@@ -698,6 +698,52 @@ fn the_effective_digest_ignores_layout_and_comments() {
 }
 
 #[test]
+fn substituted_variable_names_are_the_variables_the_loader_would_read() {
+    let names = substituted_variable_names(
+        "issuer: ${OIDC_ISSUER}\nport: ${PORT:-8080}\nname: ${NAME:?set it}\n\
+         again: ${OIDC_ISSUER}\ncost: $5 {x} ${1A} ${a b} $PLAIN\n\
+         secret: secret:env/SIGNING_KEY\n",
+    );
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["NAME", "OIDC_ISSUER", "PORT"]
+    );
+    assert!(substituted_variable_names("no: expression\n").is_empty());
+}
+
+#[test]
+fn substituted_variable_names_read_decoded_values_not_text() {
+    // An escaped or quoted spelling is the same value to the loader.
+    let names = substituted_variable_names(
+        "a: \"\\u0024{ESCAPED}\"\nb: '${SINGLE}'\nc: \"${DOUBLE}\"\nd: >-\n  ${FOLDED}\n",
+    );
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["DOUBLE", "ESCAPED", "FOLDED", "SINGLE"]
+    );
+    // A comment is not a value.
+    assert!(substituted_variable_names("# a: ${COMMENTED}\nb: x # ${TRAILING}\n").is_empty());
+}
+
+#[test]
+fn substituted_variable_names_skip_what_the_loader_refuses_to_fill() {
+    let names = substituted_variable_names(
+        "keyRef: ${REFERENCE}\nlist:\n  - itemRefs: ${NESTED}\n\
+         secretProviders:\n  env:\n    prefix: ${PROVIDER}\n\
+         kind: ${KIND}\nplain: ${KEPT}\n",
+    );
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["KEPT"]
+    );
+}
+
+#[test]
+fn substituted_variable_names_are_empty_for_text_the_reader_refuses() {
+    assert!(substituted_variable_names("a: [unclosed ${A}\n").is_empty());
+}
+
+#[test]
 fn environment_expressions_are_detected_in_authored_yaml() {
     assert!(contains_environment_expression("${A}"));
     assert!(contains_environment_expression("x ${A_1:-y} z"));

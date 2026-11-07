@@ -2434,14 +2434,11 @@ fn prepare_and_start(
         issuer_clients.push(registry_thunderid_tooling::local::TypedLocalClient {
             client_id: CALLER_ID.to_owned(),
             public_jwks: serde_json::to_string(&json!({"keys":[caller_public]}))?,
-            claims: BTreeMap::from([
-                ("registry_actor_kind".to_owned(), json!("service")),
-                ("evidence_tags".to_owned(), json!(profile.requester_tags)),
-                (
-                    "evidence_audience".to_owned(),
-                    json!(caller_evidence_audience),
-                ),
-            ]),
+            claims: crate::identity::ClaimNames::default().requester_claims(
+                "service",
+                &profile.requester_tags,
+                &caller_evidence_audience,
+            ),
             scopes: compiled.required_scopes.clone(),
             allow_human_fixture: false,
         });
@@ -2499,26 +2496,17 @@ fn prepare_and_start(
                     bail!("client exchange actor kind does not match its complete target access profile");
                 }
                 (
-                    BTreeMap::from([("registry_actor_kind".to_owned(), json!(actor_kind))]),
+                    crate::identity::ClaimNames::default().exchange_claims(actor_kind),
                     vec![binding.bootstrap_scope.clone()],
                     allow_human_fixture,
                 )
             } else {
                 (
-                    BTreeMap::from([
-                        (
-                            "registry_actor_kind".to_owned(),
-                            json!(registration.actor_kind),
-                        ),
-                        (
-                            "evidence_tags".to_owned(),
-                            json!(registration.requester_tags),
-                        ),
-                        (
-                            "evidence_audience".to_owned(),
-                            json!(registration.evidence_audience),
-                        ),
-                    ]),
+                    crate::identity::ClaimNames::default().requester_claims(
+                        &registration.actor_kind,
+                        &registration.requester_tags,
+                        &registration.evidence_audience,
+                    ),
                     compiled.required_scopes.clone(),
                     false,
                 )

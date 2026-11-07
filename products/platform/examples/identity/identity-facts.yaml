@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/identity-facts/identity-facts.v1.schema.json
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: breg
+issuer: https://id.registry.example
+audience: urn:breg:example
+allowedClients:
+  - case-portal
+  - staff-portal
+claims:
+  registry_actor_kind: string
+  registry_principal: string
+  registry_purpose: string
+  registry_role: string
+accessProfiles:
+  - id: case-read
+    scopes: [records:get, records:search]
+    purposes: [eligibility]
+    requiredClaims: [registry_principal]
+  - id: case-write
+    scopes: [records:patch]
+    requiredClaims: [registry_principal]

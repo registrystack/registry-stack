@@ -1,0 +1,210 @@
+---
+title: Generate ThunderID configuration
+description: Derive the ThunderID resources a deployment needs from the products' own configuration and one operator file, then check the inputs offline.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-07"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+If you operate a ThunderID issuer for Registry Stack products, `rstack identity generate thunderid`
+writes the clients, resource servers, scopes and agent type that issuer must hold, from the
+configuration the products already have. You write one file for what no product knows.
+
+{/* Evidence: crates/registry-rstack/src/identity.rs, generate_thunderid(), the command this page describes. */}
+
+## How the inputs fit together
+
+Each product that admits tokens states its identity facts once, from its own configuration: the
+issuer, the audience, the clients it admits, the claims it reads, and its access profiles. The
+launcher runs each product's public `generate identity-facts` command and never reads another
+product's files. It merges the facts, reads your deployment file, and renders the result.
+
+- **The issuer** comes from the products' `oidc.issuer` and is written as `server.public_url`.
+  The products must agree; the deployment file never states it.
+- **The deployment file** (`PlatformIdentityDeployment`) holds the organization unit, each client's
+  public key file and grants, browser applications, users, and the environment variable name for
+  each secret. A grant to a client a product does not admit is refused. A user reaches a product
+  only through that product's browser applications that sign in the user's type: an application
+  admits users with no type and users of a type its `userTypes` lists. A grant to a user that no
+  such application can present is refused. Claims that select an access profile the principal was
+  not granted are refused, except for a profile the product or the profile's requester clients
+  never admit for any client the principal signs in through. A development session allows at most
+  8 browser applications and 32 users; a deployment file allows 256 of each.
+- **Browser application tokens** carry `registry_actor_kind` whenever a product reads it, whether
+  or not `tokenAttributes` lists it: every user is given the kind `human`, and the Base Registry
+  Engine (BReg) refuses a user token without it. They also carry `registry_purpose` when the
+  application's product reads it and has an access profile that requires a purpose. A user's
+  purpose follows its grants as a machine client's does: a single granted purpose is set for it,
+  several need an explicit `registry_purpose` claim, and a purpose no grant gives is refused. Only
+  the purposes of products that read the claim count; Evidence takes its purpose from the request.
+  An application without room for these claims within 16 token attributes is refused.
+- **Product settings the generator does not derive** are refused when the facts are written. BReg
+  refuses an `authentication.authorityClaims.purpose` other than `registry_purpose`. Casework
+  refuses an `authentication.oidc.humanIdentity` other than the claim `registry_actor_kind` with
+  the value `human`. Evidence refuses a member of `authentication.oidc.claims` that renames the
+  actor kind, the purpose, the approver or a `registry_grant_` claim, because the issuer writes
+  them under those names only. Evidence also refuses two task authorities whose issuers differ but
+  derive the same assertion issuer id, and merging refuses two products that state different
+  issuers under one id. Casework admits a profile only for a person when the profile does not act as
+  a requester, or when it initiates reviews; its facts require a human for those profiles, so a
+  machine client granted one is refused.
+- **Actor kinds a product pins** are stated in its facts with `actorKind`. Casework's task status
+  profile requires a service and its assertion profile an agent. On a profile reached by token
+  exchange, `actorKind` applies to the client's own token, the one it requests the assertion with.
+  A machine client that states no `registry_actor_kind` is given the one kind its granted profiles
+  require, and a client of another kind is refused with
+  `identity.deployment.profile-requires-actor-kind`. An explicit `registry_actor_kind`, on a client,
+  a user or a `selectedBy` value, must be `human`, `agent` or `service`, the kinds every product
+  parses, whatever the profile states. A profile that admits only some kinds without requiring one
+  lists them under `admittedActorKinds`: an Evidence standing profile that names no kind admits a
+  human or a service, so an agent granted it, by a stated or a derived kind, is refused with
+  `identity.deployment.profile-refuses-actor-kind`.
+- **Claims that refuse a profile** are listed under `refusedClaims`. Evidence lists its actor claim
+  on every profile that is not delegated, because it never selects such a profile for a token that
+  names an actor; a client or user granted the profile with that claim is refused with
+  `identity.deployment.profile-refuses-claim`.
+- **Claims every token must carry** are listed per access profile under `requiredClaims` in the
+  facts. BReg lists a principal claim other than `sub`, each row-boundary claim of the profile
+  across every record type, action and proposal it is granted, and each claim a verified-claim
+  lookup reads. BReg refuses to write facts for a row boundary on a boolean or integer field,
+  naming the field and its type, because the issuer writes every claim as a string. Casework and Messaging list a principal claim other
+  than `sub`. Evidence lists `registry_actor_kind`, `evidence_audience`, its requester-tags claim,
+  and a principal claim other than `sub`. A machine client or user granted the profile without a
+  value for each listed claim is refused with `identity.deployment.required-claim-missing`, and a
+  browser application
+  whose `tokenAttributes` leave one out is refused with
+  `identity.deployment.required-claim-not-projected`. `registry_actor_kind` and `registry_purpose`
+  count as carried when the generator derives them. When products merge, one may require a claim
+  another does not; the claim keeps the type each declares. The check covers presence, not value: a
+  value the product refuses at runtime, such as an empty tag list, still passes. A profile reached
+  by token exchange is not checked, because the exchanged token takes its claims from the
+  assertion, not from the client that presents it.
+- **Lists are sets.** A repeated item in a list of either file, such as a scope, a required claim, a
+  granted profile or a redirect URI, is refused with `config.duplicate-item` at the repeat.
+- **Secrets** are not read. Client secrets and passwords render as `{{.NAME}}` placeholders that
+  name an environment variable you provide to ThunderID. A key file that carries private members is
+  refused. Each key must be an RSA key, an EC key on P-256, P-384 or P-521, or an Ed25519 key,
+  with its public members written as base64url. Every key needs a non-empty `kid`, distinct within the file,
+  because ThunderID matches a client assertion's `kid` header against it. Coordinates are 32, 48 or
+  66 bytes by curve, an Ed25519 key is 32 bytes, an RSA modulus is 256 to 1024 bytes, and an RSA
+  exponent is odd, with no leading zero in the modulus or the exponent. These are the lengths ThunderID requires at authentication; whether a point lies
+  on its curve is not checked.
+
+{/* Evidence: crates/registry-thunderid-tooling/src/identity_generate.rs, generate(), and key_file_refusal(). */}
+
+## Prerequisites
+
+- An `rstack` installation that includes each product you select, from the same release as
+  `rstack`. A driven tool of any other version is refused. To use a tool outside the installation,
+  set `RSTACK_BREGCTL_BIN`, `RSTACK_CASEWORKCTL_BIN`, `RSTACK_EVIDENCECTL_BIN` or
+  `RSTACK_MESSAGINGCTL_BIN` to that binary. The version check guards against a mismatch between
+  tools and `rstack`; it is not proof of origin. A binary you name through one of those variables
+  is trusted to write the facts, so point them only at builds you have verified.
+- Each selected product's project directory and runtime configuration (Evidence: its target file).
+- The deployment file and the public key files it names, for example
+  `identity-deployment.yaml` and `keys/case-portal.jwks.json`.
+
+## Check the inputs
+
+Check each file before you generate. A check reads the file through the shared reader, applies
+every rule generation applies that needs no other input, and reads no secret.
+
+```bash
+rstack identity check identity-deployment.yaml
+rstack identity check breg-facts.yaml
+```
+
+Pass the products' facts files with `--facts` to check a deployment against them as well. The
+cross-file rules, such as a grant to a client no product admits, run in memory and write nothing.
+
+```bash
+rstack identity check identity-deployment.yaml --facts breg-facts.yaml --facts messaging-facts.yaml
+```
+
+The command exits 0 when no error is reported, 1 when the file is refused, 2 for a usage error and
+3 when the file cannot be read. `--deny-warnings` also exits 1 on a warning, and `--format json`
+prints the report as JSON.
+
+## Generate
+
+Select each product with its own flags. The form is explicit: a product is driven only when you
+name its configuration file.
+
+| Product | Flags |
+| --- | --- |
+| Base Registry Engine | `--breg-project DIR --breg-runtime-config FILE [--breg-production]` |
+| Casework | `--casework-project DIR --casework-runtime-config FILE` |
+| Evidence | `--evidence-project DIR --evidence-target FILE` |
+| Messaging | `--messaging-runtime-config FILE` |
+
+```bash
+rstack identity generate thunderid \
+  --deployment identity-deployment.yaml \
+  --output identity-out \
+  --breg-project ./registry --breg-runtime-config ./runtime.yaml \
+  --messaging-runtime-config ./messaging-runtime.yaml
+```
+
+The output directory must not exist; an existing path is refused and nothing is run. Standard
+output lists the directory, the files written and counts. It carries no value read from an input.
+The facts the products write go to a private scratch directory that is removed whether the command
+succeeds or fails.
+
+Each product tool runs with a cleared environment: the system variables it needs to start, and,
+for a runtime configuration, the variables that file names in `${NAME}` expressions, so the tool
+reads the configuration as it would run. A variable the file reaches only through
+`secret:env/NAME` is not passed. Do not write a secret into a `${NAME}` expression: the runtime
+loader refuses one in secret references, and the tool that writes the facts would receive it.
+
+The directory holds:
+
+- `deployment.yaml`: members to merge into the environment's ThunderID deployment file. The
+  database, TLS and signing material stay with the environment. It sets the resource, role,
+  theme, layout and identity-provider stores to `composite`, so ThunderID reads the generated
+  resources, including the assertion-authority connections, beside the ones in its database.
+- `resources/`: one multi-document file of resources.
+- `registry-schema/`: the agent type and one agent per client.
+- `identity-receipt.json`: the input digests, each client's `sub` (under `clients`), each user's
+  `sub` (under `users`, a separate namespace, so a user and a client may share an id), the ThunderID
+  pin, and the environment variable names the placeholders need.
+
+Two runs over the same inputs produce a byte-identical directory.
+
+The receipt is written last. If a run is interrupted, an output directory without
+`identity-receipt.json` is incomplete: do not use it, and generate into a new directory.
+
+## Provide the secrets
+
+Read `requiredEnvironment` in `identity-receipt.json`, and provide each variable to ThunderID in
+the environment that runs it. The generator never sees the values.
+
+Each placeholder sits inside a single-quoted YAML value in `resources/`. Until ThunderID's loader
+is confirmed to substitute after it parses the file, keep every secret value to letters, digits and
+the characters `-`, `_`, `.`, `~`, `+`, `/` and `=`. A value that holds a single quote, a backslash,
+a brace or a line break can end the value early or change the document, and the generator cannot
+check a value it never sees.
+
+## Changing the issuer re-keys every `sub`
+
+Each principal's `sub` is derived from the exact issuer string, including a trailing slash. Change
+the issuer, even by one character, and every machine client, application and user receives a new
+`sub`. A product that keys history, approvals or grants on `sub` then sees new principals. Treat an
+issuer change like a migration: regenerate, compare the `sub` values under `clients` and `users` in
+`identity-receipt.json` with the previous receipt, and update every stored reference before you roll it out.
+
+## If a run is refused
+
+A refusal names the file, the member and the fix, and repeats no value. A product tool of another
+version, a facts file the merge rejects, or a deployment file that fails its rules exits 1 and
+leaves no output directory. Correct the input and run again with a new output path.
+
+## Next
+
+- [Connect an OIDC issuer](../connect-an-oidc-issuer/)
+- [Rotate credentials and trust](../rotate-credentials-and-trust/)
+- [Configuration files](../../../reference/configuration-files/)

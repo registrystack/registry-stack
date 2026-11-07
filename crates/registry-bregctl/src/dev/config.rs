@@ -2177,24 +2177,12 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
 }
 
 fn local_authority_claims(compiled: &registry_breg::CompiledRegistry) -> Result<Value> {
-    let inventory = registry_breg::authority::authority_inventory(compiled)
-        .context("cannot inspect the compiled registry's authority claims")?;
-    let principal = match inventory
-        .principal_claims
-        .into_iter()
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        [claim] => claim.clone(),
-        [] => "registry_principal".to_owned(),
-        claims => bail!(
-            "local development requires one common principal claim across compiled authenticated grants; the compiled registry declares multiple: {}",
-            claims.join(", ")
-        ),
-    };
+    let claims = crate::identity_facts::authority_claims(compiled).map_err(|message| {
+        anyhow::anyhow!("local development requires one common principal claim across compiled authenticated grants; {message}")
+    })?;
     Ok(json!({
-        "principal": principal,
-        "purpose": inventory.purpose_required.then_some("registry_purpose")
+        "principal": claims.principal,
+        "purpose": claims.purpose_required.then_some("registry_purpose")
     }))
 }
 

@@ -453,6 +453,7 @@ mod tests {
                     "sql",
                     "evidence-source",
                     "sdk",
+                    "identity-facts",
                 ]
         }));
         for invocation in [

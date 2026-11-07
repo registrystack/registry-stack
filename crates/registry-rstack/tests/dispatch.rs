@@ -28,7 +28,7 @@ fn platform() -> &'static str {
 fn write_release_launcher(path: &Path) {
     let executable = env!("CARGO_BIN_EXE_rstack").replace('\'', "'\"'\"'");
     let script = format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${{1:-}}\" == --version ]]; then printf 'rstack {CURRENT_VERSION}\\n'; exit 0; fi\nexec '{executable}' \"$@\"\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${{1:-}}\" == --version ]]; then printf 'rstack {CURRENT_VERSION}\\n'; exit 0; fi\n# macOS drops DYLD_* across this system-shell hop. A build that unifies rstack with the product tools (the workspace test run) links the AWS-LC FIPS library, so restore the directory the build preparation exports under another name.\nif [[ -n \"${{REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}}\" ]]; then export DYLD_FALLBACK_LIBRARY_PATH=\"$REGISTRY_CARGO_RUNTIME_LIBRARY_PATH\"; fi\nexec '{executable}' \"$@\"\n"
     );
     fs::write(path, script).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();

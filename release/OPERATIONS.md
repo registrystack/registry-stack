@@ -552,6 +552,57 @@ the required platform dependency set. For the unified package, that proof also
 requires each implementation package to contain the version-selected native bindings. The
 planner rejects a prepared tree that binds those versions.
 
+### Pin external images in the manifest
+
+An `external` entry with `kind: image-pin` is an image pin, not a documentation
+product. `registry-release validate` checks every pin; the docset commands and
+`prepare-docs` skip pins, so a pin never appears in `docsets.yaml`. An entry
+without `kind` stays a source reference and becomes a docset product as
+before. `images` is allowed only on a pin: an entry that declares `images`
+without `kind: image-pin`, any other `kind`, and `images` on a docset product
+are all refused.
+
+Each pin records `kind: image-pin`, `repo`, a 40-character commit `ref`, a
+`version`, and `images`, a map of name to a reference pinned by digest
+(`<image>@sha256:<64 hex>`). The digest is the enforced pin; a tag in front of it
+(`<image>:<tag>@sha256:...`) is accepted and kept for readability, and a
+tag-only reference is refused.
+
+```yaml
+external:
+  thunderid:
+    kind: image-pin
+    repo: thunder-id/thunderid
+    ref: 12f517c4384004e360e26eb7eb1ab0501b678bb2
+    version: 1.0.1
+    images:
+      thunderid: ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+  esignet-relay-authenticator:
+    kind: image-pin
+    repo: registrystack/esignet-relay-authenticator
+    ref: 9030f38aac2c85b2e7a2980ec23e2f8e72da97ff
+    version: 0.6.1
+    images:
+      authenticator: ghcr.io/registrystack/esignet-relay-authenticator:0.6.1@sha256:826ff864a981379dbbdd9bff0f663cd4c1952a1f1fa7c84a076bccce58931dd4
+      oidc-ui: ghcr.io/registrystack/esignet-oidc-ui:0.6.1@sha256:2629150e0733ad443d1e563d48790922c88968e93bbf5989a1b9c1974bc109c7
+```
+
+The `thunderid` pin must equal `crates/registry-thunderid-tooling/thunderid-version.json`
+(`image`, `source.commit` as `ref`, `version`, and the owner and name in
+`source.archiveUrl` as `repo`); a bump of that file and the
+manifest travel in the same PR. Every manifest for a release after beta-57
+(version greater than 0.45.0) must carry `external.thunderid`. Manifests up to
+and including beta-57 predate pins, stay unchanged, and still validate. Take
+the authenticator image names and digests from the release notes of the
+`esignet-relay-authenticator` tag, for example with
+`gh release view v0.6.1 -R registrystack/esignet-relay-authenticator`.
+
+Downstream tooling reads the pins from the manifest at the pinned release tag:
+
+```sh
+yq '.external.thunderid.images' release/manifests/registry-stack-<release-id>.yaml
+```
+
 ### Prepare the documentation archive lock
 
 Run the maintained preparation command from your clean, committed release

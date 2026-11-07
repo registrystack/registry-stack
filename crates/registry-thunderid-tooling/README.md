@@ -219,3 +219,41 @@ is written to `.breg/grants/<client>-<grant>.header` (or `.casework/grants/` or
 expiry, never a token. A refusal leaves an existing header unchanged; the
 resource's current authority checks still govern any attempted use. Run the
 command again using the same connection after restarting configured services.
+
+## Identity generator (deployment mode)
+
+`identity_generate::generate_to_directory(deployment, facts, output)` derives
+hosted ThunderID configuration from the products' identity facts
+(`PlatformIdentityFacts`, one per product, written by each product's
+`generate identity-facts` command) and one operator file
+(`PlatformIdentityDeployment`). `identity_generate::generate` is the same
+function over bytes: it opens no file, reads no environment variable and
+resolves no secret.
+
+- Facts are merged by `identity_facts::merge`: the products must trust one
+  HTTPS issuer, declare each claim with one type, and state a shared assertion
+  issuer identically.
+- The deployment file states the organization unit, each client's public JWKS
+  file and grants, browser applications, users with explicit claims, extension
+  user types, and a `secret:env/NAME` reference for every secret. A grant to a
+  client a product does not admit, an unknown claim, or a JWK carrying `d`,
+  `p`, `q`, `dp`, `dq` or `qi` is refused.
+- The output directory must not exist. It holds `deployment.yaml` (server
+  members to merge into the environment's own file), `resources/resources.yaml`
+  (one multi-document file), `registry-schema/agent-type.yaml` and
+  `registry-schema/agents/`, and `identity-receipt.json` (input digests, client
+  id to `sub`, user id to `sub`, the ThunderID pin, required environment variable names).
+  Secrets render as `{{.NAME}}` placeholders; nothing secret is written.
+- Identifiers use the crate's `local::agent_id` and scope-tree formulas seeded
+  by the issuer, so output is byte-identical across runs.
+
+Regenerate the golden tree under `fixtures/identity/expected` with
+`REGISTRY_UPDATE_GOLDEN=1 cargo test -p registry-thunderid-tooling` and review
+the diff. Development mode (`render::render`) is unchanged and guarded by a
+byte-level digest test.
+
+The facts and deployment formats have generated JSON Schemas in
+`products/platform/schemas` (`identity-facts.schema.json`,
+`identity-deployment.schema.json`), written by the same
+`tooling-schemas` example with `--features schema`. Their examples are
+in `products/platform/examples/identity`.

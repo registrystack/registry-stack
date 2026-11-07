@@ -3722,7 +3722,7 @@
           "invocation": "bregctl generate",
           "about": "Write selected compiler artifacts to a new directory",
           "long_about": null,
-          "usage": "bregctl generate [OPTIONS] --output <DIRECTORY> <ARTIFACT> <PROJECT>",
+          "usage": "bregctl generate [OPTIONS] --output <PATH> <ARTIFACT> <PROJECT>",
           "arguments": [
             {
               "display": "<ARTIFACT>",
@@ -3739,7 +3739,8 @@
                 "metadata",
                 "sql",
                 "evidence-source",
-                "sdk"
+                "sdk",
+                "identity-facts"
               ],
               "environment": null
             },
@@ -3764,9 +3765,18 @@
               "environment": null
             },
             {
-              "display": "--output <DIRECTORY>",
-              "description": "New directory that will receive exactly the generated artifact inventory. A symbolic link at any component of this path is refused.",
+              "display": "--output <PATH>",
+              "description": "New directory that will receive exactly the generated artifact inventory; for identity-facts, a new YAML file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file (identity-facts only): its authentication block states the issuer, audience and admitted clients. A symbolic link at any component of this path is refused.",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -9120,6 +9130,105 @@
           ],
           "constraints": [],
           "subcommands": []
+        },
+        {
+          "name": "generate",
+          "invocation": "caseworkctl generate",
+          "about": "Write configuration derived from the project and its runtime file",
+          "long_about": null,
+          "usage": "caseworkctl generate [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "identity-facts",
+              "invocation": "caseworkctl generate identity-facts",
+              "about": "Write the identity facts Casework expects of its token issuer: OIDC settings, task authority and exchange bindings",
+              "long_about": null,
+              "usage": "caseworkctl generate identity-facts [OPTIONS] --runtime-config <FILE> --output <FILE> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Existing authored Casework project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file; no secret in it is resolved",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "New file for the facts; an existing file is never overwritten",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         },
         {
           "name": "provider",
@@ -16103,6 +16212,107 @@
           "subcommands": []
         },
         {
+          "name": "generate",
+          "invocation": "evidencectl generate",
+          "about": "Generate configuration documents for other tools from this product's configuration",
+          "long_about": null,
+          "usage": "evidencectl generate [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json",
+                "junit"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "identity-facts",
+              "invocation": "evidencectl generate identity-facts",
+              "about": "Write the identity facts a token issuer needs to serve this deployment",
+              "long_about": null,
+              "usage": "evidencectl generate identity-facts [OPTIONS] --target <TARGET> --output <OUTPUT> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Editable Evidence project directory",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--target <TARGET>",
+                  "description": "Explicit deployment target",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <OUTPUT>",
+                  "description": "New identity facts file to create; an existing file is refused",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "access",
           "invocation": "evidencectl access",
           "about": "Manage target access profiles and local caller clients",
@@ -21739,6 +21949,59 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "identity-facts",
+              "invocation": "messagingctl generate identity-facts",
+              "about": "Write the identity facts this runtime states about its issuer",
+              "long_about": null,
+              "usage": "messagingctl generate identity-facts [OPTIONS] --runtime-config <ABSOLUTE_FILE> --output <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file: its authentication.oidc block and the package it names state the facts",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "New YAML file to create. Existing files are never overwritten",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },
@@ -24956,6 +25219,425 @@
           ],
           "constraints": [],
           "subcommands": []
+        },
+        {
+          "name": "identity",
+          "invocation": "rstack identity",
+          "about": "Generate and check hosted identity configuration",
+          "long_about": null,
+          "usage": "rstack identity [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "generate",
+              "invocation": "rstack identity generate",
+              "about": "Generate identity-provider configuration from product identity facts",
+              "long_about": null,
+              "usage": "rstack identity generate [OPTIONS] <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "thunderid",
+                  "invocation": "rstack identity generate thunderid",
+                  "about": "Generate ThunderID configuration into a new directory",
+                  "long_about": "Generate ThunderID configuration into a new directory. Runs each selected product's own `generate identity-facts` command and merges the facts with the deployment file. Select every product that admits tokens from the issuer with its flags; the deployment file never states the issuer.",
+                  "usage": "rstack identity generate thunderid [OPTIONS] --deployment <FILE> --output <DIR>",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--deployment <FILE>",
+                      "description": "Operator identity deployment file",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--output <DIR>",
+                      "description": "New directory to write; an existing path is refused",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--breg-project <DIR>",
+                      "description": "Base Registry Engine project directory",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--breg-runtime-config <FILE>",
+                      "description": "Base Registry Engine runtime configuration file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--breg-production",
+                      "description": "Check the Base Registry Engine runtime as a production runtime",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--casework-project <DIR>",
+                      "description": "Casework project directory",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--casework-runtime-config <FILE>",
+                      "description": "Casework runtime configuration file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--evidence-project <DIR>",
+                      "description": "Evidence project directory",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--evidence-target <FILE>",
+                      "description": "Evidence target file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--messaging-runtime-config <FILE>",
+                      "description": "Messaging runtime configuration file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--format <FORMAT>",
+                      "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                      "always_required": false,
+                      "repeatable": true,
+                      "default_values": [
+                        "human"
+                      ],
+                      "possible_values": [
+                        "human",
+                        "json"
+                      ],
+                      "environment": null
+                    },
+                    {
+                      "display": "--install-root <INSTALL_ROOT>",
+                      "description": "Installation generation storage directory",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--bin-dir <BIN_DIR>",
+                      "description": "Directory for the single public rstack executable link",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--asset-dir <ASSET_DIR>",
+                      "description": "Directory of already downloaded, verified release assets",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help (see a summary with '-h')",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [
+                    {
+                      "kind": "requires-all",
+                      "when": "--breg-project <DIR>",
+                      "arguments": [
+                        "--breg-runtime-config <FILE>"
+                      ]
+                    },
+                    {
+                      "kind": "requires-all",
+                      "when": "--breg-runtime-config <FILE>",
+                      "arguments": [
+                        "--breg-project <DIR>"
+                      ]
+                    },
+                    {
+                      "kind": "requires-all",
+                      "when": "--breg-production",
+                      "arguments": [
+                        "--breg-project <DIR>",
+                        "--breg-runtime-config <FILE>"
+                      ]
+                    },
+                    {
+                      "kind": "requires-all",
+                      "when": "--casework-project <DIR>",
+                      "arguments": [
+                        "--casework-runtime-config <FILE>"
+                      ]
+                    },
+                    {
+                      "kind": "requires-all",
+                      "when": "--casework-runtime-config <FILE>",
+                      "arguments": [
+                        "--casework-project <DIR>"
+                      ]
+                    },
+                    {
+                      "kind": "requires-all",
+                      "when": "--evidence-project <DIR>",
+                      "arguments": [
+                        "--evidence-target <FILE>"
+                      ]
+                    },
+                    {
+                      "kind": "requires-all",
+                      "when": "--evidence-target <FILE>",
+                      "arguments": [
+                        "--evidence-project <DIR>"
+                      ]
+                    }
+                  ],
+                  "subcommands": []
+                }
+              ]
+            },
+            {
+              "name": "check",
+              "invocation": "rstack identity check",
+              "about": "Check an identity facts document or deployment file offline",
+              "long_about": null,
+              "usage": "rstack identity check [OPTIONS] <FILE>",
+              "arguments": [
+                {
+                  "display": "<FILE>",
+                  "description": "Identity facts document or identity deployment file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--facts <FILE>",
+                  "description": "Product facts file to check a deployment against; repeat per product",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when any unaccepted warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },

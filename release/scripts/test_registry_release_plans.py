@@ -1255,6 +1255,36 @@ version = "1.0.0"
             result.stderr,
         )
 
+    def test_prepare_skips_external_image_pins_in_docsets(self) -> None:
+        target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
+        data = yaml.safe_load(target.read_text(encoding="utf-8"))
+        data["external"]["pinned-image"] = {
+            "kind": "image-pin",
+            "repo": "example/pinned-image",
+            "ref": "3" * 40,
+            "version": "1.0.0",
+            "images": {"pinned-image": "ghcr.io/example/pinned-image:1.0.0@sha256:" + "4" * 64},
+        }
+        write_yaml(target, data)
+
+        result = self.prepare()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_prepare_rejects_images_on_a_docset_product(self) -> None:
+        docsets_path = self.repo.root / "docs/site/src/data/docsets.yaml"
+        docsets = yaml.safe_load(docsets_path.read_text(encoding="utf-8"))
+        selected = next(item for item in docsets["docsets"] if item["id"] == "v1.1.0")
+        name = next(iter(selected["products"]))
+        selected["products"][name]["images"] = {"x": "ghcr.io/example/x@sha256:" + "1" * 64}
+        write_yaml(docsets_path, docsets)
+        write_json(self.repo.root / "docs/site/src/data/generated/docsets.json", docsets)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn(f"docset v1.1.0 product {name} must not declare images", result.stderr)
+
     def test_prepare_selects_evidence_openapi_and_ignores_retired_surfaces(
         self,
     ) -> None:

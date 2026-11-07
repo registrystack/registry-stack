@@ -1,0 +1,28 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: evidence
+issuer: http://127.0.0.1:8082
+audience: urn:example:resource:standalone-evidence
+allowedClients: unrestricted
+claims:
+  evidence_audience: string
+  evidence_tags: string-array
+  registry_actor_kind: string
+accessProfiles:
+- id: standalone-service
+  scopes:
+  - evidence:request
+  purposes:
+  - age-check
+  - licence-check
+  - relationship-check
+  - residence-check
+  selectedBy:
+    evidence_tags:
+    - standalone-service
+    registry_actor_kind:
+    - service
+  requiredClaims:
+  - evidence_audience
+  - evidence_tags
+  - registry_actor_kind

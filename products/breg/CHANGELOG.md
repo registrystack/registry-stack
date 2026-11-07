@@ -83,6 +83,27 @@
   `random_base64url` and compares them with the shared `constant_time_eq`. The
   token shape (32 random bytes, unpadded base64url) and the comparison result are
   unchanged.
+- Add `bregctl generate identity-facts PROJECT --runtime-config FILE --output FILE
+  [--production]`, which writes a `registry.identity-facts/v1` document from the
+  runtime's OIDC settings and the project's access profiles for
+  `rstack identity generate thunderid`. The facts always declare the
+  `registry_actor_kind` claim, which BReg requires of every token that is not
+  delegated, and state a human or service profile's `actorKind` as the kind it
+  requires, so the generator gives each principal granted it that kind or
+  refuses the grant. A profile that requires an agent is left out, because BReg
+  reaches it only through a delegated or task-grant token, which hosted
+  generation does not issue; the command names each one, and a grant that names
+  one is refused as an unknown profile. The command refuses a renamed
+  `authorityClaims.contextual.actorKind` claim, and an
+  `authorityClaims.purpose` claim other than `registry_purpose`, the purpose
+  claim the generator derives for each principal. Each profile's
+  `requiredClaims` lists a principal claim other than `sub` and the claims its
+  row boundaries read, across every record type, action and proposal the
+  profile is granted, and each claim a verified-claim lookup reads, so the
+  generator refuses a principal that would carry a token the engine rejects. A
+  profile that grants only actions or proposals is stated too. The command
+  refuses a row boundary on a boolean or integer field, naming the field and
+  its type, because the token issuer writes every claim as a string.
 - Flag a task-grant profile that binds no rows. For a non-public record type,
   `breg.access-profile.task-grant-rows-unbound` is a finding (not an error)
   when a profile with a `taskGrant`, or an Action or Proposal permission of

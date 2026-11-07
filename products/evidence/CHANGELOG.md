@@ -214,6 +214,26 @@
 - The language server now supports `evidence-oid4vp` runtime files: a project marker
   product, section symbols, client identifier and policy declarations, and the policy
   `clientIdentifier` reference check. Secret references are not navigable.
+- `evidencectl generate identity-facts <PROJECT> --target <FILE> --output <FILE>`
+  writes a `registry.identity-facts/v1` document from the target's OIDC
+  settings, its access profiles and the project's task-exchange client
+  registrations, so a token issuer can be configured from what Evidence
+  expects. It refuses an existing output, names no path or secret, and refuses
+  a target whose `requiredScopes` is `unrestricted` or an exchange client that
+  names no bootstrap resource. `evidencectl dev` issues its local clients'
+  claims through the same claim names. Each profile lists under
+  `requiredClaims` `registry_actor_kind`, the audience claim, the
+  requester-tags claim and a principal claim other than `sub`, which the facts
+  also declare, so the generator refuses a principal granted the profile
+  without them. The command refuses an `authentication.oidc.claims` member
+  that renames the actor kind, the purpose, the approver or a grant claim,
+  since the token issuer writes those under their default names. It also
+  refuses two task authorities whose issuers differ but derive the same
+  assertion issuer identifier. A standing profile that names no actor kind
+  lists `admittedActorKinds: [human, service]`, so the generator refuses an
+  agent granted it, and every profile that is not delegated lists the actor
+  claim under `refusedClaims`, so it refuses a principal that carries one.
+
 - BREAKING: Source pack scripts run on the Adapter's deterministic engine, so
   the acquisition deadline holds for every call a script can make. A pack
   script that calls `timestamp`, `elapsed`, `sleep`, `exit`, `take`, `tag`,

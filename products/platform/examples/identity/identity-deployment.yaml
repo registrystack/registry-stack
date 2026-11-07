@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/identity-deployment/identity-deployment.v1.schema.json
+apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1
+kind: PlatformIdentityDeployment
+organizationUnit:
+  handle: registry
+  name: Registry
+clients:
+  - id: case-portal
+    publicJwksFile: keys/case-portal.jwks.json
+    grants:
+      - product: breg
+        accessProfiles: [case-read]
+    claims:
+      registry_actor_kind: service
+      registry_principal: case-portal
+browserApps:
+  - id: staff-portal
+    clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET
+    origin: https://staff.registry.example
+    redirectUris: [https://staff.registry.example/auth/callback]
+    product: breg
+    tokenAttributes: [registry_actor_kind, registry_principal]
+    grants:
+      - product: breg
+        accessProfiles: [case-read]
+users:
+  - id: officer-one
+    username: officer-one
+    email: officer.one@agency.example
+    passwordRef: secret:env/OFFICER_ONE_PASSWORD
+    claims:
+      registry_actor_kind: human
+      registry_principal: officer-one
+    grants:
+      - product: breg
+        accessProfiles: [case-read]

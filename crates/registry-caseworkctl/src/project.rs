@@ -21,6 +21,9 @@ const MAXIMUM_HOLIDAY_SET_FILES: usize = 1024;
 #[derive(Debug)]
 pub(crate) enum ProjectRefusal {
     DestinationExists,
+    OutputExists,
+    ScopeClaimUnsupported,
+    HumanIdentityUnsupported,
     AuxiliaryInputInvalid(PathBuf),
     FixtureInputInvalid,
     ProjectInputPathInvalid,
@@ -37,6 +40,13 @@ impl std::fmt::Display for ProjectRefusal {
         formatter.write_str(match self {
             Self::DestinationExists => {
                 "destination already exists; init never overwrites a project"
+            }
+            Self::OutputExists => "output already exists; generate never overwrites a file",
+            Self::ScopeClaimUnsupported => {
+                "authentication.oidc.scopeClaim is not `scope`, which hosted generation does not support yet; set it to `scope`"
+            }
+            Self::HumanIdentityUnsupported => {
+                "authentication.oidc.humanIdentity is not claim `registry_actor_kind` with value `human`, which hosted generation does not support yet; set it to those"
             }
             Self::AuxiliaryInputInvalid(path) => {
                 return write!(

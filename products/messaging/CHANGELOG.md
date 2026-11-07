@@ -19,6 +19,14 @@
   is not added; it is logged as a warning by metric name, never by label value.
   The scrape keeps its other series, values and `text/plain; version=0.0.4`
   content type.
+- Add `messagingctl generate identity-facts --runtime-config FILE --output FILE`,
+  which writes a `registry.identity-facts/v1` document from the runtime's OIDC
+  settings and access profiles for `rstack identity generate thunderid`.
+  A profile's `actorKind` is stated as the kind it requires, so the generator
+  gives each principal granted it that `registry_actor_kind` or refuses the
+  grant. A profile whose principal claim is not `sub` lists it under
+  `requiredClaims`, so the generator refuses a principal granted the profile
+  without it.
 - BREAKING: provider `prepare`, `interpret` and `receipt` scripts run on a
   deterministic engine, so the script budget holds for every call a script can
   make. `timestamp`, `elapsed`, `sleep`, `exit`, `take`, `tag`, `set_tag`,

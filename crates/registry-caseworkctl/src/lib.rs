@@ -2,6 +2,7 @@
 mod dev;
 #[cfg(test)]
 mod fixture_tests;
+mod identity;
 mod project;
 mod project_types;
 mod provider_add;
@@ -63,6 +64,11 @@ enum Command {
         /// Directory for generated TypeScript and Python contracts.
         #[arg(long, value_name = "DIRECTORY")]
         output: PathBuf,
+    },
+    /// Write configuration derived from the project and its runtime file.
+    Generate {
+        #[command(subcommand)]
+        command: GenerateCommand,
     },
     /// Create approval projects and pair context providers with native producer exports.
     Provider {
@@ -129,6 +135,21 @@ struct ServeArgs {
     /// Casework runtime executable for an unmanaged installation.
     #[arg(long, hide = true, env = "CASEWORK_BIN", value_name = "BINARY")]
     casework_bin: Option<PathBuf>,
+}
+#[derive(Debug, Subcommand)]
+enum GenerateCommand {
+    /// Write the identity facts Casework expects of its token issuer: OIDC settings, task authority and exchange bindings.
+    IdentityFacts {
+        /// Existing authored Casework project directory.
+        #[arg(value_name = "PROJECT")]
+        project: PathBuf,
+        /// Runtime configuration file; no secret in it is resolved.
+        #[arg(long, value_name = "FILE")]
+        runtime_config: PathBuf,
+        /// New file for the facts; an existing file is never overwritten.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+    },
 }
 #[derive(Debug, Subcommand)]
 enum ProviderCommand {
@@ -558,6 +579,9 @@ impl Command {
             Self::Explain(_) => "explain",
             Self::Test(_) => "test",
             Self::Types { .. } => "types",
+            Self::Generate { command } => match command {
+                GenerateCommand::IdentityFacts { .. } => "generate-identity-facts",
+            },
             Self::Provider { command } => match command {
                 ProviderCommand::Add { .. } => "provider-add",
                 ProviderCommand::Pair { .. } => "provider-pair",
@@ -616,6 +640,14 @@ fn run(command: Command) -> Result<Value> {
         Command::Explain(args) => project::explain(&args.project),
         Command::Test(args) => project::test(&args.project, args.deny_warnings),
         Command::Types { project, output } => project_types::generate(&project, &output),
+        Command::Generate {
+            command:
+                GenerateCommand::IdentityFacts {
+                    project,
+                    runtime_config,
+                    output,
+                },
+        } => identity::generate(&project, &runtime_config, &output),
         Command::Provider {
             command:
                 ProviderCommand::Add {

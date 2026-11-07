@@ -403,6 +403,34 @@ impl fmt::Debug for MatchedEntitlement {
     }
 }
 
+/// Whether a principal's verified claims make `authority` a candidate: its
+/// actor kind (an agent without a task grant reaches only profiles that name
+/// agents) and every requester tag it requires.
+///
+/// Hidden from the public reference: it is exposed so the identity facts
+/// writer can be tested against the runtime's own decision, not a copy.
+#[doc(hidden)]
+pub fn authority_selected_by_principal(
+    authority: &crate::config::AuthorityProfile,
+    actor_kind: ActorKind,
+    has_task_grant: bool,
+    requester_tags: &[String],
+) -> bool {
+    if authority
+        .actor_kind
+        .is_some_and(|required| required != actor_kind)
+        || (actor_kind == ActorKind::Agent
+            && !has_task_grant
+            && authority.actor_kind != Some(ActorKind::Agent))
+    {
+        return false;
+    }
+    authority
+        .requester_tags
+        .iter()
+        .all(|required| requester_tags.iter().any(|actual| actual == required))
+}
+
 /// Match exactly one complete entitlement without inspecting selector values.
 ///
 /// Keeping this decision separate lets the service charge invalid selector
@@ -444,21 +472,12 @@ pub fn match_entitlement(
 
     let mut matched = Vec::new();
     for (authority_profile, authority) in bundle.config.authority_profiles.iter() {
-        if authority
-            .actor_kind
-            .is_some_and(|required| required != context.actor_kind())
-            || (context.actor_kind() == ActorKind::Agent
-                && !has_task_grant
-                && authority.actor_kind != Some(ActorKind::Agent))
-        {
-            continue;
-        }
-        if !authority.requester_tags.iter().all(|required| {
-            context
-                .requester_tags()
-                .iter()
-                .any(|actual| actual == required)
-        }) {
+        if !authority_selected_by_principal(
+            authority,
+            context.actor_kind(),
+            has_task_grant,
+            context.requester_tags(),
+        ) {
             continue;
         }
         if context.actor().is_some() && authority.kind != AuthorityKind::Delegated {

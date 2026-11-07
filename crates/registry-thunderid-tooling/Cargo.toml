@@ -20,28 +20,44 @@ workspace = true
 base64.workspace = true
 getrandom.workspace = true
 registry-platform-config.workspace = true
-registry-platform-crypto.workspace = true
-registry-platform-httputil.workspace = true
-registry-platform-oidc.workspace = true
+registry-platform-crypto = { workspace = true, optional = true }
+registry-platform-httputil = { workspace = true, optional = true }
+registry-platform-oidc = { workspace = true, optional = true }
 registry-platform-yaml.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, optional = true }
 rustix.workspace = true
 schemars = { workspace = true, optional = true }
-tokio.workspace = true
+tokio = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 url.workspace = true
-zeroize.workspace = true
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+tokio.workspace = true
 jsonschema.workspace = true
 p256.workspace = true
 registry-platform-authcommon.workspace = true
+tempfile.workspace = true
 
 [features]
+# The development session and task-grant code: it drives a container, makes
+# HTTP requests and signs client assertions. A launcher that only renders and
+# checks identity configuration leaves it off and links no signing library.
+session = [
+  "dep:registry-platform-crypto",
+  "dep:registry-platform-httputil",
+  "dep:registry-platform-oidc",
+  "dep:reqwest",
+  "dep:tokio",
+  "dep:zeroize",
+]
 schema = [
   "dep:schemars",
   "registry-platform-config/schema",
@@ -49,5 +65,13 @@ schema = [
 ]
 
 [[example]]
-name = "task-connection-schema"
+name = "tooling-schemas"
 required-features = ["schema"]
+
+[[example]]
+name = "integration"
+required-features = ["session"]
+
+[[example]]
+name = "contextual-exchange"
+required-features = ["session"]

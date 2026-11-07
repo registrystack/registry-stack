@@ -66,6 +66,24 @@ impl AuthorityClaimConfig {
         }
     }
 
+    /// The claim the caller's principal is read from.
+    #[must_use]
+    pub fn principal_claim(&self) -> &str {
+        &self.principal_claim
+    }
+
+    /// The claim the caller's purpose is read from, when one is configured.
+    #[must_use]
+    pub fn purpose_claim(&self) -> Option<&str> {
+        self.purpose_claim.as_deref()
+    }
+
+    /// The claim the caller's actor kind is read from.
+    #[must_use]
+    pub fn actor_kind_claim(&self) -> &str {
+        &self.contextual_claims.actor_kind
+    }
+
     #[must_use]
     pub fn with_contextual_claims(
         mut self,

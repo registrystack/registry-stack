@@ -463,6 +463,26 @@ caseworkctl status --runtime-config /etc/registry-casework/runtime.yaml
 casework --runtime-config /etc/registry-casework/runtime.yaml serve
 ```
 
+`generate identity-facts` writes the identity facts Casework expects of its
+token issuer, so the issuer's configuration is derived from this product and
+never written twice:
+
+```sh
+caseworkctl generate identity-facts ./casework \
+  --runtime-config /etc/registry-casework/runtime.yaml --output ./casework.identity-facts.yaml
+```
+
+The facts state the issuer, audience and admitted clients from
+`authentication.oidc`, the human-actor claim, each access profile's scopes
+and whether it requires a human (as Casework does for a profile that does not
+act as a requester, or that initiates reviews), and, when `taskAuthority` is configured, the task authority as an
+assertion issuer, a status profile limited to its `statusClients`, and the
+exchange profile for the clients that present its assertions. The assertion
+issuer's key location is `<taskAuthority.issuer>/.well-known/jwks.json`, where
+the Casework service publishes it. The command refuses a `humanIdentity` other
+than the claim `registry_actor_kind` with the value `human`, refuses an existing
+output file, opens no secret, and prints only the output path and counts.
+
 `check --runtime-config` checks authored configuration offline. `check
 --production` also reads the exact package input closure and points an unpaired
 context provider back to its authored `description` with the `provider pair`

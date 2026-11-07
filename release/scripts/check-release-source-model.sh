@@ -179,6 +179,10 @@ for path in manifest_paths:
         if not repo or not HEX40.fullmatch(ref):
             fail(f"{path.name} external.{name} must record a repo and a 40-hex ref")
             continue
+        if isinstance(entry, dict) and entry.get("kind") == "image-pin":
+            # An image pin is a release input, not a docset product.
+            print(f"release-source-pin {path.name} {name} {repo} {ref}")
+            continue
         print(f"release-source-external {path.name} {name} {repo} {ref}")
 
 if failed:

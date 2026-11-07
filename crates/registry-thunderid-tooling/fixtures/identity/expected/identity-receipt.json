@@ -1,0 +1,66 @@
+{
+  "apiVersion": "id.registrystack.org/formats/platform/identity-receipt/v1",
+  "clients": {
+    "case-portal": {
+      "kind": "machine",
+      "sub": "733b1a52-196d-7489-888e-8c7801eb8de9"
+    },
+    "field-agent": {
+      "kind": "machine",
+      "sub": "778546c4-aced-76b8-839a-3c20c038a0fd"
+    },
+    "staff-portal": {
+      "kind": "browser",
+      "sub": "fbc5ffd9-a8ee-76c3-8d0f-443fe31ac655"
+    },
+    "task-agent": {
+      "kind": "machine",
+      "sub": "b0e1d7c3-c123-7d24-82e0-724d1e98c3f6"
+    }
+  },
+  "inputs": {
+    "deployment": {
+      "digest": "sha256:6369f3c008dcc5428432b59eee540c6b72d749215a337298437cc30baa5a12ff"
+    },
+    "facts": {
+      "breg": {
+        "digest": "sha256:44b567b99f41abac78104de929d2aea1f413c1fe1d569a82ac0451c256d307a9"
+      },
+      "evidence": {
+        "digest": "sha256:ed2da36cf4e0bd4aba2296934c94fdcf5ce49fba469597600387e488b04dc44b"
+      }
+    },
+    "publicJwks": {
+      "case-portal": {
+        "digest": "sha256:f4c2e56b8507c043f187ef5efdaeccbc74e839b78b9821fea353600bcd26c94f"
+      },
+      "field-agent": {
+        "digest": "sha256:222f3f8a8062f12da953195f3662843585e21c538647800163a09e95bc225a3f"
+      },
+      "task-agent": {
+        "digest": "sha256:4111f520c086ca61e62f8ddf8a769e1c8ac83f555e4690a462e302983373486a"
+      }
+    }
+  },
+  "issuer": "https://id.registry.example",
+  "kind": "PlatformIdentityReceipt",
+  "requiredEnvironment": [
+    "FARMER_ONE_PASSWORD",
+    "OFFICER_ONE_PASSWORD",
+    "STAFF_PORTAL_CLIENT_SECRET"
+  ],
+  "thunderid": {
+    "image": "ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e",
+    "version": "1.0.1"
+  },
+  "users": {
+    "farmer-one": {
+      "kind": "user",
+      "sub": "9626a2dd-f898-78fb-8bec-2fa2e087fc37"
+    },
+    "officer-one": {
+      "kind": "user",
+      "sub": "db481edb-45f9-78cb-89c6-e732049ba73f"
+    }
+  }
+}

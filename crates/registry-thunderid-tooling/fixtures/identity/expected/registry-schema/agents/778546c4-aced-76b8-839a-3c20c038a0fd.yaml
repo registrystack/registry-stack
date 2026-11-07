@@ -1,0 +1,30 @@
+attributes:
+  evidence_audience: https://relying.example
+  evidence_tags:
+  - field
+  registry_actor_kind: service
+description: Deployment machine client
+id: 778546c4-aced-76b8-839a-3c20c038a0fd
+inboundAuthConfig:
+- config:
+    certificate:
+      type: JWKS
+      value: '{"keys":[{"alg":"ES256","crv":"P-256","kid":"field-agent-key-1","kty":"EC","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}]}'
+    clientId: field-agent
+    grantTypes:
+    - client_credentials
+    publicClient: false
+    token:
+      accessToken:
+        clientConfig:
+          attributes:
+          - evidence_audience
+          - evidence_tags
+          - registry_actor_kind
+          validityPeriod: 300
+    tokenEndpointAuthMethod: private_key_jwt
+  type: oauth2
+name: Client field-agent
+ouHandle: registry
+resource_type: agent
+type: default

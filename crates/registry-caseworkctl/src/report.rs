@@ -347,6 +347,13 @@ payload!(ExplainData {
 });
 payload!(TestData {fixtures:Vec<PathBuf>,proof_boundary:String,production_closure:bool,network_access:bool,database_access:bool});
 payload!(TypesData {output:PathBuf,files:Vec<String>});
+payload!(IdentityFactsData {
+    output: PathBuf,
+    product: String,
+    claims: u32,
+    access_profiles: u32,
+    assertion_issuers: u32
+});
 payload!(ReaderAuthority {profile:Option<String>,operation:String,source_writes:bool});
 payload!(ProviderPairData {
     applied: bool,
@@ -490,7 +497,7 @@ fn serialized_payload_members<T: schemars::JsonSchema>() -> PayloadMembers {
         .collect();
     PayloadMembers { required, present }
 }
-reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData,Internal=>"internal":InternalData);
+reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,GenerateIdentityFacts=>"generate-identity-facts":IdentityFactsData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData,Internal=>"internal":InternalData);
 
 impl CliReport {
     pub(crate) fn from_value(command: &str, value: Value) -> anyhow::Result<Self> {
@@ -653,6 +660,17 @@ mod typed_report_tests {
             (
                 "types",
                 crate::project_types::generate(&project, &directory.path().join("types")).unwrap(),
+            ),
+            (
+                "generate-identity-facts",
+                serde_json::json!({
+                    "ok": true,
+                    "output": "facts.yaml",
+                    "product": "casework",
+                    "claims": 1,
+                    "accessProfiles": 4,
+                    "assertionIssuers": 0,
+                }),
             ),
             (
                 "package",

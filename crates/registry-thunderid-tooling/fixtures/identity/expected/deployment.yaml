@@ -1,0 +1,15 @@
+# Generated for ThunderID 1.0.1 by the Registry Stack identity generator.
+# Merge these members into the environment's deployment.yaml; the
+# database, TLS and signing material stay with the environment.
+server:
+  public_url: https://id.registry.example
+resource:
+  store: composite
+role:
+  store: composite
+theme:
+  store: composite
+layout:
+  store: composite
+identity_provider:
+  store: composite
