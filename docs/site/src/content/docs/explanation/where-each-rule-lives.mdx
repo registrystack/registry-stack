@@ -45,6 +45,7 @@ products hold what happens around a record.
 | Field validation and patterns | BReg Record type fields: type, bounds, vocabulary, required, and a `pattern` in PostgreSQL's regular-expression syntax. An Action input can carry a `pattern` too. | The field declaration in `registry.yaml` | `registry-project.schema.json`; `bregctl explain`. A pattern is enforced by the database and is not published in the generated JSON Schema or OpenAPI. |
 | Preconditions on current data | BReg Action `requires` and `commitGuards`, checked inside the transaction | Guard entries on the Action | `bregctl explain actions` |
 | Derived values | BReg generated identifiers (`generate` on a string field) and live derived fields (reviewed SQL compiled to a read-only view) | The field declaration | `registry-project.schema.json` |
+| Rates, thresholds and other parameters that change over time | BReg Record type with `temporal` validity, one record per period, changed through an Action (a Proposal Action when a change needs review). A plan cannot read stored records, so a workflow reads the record in force with `breg.read-in-force/v1` and passes the values to the Action as inputs. | The Record type and the Action that changes it | `registry-project.schema.json`; `generated/operations/catalog.json` |
 | Calculation and branching in an Action | BReg Action `plan`: `fixed`, a Rhai Function, or a Wasm Function | Typed Action `inputs`, declared write slots and declared refusal codes; Function ABI `registry.action-plan/v1` | `bregctl generate actions` writes the `action-contracts/v1` document |
 | Record timers | BReg Record type `timers`, enabled by the root project's `timerGrants`; each timer invokes one non-public immediate Action | The timer declaration on the Record type | `registry-project.schema.json`; a timer-only Action has no portable Action contract |
 | Events and webhooks | BReg `hooks`: a `url`, `rhai` or `wasm` handler that runs after commit; local handlers use ABI `registry.hook-handler/v1` | `trigger`, `projection` and optional `when` on the hook | `bregctl explain events`; `generated/event-schemas/proposal-lifecycle.schema.json` |
@@ -59,6 +60,9 @@ products hold what happens around a record.
 
 {/* Evidence: products/breg/native-patterns.md; products/breg/immediate-actions.md;
     products/breg/generated-identifiers.md; products/breg/README.md (Live derived fields);
+    products/breg/HISTORY.md (temporal); products/coordinator/PRODUCT-CONTRACT.md (Reading the
+    record in force); products/breg/acceptance/person-registration-rhai/README.md (no stored-record
+    API in Rhai);
     products/breg/record-timers.md; products/breg/EVENTS-AND-WEBHOOKS.md;
     products/breg/wasm-action-handlers.md; products/breg/proposals.md;
     products/breg/metadata.md; products/breg/generated/authoring/registry-project.schema.json;
@@ -88,9 +92,9 @@ same state without the Action. The details are in
 
 ## Logic outside the stack
 
-When a rule lives in another system, such as a licensing authority's calculation service, do not
-add a second plugin mechanism to the stack. Write an Adapter pack route that calls the system, and
-serve it as a facade route. The Adapter keeps the source credentials, an audit journal and an
+When a rule lives in another system, such as a licensing authority's calculation service, the stack
+has no plugin mechanism to host it. Write an Adapter pack route that calls the system, and serve it
+as a facade route. The Adapter keeps the source credentials, an audit journal and an
 idempotency store for writes. A workflow then calls the route through one of two operations:
 
 - `external.get/v1` reads. The connection lists exact paths and a required response schema.

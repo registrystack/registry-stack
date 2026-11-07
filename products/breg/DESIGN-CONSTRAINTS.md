@@ -100,10 +100,10 @@ or refuses, with the context needed to apply it.
   [`wasm-action-handlers.md`](wasm-action-handlers.md)) runs behind the
   Function's declared entrypoint for typed input calculation and branching.
   Hook handlers use a separate ABI, `registry.hook-handler/v1`. The plan ABI
-  accepts scalar inputs only and refuses `crs84-point` and `structured` inputs; every
-  effect an action can produce is a declared write slot with a fixed target,
-  operation, and field list, so the script cannot reach a target, field, or
-  operation the compiler did not admit. Declared refusal codes are the only
+  accepts scalar inputs only and refuses `crs84-point` and `structured`
+  inputs; every effect an action can produce is a declared write slot with a
+  fixed target, operation, and field list, so the script cannot reach a
+  target, field, or operation the compiler did not admit. Declared refusal codes are the only
   way a script can decline a call before an effect commits.
 - A persisted `string` or `text` field may declare `pattern` using
   PostgreSQL's native advanced regular-expression syntax, on PostgreSQL 17 or
