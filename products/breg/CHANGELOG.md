@@ -12,7 +12,8 @@
   catalogue publisher. A project without either key is refused with
   `config.missing-key`; an empty list with
   `breg.manifest-projection.authorities-empty`; a repeated id with
-  `breg.manifest-projection.authority-duplicate`; a lookalike id with
+  `breg.manifest-projection.authority-duplicate`; an empty name with
+  `breg.manifest-projection.authority-name-empty`; a lookalike id with
   `breg.manifest.authority-id-collision`; and an id that names no authority
   with `breg.manifest-projection.competent-authority-dangling`. To keep the
   previous Manifest output, copy `catalog.publisher` (its `id`, `name`, `iri`

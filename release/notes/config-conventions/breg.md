@@ -2803,6 +2803,49 @@ and the registry revision change for a project that writes the member. No
 stored row is rewritten, and the generated SQL, OpenAPI document, and
 manifest are byte for byte what they were.
 
+### BREAKING: `manifestProjection` declares its authorities and names the competent one
+
+`manifestProjection` in `registry.yaml` now declares the identified public
+authorities the Registry Manifest names, and the public service names the one
+legally competent for it. Both members are required.
+
+| File | Writes | Meaning |
+|---|---|---|
+| `registry.yaml` | `manifestProjection.authorities[]` with `id`, `name`, and optional `iri` and `authorityType` | an identified authority, shaped like `catalog.publisher` |
+| `registry.yaml` | `manifestProjection.publicService.competentAuthority` | the `id` of one `authorities[]` entry |
+
+A project that writes neither member is refused with `config.missing-key` at
+the missing member. An empty `authorities` list is refused with
+`breg.manifest-projection.authorities-empty`; a repeated `id` with
+`breg.manifest-projection.authority-duplicate`; an empty `name` with
+`breg.manifest-projection.authority-name-empty`; an `id` that differs from
+another only by case or separators with `breg.manifest.authority-id-collision`;
+and a `competentAuthority` that names no entry with
+`breg.manifest-projection.competent-authority-dangling`. An `iri` or
+`authorityType` that is not a URI is refused with
+`breg.manifest-projection.invalid` at the position the entry has in the file.
+
+The generated Registry Manifest carries the entries in `authorities[]` and the
+named one in `public_services[].competent_authority`, so the DCAT document
+renders `hasCompetentAuthority` for that authority instead of the catalogue
+publisher.
+
+To migrate and keep the previous Manifest output, copy `catalog.publisher` as
+the single entry of `authorities` and name it:
+
+```yaml
+manifestProjection:
+  authorities:
+    - id: <catalog.publisher.id>
+      name: <catalog.publisher.name>
+  publicService:
+    competentAuthority: <catalog.publisher.id>
+```
+
+Carry `iri` and `authorityType` across when the publisher writes them. Then
+rebuild the package: it binds the bytes of `registry.yaml`, so the package
+digest and the registry revision change. No stored row is rewritten.
+
 ### BREAKING: a deployed package written in the retired spellings is not rehearsed
 
 `bregctl test --baseline-package`, `bregctl package --baseline-package`, and
