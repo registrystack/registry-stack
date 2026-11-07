@@ -31,6 +31,12 @@
   both answer 403 `operation.not-authorized`. Add `subjects` to every
   `deployment.authentication.policies` entry: the client's own service-account
   subject for a producer, and each operator's subject for an operator policy.
+- BREAKING: Functions can no longer call `curry`, and the pure Function
+  interpreter ABI is now `v3`. Check refuses a source that uses `curry` and
+  suggests passing the value as an argument instead. Every definition frozen
+  by 0.45.0 records `v2` and is refused with `definition.abi`, whether or not
+  it uses `curry`: settle runs with the 0.45.0 binaries, then check and
+  promote the project again.
 
 ## 0.45.0 - 2026-11-03
 

@@ -21,7 +21,7 @@ use crate::{CoordinatorError, Result};
 /// Changing this identity requires a new Workflow revision.
 pub const PURE_PROFILE: &str = "coordinator/bounded-pure/v1";
 
-pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.27.0/v2;named-input-object;raw-arithmetic-logic-string-more-string-deterministic-math-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
+pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.27.0/v3;named-input-object;raw-arithmetic-logic-string-more-string-deterministic-math-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
 
 pub(crate) const MAXIMUM_FUNCTION_OPERATIONS: u32 = 100_000;
 pub(crate) const MAXIMUM_FUNCTION_CALL_LEVELS: u32 = 32;
@@ -49,7 +49,7 @@ const PROFILE: RhaiProfile = RhaiProfile {
         map_entries: MAXIMUM_FUNCTION_MAP_ENTRIES as usize,
     },
     base: RhaiBaseEngine::Raw,
-    disabled_symbols: &["import", "export", "eval", "print", "debug"],
+    disabled_symbols: &["import", "export", "eval", "print", "debug", "curry"],
     allow_anonymous_fn: false,
     maximum_source_bytes: MAXIMUM_FUNCTION_SOURCE_BYTES as usize,
 };
@@ -91,6 +91,7 @@ impl Functions {
         let mut entries = BTreeMap::new();
         let mut findings = Vec::new();
         let mut reported = BTreeSet::new();
+        let mut refusals = BTreeSet::new();
         for (name, function) in definitions {
             let result = (|| {
                 let source = sources
@@ -124,6 +125,9 @@ impl Functions {
                 let ast = platform::compile_entrypoint(&profile(function), source, &function.entrypoint, &[1])
                     .map_err(|error| match error {
                         platform::RhaiCompileError::SourceBound => failure("function.source_limit").at(&function.source, "/"),
+                        platform::RhaiCompileError::Parse(position) if refused_only_for_curry(source) => CoordinatorError::new("function.definition", "function source uses `curry`, which Coordinator Functions do not offer")
+                            .at(&function.source, format!("line {} column {}", position.line().unwrap_or(0), position.position().unwrap_or(0)))
+                            .suggest("Pass the value as an argument where the function is called, for example add(1, x) instead of Fn(\"add\").curry(1).call(x)."),
                         platform::RhaiCompileError::Parse(position) => CoordinatorError::new("function.definition", syntax_refusal(source))
                             .at(&function.source, format!("line {} column {}", position.line().unwrap_or(0), position.position().unwrap_or(0)))
                             .suggest("Correct the named Function source syntax and rerun check."),
@@ -180,7 +184,12 @@ impl Functions {
                         }
                     }
                 }
-                Err(error) => findings.push(error),
+                // A refusal of a shared source is reported once too.
+                Err(error) => {
+                    if refusals.insert(error.to_string()) {
+                        findings.push(error);
+                    }
+                }
             }
         }
         if findings.is_empty() {
@@ -317,6 +326,19 @@ fn located(name: &str, error: &EvalAltResult) -> String {
         (Some(line), None) => format!("{kind} in function {function} at line {line}"),
         _ => format!("{kind} in function {function}"),
     }
+}
+
+/// Whether `source` parses once `curry` is allowed, so `curry` is the only
+/// reason it was refused. The profile disables `curry` because Rhai does not
+/// count data curried into a function pointer against the size limits.
+fn refused_only_for_curry(source: &str) -> bool {
+    const WITH_CURRY: RhaiProfile = RhaiProfile {
+        disabled_symbols: &["import", "export", "eval", "print", "debug"],
+        ..PROFILE
+    };
+    platform::build_engine(&WITH_CURRY, None, |_| {})
+        .compile(source)
+        .is_ok()
 }
 
 /// The parser's own reason for refusing authored source, which names source
@@ -612,10 +634,9 @@ fn pad_text(
 
 /// Calls the interpreter answers itself, so its function table does not list
 /// them.
-const INTERPRETER_CALLS: [&str; 7] = [
+const INTERPRETER_CALLS: [&str; 6] = [
     "Fn",
     "call",
-    "curry",
     "is_def_fn",
     "is_def_var",
     "is_shared",
@@ -970,12 +991,28 @@ mod tests {
     }
 
     #[test]
+    fn curry_is_refused_in_every_call_form() {
+        // Rhai does not count data curried into a function pointer against
+        // the size limits, so the profile leaves `curry` out.
+        assert!(!helpers().contains("curry"));
+        for script in [
+            r#"fn g(x) { x } curry(Fn("g"), 1)"#,
+            r#"fn g(x) { x } Fn("g").curry(1)"#,
+            r#"fn g(x) { x } Fn("curry")"#,
+        ] {
+            assert!(
+                engine().eval::<rhai::Dynamic>(script).is_err(),
+                "curry accepted in: {script}"
+            );
+        }
+    }
+
+    #[test]
     fn the_interpreters_own_calls_are_listed_and_run() {
         for (name, script) in [
             ("type_of", r#"type_of(1)"#),
             ("Fn", r#"fn g(x) { x } Fn("g")"#),
             ("call", r#"fn g(x) { x } call(Fn("g"), 1)"#),
-            ("curry", r#"fn g(x) { x } curry(Fn("g"), 1)"#),
             ("is_def_fn", r#"is_def_fn("g", 1)"#),
             ("is_def_var", r#"is_def_var("x")"#),
             ("is_shared", r#"let x = 1; is_shared(x)"#),

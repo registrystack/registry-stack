@@ -461,7 +461,7 @@ fn a_flat_mapping_is_unchanged() {
     );
     assert_eq!(
         definition.digest,
-        "sha256:f50dbad620b01d86d3f6214c4acfe82f92e8db4c81442e3beb8c807a2a0c0801"
+        "sha256:862523b816685b1cd9b1ae8ee0c439b3a8db7519ca13b869e9fc0980fde3f5e2"
     );
 }
 
