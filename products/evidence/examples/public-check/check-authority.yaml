@@ -1,0 +1,26 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: public-check
+project: certificate-check
+# Offline fixture evaluation resolves each case through an access profile, so the
+# example carries one relying-service profile. A deployed check-only instance
+# that does not run fixtures can use `accessProfiles: {}`.
+accessProfiles:
+  certificate-service:
+    authority: organizational
+    actorKind: service
+    requesterTags:
+    - certificate-service
+    grants:
+    - definition: certificate-status
+      purpose: certificate-check
+      audienceFrom: authenticated-requester
+      representations:
+      - signed-jws
+      subjectBinding: audience-scoped
+      subjects:
+      - role: certificate
+        selectorProfile: certificate-number
+        valueOrigin: request
+publicCheck:
+  definition: certificate-status

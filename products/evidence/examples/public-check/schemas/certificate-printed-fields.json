@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:example:schema:certificate-printed-fields",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["holderName", "issuedOn", "expiresOn"],
+  "properties": {
+    "holderName": {"type": "string", "maxLength": 128},
+    "issuedOn": {"type": "string", "format": "date"},
+    "expiresOn": {"type": "string", "format": "date"}
+  }
+}
