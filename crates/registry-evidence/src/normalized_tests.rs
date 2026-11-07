@@ -90,12 +90,12 @@ use registry_evidence_verifier::{
 };
 
 const AUTH_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"acceptance-auth-key"}"#;
-const EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
-const EVIDENCE_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+pub(crate) const EVIDENCE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
+pub(crate) const EVIDENCE_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 const HOLDER_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"holder-proof-key"}"#;
 const TOKEN_ISSUER: &str = "https://identity.invalid";
 const TOKEN_AUDIENCE: &str = "evidence-fixture";
-const EVIDENCE_AUDIENCE: &str = "https://relying.invalid/procedure";
+pub(crate) const EVIDENCE_AUDIENCE: &str = "https://relying.invalid/procedure";
 const SOURCE_TOKEN: &str = "normalized-source-token-canary";
 const SUBJECT_BINDING_SECRET: &str = "normalized-subject-binding-secret-32-bytes";
 const REQUIREMENT_AUDIENCE: &str = "urn:example:normalized:requirement:audience";
@@ -1806,7 +1806,7 @@ fn scripts() -> BTreeMap<String, String> {
     ])
 }
 
-fn authenticator() -> Authenticator {
+pub(crate) fn authenticator() -> Authenticator {
     let private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("authentication key parses");
     let jwks: JwkSet = serde_json::from_value(json!({"keys": [private.public()]}))
         .expect("static authentication JWKS parses");
@@ -1834,7 +1834,7 @@ fn authenticator() -> Authenticator {
     .with_resources(vec![TOKEN_AUDIENCE.to_owned()])
 }
 
-fn access_token(extra: Option<Value>) -> String {
+pub(crate) fn access_token(extra: Option<Value>) -> String {
     access_token_for_actor("service", extra)
 }
 
@@ -1919,7 +1919,7 @@ fn subject(record_id: Option<&str>) -> RequestedSubject {
     }
 }
 
-fn fresh_nonce() -> String {
+pub(crate) fn fresh_nonce() -> String {
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(&ulid::Ulid::generate().to_bytes());
     URL_SAFE_NO_PAD.encode(bytes)
@@ -1967,7 +1967,7 @@ fn released_credential_payload(credential: &str) -> Value {
         .expect("payload parses")
 }
 
-fn decode_evidence(jws: &FlattenedJws) -> Evidence {
+pub(crate) fn decode_evidence(jws: &FlattenedJws) -> Evidence {
     serde_json::from_slice(
         &URL_SAFE_NO_PAD
             .decode(&jws.payload)
@@ -2036,14 +2036,14 @@ fn verification_policy_for(
     policy
 }
 
-fn write_secret(root: &Path, name: &str, value: &str) {
+pub(crate) fn write_secret(root: &Path, name: &str, value: &str) {
     let path = root.join(name);
     fs::write(&path, value).expect("synthetic secret is written");
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
         .expect("synthetic secret is owner-only");
 }
 
-fn make_read_only(root: &Path) {
+pub(crate) fn make_read_only(root: &Path) {
     for entry in fs::read_dir(root).expect("package directory is readable") {
         let path = entry.expect("package member is readable").path();
         if path.is_dir() {

@@ -1668,7 +1668,7 @@ fn correlation_id(response: &axum_test::TestResponse) -> Value {
 /// its own, so one subscriber is installed process-wide on first use and routes
 /// each record to the buffer of the thread that emitted it. Tests running
 /// concurrently on other threads have no buffer and their records are dropped.
-fn capture_evidence_logs<F, Fut>(body: F) -> Vec<Value>
+pub(crate) fn capture_evidence_logs<F, Fut>(body: F) -> Vec<Value>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = ()>,
