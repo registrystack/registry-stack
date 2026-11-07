@@ -3984,6 +3984,7 @@ async fn activated_authority_fixture() -> (PreparedAcceptance, Arc<EvidenceRunti
         target: "local".to_owned(),
         project: "wire-fixture".to_owned(),
         access_profiles: profiles.into_inner().expect("compiled profiles"),
+        public_check: None,
     };
     crate::authority::activate(
         &authority_root,

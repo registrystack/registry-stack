@@ -206,3 +206,70 @@ fn tooling_editor_publishes_its_setup_report_in_json() {
         ]
     );
 }
+
+/// A `publicCheck` declaration the definition cannot satisfy is refused by the
+/// offline check, with a diagnostic that names the rule and not a generic
+/// schema failure.
+#[test]
+fn check_refuses_an_unsatisfiable_public_check_declaration() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let project = workspace.path().join("project");
+    let output = evidencectl()
+        .args([
+            "init",
+            &project.display().to_string(),
+            "--transport",
+            "sqlite-extract",
+            "--profile",
+            "local",
+        ])
+        .output()
+        .expect("scaffold project");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let path = project.join("evidence.yaml");
+    let mut document: Value =
+        serde_norway::from_slice(&fs::read(&path).expect("project text")).expect("project YAML");
+    let definitions = document["assertionDefinitions"]
+        .as_object_mut()
+        .expect("definitions");
+    let (_, definition) = definitions.iter_mut().next().expect("one definition");
+    definition["publicCheck"] = serde_json::json!({
+        "checkCodeFact": "checkCode",
+        "statusOutput": "no-such-output",
+        "fieldsOutput": "no-such-output"
+    });
+    fs::write(
+        &path,
+        serde_norway::to_string(&document).expect("project YAML"),
+    )
+    .expect("write project");
+
+    let output = evidencectl()
+        .args(["--format", "json", "check", &project.display().to_string()])
+        .output()
+        .expect("run check");
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_of(&output);
+    assert_eq!(report["ok"], Value::Bool(false));
+    let codes: Vec<&str> = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics list")
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str())
+        .collect();
+    for expected in [
+        "evidence.project.public-check-status-output",
+        "evidence.project.public-check-fields-output",
+        "evidence.project.public-check-same-output",
+    ] {
+        assert!(
+            codes.contains(&expected),
+            "{expected} missing from {codes:?}"
+        );
+    }
+}

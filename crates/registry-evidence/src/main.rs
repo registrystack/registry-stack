@@ -589,7 +589,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 // This copy can reach only the offline fixture kernel, never
                 // DeploymentInputs or serving initialization. No authority
                 // store, credential, source or operator signer is accessed.
-                bundle.config.authority_profiles = document.access_profiles;
+                document.apply_to(&mut bundle.config);
             } else if bundle.config.project.is_some() {
                 return Err(CliError("normalized fixtures require --authority-document with the compiled target grants").into());
             }
@@ -644,7 +644,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
             if let Some(path) = authority_document {
                 let document = read_bundle_authority(&path, &bundle)?;
-                bundle.config.authority_profiles = document.access_profiles;
+                document.apply_to(&mut bundle.config);
             } else if bundle.config.project.is_some() {
                 return Err(CliError("normalized fixtures require --authority-document with the compiled target grants").into());
             }
