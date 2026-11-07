@@ -72,9 +72,11 @@ https://support.kobotoolbox.org/api.html).
 
 An endpoint declares one kind, so this pack declares
 `static-authorization` with `scheme: Token`, and the runtime config
-binds the personal API token through `tokenRef`. The token reads the
-API only. A Kobo password also signs in to the web UI, so a leaked
-password is a full account login. A deployment that must use Basic
+binds the personal API token through `tokenRef`. The API token cannot
+sign in to the Kobo web UI, but it is not read-only: it carries the
+account's API rights, so bind the token of an account restricted to the
+form. A Kobo password also signs in to the web UI, so a leaked password
+is a full account login. A deployment that must use Basic
 swaps the endpoint kind to `basic` and binds `usernameRef` and
 `passwordRef`; both sides of the kind match move together. The
 endpoint declares no request or response header allowlists: the

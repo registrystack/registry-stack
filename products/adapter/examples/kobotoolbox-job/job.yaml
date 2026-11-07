@@ -27,7 +27,7 @@ source:
   pack:
     id: kobotoolbox
     version: "1"
-    digest: sha256:7b958e8918e706d11211cbf59ae1d8b4e73b5f62376d2017133eed4e266adbcf
+    digest: sha256:77544faac4b11ba7d728d011ae243a49c01817eb9700337538b2a9ba54bd5a46
   route: kobo-submissions
 # Programme semantics stay beside the job, not in the reusable Kobo provider
 # pack. This example maps one projected submission into a synthetic BReg
