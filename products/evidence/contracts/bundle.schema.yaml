@@ -1821,6 +1821,34 @@ $defs:
           derivation inputs, so a caller cannot distinguish the cause from the response.
         enum:
           - collapse-unresolved
+      publicCheck:
+        description: >-
+          Experimental (`v1alpha1`). Declares that this requirement can answer an
+          unauthenticated certificate check once a target authority activates it. Names the
+          Source fact that carries the check code and the two concepts that form the public
+          answer; the status concept is a controlled category and the fields concept is a
+          reviewed structured value, and they are different concepts. The requirement has one
+          subject role with one selector profile of one field, acquires through one Source,
+          and declares no holder-presented channel. Omitted when the requirement declares no
+          public check, so existing configuration revisions do not change.
+        type: object
+        additionalProperties: false
+        required:
+          - checkCodeFact
+          - statusOutput
+          - fieldsOutput
+        properties:
+          checkCodeFact:
+            description: Name of the Source fact that carries the check code the caller must present.
+            type: string
+            minLength: 1
+            maxLength: 128
+          statusOutput:
+            description: Handle of the controlled-category concept that carries the public status.
+            type: string
+          fieldsOutput:
+            description: Handle of the reviewed-structured-value concept that carries the public fields.
+            type: string
   boolean-constraints:
     type: object
     additionalProperties: false

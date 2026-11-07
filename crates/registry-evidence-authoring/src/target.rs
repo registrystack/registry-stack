@@ -348,10 +348,10 @@ pub fn validate_authority(
         ));
     }
     if let Some(activation) = &authority.public_check {
-        if !project
+        if project
             .assertion_definitions
             .get(&activation.definition)
-            .is_some_and(|definition| definition.public_check.is_some())
+            .is_none_or(|definition| definition.public_check.is_none())
         {
             findings.push(Finding::new(
                 FieldPath::root().key("publicCheck").key("definition"),

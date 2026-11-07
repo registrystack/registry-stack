@@ -104,6 +104,17 @@
           },
           "type": "object"
         },
+        "publicCheck": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicCheck"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Experimental (`v1alpha1`). Declares that this definition may answer the\nunauthenticated public certificate check once a target authority\nactivates it. Declaring it grants nothing by itself."
+        },
         "purpose": {
           "type": "string"
         },
@@ -836,6 +847,32 @@
         "top-level"
       ],
       "type": "string"
+    },
+    "PublicCheck": {
+      "additionalProperties": false,
+      "description": "The public certificate check's view of one assertion definition: where the\nstored check code is read from, and which two outputs form the answer. Other\noutputs of the definition stay on the relying-service path.",
+      "properties": {
+        "checkCodeFact": {
+          "description": "Name of a string fact of the acquiring Source holding the stored check\ncode. The code is compared and then removed; no Output can carry it.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "fieldsOutput": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Output id of a reviewed structured value whose `fields` object is the\nprinted content of the answer."
+        },
+        "statusOutput": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Output id of a controlled category whose values lie within `valid`,\n`suspended`, `revoked` and `expired`."
+        }
+      },
+      "required": [
+        "checkCodeFact",
+        "statusOutput",
+        "fieldsOutput"
+      ],
+      "type": "object"
     },
     "Representation": {
       "enum": [

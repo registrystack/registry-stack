@@ -1543,7 +1543,7 @@ fn validate_public_check(
         ));
     }
     let fields = definition.outputs.get(&public_check.fields_output);
-    if !fields.is_some_and(|output| output.value_type == "reviewed-structured-value") {
+    if fields.is_none_or(|output| output.value_type != "reviewed-structured-value") {
         findings.push(Finding::new(
             at.clone().key("fieldsOutput"),
             "public-check-fields-output",
