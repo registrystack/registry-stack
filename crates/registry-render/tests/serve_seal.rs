@@ -300,9 +300,9 @@ struct SealSpec {
 /// How the fixture's seal signs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Signer {
-    /// A `local-jwk` key file, under `trust: test-only`.
+    /// A `local-jwk` key file, under `assuranceProfile: local`.
     KeyFile,
-    /// A key behind a [`TestTransit`] proxy, under `trust: production`.
+    /// A key behind a [`TestTransit`] proxy, under `assuranceProfile: production`.
     Transit,
 }
 
@@ -385,13 +385,13 @@ fn deployment_signed_by(seal: Option<SealSpec>, signer: Signer) -> Fixture {
         Some(spec) => {
             std::fs::write(home.join("chain.pem"), spec.seal.chain_pem()).unwrap();
             let key = spec.key_of.as_ref().unwrap_or(&spec.seal);
-            let (signer, trust) = match signer {
+            let (signer, profile) = match signer {
                 Signer::KeyFile => {
                     write_secret(&home.join("seal.jwk"), &private_jwk_json(key.private_jwk()));
                     (
                         "        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n"
                             .to_owned(),
-                        "test-only",
+                        "local",
                     )
                 }
                 Signer::Transit => {
@@ -415,7 +415,7 @@ fn deployment_signed_by(seal: Option<SealSpec>, signer: Signer) -> Fixture {
                     .to_owned(),
             };
             format!(
-                "signing:\n  seals:\n    ministry:\n      signer:\n{signer}      certificateChainFile: {}\n{timestamp}      allowedClients: [{SEAL_CLIENT}]\n      trust: {trust}\n",
+                "assuranceProfile: {profile}\nsigning:\n  seals:\n    ministry:\n      signer:\n{signer}      certificateChainFile: {}\n{timestamp}      allowedClients: [{SEAL_CLIENT}]\n",
                 home.join("chain.pem").display()
             )
         }
@@ -1721,10 +1721,14 @@ fn a_production_seal_signs_through_its_transit_key() {
 }
 
 #[test]
-fn a_production_seal_never_signs_with_a_key_file() {
+fn a_production_runtime_never_signs_with_a_key_file() {
     let fixture = sealed(None);
     let text = std::fs::read_to_string(&fixture.runtime_path).unwrap();
-    let production = text.replacen("      trust: test-only\n", "      trust: production\n", 1);
+    let production = text.replacen(
+        "assuranceProfile: local\n",
+        "assuranceProfile: production\n",
+        1,
+    );
     assert_ne!(production, text);
     std::fs::write(&fixture.runtime_path, production).unwrap();
     let (code, stderr) = refused_startup(&fixture);
@@ -1734,7 +1738,7 @@ fn a_production_seal_never_signs_with_a_key_file() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("render.runtime.seal-signer-assurance-mismatch"),
+        stderr.contains("render.runtime.signer-assurance-mismatch"),
         "{stderr}"
     );
     assert!(

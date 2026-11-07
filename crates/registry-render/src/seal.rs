@@ -754,7 +754,7 @@ impl Seal {
             fingerprint: chain.leaf_sha256_fingerprint(),
             signing: SigningPayload {
                 signer_name: chain.display_name().map(str::to_owned),
-                test_only: seal.is_test_only(),
+                test_only: runtime.seals_are_test_only(),
             },
             chain,
             signer,
@@ -775,7 +775,7 @@ impl Seal {
         self.chain.allows_document_signing_purpose()
     }
 
-    /// Whether the runtime file declares the seal `trust: test-only`.
+    /// Whether the runtime file declares `assuranceProfile: local`.
     pub fn is_test_only(&self) -> bool {
         self.signing.test_only
     }

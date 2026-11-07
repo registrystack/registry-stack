@@ -188,7 +188,7 @@ fn run_with_transit_key(
          Have a certificate authority issue a seal certificate from the request: a leaf with \
          basicConstraints CA:FALSE and the digitalSignature or nonRepudiation key usage. \
          Point certificateChainFile at the issued chain, the seal certificate first, and sign \
-         with signer.type: transit naming this key version, under trust: production.",
+         with signer.type: transit naming this key version, under assuranceProfile: production.",
         request.csr.display(),
     )
     .map_err(|error| internal(&format!("the summary could not be printed: {error}")))?;

@@ -224,6 +224,13 @@ fn set_signing_constraints(schema: &mut Value) {
         member.remove("anyOf");
         member.insert("$ref".to_owned(), json!("#/$defs/SigningRuntime"));
     }
+    if let Some(member) = schema
+        .pointer_mut("/properties/assuranceProfile")
+        .and_then(Value::as_object_mut)
+    {
+        member.remove("anyOf");
+        member.insert("$ref".to_owned(), json!("#/$defs/AssuranceProfile"));
+    }
     if let Some(seals) = schema
         .pointer_mut("/$defs/SigningRuntime/properties/seals")
         .and_then(Value::as_object_mut)
@@ -288,15 +295,28 @@ fn set_signing_constraints(schema: &mut Value) {
                 {"required": ["withoutTimestamp"], "not": {"required": ["timestampAuthority"]}}
             ]),
         );
-        // A production seal signs through Transit; a key file is for a
-        // test-only seal.
-        seal.insert(
-            "if".to_owned(),
-            json!({"properties": {"trust": {"const": "production"}}, "required": ["trust"]}),
-        );
-        seal.insert(
-            "then".to_owned(),
-            json!({"properties": {"signer": {"properties": {"type": {"const": "transit"}}}}}),
+    }
+    // The profile decides the signer: `local` signs with a key file,
+    // `production` through Transit. A runtime that declares a seal states it.
+    if let Some(root) = schema.as_object_mut() {
+        let signer_is = |profile: &str, signer: &str| {
+            json!({
+                "if": {"properties": {"assuranceProfile": {"const": profile}}, "required": ["assuranceProfile"]},
+                "then": {"properties": {"signing": {"properties": {"seals": {"additionalProperties": {
+                    "properties": {"signer": {"properties": {"type": {"const": signer}}}}
+                }}}}}}
+            })
+        };
+        root.insert(
+            "allOf".to_owned(),
+            json!([
+                {
+                    "if": {"properties": {"signing": {"properties": {"seals": {"minProperties": 1}}, "required": ["seals"]}}, "required": ["signing"]},
+                    "then": {"required": ["assuranceProfile"]}
+                },
+                signer_is("local", "local-jwk"),
+                signer_is("production", "transit")
+            ]),
         );
     }
     if let Some(Value::Array(variants)) = schema.pointer_mut("/$defs/SealSignerRuntime/oneOf") {
@@ -750,12 +770,12 @@ mod tests {
                 "allowedClients": ["portal", "records-service"]
             }},
             "audit": {"path": "/var/lib/render/audit/render.jsonl"},
+            "assuranceProfile": "local",
             "signing": {"seals": {"ministry": {
                 "signer": {"type": "local-jwk", "privateKeyRef": "secret:file/seal.jwk"},
                 "certificateChainFile": "/etc/render/seal/chain.pem",
                 "timestampAuthority": {"url": "https://tsa.example.test/tsr"},
-                "allowedClients": ["records-service"],
-                "trust": "test-only"
+                "allowedClients": ["records-service"]
             }}}
         })
     }
@@ -771,30 +791,22 @@ mod tests {
         let without = json!("seal-stops-validating-when-certificate-expires");
         let no_authority = with(&base, &authority, None);
         let transit = with(
-            &with(
-                &base,
-                &format!("{seal}/signer"),
-                Some(json!({
-                    "type": "transit",
-                    "unixSocketPath": "/run/render/transit.sock",
-                    "mount": "transit",
-                    "keyName": "render-seal",
-                    "keyVersion": 3,
-                    "attemptTimeoutMilliseconds": 2000
-                })),
-            ),
-            &format!("{seal}/trust"),
-            Some(json!("production")),
+            &with(&base, "/assuranceProfile", Some(json!("production"))),
+            &format!("{seal}/signer"),
+            Some(json!({
+                "type": "transit",
+                "unixSocketPath": "/run/render/transit.sock",
+                "mount": "transit",
+                "keyName": "render-seal",
+                "keyVersion": 3,
+                "attemptTimeoutMilliseconds": 2000
+            })),
         );
+        let no_seals = with(&with(&base, "/signing", None), "/assuranceProfile", None);
         let signer = format!("{seal}/signer");
         let cases = [
-            (
-                &transit,
-                "/signing/seals/ministry/trust",
-                Some(json!("test-only")),
-                true,
-            ),
-            (&transit, &format!("{seal}/trust"), None, false),
+            (&transit, "/assuranceProfile", Some(json!("local")), false),
+            (&transit, "/assuranceProfile", None, false),
             (
                 &transit,
                 &format!("{signer}/unixSocketPath"),
@@ -861,19 +873,23 @@ mod tests {
                 Some(json!("secret:file/seal.jwk")),
                 false,
             ),
-            (&base, &format!("{seal}/trust"), None, false),
+            (&base, "/assuranceProfile", None, false),
+            (&base, "/assuranceProfile", Some(json!("production")), false),
             (
                 &base,
-                "/signing/seals/ministry/trust",
-                Some(json!("test-only")),
-                true,
-            ),
-            (
-                &base,
-                "/signing/seals/ministry/trust",
-                Some(json!("production")),
+                "/assuranceProfile",
+                Some(json!("evidence-grade")),
                 false,
             ),
+            (
+                &base,
+                &format!("{seal}/trust"),
+                Some(json!("test-only")),
+                false,
+            ),
+            (&no_seals, "/assuranceProfile", Some(json!("local")), true),
+            (&base, "/assuranceProfile", Some(Value::Null), false),
+            (&no_seals, "/assuranceProfile", Some(Value::Null), false),
             (
                 &base,
                 &format!("{authority}/url"),
@@ -1057,7 +1073,12 @@ mod tests {
                 Some(without),
                 false,
             ),
-            (&no_authority, &format!("{seal}/trust"), None, false),
+            (
+                &no_authority,
+                &format!("{seal}/withoutTimestamp"),
+                None,
+                false,
+            ),
             (&base, "/signing/seals", Some(json!({})), false),
             (&base, "/signing", Some(Value::Null), false),
             (&base, "/signing/extra", Some(json!(1)), false),
@@ -1075,6 +1096,7 @@ mod tests {
             .chain([
                 (base.clone(), true),
                 (transit.clone(), true),
+                (no_seals.clone(), true),
                 (renamed, false),
             ]);
         for (document, accepted) in documents {

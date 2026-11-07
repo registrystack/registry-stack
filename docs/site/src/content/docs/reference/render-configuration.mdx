@@ -84,16 +84,19 @@ rules are not in the tables.
   rely on it for B-T.
 - `certificateChainFile` is an absolute path with no `.` or `..` segment. The file is PEM, the
   seal certificate first.
-- `trust` is required: `test-only` or `production`. A `production` seal signs through a `transit`
-  signer; `trust: production` with a `local-jwk` signer is refused as
-  `render.runtime.seal-signer-assurance-mismatch`. A `test-only` seal may use either signer.
+- `assuranceProfile` is a top-level runtime member, `local` or `production`, the same member and
+  values Evidence uses. It is required when `signing.seals` declares a seal, and unused otherwise.
+  Under `production` every seal signs through a `transit` signer; under `local` every seal signs
+  with a `local-jwk` key file. A seal with the other signer is refused as
+  `render.runtime.signer-assurance-mismatch`, at its `signer.type`. A runtime without seals
+  needs no `assuranceProfile`.
 - `signer` names how the seal key signs. `type: transit` signs through a Vault or OpenBao Transit
   signing proxy on the Render host: `unixSocketPath` is the proxy's socket, an absolute path with no
   `.` or `..` segment; `mount` and `keyName` are local identifiers naming the key; `keyVersion`
   pins one version of it; and `attemptTimeoutMilliseconds` (1 to 30000, required) bounds each call.
   The key is ECDSA P-256, so the seal signs ES256, and it must be non-exportable, not derived, and
   without plaintext backup. The proxy holds the Transit token; Render sends none.
-- `type: local-jwk` is for a test-only seal: `privateKeyRef` is a file-provider secret reference
+- `type: local-jwk` is for `assuranceProfile: local`: `privateKeyRef` is a file-provider secret reference
   (`secret:file/<name>`) to one ES256, ES384, RS256, or RS384 private JWK, and EdDSA is refused. An
   environment reference is refused as `render.runtime.seal-key-requires-file-provider`.
 - `registry-render keygen --key <file> --csr <file> --common-name <name>` writes a seal key in the
@@ -107,10 +110,10 @@ rules are not in the tables.
   writes the request alone. Keygen never overwrites a file and never prints a key.
 - `allowedClients` is a list of at least one named client. `unrestricted` and any item containing
   `*` are refused. When `authentication.oidc.allowedClients` lists clients, each seal client must be in it.
-- `trust: test-only` sets `signing.testOnly` in the template payload, and every answer about the
+- `assuranceProfile: local` sets `signing.testOnly` in the template payload, and every answer about the
   seal says so: `testOnly: true` in the JSON `seal` member, the `/ready` entry, and each audit entry
   of the call, and `X-Registry-Seal-Test-Only: true` on the PDF answer. `serve` logs one `test-only
-  seal` warning per such seal at startup. A `trust: production` seal carries none of these.
+  seal` warning per such seal at startup. Under `assuranceProfile: production` a seal carries none of these.
 - A document type's `seal` must name a seal in `signing.seals`. A package that names an unbound
   seal is refused at `serve`; `check` reports it, and warns about a runtime seal no document type
   names.
@@ -135,7 +138,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-client-wildcard` | A client is `unrestricted` or contains a wildcard. |
 | `render.runtime.seal-client-not-admitted` | A seal client is not in `authentication.oidc.allowedClients`. |
 | `render.runtime.seal-key-requires-file-provider` | `signer.privateKeyRef` names the environment provider; a seal key is read through the file provider only. |
-| `render.runtime.seal-signer-assurance-mismatch` | A `trust: production` seal signs with a `local-jwk` key file; a production seal signs through `transit`. |
+| `render.runtime.signer-assurance-mismatch` | A seal's signer does not suit `assuranceProfile`: `local` signs with `local-jwk`, `production` signs through `transit`. |
 | `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
 | `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
 | `render.runtime.seals-not-served` | Document types name seals and the runtime has no `signing` block: they render unsealed (warning). |
@@ -207,7 +210,7 @@ The default answer is `application/pdf` with these headers. Every digest is labe
 | `X-Registry-Seal-Level` | `B-T` or `B-B`, the baseline level names of ETSI EN 319 142-1. |
 | `X-Registry-Certificate-Digest` | SHA-256 of the seal certificate's DER. |
 | `X-Registry-Timestamped-At` | The timestamp authority's `genTime`, RFC 3339 at the authority's precision; B-T only. |
-| `X-Registry-Seal-Test-Only` | `true`; only for a seal declared `trust: test-only`. |
+| `X-Registry-Seal-Test-Only` | `true`; only for a seal under `assuranceProfile: local`. |
 
 With `Accept: application/json` the body is `pdfBase64`, `documentDigest`, `signedFileDigest`,
 `dataDigest`, `documentVersion`, `packageDigest`, `warnings`, and `seal` (`id`, `level`,

@@ -683,7 +683,7 @@ struct SealReadiness {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
-    /// Present, `true`, for a seal declared `trust: test-only`.
+    /// Present, `true`, for a seal under `assuranceProfile: local`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     test_only: bool,
 }
