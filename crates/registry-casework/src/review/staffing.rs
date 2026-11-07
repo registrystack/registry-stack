@@ -365,7 +365,7 @@ impl CaseworkService {
         request: ReviewCaseloadMoveRequest,
     ) -> Result<ReviewCaseloadPreview, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
-        if actor.role != CaseworkRole::Supervisor {
+        if actor.role != CaseworkActsAs::Supervisor {
             return Err(ReviewRuntimeError::Forbidden);
         }
         let client = self.store.client().await?;
@@ -420,7 +420,7 @@ impl CaseworkService {
         request: ReviewCaseloadApplyRequest,
     ) -> Result<ReviewCaseloadResult, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
-        if actor.role != CaseworkRole::Supervisor {
+        if actor.role != CaseworkActsAs::Supervisor {
             return Err(ReviewRuntimeError::Forbidden);
         }
         let (movement, tasks, directory_revision) = self
@@ -583,10 +583,10 @@ async fn validate_caseload_set(
             .access_profiles
             .iter()
             .filter(|profile| stage.deciding_profiles.contains(&profile.id))
-            .filter_map(|profile| match profile.role {
-                CaseworkRole::Staff => Some("staff".to_owned()),
-                CaseworkRole::Supervisor => Some("supervisor".to_owned()),
-                CaseworkRole::Administrator | CaseworkRole::Requester => None,
+            .filter_map(|profile| match profile.acts_as {
+                CaseworkActsAs::Staff => Some("staff".to_owned()),
+                CaseworkActsAs::Supervisor => Some("supervisor".to_owned()),
+                CaseworkActsAs::Administrator | CaseworkActsAs::Requester => None,
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -646,7 +646,7 @@ impl CaseworkService {
         request: ReviewClockRecomputeRequest,
     ) -> Result<ReviewClockRecomputePreview, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(ReviewRuntimeError::Forbidden);
         }
         for id in &request.task_ids {
@@ -706,7 +706,7 @@ impl CaseworkService {
         request: ReviewClockRecomputeApplyRequest,
     ) -> Result<ReviewClockRecomputeResult, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
-        if actor.role != CaseworkRole::Administrator {
+        if actor.role != CaseworkActsAs::Administrator {
             return Err(ReviewRuntimeError::Forbidden);
         }
         let (inputs, tasks, directory_revision) = self

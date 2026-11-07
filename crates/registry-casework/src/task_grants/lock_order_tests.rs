@@ -161,7 +161,7 @@ async fn grant_approval_and_decision_lock_request_before_task_without_deadlock()
             subject: "human".into(),
         },
         profile_id: "staff".into(),
-        role: CaseworkRole::Staff,
+        role: CaseworkActsAs::Staff,
     };
     let request_id: Uuid = store
         .client()

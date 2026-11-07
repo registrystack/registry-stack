@@ -680,13 +680,13 @@ const CASEWORK_DOCUMENTS: &[DocumentRules] = &[
     },
     DocumentRules {
         pattern: "holiday-sets/*.yaml",
-        declarations: &[N::global("holidaySet", "Casework holiday set")],
+        declarations: &[N::global("id", "Casework holiday set")],
         references: &[],
         files: &[],
     },
     DocumentRules {
         pattern: "holiday-sets/*.yml",
-        declarations: &[N::global("holidaySet", "Casework holiday set")],
+        declarations: &[N::global("id", "Casework holiday set")],
         references: &[],
         files: &[],
     },

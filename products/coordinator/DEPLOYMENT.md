@@ -168,7 +168,7 @@ Retain the keys needed to read those snapshots and the custody metadata needed f
 Pin the package digest for exact bytes; use `workflowRevision` for execution semantics.
 
 - The computed Workflow revision hashes the input, graph, outcomes, used Operation and Function
-  revisions, and host execution contracts. Presentation titles and descriptions do not change it.
+  revisions, and host execution contracts. Presentation labels and descriptions do not change it.
   `check` prints this revision on its `Definition:` line. Start, status, list, and inspect report it
   as `workflowRevision`. Existing runs keep their admitted revision.
 - The package digest is the SHA-256 of `SHA256SUMS`. That file covers the exact `definition.json`

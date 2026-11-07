@@ -126,7 +126,7 @@ elsewhere does not make a caller allowed to send.
 | `sender` | Submit through the sender profiles and templates its profile lists, submit direct content only when the profile sets `allowDirectContent`, preview a listed template, and read and cancel the messages its own principal submitted | `profile.not-authorized` for an unlisted sender profile or template, or for direct content the profile does not allow |
 | `operator` | Read and cancel every message | `operation.not-authorized` for a submission or a preview |
 
-{/* Evidence: crates/registry-messaging-core/src/access.rs, AccessRole, resolve(), and
+{/* Evidence: crates/registry-messaging-core/src/access.rs, ActsAs, resolve(), and
     authorize_submission(); crates/registry-messaging-core/src/visibility.rs. */}
 
 A message is visible to the principal that submitted it, identified by the verified issuer and configured principal,

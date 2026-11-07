@@ -217,7 +217,7 @@ impl CapturedLogs {
     }
 }
 
-fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
+fn actor(subject: &str, role: CaseworkActsAs, profile_id: &str) -> ActorContext {
     ActorContext {
         principal: IssuerPrincipal {
             issuer: "https://issuer.test".to_owned(),
@@ -228,12 +228,14 @@ fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
     }
 }
 
-fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
+fn profile(id: &str, role: CaseworkActsAs) -> AccessProfile {
     AccessProfile {
         id: id.to_owned(),
+        label: None,
+        description: None,
         principal_claim: "sub".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
-        role,
+        acts_as: role,
     }
 }
 
@@ -268,10 +270,10 @@ fn project(version: &str) -> CaseworkProject {
             version: version.to_owned(),
         },
         access_profiles: vec![
-            profile("staff", CaseworkRole::Staff),
-            profile("supervisor", CaseworkRole::Supervisor),
-            profile("administrator", CaseworkRole::Administrator),
-            profile("producer", CaseworkRole::Requester),
+            profile("staff", CaseworkActsAs::Staff),
+            profile("supervisor", CaseworkActsAs::Supervisor),
+            profile("administrator", CaseworkActsAs::Administrator),
+            profile("producer", CaseworkActsAs::Requester),
         ],
         queues: vec![QueuePolicy {
             id: "review".to_owned(),
@@ -490,7 +492,7 @@ fn bind_request(
 ) -> ReviewCreateRequest {
     // Construct expected admission identity from this test's exact compiled policy.
     // Retried requests keep the original request value and are never rebound.
-    let producer = actor("registry-service", CaseworkRole::Requester, "producer");
+    let producer = actor("registry-service", CaseworkActsAs::Requester, "producer");
     request.policy = service
         .review_policy_description(&producer, &request.policy.id)
         .unwrap()
@@ -581,10 +583,10 @@ async fn fixture() -> Fixture {
         .expect("version two service"),
         store,
         database,
-        producer: actor("registry-service", CaseworkRole::Requester, "producer"),
-        reviewer_a: actor("reviewer-a", CaseworkRole::Staff, "staff"),
-        reviewer_b: actor("reviewer-b", CaseworkRole::Staff, "staff"),
-        supervisor: actor("supervisor", CaseworkRole::Supervisor, "supervisor"),
+        producer: actor("registry-service", CaseworkActsAs::Requester, "producer"),
+        reviewer_a: actor("reviewer-a", CaseworkActsAs::Staff, "staff"),
+        reviewer_b: actor("reviewer-b", CaseworkActsAs::Staff, "staff"),
+        supervisor: actor("supervisor", CaseworkActsAs::Supervisor, "supervisor"),
         source_revoked,
         source_state,
         source_read_blocked,
@@ -2472,7 +2474,7 @@ async fn retained_reviews_remain_bound_to_the_admitted_producer_identity() {
         Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("replacement producer service");
-    let replacement = actor("replacement-service", CaseworkRole::Requester, "producer");
+    let replacement = actor("replacement-service", CaseworkActsAs::Requester, "producer");
     let request_id = created.accepted.request_id;
 
     assert!(matches!(
@@ -4110,7 +4112,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
             .await,
         Err(ReviewRuntimeError::Forbidden)
     ));
-    let outsider = actor("outside-team", CaseworkRole::Supervisor, "supervisor");
+    let outsider = actor("outside-team", CaseworkActsAs::Supervisor, "supervisor");
     assert!(matches!(
         service.review_accountability(&outsider, *event).await,
         Err(ReviewRuntimeError::NotFound)
@@ -4480,7 +4482,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
     assert!(matches!(
         source
             .own_review_decisions(
-                &actor("reviewer-a", CaseworkRole::Administrator, "administrator"),
+                &actor("reviewer-a", CaseworkActsAs::Administrator, "administrator"),
                 None,
                 "",
                 None,
@@ -4490,7 +4492,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
             .await,
         Err(ReviewRuntimeError::Forbidden)
     ));
-    let wrong_profile = actor("reviewer-a", CaseworkRole::Staff, "not-pinned");
+    let wrong_profile = actor("reviewer-a", CaseworkActsAs::Staff, "not-pinned");
     assert!(source
         .own_review_decisions(&wrong_profile, None, "", None, None, 1)
         .await
@@ -5842,7 +5844,7 @@ async fn advisory_history_uses_the_active_tasks_routed_queue() {
         )
         .await
         .expect("seed the routed queue's separate team");
-    let specialist = actor("specialist", CaseworkRole::Staff, "staff");
+    let specialist = actor("specialist", CaseworkActsAs::Staff, "staff");
     let (service, audit) = service_with_audit(&fixture, routed_project);
     let created = service
         .create_review_request(
@@ -6316,7 +6318,7 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
     let mut project = answer_project(false);
     project
         .access_profiles
-        .push(profile("initiator", CaseworkRole::Requester));
+        .push(profile("initiator", CaseworkActsAs::Requester));
     project.trusted_producers[0].initiator_profile = Some("initiator".to_owned());
     project.check().expect("initiator retention test project");
     let service = CaseworkService::new(
@@ -6325,9 +6327,9 @@ async fn an_initiator_learns_their_own_result_expired_before_and_after_erasure()
         Vec::<Arc<dyn ReviewContextProvider>>::new(),
     )
     .expect("initiator retention test service");
-    let initiator = actor("initiator", CaseworkRole::Requester, "initiator");
-    let another_person = actor("another-person", CaseworkRole::Requester, "initiator");
-    let mut same_subject_elsewhere = actor("initiator", CaseworkRole::Requester, "initiator");
+    let initiator = actor("initiator", CaseworkActsAs::Requester, "initiator");
+    let another_person = actor("another-person", CaseworkActsAs::Requester, "initiator");
+    let mut same_subject_elsewhere = actor("initiator", CaseworkActsAs::Requester, "initiator");
     same_subject_elsewhere.principal.issuer = "https://other-issuer.test".to_owned();
     let mut answer_request = request("initiator-retention", "initiator-retention-ref");
     answer_request.policy = service
@@ -7189,7 +7191,7 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
         .await
         .expect("create membership review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
-    let same_profile_nonmember = actor("not-a-member", CaseworkRole::Staff, "staff");
+    let same_profile_nonmember = actor("not-a-member", CaseworkActsAs::Staff, "staff");
     assert!(matches!(
         fixture
             .service_v1
@@ -7311,7 +7313,7 @@ async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() 
     let ineligible_selected_profile = ActorContext {
         principal: fixture.reviewer_a.principal.clone(),
         profile_id: "supervisor".to_owned(),
-        role: CaseworkRole::Supervisor,
+        role: CaseworkActsAs::Supervisor,
     };
 
     assert!(matches!(
@@ -7580,7 +7582,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
     let staff_scoped_supervisor_principal = ActorContext {
         principal: fixture.supervisor.principal.clone(),
         profile_id: "staff".to_owned(),
-        role: CaseworkRole::Staff,
+        role: CaseworkActsAs::Staff,
     };
 
     assert!(matches!(
@@ -10570,7 +10572,7 @@ async fn review_activity_clock_recovers_after_holiday_publication_and_applies_ef
 
     service
         .create_holiday_revision(
-            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &actor("admin", CaseworkActsAs::Administrator, "administrator"),
             &HolidaySetDocument {
                 holiday_set: "office-holidays".to_owned(),
                 revision: 1,
@@ -10704,7 +10706,7 @@ async fn review_clock_reassignment_to_an_unserved_queue_defers_until_the_queue_i
         .get(0);
     service
         .create_holiday_revision(
-            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &actor("admin", CaseworkActsAs::Administrator, "administrator"),
             &HolidaySetDocument {
                 holiday_set: "office-holidays".to_owned(),
                 revision: 1,
@@ -10921,7 +10923,7 @@ async fn source_review_clock_defers_effects_until_the_frozen_binding_is_current(
         .expect("claim source activity-clock task");
     service
         .create_holiday_revision(
-            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &actor("admin", CaseworkActsAs::Administrator, "administrator"),
             &HolidaySetDocument {
                 holiday_set: "office-holidays".to_owned(),
                 revision: 1,
@@ -11063,7 +11065,7 @@ async fn reviewable_source_context_keeps_the_review_clock_current() {
         .expect("claim source completed-clock task");
     service
         .create_holiday_revision(
-            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &actor("admin", CaseworkActsAs::Administrator, "administrator"),
             &HolidaySetDocument {
                 holiday_set: "office-holidays".to_owned(),
                 revision: 1,

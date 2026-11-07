@@ -18,7 +18,7 @@ use registry_casework::{
     PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
-    AccessProfile, ActorContext, CaseworkProject, CaseworkRole, ContentDigest, DecisionKind,
+    AccessProfile, ActorContext, CaseworkActsAs, CaseworkProject, ContentDigest, DecisionKind,
     InboxPolicy, IssuerPrincipal, ProjectIdentity, QueuePolicy, ReviewCompletion,
     ReviewCompletionDestinationPolicy, ReviewCompletionType, ReviewContext, ReviewContextPolicy,
     ReviewCreateRequest, ReviewNegativeDecisionMode, ReviewPolicy, ReviewProducerPolicy,
@@ -304,16 +304,18 @@ impl PaymentStore {
     }
 }
 
-fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
+fn profile(id: &str, role: CaseworkActsAs) -> AccessProfile {
     AccessProfile {
         id: id.to_owned(),
+        label: None,
+        description: None,
         principal_claim: "sub".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
-        role,
+        acts_as: role,
     }
 }
 
-fn actor(subject: &str, role: CaseworkRole, profile_id: &str) -> ActorContext {
+fn actor(subject: &str, role: CaseworkActsAs, profile_id: &str) -> ActorContext {
     ActorContext {
         principal: IssuerPrincipal {
             issuer: ISSUER.to_owned(),
@@ -333,10 +335,10 @@ fn project(issuer: &str) -> CaseworkProject {
             version: "1".to_owned(),
         },
         access_profiles: vec![
-            profile("reviewer", CaseworkRole::Staff),
-            profile("supervisor", CaseworkRole::Supervisor),
-            profile("administrator", CaseworkRole::Administrator),
-            profile("payments", CaseworkRole::Requester),
+            profile("reviewer", CaseworkActsAs::Staff),
+            profile("supervisor", CaseworkActsAs::Supervisor),
+            profile("administrator", CaseworkActsAs::Administrator),
+            profile("payments", CaseworkActsAs::Requester),
         ],
         queues: vec![QueuePolicy {
             id: "payment-review".to_owned(),
@@ -498,8 +500,8 @@ async fn independent_payment_source_uses_casework_but_retains_release_authority(
                 .binding(),
         )
         .expect("freeze payment batch");
-    let producer = actor("payment-service", CaseworkRole::Requester, "payments");
-    let reviewer = actor("reviewer", CaseworkRole::Staff, "reviewer");
+    let producer = actor("payment-service", CaseworkActsAs::Requester, "payments");
+    let reviewer = actor("reviewer", CaseworkActsAs::Staff, "reviewer");
     let accepted = service
         .create_review_request(&producer, request, "submit-payment-batch")
         .await

@@ -8,6 +8,9 @@
           "$ref": "#/$defs/ActorKind",
           "description": "The actor kind the token must claim. Absent means any kind."
         },
+        "actsAs": {
+          "$ref": "#/$defs/ActsAs"
+        },
         "allowDirectContent": {
           "default": false,
           "type": "boolean"
@@ -18,8 +21,16 @@
           "minimum": 1,
           "type": "integer"
         },
+        "description": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "What the profile is for, accepted for authoring and tooling; never matched against a caller."
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "A name for the profile, accepted for authoring and tooling; never matched against a caller."
         },
         "maximumMessagesPerDay": {
           "description": "The most messages the profile may submit in any 24 hours. Absent\nmeans no daily bound beyond the rate.",
@@ -51,9 +62,6 @@
           "$ref": "#/$defs/RequiredScopes",
           "description": "The scopes a token must carry: `unrestricted`, or a list of at least\none scope. Held as the listed scopes, so `unrestricted` is the empty\nlist."
         },
-        "role": {
-          "$ref": "#/$defs/AccessRole"
-        },
         "senderProfiles": {
           "default": [],
           "description": "The sender profiles a sender may select; an operator lists none.",
@@ -78,19 +86,11 @@
         "principalClaim",
         "requiredScopes",
         "requesterClients",
-        "role",
+        "actsAs",
         "requestsPerMinute",
         "burst"
       ],
       "type": "object"
-    },
-    "AccessRole": {
-      "description": "What a profile is for. A sender submits and reads its own messages; an\noperator reads and acts on every message but submits none.",
-      "enum": [
-        "sender",
-        "operator"
-      ],
-      "type": "string"
     },
     "ActorKind": {
       "description": "The closed actor-kind vocabulary, spelled exactly as the Registry Stack\ncontextual-claim profile spells it.",
@@ -101,12 +101,27 @@
       ],
       "type": "string"
     },
+    "ActsAs": {
+      "description": "What a profile is for. A sender submits and reads its own messages; an\noperator reads and acts on every message but submits none.",
+      "enum": [
+        "sender",
+        "operator"
+      ],
+      "type": "string"
+    },
     "Channel": {
       "description": "A delivery channel.",
       "enum": [
         "email",
         "sms"
       ],
+      "type": "string"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
       "type": "string"
     },
     "ExternalId": {

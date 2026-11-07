@@ -7,10 +7,10 @@ fn project_value() -> Value {
         "apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,
         "project":{"id":"review-project","version":"1"},
         "accessProfiles":{
-            "reviewer":{"role":"staff","principalClaim":"principal","requiredScopes":["casework:review"]},
-            "supervisor":{"role":"supervisor","principalClaim":"principal","requiredScopes":["casework:supervise"]},
-            "administrator":{"role":"administrator","principalClaim":"principal","requiredScopes":["casework:admin"]},
-            "producer":{"role":"requester","principalClaim":"principal","requiredScopes":["casework:request"]}
+            "reviewer":{"actsAs":"staff","principalClaim":"principal","requiredScopes":["casework:review"]},
+            "supervisor":{"actsAs":"supervisor","principalClaim":"principal","requiredScopes":["casework:supervise"]},
+            "administrator":{"actsAs":"administrator","principalClaim":"principal","requiredScopes":["casework:admin"]},
+            "producer":{"actsAs":"requester","principalClaim":"principal","requiredScopes":["casework:request"]}
         },
         "queues":{"reviews":{"label":"Reviews"},"north":{"label":"North reviews"}},
         "teams":{"review-team":{"label":"Review team","serves":["reviews","north"],"memberProfiles":["reviewer"],"supervisorProfiles":["supervisor"]}},
@@ -475,6 +475,12 @@ fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
     renamed["queues"]["reviews"]["label"] = json!("Decision queue");
     renamed["teams"]["review-team"]["label"] = json!("Decision team");
     renamed["reviewPolicies"]["notice-review"]["outcomes"]["approved"]["label"] = json!("Accept");
+    let profile = renamed["accessProfiles"]
+        .as_object()
+        .and_then(|profiles| profiles.keys().next().cloned())
+        .expect("an access profile");
+    renamed["accessProfiles"][&profile]["label"] = json!("Reviewer access");
+    renamed["accessProfiles"][&profile]["description"] = json!("Who may decide notices");
     renamed["contextProviders"]["notice-context"]["description"] =
         json!("context-providers/relocated.json");
     let after = decode(renamed.clone())
@@ -487,6 +493,14 @@ fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
     );
     after.verify().unwrap();
     assert_eq!(after.outcomes[0].label, "Accept");
+    let kept = after
+        .dependencies
+        .access_profiles
+        .iter()
+        .find(|candidate| candidate.id == profile)
+        .expect("the profile is in the closure");
+    assert_eq!(kept.label.as_deref(), Some("Reviewer access"));
+    assert_eq!(kept.description.as_deref(), Some("Who may decide notices"));
     assert_ne!(
         ContentDigest::for_bytes(&serde_json::to_vec(&original).unwrap()),
         ContentDigest::for_bytes(&serde_json::to_vec(&renamed).unwrap())

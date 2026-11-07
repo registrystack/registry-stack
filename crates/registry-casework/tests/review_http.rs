@@ -206,12 +206,14 @@ fn context_contract() -> ReviewContextContract {
     }
 }
 
-fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
+fn profile(id: &str, role: CaseworkActsAs) -> AccessProfile {
     AccessProfile {
         id: id.to_owned(),
+        label: None,
+        description: None,
         principal_claim: "registry_principal".to_owned(),
         required_scopes: vec![format!("casework:{id}")],
-        role,
+        acts_as: role,
     }
 }
 
@@ -224,12 +226,12 @@ fn project(issuer: &str) -> CaseworkProject {
             version: "1".to_owned(),
         },
         access_profiles: vec![
-            profile("staff", CaseworkRole::Staff),
-            profile("supervisor", CaseworkRole::Supervisor),
-            profile("administrator", CaseworkRole::Administrator),
-            profile("producer", CaseworkRole::Requester),
-            profile("producer-alternate", CaseworkRole::Requester),
-            profile("initiator", CaseworkRole::Requester),
+            profile("staff", CaseworkActsAs::Staff),
+            profile("supervisor", CaseworkActsAs::Supervisor),
+            profile("administrator", CaseworkActsAs::Administrator),
+            profile("producer", CaseworkActsAs::Requester),
+            profile("producer-alternate", CaseworkActsAs::Requester),
+            profile("initiator", CaseworkActsAs::Requester),
         ],
         queues: vec![QueuePolicy {
             id: "review".to_owned(),
@@ -2129,7 +2131,7 @@ async fn review_task_cursor_refusals_are_concealed_result_expired_problems_over_
                     subject: "registry-service".to_owned(),
                 },
                 profile_id: "producer".to_owned(),
-                role: CaseworkRole::Requester,
+                role: CaseworkActsAs::Requester,
             },
             accepted.request_id,
             registry_casework_core::ReviewCancelRequest {
@@ -2189,7 +2191,7 @@ async fn review_task_inbox_refuses_a_broad_live_query_and_accepts_exact_subject_
             subject: "registry-service".to_owned(),
         },
         profile_id: "producer".to_owned(),
-        role: CaseworkRole::Requester,
+        role: CaseworkActsAs::Requester,
     };
     for index in 0..25 {
         service
@@ -2803,7 +2805,7 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
                 subject: "reviewer".into(),
             },
             profile_id: "staff".into(),
-            role: CaseworkRole::Staff,
+            role: CaseworkActsAs::Staff,
         };
         let cause = service
             .decide_review_task(
@@ -3773,7 +3775,7 @@ async fn supervisory_request_lookup_precedes_pagination_and_conceals_inaccessibl
                     subject: "registry-service".to_owned(),
                 },
                 profile_id: "producer".to_owned(),
-                role: CaseworkRole::Requester,
+                role: CaseworkActsAs::Requester,
             },
             target.request_id,
             registry_casework_core::ReviewCancelRequest {
@@ -4367,7 +4369,7 @@ async fn own_decision_discovery_and_audited_outcomes_are_minimal_over_http() {
             .collect();
     policy
         .access_profiles
-        .push(profile("other-staff", CaseworkRole::Staff));
+        .push(profile("other-staff", CaseworkActsAs::Staff));
     let (app, service, _, _, _, _, database) = app_with_project(&idp, policy).await;
     let (client, server) = native_review_client(app.clone()).await;
     let reviewer = human_token(&idp, "reviewer", "staff");
@@ -5184,7 +5186,7 @@ async fn submitted_tasks_remain_discoverable_without_spending_human_source_read_
             subject: "registry-service".to_owned(),
         },
         profile_id: "producer".to_owned(),
-        role: CaseworkRole::Requester,
+        role: CaseworkActsAs::Requester,
     };
     // More source-backed candidates than the default source-read budget of
     // 25, then one submitted-context task the caller can see without a

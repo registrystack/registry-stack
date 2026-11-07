@@ -5139,7 +5139,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
-        "sha256": "7131a57da2c495a5f2142ab5e682e6b95cfda65a2e60d743c15c5c0c00b175dd",
+        "sha256": "3fef758cd53950ea9cef953dca6c2364188eddff2978695c70fd88237d451ece",
         "mediaType": "application/schema+json"
       }
     },
@@ -5157,7 +5157,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "618dd00144eced267ce239c8412381a555e488af08cb7d6936e63dd963463b0a",
+        "sha256": "87a1a61127de6eb20c130f17b2d804c8b209c7343e7e4275f480f37833b83fcf",
         "mediaType": "application/schema+json"
       }
     },
@@ -5175,7 +5175,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "9d026bf36a11bc83493f835f028ff52092e0f6c4cd42b471024ead336b6d8a9e",
+        "sha256": "bedf544af8917914aa1209e39f00f0cbbcd45a668faead9633094b2e43bdc136",
         "mediaType": "application/schema+json"
       }
     },
@@ -5207,11 +5207,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "ae097b5904283e2c57ae726020a6376fe02b975391df284e67e08e5b3ddaf64c"
+        "sha256": "032aa502fa63b5e7fe1cfb8f400be84d0802637409ac82ddf9f40152c482b91f"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "472c4861ab27a301f077784e63cd06891ef4b73813aab1dd802c567daac70d16",
+        "sha256": "b22c06678f15e4a5aa028df61819cde8d37ce2311e1249a3a8fcc18d00aa3eab",
         "mediaType": "application/schema+json"
       }
     },
@@ -5391,7 +5391,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
-        "sha256": "43d58cc3028e7a97f91929625aeff1ec243f937e16ee455de8f3cb1caa4675b7",
+        "sha256": "26884cc061cde1b1e5f6eb60d59b738c4522d9451c3ebef0f0e0ac007f17a7e9",
         "mediaType": "application/schema+json"
       }
     },
@@ -5661,7 +5661,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
-        "sha256": "a1bab27c4778502d75e2041b7d38dd0dc9cfffaa91d52625813b16cf694b9b22",
+        "sha256": "776bed90338ce6d6466d4a9b7987119951b6014c06f6091813a453807fe2a838",
         "mediaType": "application/schema+json"
       }
     },
@@ -5769,7 +5769,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/project.schema.json",
-        "sha256": "af3c4d9d5e6da2a07c2d26fc9a06f7bdb3358f6145c54b25d7a045d3066c09e6",
+        "sha256": "2a6983bc79d8bf3bae405d3428189c364e643460bcce5930f60e21fde9c31865",
         "mediaType": "application/schema+json"
       }
     },
@@ -6021,7 +6021,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/project/project.schema.json",
-        "sha256": "1cb82ae0e7ec13bf7d54b109546a4d68cb2b3b031868941728dba209bea8bf21",
+        "sha256": "ff888718d437664e4ca5095c5e58016539c58e535f512ea873a210929fd5df80",
         "mediaType": "application/schema+json"
       }
     },

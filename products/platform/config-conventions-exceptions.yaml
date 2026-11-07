@@ -793,3 +793,81 @@ exceptions:
   class: protocol-constant
   reason: The value is the JSON Schema 2020-12 dialect URI and is written exactly as that specification defines it
   resolution: Permanent for the effective-contract v1alpha1 exchange model.
+- rule: CFG-NAME-5
+  format: adapter/effective-contract
+  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/protocolProblems/properties/problems/prefixItems/0/properties/title
+  class: protocol-constant
+  reason: "The member is the RFC 9457 problem document's `title`, written as that specification defines it."
+  resolution: Permanent.
+- rule: CFG-NAME-5
+  format: adapter/effective-contract
+  location: products/adapter/schemas/effective-contract.v1alpha1.schema.json#/$defs/protocolProblems/properties/problems/prefixItems/1/properties/title
+  class: protocol-constant
+  reason: "The member is the RFC 9457 problem document's `title`, written as that specification defines it."
+  resolution: Permanent.
+- rule: CFG-NAME-5
+  format: adapter/profile
+  location: products/adapter/schemas/profile.v1alpha1.schema.json#/$defs/Problem/properties/title
+  class: protocol-constant
+  reason: "The member is the RFC 9457 problem document's `title`, written as that specification defines it."
+  resolution: Permanent.
+- rule: CFG-NAME-5
+  format: breg/model-selection
+  location: products/breg/generated/tools/model-selection.v1alpha1.schema.json#/$defs/RegistrySelection/properties/title
+  class: exchange-model
+  reason: "The selection names a published PublicSchema model by the `title` that model publishes."
+  resolution: Permanent for the PublicSchema model description.
+- rule: CFG-NAME-5
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionCatalogSource/properties/title
+  class: exchange-model
+  reason: "The projection copies the DCAT and Manifest member `title`, which those published models fix."
+  resolution: Permanent for the DCAT catalogue projection.
+- rule: CFG-NAME-5
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionDataServiceSource/properties/title
+  class: exchange-model
+  reason: "The projection copies the DCAT and Manifest member `title`, which those published models fix."
+  resolution: Permanent for the DCAT catalogue projection.
+- rule: CFG-NAME-5
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionDatasetSource/properties/title
+  class: exchange-model
+  reason: "The projection copies the DCAT and Manifest member `title`, which those published models fix."
+  resolution: Permanent for the DCAT catalogue projection.
+- rule: CFG-NAME-5
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionDistributionSource/properties/title
+  class: exchange-model
+  reason: "The projection copies the DCAT and Manifest member `title`, which those published models fix."
+  resolution: Permanent for the DCAT catalogue projection.
+- rule: CFG-NAME-5
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionEntitySource/properties/title
+  class: exchange-model
+  reason: "The projection copies the DCAT and Manifest member `title`, which those published models fix."
+  resolution: Permanent for the DCAT catalogue projection.
+- rule: CFG-NAME-5
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionPublicServiceSource/properties/title
+  class: exchange-model
+  reason: "The projection copies the DCAT and Manifest member `title`, which those published models fix."
+  resolution: Permanent for the DCAT catalogue projection.
+- rule: CFG-NAME-5
+  format: discovery/index
+  location: products/discovery/schemas/index.schema.json#/$defs/service/properties/title
+  class: exchange-model
+  reason: "The discovery index publishes a service `title` for readers of the published index; the index format fixes the member."
+  resolution: Permanent for the discovery index format.
+- rule: CFG-NAME-5
+  format: evidence/bundle
+  location: products/evidence/contracts/bundle.schema.yaml#/properties/publication/properties/title
+  class: exchange-model
+  reason: "The publication block carries the `title` member of the published bundle metadata, which that exchange model fixes."
+  resolution: Permanent for the published bundle metadata.
+- rule: CFG-NAME-5
+  format: evidence/target
+  location: crates/registry-evidencectl/schemas/authoring/target.schema.json#/$defs/TargetPublication/properties/title
+  class: exchange-model
+  reason: "The publication block carries the `title` member of the published bundle metadata, which that exchange model fixes."
+  resolution: Permanent for the published bundle metadata.

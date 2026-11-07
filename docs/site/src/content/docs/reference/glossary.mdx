@@ -27,7 +27,7 @@ Product names are always in English, including on future translated pages.
 
 <dl class="glossary-dl">
   <dt id="access-profile">access profile</dt>
-  <dd>A named grant a caller selects with its token. In Base Registry Engine (BReg), it states which scopes, purposes, claims, operations, fields, and rows the caller may reach; see <a href="../../configure/breg-access/">Control access per profile</a>. In Registry Casework, an entry under `accessProfiles` admits a token carrying its `requiredScopes`, takes the caller's identity from `principalClaim`, and gives one role: staff, supervisor, administrator, or requester; see <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
+  <dd>A named grant a caller selects with its token. In Base Registry Engine (BReg), it states which scopes, purposes, claims, operations, fields, and rows the caller may reach; see <a href="../../configure/breg-access/">Control access per profile</a>. In Registry Casework, an entry under `accessProfiles` admits a token carrying its `requiredScopes`, takes the caller's identity from `principalClaim`, and gives one actsAs: staff, supervisor, administrator, or requester; see <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
 
   <dt id="accountability-record">accountability record</dt>
   <dd>The protected record Registry Casework keeps of who made a <a href="#decision">Decision</a> and their private reason, held for the pinned policy's `accountabilityRetentionDays` and never sent to the producer. See <a href="../../operate/casework-retention/">Retention in Casework</a>.</dd>

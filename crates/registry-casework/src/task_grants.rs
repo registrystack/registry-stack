@@ -12,11 +12,11 @@ pub(crate) struct StoredReviewTaskGrant {
     pub invalidated: bool,
 }
 
-fn membership_kind(role: CaseworkRole) -> Option<&'static str> {
+fn membership_kind(role: CaseworkActsAs) -> Option<&'static str> {
     match role {
-        CaseworkRole::Staff => Some("staff"),
-        CaseworkRole::Supervisor => Some("supervisor"),
-        CaseworkRole::Administrator | CaseworkRole::Requester => None,
+        CaseworkActsAs::Staff => Some("staff"),
+        CaseworkActsAs::Supervisor => Some("supervisor"),
+        CaseworkActsAs::Administrator | CaseworkActsAs::Requester => None,
     }
 }
 
@@ -188,8 +188,7 @@ impl PostgresStore {
             )
             .await?;
         let Some(row) = row else { return Ok(None) };
-        let pinned: registry_casework_core::ReviewPolicyClosure =
-            serde_json::from_value(row.get(8))?;
+        let pinned = crate::store::stored_policy(row.get(8))?;
         pinned.verify().map_err(|_| StoreError::Corrupt)?;
         if !pinned
             .dependencies
@@ -463,7 +462,7 @@ impl PostgresStore {
         &self,
         grant: &ReviewTaskGrant,
         template: &TaskTemplate,
-        configured_approver_role: Option<CaseworkRole>,
+        configured_approver_role: Option<CaseworkActsAs>,
     ) -> Result<bool, StoreError> {
         let role = self
             .client()
@@ -476,8 +475,8 @@ impl PostgresStore {
             .ok_or(StoreError::NotFound)?
             .get::<_, String>(0);
         let role = match role.as_str() {
-            "staff" => CaseworkRole::Staff,
-            "supervisor" => CaseworkRole::Supervisor,
+            "staff" => CaseworkActsAs::Staff,
+            "supervisor" => CaseworkActsAs::Supervisor,
             _ => return Err(StoreError::Corrupt),
         };
         let actor = ActorContext {
@@ -1098,7 +1097,7 @@ impl crate::CaseworkService {
             .access_profiles
             .iter()
             .find(|profile| profile.id == grant.approver_profile)
-            .map(|profile| profile.role);
+            .map(|profile| profile.acts_as);
         if !self
             .store
             .check_review_task_grant_eligibility(grant, template, configured_approver_role)

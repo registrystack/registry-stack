@@ -169,7 +169,7 @@ fn two_of_each(order: [usize; 2]) -> String {
     };
     format!(
         "apiVersion: {CASEWORK_API_VERSION}\nkind: {CASEWORK_KIND}\nproject: {{id: review-project, version: \"1\"}}\n\
-         accessProfiles:\n  reviewer: {{role: staff, principalClaim: principal, requiredScopes: [\"casework:review\"]}}\n  supervisor: {{role: supervisor, principalClaim: principal, requiredScopes: [\"casework:supervise\"]}}\n  administrator: {{role: administrator, principalClaim: principal, requiredScopes: [\"casework:admin\"]}}\n  producer: {{role: requester, principalClaim: principal, requiredScopes: [\"casework:request\"]}}\n\
+         accessProfiles:\n  reviewer: {{actsAs: staff, principalClaim: principal, requiredScopes: [\"casework:review\"]}}\n  supervisor: {{actsAs: supervisor, principalClaim: principal, requiredScopes: [\"casework:supervise\"]}}\n  administrator: {{actsAs: administrator, principalClaim: principal, requiredScopes: [\"casework:admin\"]}}\n  producer: {{actsAs: requester, principalClaim: principal, requiredScopes: [\"casework:request\"]}}\n\
          queues: {{reviews: {{label: Reviews}}}}\n\
          teams: {{review-team: {{label: Review team, serves: [reviews], memberProfiles: [reviewer], supervisorProfiles: [supervisor]}}}}\n\
          contextProviders:\n{}\
@@ -268,6 +268,73 @@ fn an_elapsed_budget_names_exactly_one_unit() {
             "{after} is refused"
         );
     }
+}
+
+#[test]
+fn an_access_profile_role_is_refused_and_names_acts_as() {
+    let diagnostics =
+        read(&replaced("actsAs: staff", "role: staff")).expect_err("the old spelling is refused");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "config.removed-key"
+                && diagnostic.path == "/accessProfiles/staff/role"
+                && diagnostic.suggested_action.contains("actsAs")),
+        "no removed-key diagnostic names actsAs: {diagnostics:#?}"
+    );
+}
+
+#[test]
+fn a_holiday_set_file_reads_id_and_refuses_holiday_set() {
+    let file = |first: &str| {
+        format!(
+            "apiVersion: {CASEWORK_HOLIDAY_SET_API_VERSION}\nkind: {CASEWORK_HOLIDAY_SET_KIND}\n{first}: office-holidays\nrevision: 7\nlabel: Office holidays\ndates: [2026-09-07]\n"
+        )
+    };
+    let read = |text: String| CaseworkHolidaySet::read("holiday-set.yaml", text.as_bytes());
+    let decoded = read(file("id")).expect("id reads").value;
+    assert_eq!(decoded.id.to_string(), "office-holidays");
+    assert_eq!(decoded.label.as_deref(), Some("Office holidays"));
+    let diagnostics = read(file("holidaySet")).expect_err("holidaySet is refused");
+    assert!(
+        diagnostics
+            .diagnostics()
+            .iter()
+            .any(|d| d.code == "config.removed-key"
+                && d.path == "/holidaySet"
+                && d.suggested_action.contains("id")),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn an_access_profile_reads_acts_as() {
+    let project = read(EXAMPLE).expect("the example reads");
+    assert!(project
+        .access_profiles
+        .iter()
+        .any(|profile| profile.acts_as == CaseworkActsAs::Staff));
+}
+
+#[test]
+fn an_access_profile_reads_a_label_and_a_description() {
+    let project = read(&replaced(
+        "requiredScopes: [casework:staff], actsAs: staff}",
+        "requiredScopes: [casework:staff], actsAs: staff, label: Reviewer, description: Decides review tasks}",
+    ))
+    .expect("the labelled profile reads");
+    let profile = project
+        .access_profiles
+        .iter()
+        .find(|profile| profile.acts_as == CaseworkActsAs::Staff)
+        .expect("the staff profile");
+    assert_eq!(profile.label.as_deref(), Some("Reviewer"));
+    assert_eq!(profile.description.as_deref(), Some("Decides review tasks"));
+    let unlabelled = read(EXAMPLE).expect("the example reads");
+    assert!(unlabelled
+        .access_profiles
+        .iter()
+        .all(|profile| profile.label.is_none() && profile.description.is_none()));
 }
 
 #[test]

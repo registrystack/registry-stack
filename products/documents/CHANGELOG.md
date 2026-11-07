@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Each access profile may carry an optional `label` and `description`, accepted for authoring and tooling; the Document Store does not serve them until a view exists. Neither is matched against a caller, and a profile that writes neither reads as before.
+
+- BREAKING: Document Store access profiles rename `role` to `actsAs`; the values are unchanged; the schema definition `AccessRole` is now `ActsAs`. Migration: in each `accessProfiles` entry, write `actsAs: VALUE` where the file wrote `role: VALUE`. A file that still writes `role` is refused with `config.removed-key` naming `actsAs`.
+
 - BREAKING: A runtime configuration file is refused with
   `platform.runtime-config.unsafe-file` when it or an ancestor directory is not
   owned by root or the runtime user, or is writable by group or others. A

@@ -3549,7 +3549,7 @@ fn fixture_closure(policy: ReviewPolicy) -> registry_casework_client::ReviewPoli
         .remove("id");
     let project: registry_casework_core::CaseworkProject = serde_json::from_value(json!({
         "apiVersion":"id.registrystack.org/formats/casework/project/v1alpha1", "kind":"CaseworkProject", "project":{"id":"client-fixture","version":"1"},
-        "accessProfiles":{"supervisor":{"role":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"]},"administrator":{"role":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},"staff":{"role":"staff","principalClaim":"sub","requiredScopes":["casework:staff"]},"requester":{"role":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}},
+        "accessProfiles":{"supervisor":{"actsAs":"supervisor","principalClaim":"sub","requiredScopes":["casework:supervisor"]},"administrator":{"actsAs":"administrator","principalClaim":"sub","requiredScopes":["casework:admin"]},"staff":{"actsAs":"staff","principalClaim":"sub","requiredScopes":["casework:staff"]},"requester":{"actsAs":"requester","principalClaim":"sub","requiredScopes":["casework:request"]}},
         "queues":queues, "reviewPolicies":{policy.id.clone(): policy_body}, "contextProviders":providers,
         "trustedProducers":{"requester":{"profile":"requester","issuer":"https://issuer.example","subject":"producer","sourceNamespaces":["registry"],"reviewPolicies":[policy.id],"retention":{"receiptRetentionDays":30}}}
     })).expect("fixture project");

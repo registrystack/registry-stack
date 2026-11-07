@@ -1,6 +1,6 @@
 //! Governed task delegation policy and immutable source-bound authorization.
 use crate::finding::{ConfigFinding, Findings};
-use crate::{CaseworkProject, CaseworkRole, IssuerPrincipal};
+use crate::{CaseworkActsAs, CaseworkProject, IssuerPrincipal};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, fmt};
@@ -476,7 +476,10 @@ impl TaskTemplate {
         for (index, id) in self.eligible_profiles.iter().enumerate() {
             let eligible = project.access_profiles.iter().any(|profile| {
                 profile.id == *id
-                    && matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
+                    && matches!(
+                        profile.acts_as,
+                        CaseworkActsAs::Staff | CaseworkActsAs::Supervisor
+                    )
             });
             if !eligible {
                 findings.push(

@@ -172,10 +172,10 @@ impl Casework {
                 "kind": "CaseworkProject",
                 "project": {"id": "adapter-ingestion-review", "version": "1"},
                 "accessProfiles": {
-                    "staff": {"principalClaim": "sub", "requiredScopes": ["casework:staff"], "role": "staff"},
-                    "supervisor": {"principalClaim": "sub", "requiredScopes": ["casework:supervisor"], "role": "supervisor"},
-                    "administrator": {"principalClaim": "sub", "requiredScopes": ["casework:admin"], "role": "administrator"},
-                    "coordinator-producer": {"principalClaim": "sub", "requiredScopes": ["casework:review"], "role": "requester"}
+                    "staff": {"principalClaim": "sub", "requiredScopes": ["casework:staff"], "actsAs":"staff"},
+                    "supervisor": {"principalClaim": "sub", "requiredScopes": ["casework:supervisor"], "actsAs":"supervisor"},
+                    "administrator": {"principalClaim": "sub", "requiredScopes": ["casework:admin"], "actsAs":"administrator"},
+                    "coordinator-producer": {"principalClaim": "sub", "requiredScopes": ["casework:review"], "actsAs":"requester"}
                 },
                 "queues": {"applications": {"label": "Household ingestion reviews"}},
                 "teams": {"reviewers": {"label": "Household reviewers", "serves": ["applications"], "memberProfiles": ["staff"], "supervisorProfiles": ["supervisor"]}},

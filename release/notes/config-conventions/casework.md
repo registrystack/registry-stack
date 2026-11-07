@@ -1575,3 +1575,47 @@ client, whose errors are enum variants with no word of their own.
 
 No file an adopter writes changes. To migrate, change what a consumer of a
 client error compares each of these members with.
+
+## BREAKING: access profiles rename `role` to `actsAs`
+
+Casework, Documents and Messaging name what a caller resolved to an access
+profile is with one key, `actsAs`, where each wrote `role`. The values are
+unchanged. `role` keeps its data sense (event records, Evidence subjects) and
+BReg profiles carry none.
+
+- Migration: in each `accessProfiles` entry, write `actsAs: VALUE` where the
+  file wrote `role: VALUE`. The old key is refused with `config.removed-key`,
+  which names `actsAs`.
+- The schema definitions `CaseworkRole` and `AccessRole` are now
+  `CaseworkActsAs` and `ActsAs`, in the project schemas, the Casework OpenAPI
+  document and the `caseworkctl` report schema.
+- The diagnostic `casework.access-profile.missing-role` is now
+  `casework.access-profile.missing-acts-as`; a script that matched it must
+  match the new code.
+
+## BREAKING: a holiday-set file names itself `id`
+
+`holiday-sets/*.yaml` files write `id` where they wrote `holidaySet`, and may
+add an optional `label`, matching the shape of a Scheduling holiday set. A
+calendar's `holidaySet` member, which names the set it uses, is unchanged.
+
+- Migration: write `id: SET_ID` where the file wrote `holidaySet: SET_ID`. The
+  old key is refused with `config.removed-key` naming `id`.
+
+## BREAKING: this release does not read review state stored by 0.45.0 or earlier
+
+A stored review policy that still names `role` on an access profile is refused
+with a message that says it was stored by an earlier release and names the
+member. Casework history stored before the upgrade is not readable after it,
+and decided reviews still in their result window are not either.
+
+- Migration: start Casework on a new database when upgrading from 0.45.0 or
+  earlier. Activation refuses while any stored review, in any lifecycle, holds
+  the earlier shape.
+
+## BREAKING: the `caseworkctl dev` report names `actsAs`
+
+A client in the report carries `actsAs` where it carried `role`. The values are
+unchanged.
+
+- Migration: read `clients[].actsAs` where a script read `clients[].role`.

@@ -42,7 +42,7 @@ accessProfiles:
     requiredScopes: [messaging:send]
     requesterClients: [case-system]
     actorKind: service
-    role: sender
+    actsAs: sender
     senderProfiles: [transactional, reminders-sms]
     templates: [appointment-reminder, appointment-reminder-sms]
     requestsPerMinute: 60
@@ -51,6 +51,6 @@ accessProfiles:
     principalClaim: sub
     requiredScopes: [messaging:operate]
     requesterClients: [operations-console]
-    role: operator
+    actsAs: operator
     requestsPerMinute: 60
     burst: 10

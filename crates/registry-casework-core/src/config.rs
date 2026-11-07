@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::finding::{ConfigFinding, Findings, IDENTIFIER_ACTION, IDENTIFIER_MESSAGE};
-use crate::CaseworkRole;
+use crate::CaseworkActsAs;
 use crate::ReviewPolicy;
 use crate::MAXIMUM_RECEIPT_RETENTION_DAYS;
 use crate::{clock_policy_findings, routing_policy_findings, CalendarPolicy, ClockPolicy};
@@ -316,7 +316,11 @@ pub const CASEWORK_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         },
         RemovedKey {
             pointer: "/accessProfiles/*/id",
-            replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {role: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+            replacement: "Write accessProfiles as a mapping from each id to the rest of its entry, accessProfiles: {PROFILE_ID: {actsAs: ...}}, with no id member. See row F4 of the format table in the Casework CHANGELOG.",
+        },
+        RemovedKey {
+            pointer: "/accessProfiles/*/role",
+            replacement: "Write the same value as actsAs.",
         },
         RemovedKey {
             pointer: "/queues/*/id",
@@ -1033,11 +1037,15 @@ impl CaseworkProject {
                 );
             }
             for (name, ids, role) in [
-                ("memberProfiles", &team.member_profiles, CaseworkRole::Staff),
+                (
+                    "memberProfiles",
+                    &team.member_profiles,
+                    CaseworkActsAs::Staff,
+                ),
                 (
                     "supervisorProfiles",
                     &team.supervisor_profiles,
-                    CaseworkRole::Supervisor,
+                    CaseworkActsAs::Supervisor,
                 ),
             ] {
                 if ids.is_empty()
@@ -1045,7 +1053,7 @@ impl CaseworkProject {
                         !self
                             .access_profiles
                             .iter()
-                            .any(|profile| profile.id == *id && profile.role == role)
+                            .any(|profile| profile.id == *id && profile.acts_as == role)
                     })
                 {
                     findings.push(
@@ -1172,20 +1180,20 @@ impl CaseworkProject {
             }
         }
         for (role, name) in [
-            (CaseworkRole::Staff, "staff"),
-            (CaseworkRole::Supervisor, "supervisor"),
-            (CaseworkRole::Administrator, "administrator"),
+            (CaseworkActsAs::Staff, "staff"),
+            (CaseworkActsAs::Supervisor, "supervisor"),
+            (CaseworkActsAs::Administrator, "administrator"),
         ] {
             if !self
                 .access_profiles
                 .iter()
-                .any(|profile| profile.role == role)
+                .any(|profile| profile.acts_as == role)
             {
                 findings.push(
-                    "casework.access-profile.missing-role",
+                    "casework.access-profile.missing-acts-as",
                     "/accessProfiles",
-                    format!("no access profile has role {name}"),
-                    format!("Declare an access profile with role: {name}."),
+                    format!("no access profile acts as {name}"),
+                    format!("Declare an access profile with actsAs: {name}."),
                 );
             }
         }
@@ -1251,14 +1259,17 @@ impl CaseworkProject {
                         .iter()
                         .find(|profile| profile.id == *profile_id)
                         .is_none_or(|profile| {
-                            !matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
+                            !matches!(
+                                profile.acts_as,
+                                CaseworkActsAs::Staff | CaseworkActsAs::Supervisor
+                            )
                         })
                     {
                         findings.push(
                             "casework.review-policy.ineligible-deciding-profile",
                             format!("{stage_at}/decidingProfiles/{profile_index}"),
                             "no staff or supervisor access profile has this id",
-                            "Name an access profile with role staff or supervisor.",
+                            "Name an access profile with actsAs staff or supervisor.",
                         );
                     }
                 }
@@ -1324,18 +1335,18 @@ impl CaseworkProject {
                 .access_profiles
                 .iter()
                 .find(|profile| profile.id == producer.profile)
-                .is_none_or(|profile| profile.role != CaseworkRole::Requester)
+                .is_none_or(|profile| profile.acts_as != CaseworkActsAs::Requester)
             {
                 findings.push(
                     "casework.review-producer.not-a-requester-profile",
                     format!("{at}/profile"),
                     "no requester access profile has this id",
-                    "Name an access profile with role requester.",
+                    "Name an access profile with actsAs requester.",
                 );
             }
             if let Some(initiator_profile) = &producer.initiator_profile {
                 let requester_profile = self.access_profiles.iter().any(|profile| {
-                    profile.id == *initiator_profile && profile.role == CaseworkRole::Requester
+                    profile.id == *initiator_profile && profile.acts_as == CaseworkActsAs::Requester
                 });
                 let producer_profile = self
                     .trusted_producers
@@ -1773,24 +1784,24 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
 /// lower role. A profile that requires no scope is reported as such and not
 /// here.
 fn profiles_without_a_separate_scope(profiles: &[AccessProfile]) -> Vec<usize> {
-    fn role_rank(role: CaseworkRole) -> u8 {
+    fn role_rank(role: CaseworkActsAs) -> u8 {
         match role {
-            CaseworkRole::Requester => 0,
-            CaseworkRole::Staff => 1,
-            CaseworkRole::Supervisor => 2,
-            CaseworkRole::Administrator => 3,
+            CaseworkActsAs::Requester => 0,
+            CaseworkActsAs::Staff => 1,
+            CaseworkActsAs::Supervisor => 2,
+            CaseworkActsAs::Administrator => 3,
         }
     }
     profiles
         .iter()
         .enumerate()
         .filter(|(target_index, target)| {
-            let target_rank = role_rank(target.role);
+            let target_rank = role_rank(target.acts_as);
             let other_same_or_lower_scopes: BTreeSet<&String> = profiles
                 .iter()
                 .enumerate()
                 .filter(|(index, profile)| {
-                    index != target_index && role_rank(profile.role) <= target_rank
+                    index != target_index && role_rank(profile.acts_as) <= target_rank
                 })
                 .flat_map(|(_, profile)| profile.required_scopes.iter())
                 .collect();
@@ -1811,6 +1822,28 @@ pub struct AccessProfile {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// A name for the profile, accepted for authoring and tooling; never matched against a caller. Part of the review policy description, which any caller who may read that description can see.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    /// What the profile is for, accepted for authoring and tooling; never matched against a caller. Part of the review policy description, which any caller who may read that description can see.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub description: Option<String>,
     pub principal_claim: String,
     #[serde(deserialize_with = "crate::typed::unique_list")]
     #[cfg_attr(
@@ -1818,7 +1851,7 @@ pub struct AccessProfile {
         schemars(with = "registry_platform_yaml::UniqueList<String>", length(min = 1))
     )]
     pub required_scopes: Vec<String>,
-    pub role: CaseworkRole,
+    pub acts_as: CaseworkActsAs,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

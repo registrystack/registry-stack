@@ -484,17 +484,17 @@ async fn description(
             })
             .cloned()
             .collect(),
-        context_providers: if actor.role == CaseworkRole::Requester {
+        context_providers: if actor.role == CaseworkActsAs::Requester {
             Vec::new()
         } else {
             state.project.context_providers.clone()
         },
-        calendars: if actor.role == CaseworkRole::Requester {
+        calendars: if actor.role == CaseworkActsAs::Requester {
             Vec::new()
         } else {
             state.project.calendars.clone()
         },
-        clocks: if actor.role == CaseworkRole::Requester {
+        clocks: if actor.role == CaseworkActsAs::Requester {
             Vec::new()
         } else {
             state.project.clocks.clone()

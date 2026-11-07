@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Each target-authority access profile may carry an optional `label` and `description`, accepted for authoring and tooling; compilation drops them and Evidence does not serve them. Neither is matched against a caller, and a profile that writes neither reads as before.
+
 - A definition with `holderPresented` acquisition now answers only as a signed
   JWS assertion. Startup already refused an SD-JWT VC representation there; it
   now refuses unsigned JSON too, and `evidencectl` refuses both before

@@ -1413,7 +1413,7 @@ pub(crate) mod tests {
     #[test]
     fn authored_project_environment_expressions_are_refused_in_structured_yaml() {
         for (path, from, to) in [
-            (PACKAGE_FILE, "role: sender", "role: ${ROLE}"),
+            (PACKAGE_FILE, "actsAs: sender", "actsAs: ${ROLE}"),
             (
                 "providers/sms-gateway/provider.yaml",
                 "prepareScript: scripts/prepare.rhai",
@@ -1449,7 +1449,7 @@ pub(crate) mod tests {
                 "project: {id: operations, version: \"1\"}\n",
                 "accessProfiles:\n",
                 "  - {id: operations, principalClaim: sub, requesterClients: [console],\n",
-                "     requiredScopes: unrestricted, role: operator,\n",
+                "     requiredScopes: unrestricted, actsAs: operator,\n",
                 "     requestsPerMinute: 60, burst: 10}\n",
             ),
         )

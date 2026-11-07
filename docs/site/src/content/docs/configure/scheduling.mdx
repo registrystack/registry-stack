@@ -54,7 +54,7 @@ October 2026:
    revision: 1
 +  dates:
 +    - "2026-10-13"
-   because: Public holidays observed by the registry offices.
+   label: Public holidays observed by the registry offices.
 ```
 
 Prove it with a case at the end of the counter fixture. A booking at 09:00 that day must be
@@ -103,7 +103,7 @@ exceptions:
     endTime: "00:45"
 ```
 
-{/* Evidence: crates/registry-scheduling-core/src/policy.rs, HolidaySetPolicy and
+{/* Evidence: crates/registry-scheduling-core/src/policy.rs, HolidaySet and
     OpeningPatternPolicy; crates/registry-scheduling-core/src/fixture.rs;
     products/scheduling/generated/records/records.schema.json, CalendarExceptionRecord. */}
 

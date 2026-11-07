@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Each access profile may carry an optional `label` and `description`, accepted for authoring and tooling; Messaging does not serve them until a view exists. Neither is matched against a caller, and a profile that writes neither reads as before.
+
+- BREAKING: Messaging access profiles rename `role` to `actsAs`; the values are unchanged; the schema definition `AccessRole` is now `ActsAs`. Migration: in each `accessProfiles` entry, write `actsAs: VALUE` where the file wrote `role: VALUE`. A file that still writes `role` is refused with `config.removed-key` naming `actsAs`.
+
+- BREAKING: The `messagingctl` report names an access profile's `actsAs` where it named `role`: read `accessProfiles[].actsAs`. Values are unchanged.
+
 - Adopt the shared platform implementations for the access-token algorithm
   roster (still exactly RS256 and ES256), framework-rejection normalization
   (400, 413, 415 and 422 answer the same `request.*` problem codes), the stop

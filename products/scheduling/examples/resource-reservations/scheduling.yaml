@@ -34,7 +34,7 @@ offerings:
 holidaySets:
   - id: hall-holidays
     revision: 1
-    because: The facility calendar is reviewed by its operator.
+    label: The facility calendar is reviewed by its operator.
 openings:
   - id: hall-hours
     location: community-hall

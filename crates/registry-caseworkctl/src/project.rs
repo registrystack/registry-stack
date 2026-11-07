@@ -4,7 +4,7 @@ use registry_casework::{
     open_audit, package_limits, secret_resolver, PostgresStore, RuntimeConfig, PACKAGE_COMMAND,
 };
 use registry_casework_core::{
-    CaseworkProject, CaseworkRole, ClockPolicy, ConfigLoadError, ReviewContextPolicy,
+    CaseworkActsAs, CaseworkProject, ClockPolicy, ConfigLoadError, ReviewContextPolicy,
 };
 use registry_platform_config::{plan_package, write_package, SecretResolver};
 use registry_platform_yaml::{Decoded, Diagnostic, Report, Severity, Source};
@@ -74,19 +74,19 @@ accessProfiles:
   staff:
     principalClaim: sub
     requiredScopes: [casework:staff]
-    role: staff
+    actsAs: staff
   supervisor:
     principalClaim: sub
     requiredScopes: [casework:supervisor]
-    role: supervisor
+    actsAs: supervisor
   administrator:
     principalClaim: sub
     requiredScopes: [casework:admin]
-    role: administrator
+    actsAs: administrator
   requester:
     principalClaim: sub
     requiredScopes: [casework:request]
-    role: requester
+    actsAs: requester
 queues:
   decisions:
     label: Decisions awaiting review
@@ -734,7 +734,7 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
         let eligible_deciding_profiles = policy
             .access_profiles
             .iter()
-            .filter(|profile| matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor))
+            .filter(|profile| matches!(profile.acts_as, CaseworkActsAs::Staff | CaseworkActsAs::Supervisor))
             .map(|profile| profile.id.clone())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()

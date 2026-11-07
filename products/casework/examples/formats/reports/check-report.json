@@ -10,7 +10,7 @@
   "networkAccess": false,
   "policyBindings": [
     {
-      "digest": "sha256:3807f44c707c4dd6a963dd5f7e56f32aec648379fcb97fe27ba17ad04c438e0c",
+      "digest": "sha256:7f7eaca1038b2e7108379a67e8bf8daa9fc6675e07f5e828c4dfcd69eea5cdcd",
       "id": "decision",
       "version": "1"
     }

@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use registry_platform_hooks::{HookDeclaration, HookHandlerSource, HookPhase as SharedHookPhase};
 use registry_platform_yaml::{
     ApiVersion, BoundedU32, BoundedU64, Decoded, Diagnostic, DisplayText, Document, EnvelopeRule,
-    Expect, ExternalId, FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader, Report,
-    Severity, UniqueIdList, UniqueList,
+    Expect, ExternalId, FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader,
+    RemovedKey, Report, Severity, UniqueIdList, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +29,10 @@ pub const DOCUMENTS_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(DOCUMENTS_PROJECT_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/accessProfiles/*/role",
+        replacement: "Write the same value as actsAs.",
+    }],
 };
 
 /// The largest document a deployment or a policy may admit: one gibibyte.
@@ -209,7 +212,7 @@ impl DocumentsProject {
         document: &Document,
         pointer: &str,
         profile: &LocalId,
-        roles: &[AccessRole],
+        roles: &[ActsAs],
     ) -> Option<Diagnostic> {
         match self.access_profiles.get(profile) {
             None => Some(document.diagnostic_at_value(
@@ -219,7 +222,7 @@ impl DocumentsProject {
                 "this names an access profile the project does not declare",
                 "Name a profile declared under accessProfiles, or declare it.",
             )),
-            Some(declared) if !roles.contains(&declared.role) => {
+            Some(declared) if !roles.contains(&declared.acts_as) => {
                 Some(document.diagnostic_at_value(
                     Severity::Error,
                     "documents.project.profile-role-mismatch",
@@ -234,19 +237,39 @@ impl DocumentsProject {
 }
 
 /// The roles a policy's custody profiles may have.
-const CUSTODY_ROLES: &[AccessRole] = &[AccessRole::Custodian, AccessRole::RepresentedPrincipal];
+const CUSTODY_ROLES: &[ActsAs] = &[ActsAs::Custodian, ActsAs::RepresentedPrincipal];
 /// The roles a policy's granting profiles may have.
-const GRANTING_ROLES: &[AccessRole] = &[AccessRole::Custodian];
+const GRANTING_ROLES: &[ActsAs] = &[ActsAs::Custodian];
 /// The roles a policy's represented principal profile may have.
-const REPRESENTED_PRINCIPAL_ROLES: &[AccessRole] = &[AccessRole::RepresentedPrincipal];
+const REPRESENTED_PRINCIPAL_ROLES: &[ActsAs] = &[ActsAs::RepresentedPrincipal];
 /// The roles a policy's recipient profiles may have.
-const RECIPIENT_ROLES: &[AccessRole] = &[AccessRole::Recipient];
+const RECIPIENT_ROLES: &[ActsAs] = &[ActsAs::Recipient];
 
 /// One declared caller profile.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessProfile {
+    /// A name for the profile, accepted for authoring and tooling; never matched against a caller.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    /// What the profile is for, accepted for authoring and tooling; never matched against a caller.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub description: Option<String>,
     /// `sub`, or the name of another string claim identifying the principal.
     /// Every profile of one actor kind names the same claim.
     pub principal_claim: ExternalId,
@@ -257,7 +280,7 @@ pub struct AccessProfile {
     /// The actor kind the token must claim.
     pub actor_kind: ActorKind,
     /// What a caller resolved to this profile is to a document.
-    pub role: AccessRole,
+    pub acts_as: ActsAs,
     /// The institution this profile acts for. The Document Store records it
     /// as the issuing institution of every document version a caller under
     /// this profile reserves; a profile that names none records none.
@@ -346,7 +369,7 @@ impl ActorKind {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
-pub enum AccessRole {
+pub enum ActsAs {
     /// Places documents in custody and issues document grants.
     Custodian,
     /// The person on whose behalf custody is held.
@@ -655,10 +678,28 @@ mod tests {
     }
 
     #[test]
+    fn an_access_profile_reads_a_label_and_a_description() {
+        let text = STARTER.replacen(
+            "    actsAs: custodian\n",
+            "    actsAs: custodian\n    label: Custodian\n    description: Holds documents.\n",
+            1,
+        );
+        let decoded = DocumentsProject::decode("documents.yaml", text.as_bytes())
+            .unwrap_or_else(|report| panic!("the labelled profile is refused: {report:?}"));
+        let labelled = decoded
+            .value
+            .access_profiles
+            .values()
+            .filter(|profile| profile.label.as_deref() == Some("Custodian"))
+            .count();
+        assert_eq!(labelled, 1);
+    }
+
+    #[test]
     fn an_unknown_member_is_refused() {
         let text = STARTER.replace(
-            "    role: custodian\n",
-            "    role: custodian\n    admin: true\n",
+            "    actsAs: custodian\n",
+            "    actsAs: custodian\n    admin: true\n",
         );
         assert!(refusal_codes(&text)
             .iter()
@@ -740,6 +781,25 @@ mod tests {
                 .collect();
             assert_eq!(paths, [format!("/accessProfiles/custodian-app/{member}")]);
         }
+    }
+
+    #[test]
+    fn the_former_role_spelling_names_actsas_as_its_replacement() {
+        let text = STARTER.replacen(
+            "    requiredScopes: [documents:custody]\n",
+            "    requiredScopes: [documents:custody]\n    role: custodian\n",
+            1,
+        );
+        assert_ne!(text, STARTER);
+        let report = DocumentsProject::decode("documents.yaml", text.as_bytes())
+            .expect_err("the former spelling is refused");
+        let removed = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.removed-key")
+            .expect("a removed-key diagnostic");
+        assert_eq!(removed.path, "/accessProfiles/custodian-app/role");
+        assert!(format!("{removed:?}").contains("actsAs"), "{removed:?}");
     }
 
     #[test]

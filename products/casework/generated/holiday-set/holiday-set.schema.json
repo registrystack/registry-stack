@@ -5,6 +5,13 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
       "type": "string"
     },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
+    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -28,13 +35,17 @@
       "type": "array",
       "uniqueItems": true
     },
-    "holidaySet": {
+    "id": {
       "$ref": "#/$defs/LocalId",
       "description": "The holiday set a calendar names in `holidaySet`."
     },
     "kind": {
       "const": "CaseworkHolidaySet",
       "type": "string"
+    },
+    "label": {
+      "$ref": "#/$defs/DisplayText",
+      "description": "An optional human label for the set."
     },
     "revision": {
       "format": "uint64",
@@ -46,7 +57,7 @@
   "required": [
     "apiVersion",
     "kind",
-    "holidaySet",
+    "id",
     "revision",
     "dates"
   ],

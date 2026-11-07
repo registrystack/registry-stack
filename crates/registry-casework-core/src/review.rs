@@ -774,6 +774,10 @@ impl ReviewPolicy {
                 }
             }
         }
+        for profile in &mut dependencies.access_profiles {
+            profile.label = None;
+            profile.description = None;
+        }
         if let Some(provider) = &mut dependencies.context_provider {
             provider.description = None;
         }

@@ -65,10 +65,10 @@ fn named_function_inputs_are_typed_and_the_snapshot_restores_without_sources() {
 fn presentation_version_and_unreferenced_definitions_do_not_change_workflow_revision() {
     let initial = load(&project(), SOURCE).unwrap();
     let mut edited = project();
-    edited["title"] = json!("Readable workflow");
+    edited["label"] = json!("Readable workflow");
     edited["project"]["version"] = json!("next");
-    edited["workflow"]["steps"]["done"]["title"] = json!("Show the text");
-    edited["functions"]["render"]["title"] = json!("Render a notice");
+    edited["workflow"]["steps"]["done"]["label"] = json!("Show the text");
+    edited["functions"]["render"]["label"] = json!("Render a notice");
     edited["types"]["request"]["properties"]["text"]["description"] = json!("Public text");
     edited["types"]["unrelated"] = json!({"type":"integer"});
     edited["functions"]["unrelated"] = json!({"runtime":"rhai","source":"functions.rhai","entrypoint":"render",
@@ -77,9 +77,79 @@ fn presentation_version_and_unreferenced_definitions_do_not_change_workflow_revi
     assert_eq!(initial.digest, edited.digest);
     assert_ne!(initial.snapshot().unwrap(), edited.snapshot().unwrap());
     assert_eq!(
-        edited.explain().unwrap()["steps"][0]["presentation"]["title"],
+        edited.explain().unwrap()["steps"][0]["presentation"]["label"],
         json!("Show the text")
     );
+}
+
+#[test]
+fn an_event_trigger_label_and_description_do_not_change_workflow_revision() {
+    let trigger = |extra: Value| {
+        let mut project = project();
+        let mut trigger = json!({"source":"licensing","eventType":"licence-created-v1",
+            "dataSchema":"urn:example:licence-created:v1","event":{"type":"object"},
+            "input":{"type":"fields","fields":{"text":{"type":"literal","value":"hello"}}}});
+        trigger
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        project["workflow"]["eventTriggers"] = json!({"licence-created": trigger});
+        project
+    };
+    let initial = load(&trigger(json!({})), SOURCE).unwrap();
+    let edited = load(
+        &trigger(json!({"label":"A licence is issued","description":"Starts a notice."})),
+        SOURCE,
+    )
+    .unwrap();
+    let reworded = load(
+        &trigger(json!({"label":"Licence issued","description":"Starts the notice."})),
+        SOURCE,
+    )
+    .unwrap();
+    assert_eq!(initial.digest, edited.digest);
+    assert_eq!(edited.digest, reworded.digest);
+    let explained = edited.explain().unwrap();
+    assert_eq!(
+        explained["presentation"]["eventTriggers"]["licence-created"],
+        json!({"label":"A licence is issued","description":"Starts a notice."})
+    );
+    assert!(explained["eventTriggers"]["licence-created"]
+        .get("label")
+        .is_none());
+    assert_eq!(
+        initial.explain().unwrap()["presentation"]
+            .get("eventTriggers")
+            .and_then(Value::as_object)
+            .map(|triggers| triggers.len()),
+        None
+    );
+}
+
+#[test]
+fn a_title_is_refused_with_label_as_its_replacement() {
+    for (pointer, set) in [
+        ("/title", "project"),
+        ("/functions/render/title", "function"),
+        ("/workflow/steps/done/title", "step"),
+        ("/operations/read-job/title", "operation"),
+    ] {
+        let mut edited = project();
+        match set {
+            "project" => edited["title"] = json!("Readable workflow"),
+            "function" => edited["functions"]["render"]["title"] = json!("Render a notice"),
+            "operation" => {
+                edited["operations"] = json!({"read-job":{"title":"Read the job","uses":"external.get/v1","connection":"jobs"}});
+            }
+            _ => edited["workflow"]["steps"]["done"]["title"] = json!("Show the text"),
+        }
+        let error = refused(&edited, SOURCE);
+        let text = format!("{error:?}");
+        assert!(
+            text.contains("config.removed-key") && text.contains(pointer) && text.contains("label"),
+            "{pointer}: {text}"
+        );
+    }
 }
 
 #[test]

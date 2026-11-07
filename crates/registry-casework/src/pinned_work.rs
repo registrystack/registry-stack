@@ -210,7 +210,7 @@ fn profile_preserved(project: &CaseworkProject, policy: &ReviewPolicyClosure, id
             .find(|profile| profile.id == id),
     ) {
         (Some(active), Some(pinned)) => {
-            active.role == pinned.role
+            active.acts_as == pinned.acts_as
                 && active.principal_claim == pinned.principal_claim
                 && active.required_scopes.iter().collect::<BTreeSet<_>>()
                     == pinned.required_scopes.iter().collect::<BTreeSet<_>>()

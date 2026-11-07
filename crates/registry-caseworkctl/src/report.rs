@@ -410,7 +410,7 @@ payload!(DevClient {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     id: String,
     profile: String,
-    role: CaseworkRole,
+    acts_as: CaseworkActsAs,
     subject: String,
     client_id_file: PathBuf,
     assertion_key_file: PathBuf

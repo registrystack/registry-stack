@@ -194,7 +194,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
 openings:
 {openings}channels: [public]
 holdPolicy:

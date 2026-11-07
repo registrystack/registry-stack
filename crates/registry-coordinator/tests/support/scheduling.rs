@@ -351,7 +351,7 @@ kind: SchedulingProject
 project: {id: coordinator-lifecycle, version: "1"}
 services: [{id: registry-update, label: Registry record update}]
 channels: [public]
-holidaySets: [{id: none, revision: 1, because: Synthetic test calendar.}]
+holidaySets: [{id: none, revision: 1, label: Synthetic test calendar.}]
 openings:
   - id: all-day
     location: north-counter

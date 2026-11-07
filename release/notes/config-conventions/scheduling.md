@@ -529,3 +529,25 @@ Migration:
    that call this deployment.
 2. Write a client the list repeats once.
 3. Run `schedulingctl check PROJECT --runtime-config runtime.yaml`.
+
+## BREAKING: a holiday set's `because` is renamed `label`
+
+Entries under `holidaySets` write `label` where they wrote `because`, so a
+holiday set has the shape `{id, revision, label, dates}` that the Casework
+holiday-set file shares. The schema definition `HolidaySetPolicy` is now
+`HolidaySet`. `because` stays on every other Scheduling item.
+
+- Migration: write `label: TEXT` where a holiday set wrote `because: TEXT`. The
+  old key is refused with `config.removed-key` naming `label`.
+
+## BREAKING: this release does not read state stored by 0.45.0 or earlier
+
+A stored policy that still holds `holidaySets[*].because` is refused with a
+message that says it was stored by an earlier release and names the member.
+
+- Migration: put Scheduling on a new database.
+
+## A holiday set's `label` is optional
+
+A holiday set may omit `label`, as the Casework holiday-set file does; its id
+names it.

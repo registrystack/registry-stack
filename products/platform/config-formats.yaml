@@ -1541,7 +1541,7 @@ formats:
     check: caseworkctl check {project}
     example: products/casework/examples/multi-stage-routing-clocks/holiday-sets/office-holidays-7.yaml
     conformance:
-      requiredText: /holidaySet
+      requiredText: /id
       optionalText: none
       integer: /revision
       boolean: none

@@ -434,6 +434,9 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 | Outbound hook destination bindings, one entry per destination id | `destinations.hooks` | `eventDestinations` |
+| What a caller resolved to an access profile is to the service (Casework, Documents, Messaging; `role` keeps its data sense elsewhere, so review refuses it here) | `actsAs` under an access profile | |
+| Human-readable name of an authored item (workflow, function, operation, step, event trigger) | `label` | `title` |
+| A holiday set (the Casework holiday-set file, Scheduling `holidaySets`) | `id`, `revision`, `label`, `dates`; each product keeps its own placement and mirrors the shape, since the two share no crate | |
 | Trust anchors for an outbound TLS peer: a secret reference holding PEM roots | `caBundleRef` | |
 | Trust anchors for an outbound TLS peer: an absolute path to a PEM file | `caBundleFile` | |
 

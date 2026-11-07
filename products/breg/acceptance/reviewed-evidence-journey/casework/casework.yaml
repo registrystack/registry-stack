@@ -8,22 +8,22 @@ accessProfiles:
     principalClaim: sub
     requiredScopes:
     - casework:staff
-    role: staff
+    actsAs: staff
   administrator:
     principalClaim: sub
     requiredScopes:
     - casework:admin
-    role: administrator
+    actsAs: administrator
   requester:
     principalClaim: sub
     requiredScopes:
     - casework:request
-    role: requester
+    actsAs: requester
   supervisor:
     principalClaim: sub
     requiredScopes:
     - casework:supervisor
-    role: supervisor
+    actsAs: supervisor
 queues:
   reviews:
     label: Synthetic status corrections

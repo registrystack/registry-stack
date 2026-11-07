@@ -6,8 +6,8 @@ use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_casework_core::{
-    findings_report, valid_directory_identifier, valid_profile_identifier, CaseworkProject,
-    CaseworkRole, ConfigFinding,
+    findings_report, valid_directory_identifier, valid_profile_identifier, CaseworkActsAs,
+    CaseworkProject, ConfigFinding,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, local_id_collision_diagnostics, ApiVersion, AuthoredId, Decoded,
@@ -652,7 +652,7 @@ pub(super) fn scope_findings(
 #[derive(Debug)]
 pub(super) struct Bound<'a> {
     pub client: &'a Client,
-    pub role: CaseworkRole,
+    pub role: CaseworkActsAs,
     pub principal: String,
 }
 
@@ -720,14 +720,14 @@ pub(super) fn bind<'a>(
         }
         let claims = format!("{at}/claims");
         let human = client.claims.get(HUMAN_CLAIM).map(String::as_str);
-        match profile.role {
-            CaseworkRole::Requester if human.is_some() => found.push(ConfigFinding::new(
+        match profile.acts_as {
+            CaseworkActsAs::Requester if human.is_some() => found.push(ConfigFinding::new(
                 "casework.dev-clients.requester-human-claim",
                 member(&claims, HUMAN_CLAIM),
                 "the client binds a Requester profile, a calling system rather than a person, so it carries no registry_actor_kind claim",
                 "Remove registry_actor_kind from this client's claims.",
             )),
-            CaseworkRole::Requester => (),
+            CaseworkActsAs::Requester => (),
             _ if human != Some(HUMAN_VALUE) => found.push(ConfigFinding::new(
                 "casework.dev-clients.missing-human-claim",
                 member(&claims, HUMAN_CLAIM),
@@ -751,7 +751,7 @@ pub(super) fn bind<'a>(
         };
         bound.push(Bound {
             client,
-            role: profile.role,
+            role: profile.acts_as,
             principal,
         });
     }
@@ -766,11 +766,11 @@ pub(super) fn bind<'a>(
             ));
         }
         for (list, members, role, name) in [
-            ("staff", &team.staff, CaseworkRole::Staff, "Staff"),
+            ("staff", &team.staff, CaseworkActsAs::Staff, "Staff"),
             (
                 "supervisors",
                 &team.supervisors,
-                CaseworkRole::Supervisor,
+                CaseworkActsAs::Supervisor,
                 "Supervisor",
             ),
         ] {
@@ -782,7 +782,7 @@ pub(super) fn bind<'a>(
                 let Some(entry) = bound.iter().find(|entry| &entry.client.id == member) else {
                     continue;
                 };
-                if entry.role == CaseworkRole::Requester {
+                if entry.role == CaseworkActsAs::Requester {
                     found.push(ConfigFinding::new(
                         "casework.dev-clients.requester-member",
                         &pointer,
@@ -823,7 +823,7 @@ pub(super) fn bind<'a>(
     if found.is_empty()
         && !bound
             .iter()
-            .any(|entry| entry.role == CaseworkRole::Administrator)
+            .any(|entry| entry.role == CaseworkActsAs::Administrator)
     {
         found.push(ConfigFinding::new(
             "casework.dev-clients.missing-administrator",

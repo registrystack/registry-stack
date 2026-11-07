@@ -904,7 +904,7 @@ pub use capture::AuditCapture;
 mod tests {
     use std::time::Duration;
 
-    use registry_casework_core::{ActorContext, CaseworkRole, IssuerPrincipal};
+    use registry_casework_core::{ActorContext, CaseworkActsAs, IssuerPrincipal};
 
     use super::*;
 
@@ -915,7 +915,7 @@ mod tests {
                 subject: "officer-7".to_owned(),
             },
             profile_id: "officer".to_owned(),
-            role: CaseworkRole::Staff,
+            role: CaseworkActsAs::Staff,
         }
     }
 

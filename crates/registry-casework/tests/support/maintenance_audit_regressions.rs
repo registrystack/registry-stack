@@ -12,7 +12,7 @@ pub(super) async fn due_clock(f: &Fixture, id: &str) -> (Uuid, Uuid) {
     let task = f.task(request.request_id).await;
     f.service
         .create_holiday_revision(
-            &actor("admin", CaseworkRole::Administrator),
+            &actor("admin", CaseworkActsAs::Administrator),
             &HolidaySetDocument {
                 holiday_set: "office-holidays".into(),
                 revision: 1,
@@ -30,7 +30,7 @@ async fn stop_writer(f: &Fixture, task: Uuid) {
     assert!(matches!(
         f.service
             .claim_review_task(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 task,
                 f.profile(),
                 "human-source-token",
@@ -167,7 +167,7 @@ pub(super) async fn expired_review(f: &Fixture, id: &str) -> (Uuid, Uuid) {
     let task = f.task(request.request_id).await;
     f.service
         .cancel_review_request(
-            &actor("notice-service", CaseworkRole::Requester),
+            &actor("notice-service", CaseworkActsAs::Requester),
             request.request_id,
             ReviewCancelRequest {
                 subject: f.request(id).subject,

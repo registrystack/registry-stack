@@ -699,7 +699,7 @@ fn write_runtime(
                 "principalClaim": "sub",
                 "requiredScopes": ["messaging:operate"],
                 "requesterClients": ["operations-console"],
-                "role": "operator",
+                "actsAs": "operator",
                 "requestsPerMinute": 60,
                 "burst": 10
             }]

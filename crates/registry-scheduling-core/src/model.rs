@@ -1740,7 +1740,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
     dates: ["2026-12-25"]
 openings:
   - id: counter-hours
@@ -1842,7 +1842,7 @@ offerings:
 holidaySets:
   - id: office-holidays
     revision: 1
-    because: Public holidays observed by the registry office.
+    label: Public holidays observed by the registry office.
 openings:
   - id: counter-hours
     location: north-counter

@@ -19,7 +19,7 @@ workflow:
   start: submit
   steps:
     submit:
-      title: Request review of the submitted context
+      label: Request review of the submitted context
       type: call
       operation: request-review
       input: {type: input}

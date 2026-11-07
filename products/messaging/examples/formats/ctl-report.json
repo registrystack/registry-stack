@@ -7,17 +7,17 @@
   "version": "0.44.0-dev",
   "accessProfiles": [
     {
-      "id": "case-notices",
-      "role": "sender"
+      "actsAs": "sender",
+      "id": "case-notices"
     },
     {
-      "id": "operations",
-      "role": "operator"
+      "actsAs": "operator",
+      "id": "operations"
     }
   ],
   "filesChecked": 18,
   "project": "products/messaging/examples/starter",
-  "projectDigest": "sha256:b819f6d18f1b32ede522cb7c4ad436056a1cc85e10523c891dcfe892623ecb5b",
+  "projectDigest": "sha256:d02d7d878c869ae2dfcf180f9d324f034872064a38a3c869ce51f6365d3072dc",
   "projectFiles": 18,
   "templates": [
     {

@@ -116,7 +116,7 @@ async fn holiday_publication_refreshes_deadlines_and_due_ordered_next() {
     assert_eq!(f.db.query_one("SELECT count(*) FROM casework_review_clock_occurrences WHERE state='source-facts-missing'", &[]).await.unwrap().get::<_, i64>(0), 2);
     f.service
         .create_holiday_revision(
-            &actor("admin", CaseworkRole::Administrator),
+            &actor("admin", CaseworkActsAs::Administrator),
             &HolidaySetDocument {
                 holiday_set: "office-holidays".into(),
                 revision: 1,
@@ -140,7 +140,7 @@ async fn holiday_publication_refreshes_deadlines_and_due_ordered_next() {
     let next = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             None,
             "human-source-token",
             ReviewStaffingQuery {

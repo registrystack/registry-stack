@@ -19,7 +19,7 @@ accessProfiles:
     requesterClients: [civil-registry-app]
     actorKind: service
     # custodian: places documents in custody and issues document grants.
-    role: custodian
+    actsAs: custodian
     # The institution this profile acts for, recorded as the issuing
     # institution of every document it reserves.
     institution: civil-registry
@@ -29,21 +29,21 @@ accessProfiles:
     requesterClients: [citizen-portal]
     actorKind: human
     # represented-principal: the person on whose behalf custody is held.
-    role: represented-principal
+    actsAs: represented-principal
   staff:
     principalClaim: sub
     requiredScopes: [documents:read]
     requesterClients: [case-portal]
     actorKind: human
     # recipient: the institution's own staff, named one at a time by a grant.
-    role: recipient
+    actsAs: recipient
   reader:
     principalClaim: sub
     requiredScopes: [documents:read]
     requesterClients: [partner-portal]
     actorKind: human
     # recipient: reads exactly the document version a document grant names.
-    role: recipient
+    actsAs: recipient
 
 documentPolicies:
   citizen-delivery:

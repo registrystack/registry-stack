@@ -56,7 +56,7 @@ async fn inbox_source_refusal_summary_is_aggregated_redacted_and_levelled() {
     let denied = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-profile-canary"),
             "source-token-canary",
             Default::default(),
@@ -123,7 +123,7 @@ async fn inbox_source_refusal_summary_is_aggregated_redacted_and_levelled() {
     let concealed = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             Default::default(),
@@ -173,7 +173,7 @@ async fn ordinary_due_and_subject_pages_walk_beyond_the_per_page_scan_budget() {
             let page = f
                 .service
                 .review_staffing_tasks(
-                    &actor("a", CaseworkRole::Staff),
+                    &actor("a", CaseworkActsAs::Staff),
                     Some("source-staff"),
                     "human-source-token",
                     ReviewStaffingQuery {
@@ -227,7 +227,7 @@ async fn live_reference_filter_and_sort_still_refuse_an_incomplete_scan() {
         assert!(matches!(
             f.service
                 .review_staffing_tasks(
-                    &actor("a", CaseworkRole::Staff),
+                    &actor("a", CaseworkActsAs::Staff),
                     Some("source-staff"),
                     "human-source-token",
                     query,
@@ -248,7 +248,7 @@ async fn duplicate_task_slots_share_one_current_source_read_in_both_inbox_paths(
         let f = Fixture::new(value).await;
         f.create("same-request").await;
         f.state.human_reads.store(0, Ordering::SeqCst);
-        let person = actor("a", CaseworkRole::Staff);
+        let person = actor("a", CaseworkActsAs::Staff);
         let page = if staffing {
             f.service
                 .review_staffing_tasks(
@@ -296,7 +296,7 @@ async fn page_local_visibility_cache_never_crosses_caller_profile_or_invocation(
             ("b", "source-staff", "human-source-token", true),
         ] {
             let before = f.state.human_reads.load(Ordering::SeqCst);
-            let person = actor(who, CaseworkRole::Staff);
+            let person = actor(who, CaseworkActsAs::Staff);
             let page = if staffing {
                 f.service
                     .review_staffing_tasks(&person, Some(profile), token, Default::default())
@@ -317,7 +317,7 @@ async fn page_local_visibility_cache_never_crosses_caller_profile_or_invocation(
         let page = if staffing {
             f.service
                 .review_staffing_tasks(
-                    &actor("a", CaseworkRole::Staff),
+                    &actor("a", CaseworkActsAs::Staff),
                     Some("source-staff"),
                     "human-source-token",
                     Default::default(),
@@ -326,7 +326,7 @@ async fn page_local_visibility_cache_never_crosses_caller_profile_or_invocation(
         } else {
             f.service
                 .review_tasks(
-                    &actor("a", CaseworkRole::Staff),
+                    &actor("a", CaseworkActsAs::Staff),
                     Some("source-staff"),
                     "human-source-token",
                     None,
@@ -435,7 +435,7 @@ async fn concealed_and_changed_candidates_do_not_hide_following_visible_rows() {
         let mut cursor = None;
         let mut seen = Vec::new();
         for _ in 0..5 {
-            let person = actor("a", CaseworkRole::Staff);
+            let person = actor("a", CaseworkActsAs::Staff);
             let page = if staffing {
                 service
                     .review_staffing_tasks(
@@ -489,7 +489,7 @@ async fn candidate_budget_exhaustion_refuses_the_entire_page_in_both_paths() {
             "d-hidden".into(),
         ]);
         f.state.human_reads.store(0, Ordering::SeqCst);
-        let person = actor("a", CaseworkRole::Staff);
+        let person = actor("a", CaseworkActsAs::Staff);
         let page = if staffing {
             f.service
                 .review_staffing_tasks(
@@ -530,7 +530,7 @@ async fn directory_revocation_during_source_io_is_rechecked_in_both_paths() {
         f.create("revoked-during-read-canary").await;
         let (service, entered, release) = controlled_service(&f, true, None);
         let reader = async {
-            let person = actor("a", CaseworkRole::Staff);
+            let person = actor("a", CaseworkActsAs::Staff);
             if staffing {
                 service
                     .review_staffing_tasks(
@@ -590,7 +590,7 @@ async fn provider_deadline_refuses_without_a_partial_page_in_both_paths() {
         let f = Fixture::new(value).await;
         f.create("deadline-canary").await;
         let (service, _, _) = controlled_service(&f, true, None);
-        let person = actor("a", CaseworkRole::Staff);
+        let person = actor("a", CaseworkActsAs::Staff);
         let result = tokio::time::timeout(Duration::from_secs(3), async {
             if staffing {
                 service
@@ -631,7 +631,7 @@ async fn task_claimed_during_source_io_leaves_the_unclaimed_page_in_both_paths()
         let task = f.task(accepted.request_id).await;
         let (service, entered, release) = controlled_service(&f, true, None);
         let reader = async {
-            let person = actor("a", CaseworkRole::Staff);
+            let person = actor("a", CaseworkActsAs::Staff);
             if staffing {
                 service
                     .review_staffing_tasks(
@@ -697,7 +697,7 @@ async fn ordinary_pages_budget_the_anchor_without_preflighting_lookahead() {
         let page = f
             .service
             .review_staffing_tasks(
-                &actor("a", CaseworkRole::Staff),
+                &actor("a", CaseworkActsAs::Staff),
                 Some("source-staff"),
                 "human-source-token",
                 ReviewStaffingQuery {
@@ -771,7 +771,7 @@ async fn inbox_sql_execution_count_does_not_grow_per_task() {
                 if staffing {
                     f.service
                         .review_staffing_tasks(
-                            &actor("a", CaseworkRole::Staff),
+                            &actor("a", CaseworkActsAs::Staff),
                             Some("source-staff"),
                             "human-source-token",
                             ReviewStaffingQuery {
@@ -783,7 +783,7 @@ async fn inbox_sql_execution_count_does_not_grow_per_task() {
                 } else {
                     f.service
                         .review_tasks(
-                            &actor("a", CaseworkRole::Staff),
+                            &actor("a", CaseworkActsAs::Staff),
                             Some("source-staff"),
                             "human-source-token",
                             None,
@@ -848,7 +848,7 @@ async fn supervision_retains_a_completed_prefix_when_a_later_request_times_out()
     .unwrap();
     let page = service
         .supervisory_review_tasks(
-            &actor("supervisor", CaseworkRole::Supervisor),
+            &actor("supervisor", CaseworkActsAs::Supervisor),
             Some("source-staff"),
             "human-source-token",
             None,
@@ -879,7 +879,7 @@ async fn live_reference_scan_splits_observations_at_the_provider_batch_bound() {
     let page = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             ReviewStaffingQuery {
@@ -911,7 +911,7 @@ async fn ordinary_continuation_charges_its_anchor_to_the_source_budget() {
     let first = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             query.clone(),
@@ -923,7 +923,7 @@ async fn ordinary_continuation_charges_its_anchor_to_the_source_budget() {
     let result = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             ReviewStaffingQuery {
@@ -955,7 +955,7 @@ async fn continuation_sizes_its_page_after_charging_the_anchor() {
     let first = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             query.clone(),
@@ -968,7 +968,7 @@ async fn continuation_sizes_its_page_after_charging_the_anchor() {
     let next = f
         .service
         .review_staffing_tasks(
-            &actor("a", CaseworkRole::Staff),
+            &actor("a", CaseworkActsAs::Staff),
             Some("source-staff"),
             "human-source-token",
             ReviewStaffingQuery {

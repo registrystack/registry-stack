@@ -133,7 +133,7 @@ services:
   - {id: registry-update, label: Registry record update}
   - {id: registry-review, label: Registry record review}
 channels: [public, assisted, urgent, walk-in]
-holidaySets: [{id: none, revision: 1, because: test}]
+holidaySets: [{id: none, revision: 1, label: test}]
 openings:
   - id: all-day
     location: north-counter
@@ -10913,6 +10913,47 @@ async fn a_retained_policy_with_obsolete_windows_is_not_reinterpreted() {
         .await
         .expect_err("an obsolete member is not silently discarded");
     assert!(matches!(refusal, StoreError::Corrupt));
+}
+
+#[tokio::test]
+async fn a_policy_stored_by_an_earlier_release_is_refused_naming_the_removed_member() {
+    let fx = fixture().await;
+    let mut document = serde_json::to_value(read_policy(POLICY).expect("current policy"))
+        .expect("serialize current policy");
+    document.as_object_mut().unwrap().insert(
+        "holidaySets".to_owned(),
+        json!([{"id": "office", "revision": 1, "because": "Office closures", "dates": []}]),
+    );
+    fx.admin
+        .execute(
+            "UPDATE scheduling_policy_revisions SET policy_document=$1",
+            &[&document],
+        )
+        .await
+        .expect("retain a policy in the earlier release shape");
+    let mut replacement = read_policy(POLICY).expect("current policy");
+    replacement.project.version = "2".to_owned();
+    let digest = replacement.policy_digest();
+    let pool_ids: Vec<String> = replacement
+        .offerings
+        .iter()
+        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
+        .collect();
+    let refusal = fx
+        .store
+        .apply_policy(SCHEDULING_ID, &digest, &pool_ids, &replacement)
+        .await
+        .expect_err("a removed member is refused, not reinterpreted");
+    assert!(
+        matches!(refusal, StoreError::StoredByEarlierRelease { .. }),
+        "{refusal:?}"
+    );
+    assert!(refusal.is_activation_refusal(), "{refusal:?}");
+    let text = refusal.to_string();
+    assert!(
+        text.contains("stored by an earlier release") && text.contains("holidaySets[*].because"),
+        "{text}"
+    );
 }
 
 #[tokio::test]

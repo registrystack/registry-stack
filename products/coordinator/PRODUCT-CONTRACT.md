@@ -9,7 +9,7 @@ data, and effect ownership. Coordinator owns durable progress, prepared commands
 
 A `CoordinatorProject` has one `workflow` and optional reusable `contracts`, `types`, `functions`,
 and `operations` assets. `project.id` names the Workflow and `project.version` is its human release
-label. A compiled `workflowRevision` pins execution semantics independently of presentation titles
+label. A compiled `workflowRevision` pins execution semantics independently of presentation labels
 and descriptions. Imported contracts are local generated public artifacts, not runtime discovery.
 
 A Function declares `runtime`, `source`, `entrypoint`, named `inputs`, and `output`. The bounded

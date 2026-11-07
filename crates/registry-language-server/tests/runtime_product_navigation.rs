@@ -13,7 +13,7 @@ use support::{
 
 const BREG: &str = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: <|project|>example}\nmodules: [{id: <|module-use|>core}]\naccessProfiles:\n  - id: reader\n    permissions:\n      records:\n        - recordType: <|use|>person\n          readableFields: [<|field-use|>name]\n";
 const BREG_MODULE: &str = "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: <|module|>core\nrecordTypes:\n  - id: <|definition|>person\n    fields: [{id: <|field|>name, type: string}]\n";
-const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: {<|definition|>triage: {label: Triage}}\naccessProfiles: {staff: {principalClaim: sub, requiredScopes: [casework:staff], role: staff}}\nreviewPolicies:\n  decision:\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalRetentionDays: 30, accountabilityRetentionDays: 90}\n    displaySchema: {type: object}\n";
+const CASEWORK: &str = "apiVersion: id.registrystack.org/formats/casework/project/v1alpha1\nkind: CaseworkProject\nproject: {id: <|project|>intake, version: '1'}\nqueues: {<|definition|>triage: {label: Triage}}\naccessProfiles: {staff: {principalClaim: sub, requiredScopes: [casework:staff], actsAs: staff}}\nreviewPolicies:\n  decision:\n    version: '1'\n    purpose: answer\n    context: {mode: submitted}\n    stages: [{id: review, queue: <|use|>triage, decidingProfiles: [staff], requiredApprovals: 1}]\n    retention: {terminalRetentionDays: 30, accountabilityRetentionDays: 90}\n    displaySchema: {type: object}\n";
 const SCHEDULING: &str = "apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\nkind: SchedulingProject\nservices: [{id: <|definition|>visit}]\nofferings: [{id: consultation, service: <|use|>visit, location: <|location-use|>office, exactTime: {pool: <|pool-use|>stations}}]\n";
 const RECORDS: &str = "locations: [{id: <|location|>office}]\npools: [{id: <|pool|>stations}]\n";
 const MESSAGING: &str = "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\nkind: MessagingProject\nproviders: [{id: <|definition|>smtp}]\nsenderProfiles: [{id: transactional, provider: <|use|>smtp}]\ntemplates: [{id: <|template|>notice, version: '1'}, {id: notice, version: '2'}]\naccessProfiles: [{id: staff, senderProfiles: [transactional], templates: [<|template-use|>notice]}]\n";
@@ -696,11 +696,7 @@ fn casework_routing_teams_clocks_and_holiday_sets_resolve() {
     let holiday = fixture(
         "products/casework/examples/multi-stage-routing-clocks/holiday-sets/office-holidays-7.yaml",
     )
-    .replacen(
-        "holidaySet: office-holidays",
-        "holidaySet: <|holiday|>office-holidays",
-        1,
-    );
+    .replacen("id: office-holidays", "id: <|holiday|>office-holidays", 1);
     let project = Project::new(&[
         file("casework.yaml", &casework),
         file("fixtures/multi-stage-policy.yaml", &fixture_source),

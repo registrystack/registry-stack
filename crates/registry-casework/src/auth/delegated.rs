@@ -209,7 +209,7 @@ impl CaseworkAuthenticator {
         let profile = self
             .profiles
             .get(&binding.profile)
-            .filter(|profile| profile.role == CaseworkRole::Staff)
+            .filter(|profile| profile.acts_as == CaseworkActsAs::Staff)
             .ok_or_else(|| {
                 self.delegated_staff_refusal(
                     registry_platform_oidc::AuthenticationStage::Profile,
@@ -363,7 +363,7 @@ impl CaseworkAuthenticator {
                     subject: principal.to_owned(),
                 },
                 profile_id: profile.id.clone(),
-                role: CaseworkRole::Staff,
+                role: CaseworkActsAs::Staff,
             },
             policy_id: policy_id.to_owned(),
             gateway: IssuerPrincipal {

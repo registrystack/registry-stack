@@ -472,7 +472,8 @@ whole validity; raise it only for the holder-bound credentials that need it.
 The target authority's `project` and `target` must match the selected project
 and target. Each `accessProfiles` entry matches authenticated requester tags,
 an authority kind and optional actor narrowing, then carries one or more
-complete grants. A grant declares its definition, purpose,
+complete grants. An entry may also carry a `label` and a `description` for
+authoring and tooling, which compilation drops; neither is matched against a caller. A grant declares its definition, purpose,
 `audienceFrom: authenticated-requester`, representations, subject binding and
 every subject's role, selector profile and value origin. `valueClaims` is
 required for authenticated-context or authenticated-grant values and forbidden
@@ -956,6 +957,7 @@ accessProfiles
 accessProfiles.*
 accessProfiles.*.actorKind
 accessProfiles.*.authority
+accessProfiles.*.description
 accessProfiles.*.grantSourceIssuer
 accessProfiles.*.grants
 accessProfiles.*.grants[]
@@ -972,6 +974,7 @@ accessProfiles.*.grants[].subjects[].selectorProfile
 accessProfiles.*.grants[].subjects[].valueClaims
 accessProfiles.*.grants[].subjects[].valueClaims.*
 accessProfiles.*.grants[].subjects[].valueOrigin
+accessProfiles.*.label
 accessProfiles.*.requesterClients
 accessProfiles.*.requesterClients[]
 accessProfiles.*.requesterTags
