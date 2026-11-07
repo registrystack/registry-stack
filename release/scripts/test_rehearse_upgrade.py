@@ -1286,7 +1286,7 @@ class MessagingAssertionsTest(unittest.TestCase):
     def test_the_acts_as_migration_runs_only_across_its_boundary(self) -> None:
         # 0.46.0 refuses a Messaging package that writes `role`, so a 0.45.0
         # project is re-authored and repackaged; the database state is kept.
-        self.assertEqual(MODULE.MESSAGING_ACTS_AS_BOUNDARY, (0, 46, 0))
+        self.assertEqual(MODULE.ACTS_AS_BOUNDARY, (0, 46, 0))
         self.assertTrue(MODULE.crosses_messaging_acts_as_boundary((0, 45, 0)))
         self.assertFalse(MODULE.crosses_messaging_acts_as_boundary((0, 46, 0)))
         self.assertFalse(MODULE.crosses_messaging_acts_as_boundary((0, 46, 1)))
@@ -1294,7 +1294,7 @@ class MessagingAssertionsTest(unittest.TestCase):
     def test_the_acts_as_migration_is_removed_once_the_floor_reaches_it(self) -> None:
         # From 0.46.0 on the floor is a release that writes `actsAs`, so no
         # rehearsal crosses the boundary and the migration is dead code.
-        self.assertLess(MODULE.FORWARD_PATH_FLOOR, MODULE.MESSAGING_ACTS_AS_BOUNDARY,
+        self.assertLess(MODULE.FORWARD_PATH_FLOOR, MODULE.ACTS_AS_BOUNDARY,
                         "remove the Messaging actsAs migration from rehearse-upgrade.py")
 
     def test_acts_as_replaces_role_in_place_in_every_access_profile(self) -> None:
