@@ -135,6 +135,19 @@ the history of every activation.
     compute_requirement_revisions; crates/registry-evidence/src/runtime.rs, AuditPhase::AccessAttempt
     and AuditPhase::DisclosureRelease; products/evidence/OPERATOR-CONTRACT.md, "Supported deployment". */}
 
+## Can a holder check a certificate without an account?
+
+Yes, when the operator turns that on. A certificate carries a QR code with its number and a random
+check code. A static page sends both to one route, `POST /v1/public-check`, and Evidence answers
+the status (valid, suspended, revoked, or expired), the printed fields, and the time it checked,
+read from the source at that moment. The holder hands over the code, so no registration is needed.
+A wrong number and a wrong code get the same not-found answer. The answer is not signed; an
+institution that needs a provable answer uses the signed relying-service path on the same
+definition. The route is experimental.
+
+{/* Evidence: products/evidence/examples/public-check/README.md;
+    products/evidence/CONCEPT.md, "Public certificate check". */}
+
 ## Who owns the result?
 
 Your institution keeps the record. The relying service verifies the answer and owns the decision

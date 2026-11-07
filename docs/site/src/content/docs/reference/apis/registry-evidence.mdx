@@ -36,7 +36,7 @@ no source and writes no evidence audit entry.
 [How Evidence works](../../../explanation/how-evidence-works/) explains the model.
 
 The Version 1 contract is frozen: those three versioned operations and their envelopes are the
-complete Evidence request surface.
+complete Evidence request surface. The experimental public check route is outside that contract.
 
 {/* Evidence: products/evidence/generated/registry-evidence.openapi.json, createEvidence,
     createEvidenceRequestBatch, listEvidenceDefinitions, EvidenceDefinitions, EvidenceDefinition,
@@ -53,10 +53,17 @@ the deployment names. Evidence reads no `client_id`, `azp`, header, or request f
 [Request an access token from your own code](../../../configure/request-an-access-token/) shows the
 exchange. The other routes take no credential and reveal no definition or entitlement.
 
+One experimental route is also unauthenticated and reads registry data: `POST /v1/public-check`,
+which exists only when the operator activates a public check. It takes a certificate number and its
+check code, reads no `Authorization` header or any other request header except `Content-Type`, and
+answers one configured requirement. An operator exposes it only through a path-restricted proxy.
+See the [public certificate check example](https://github.com/registrystack/registry-stack/blob/main/products/evidence/examples/public-check/README.md).
+
 {/* Evidence: products/evidence/generated/registry-evidence.openapi.json, bearerAuth and
     getProtectedResourceMetadata;
     crates/registry-evidence/src/auth.rs, AuthenticationClaimsConfig and principal_claim;
-    products/evidence/OPERATOR-CONTRACT.md. */}
+    products/evidence/OPERATOR-CONTRACT.md;
+    products/evidence/examples/public-check/README.md. */}
 
 ## Response encodings
 
