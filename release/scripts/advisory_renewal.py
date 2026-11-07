@@ -299,11 +299,6 @@ def renew_image(
                     f"{name}: {label}: component evidence is unevaluable: "
                     f"{finding.component_layer_error}"
                 )
-            if reviewed > today:
-                raise RenewalError(
-                    f"{name}: {label}: future-dated exception: --reviewed-at "
-                    f"{reviewed_at} is after the evaluation date {today.isoformat()}"
-                )
             recorded = _iso_date(exception["reviewed_at"], f"{name}: {label} reviewed_at")
             if reviewed < recorded:
                 raise RenewalError(
@@ -463,8 +458,15 @@ def renew(
         raise RenewalError("--version must be canonical semantic version text")
     if checker.GIT_REVISION_RE.fullmatch(source_revision) is None:
         raise RenewalError("--source-revision must be a full lowercase Git revision")
-    _iso_date(reviewed_at, "--reviewed-at")
+    reviewed = _iso_date(reviewed_at, "--reviewed-at")
     evaluated_on = evaluation_date(today)
+    # Every renewed exception takes this one review date, so refuse a future
+    # date before any image is unpacked, whether or not an image has exceptions.
+    if reviewed > evaluated_on:
+        raise RenewalError(
+            f"future-dated review: --reviewed-at {reviewed_at} is after the "
+            f"evaluation date {evaluated_on.isoformat()}"
+        )
     images = load_collection(evidence_dir, version, source_revision)
     renewals = [
         renew_image(

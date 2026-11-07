@@ -15,7 +15,7 @@ import tarfile
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest import TestCase, main
+from unittest import TestCase, main, mock
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -633,16 +633,25 @@ class AdvisoryRenewalTest(TestCase):
 
     def test_refuses_review_dates_that_move_backwards_or_outlive_expiry(self) -> None:
         self.assert_refused("precedes the recorded reviewed_at", reviewed_at="2026-08-31")
-        self.assert_refused("future-dated exception", reviewed_at="2026-09-16")
+        self.assert_refused("future-dated review", reviewed_at="2026-09-16")
         self.assert_refused("not an ISO date", reviewed_at="15/09/2026")
 
-    def test_future_review_date_is_refused_naming_the_exception(self) -> None:
-        stderr = self.assert_refused("future-dated exception", reviewed_at="2026-09-16")
-        exception = self.read_json(self.baseline_path("breg"))["exceptions"][0]
-        key = " ".join(renewal.checker.exception_key(exception))
-        self.assertIn(f"breg: {key}: future-dated exception", stderr)
-        self.assertIn("2026-09-16", stderr)
-        self.assertIn("2026-09-15", stderr)
+    def test_future_review_date_is_refused_once_before_any_image_is_unpacked(self) -> None:
+        with mock.patch.object(renewal, "extracted_rootfs") as unpacked:
+            stderr = self.assert_refused("future-dated review", reviewed_at="2026-09-16")
+        unpacked.assert_not_called()
+        self.assertEqual(1, stderr.count("future-dated"))
+        self.assertIn("--reviewed-at 2026-09-16", stderr)
+        self.assertIn("evaluation date 2026-09-15", stderr)
+
+    def test_future_review_date_is_refused_for_images_without_exceptions(self) -> None:
+        for name in IMAGES:
+            self.edit_json(
+                self.baseline_path(name),
+                lambda value: value.__setitem__("exceptions", []),
+            )
+
+        self.assert_refused("future-dated review", reviewed_at="2026-09-16")
 
     def test_review_timestamps_are_refused_as_not_plain_dates(self) -> None:
         for timestamp in (
