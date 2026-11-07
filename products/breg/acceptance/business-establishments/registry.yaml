@@ -237,12 +237,20 @@
         "schemeIri": "https://business-establishments.example.gov/model/establishment-kind"
       }
     ],
+    "authorities": [
+      {
+        "id": "business-establishments-authority",
+        "name": "Business Registration Authority",
+        "iri": "https://business-establishments.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "business-establishments-service",
       "title": {
         "en": "Business Establishments Registry Catalog",
         "fr": "Catalogue du registre des entreprises et établissements"
-      }
+      },
+      "competentAuthority": "business-establishments-authority"
     },
     "distributions": [
       {

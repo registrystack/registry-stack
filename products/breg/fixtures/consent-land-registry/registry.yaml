@@ -23,9 +23,17 @@
         "iri": "https://consent-land-registry.example.gov/authority"
       }
     },
+    "authorities": [
+      {
+        "id": "consent-land-registry-authority",
+        "name": "Land Registry Authority",
+        "iri": "https://consent-land-registry.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "consent-land-registry-service",
-      "title": "Consent Land Registry Catalog"
+      "title": "Consent Land Registry Catalog",
+      "competentAuthority": "consent-land-registry-authority"
     },
     "datasets": [
       {

@@ -235,13 +235,17 @@ fn project_manifest(
         ecosystem_bindings: Vec::new(),
         requirements: Vec::new(),
         evidence_types: Vec::new(),
-        authorities: vec![AuthorityManifest {
-            id: projection.primary_authority.id.clone(),
-            iri: Some(projection.primary_authority.iri.clone()),
-            name: projection.primary_authority.name.clone(),
-            authority_type: projection.primary_authority.authority_type.clone(),
-            spatial: None,
-        }],
+        authorities: projection
+            .authorities
+            .values()
+            .map(|authority| AuthorityManifest {
+                id: authority.id.clone(),
+                iri: Some(authority.iri.clone()),
+                name: authority.name.clone(),
+                authority_type: authority.authority_type.clone(),
+                spatial: None,
+            })
+            .collect(),
         public_services: vec![ServiceManifest {
             id: projection.public_service.source.id.clone(),
             iri: Some(projection.public_service.iri.clone()),
@@ -743,7 +747,8 @@ mod tests {
             "accessProfile":"public-reader",
             "classificationCeiling":"public",
             "catalog":{"baseUrl":"https://shared-codes.example.test","title":"Shared Codes","publisher":{"id":"publisher","name":"Publisher"}},
-            "publicService":{"id":"shared-codes-service","title":"Shared Codes"},
+            "authorities":[{"id":"publisher","name":"Publisher"}],
+            "publicService":{"id":"shared-codes-service","title":"Shared Codes","competentAuthority":"publisher"},
             "datasets":[
               {"id":"public-cases","title":"Public cases","accessProfile":"public-reader","classificationCeiling":"public"},
               {"id":"protected-cases","title":"Protected cases","accessProfile":"protected-reader","classificationCeiling":"restricted"}

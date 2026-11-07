@@ -293,7 +293,8 @@ manifestProjection:
     baseUrl: https://wasm-schema-test.invalid
     title: WASM Schema Test
     publisher: {id: wasm-schema-test-authority, name: Synthetic Publisher}
-  publicService: {id: wasm-schema-test-service, title: WASM Schema Test}
+  authorities: [{id: wasm-schema-test-authority, name: Synthetic Publisher}]
+  publicService: {id: wasm-schema-test-service, title: WASM Schema Test, competentAuthority: wasm-schema-test-authority}
   datasets:
     - {id: wasm-schema-test, title: WASM Schema Test, owner: Synthetic Publisher, status: active}
   dataServices:

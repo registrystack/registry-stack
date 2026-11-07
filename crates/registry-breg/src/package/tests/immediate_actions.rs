@@ -1184,7 +1184,8 @@ fn package_capacity_request(source_revision: &str) -> PackageBuildRequest {
             "title": "Action Package",
             "publisher": {"id": "action-authority", "name": "Action Authority"}
         },
-        "publicService": {"id": "action-service", "title": "Action Service"},
+        "authorities": [{"id": "action-authority", "name": "Action Authority"}],
+        "publicService": {"id": "action-service", "title": "Action Service", "competentAuthority": "action-authority"},
         "datasets": [{
             "id": "test-dataset", "title": "Test Dataset",
             "owner": "Action Authority", "status": "active"

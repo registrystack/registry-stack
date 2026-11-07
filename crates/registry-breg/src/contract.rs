@@ -987,6 +987,9 @@ pub struct ManifestProjectionSource {
     pub access_profile: String,
     pub classification_ceiling: Classification,
     pub catalog: ManifestProjectionCatalogSource,
+    /// The identified public authorities the Manifest names. The public
+    /// service names its competent authority from this list by id.
+    pub authorities: Vec<ManifestProjectionAuthoritySource>,
     pub public_service: ManifestProjectionPublicServiceSource,
     pub datasets: Vec<ManifestProjectionDatasetSource>,
     pub data_services: Vec<ManifestProjectionDataServiceSource>,
@@ -1086,6 +1089,28 @@ pub struct ManifestProjectionPublisherSource {
     pub authority_type: Option<String>,
 }
 
+/// An identified public authority, shaped like the catalogue publisher.
+/// It projects to a Registry Manifest `authorities[]` entry. Without an
+/// `iri`, the authority IRI is derived from the canonical base IRI.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManifestProjectionAuthoritySource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority_type: Option<String>,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1132,6 +1157,11 @@ pub struct ManifestProjectionPublicServiceSource {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub title: ManifestProjectionTextSource,
+    /// The id of the `authorities[]` entry legally competent for this
+    /// service (CPSV-AP `hasCompetentAuthority`).
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub competent_authority: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

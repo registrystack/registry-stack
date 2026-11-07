@@ -17,9 +17,13 @@ manifestProjection:
     publisher:
       id: permit-registry-authority
       name: Permit Registry Authority
+  authorities:
+    - id: permit-registry-authority
+      name: Permit Registry Authority
   publicService:
     id: permit-authority-transfer-service
     title: Permit authority transfer service
+    competentAuthority: permit-registry-authority
   datasets:
     - id: permits
       title: Permit authority transfers

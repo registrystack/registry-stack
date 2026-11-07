@@ -43,9 +43,17 @@
         ]
       }
     ],
+    "authorities": [
+      {
+        "id": "household-history-authority",
+        "name": "Household History Acceptance Authority",
+        "iri": "https://household-history.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "household-history-service",
-      "title": "Household History Acceptance Catalog"
+      "title": "Household History Acceptance Catalog",
+      "competentAuthority": "household-history-authority"
     },
     "distributions": []
   },

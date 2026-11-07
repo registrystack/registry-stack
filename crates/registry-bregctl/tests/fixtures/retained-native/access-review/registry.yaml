@@ -14,7 +14,8 @@ manifestProjection:
     baseUrl: https://registry.example.com
     title: Access review example
     publisher: {id: access-review-authority, name: Example institution}
-  publicService: {id: access-review-service, title: Access review example}
+  authorities: [{id: access-review-authority, name: Example institution}]
+  publicService: {id: access-review-service, title: Access review example, competentAuthority: access-review-authority}
   datasets:
     - {id: access-review, title: Access review records, owner: Example institution, status: active}
   dataServices:

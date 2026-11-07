@@ -23,9 +23,17 @@
         "iri": "https://household-contact-actions.example.gov/authority"
       }
     },
+    "authorities": [
+      {
+        "id": "household-contact-actions-authority",
+        "name": "Household Registry Authority",
+        "iri": "https://household-contact-actions.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "household-contact-actions-service",
-      "title": "Household Contact Actions Catalog"
+      "title": "Household Contact Actions Catalog",
+      "competentAuthority": "household-contact-actions-authority"
     },
     "datasets": [
       {

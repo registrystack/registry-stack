@@ -42,9 +42,17 @@
         ]
       }
     ],
+    "authorities": [
+      {
+        "id": "inspection-authority",
+        "name": "Environmental Authority",
+        "iri": "https://inspection-registry.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "inspection-service",
-      "title": "Facility Inspection and Permit Registry Catalog"
+      "title": "Facility Inspection and Permit Registry Catalog",
+      "competentAuthority": "inspection-authority"
     },
     "distributions": []
   },

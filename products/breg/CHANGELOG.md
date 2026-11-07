@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- BREAKING: `manifestProjection` declares the identified public authorities
+  it names in a required `authorities` list (`id`, `name`, optional `iri` and
+  `authorityType`, shaped like `catalog.publisher`), and `publicService` names
+  the authority legally competent for it with a required `competentAuthority`
+  id from that list. The generated Registry Manifest carries them in
+  `authorities[]` and `public_services[].competent_authority`, so CPSV-AP
+  renders `hasCompetentAuthority` for the named authority instead of the
+  catalogue publisher. A project without either key is refused with
+  `config.missing-key`; an empty list with
+  `breg.manifest-projection.authorities-empty`; a repeated id with
+  `breg.manifest-projection.authority-duplicate`; a lookalike id with
+  `breg.manifest.authority-id-collision`; and an id that names no authority
+  with `breg.manifest-projection.competent-authority-dangling`. To keep the
+  previous Manifest output, copy `catalog.publisher` (its `id`, `name`, `iri`
+  and `authorityType`) as the single entry of `authorities` and set
+  `publicService.competentAuthority` to the publisher's `id`. Dataset `owner`
+  is unchanged. `bregctl init --from` writes both keys. Rebuild the package; no
+  stored row changes.
 - Fix blind-index lookups that missed Unicode-equivalent spellings. The
   composed and decomposed forms of one name hashed to different digests, so a
   lookup missed the record and a `unique` index accepted both as two records.

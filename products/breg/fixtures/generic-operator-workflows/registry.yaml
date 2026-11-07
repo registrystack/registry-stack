@@ -47,9 +47,14 @@ manifestProjection:
       title: Generic Registry API
       endpointUrl: https://generic-registry.example.invalid
       servesDatasets: [generic-registry]
+  authorities:
+    - id: generic-registry-authority
+      name: Generic Registry Authority
+      iri: https://generic-registry.example.invalid/authority
   publicService:
     id: generic-registry-service
     title: Generic Registry Service
+    competentAuthority: generic-registry-authority
 
 # A vocabulary is a closed code list. A `vocabulary-code` field accepts only
 # these values, and the compiler refuses any other value at authoring time.

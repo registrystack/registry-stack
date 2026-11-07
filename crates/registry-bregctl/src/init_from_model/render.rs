@@ -262,6 +262,10 @@ fn registry(plan: &Plan) -> String {
     yaml.entry(3, "id", &format!("{id}-authority"));
     yaml.entry(3, "name", &format!("{title} Authority"));
     yaml.entry(3, "iri", &format!("{base}/authority"));
+    yaml.line(1, "authorities:");
+    yaml.entry(2, "- id", &format!("{id}-authority"));
+    yaml.entry(3, "name", &format!("{title} Authority"));
+    yaml.entry(3, "iri", &format!("{base}/authority"));
     yaml.line(1, "datasets:");
     yaml.entry(2, "- id", id);
     yaml.entry(3, "title", title);
@@ -354,6 +358,7 @@ fn registry(plan: &Plan) -> String {
     yaml.line(1, "publicService:");
     yaml.entry(2, "id", &format!("{id}-service"));
     yaml.entry(2, "title", &format!("{title} Service"));
+    yaml.entry(2, "competentAuthority", &format!("{id}-authority"));
     yaml.blank();
 
     if !plan.vocabularies.is_empty() {

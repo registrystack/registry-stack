@@ -12,7 +12,8 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
         "manifestProjection":{
             "accessProfile":"reader","classificationCeiling":"internal",
             "catalog":{"baseUrl":"https://patterns.example.test","title":"Native patterns","publisher":{"id":"authority","name":"Authority"}},
-            "publicService":{"id":"service","title":"Registry"},
+            "authorities":[{"id":"authority","name":"Authority"}],
+            "publicService":{"id":"service","title":"Registry","competentAuthority":"authority"},
             "datasets":[{"id":"records","title":"Records"}],
             "dataServices":[{"id":"api","title":"API","endpointUrl":"https://patterns.example.test/v1","servesDatasets":["records"]}]
         },

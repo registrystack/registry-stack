@@ -23,9 +23,17 @@
         "iri": "https://person-registration-rhai.example.gov/authority"
       }
     },
+    "authorities": [
+      {
+        "id": "person-registration-authority",
+        "name": "Synthetic Person Registration Authority",
+        "iri": "https://person-registration-rhai.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "person-registration-service",
-      "title": "Synthetic Person Registration Service"
+      "title": "Synthetic Person Registration Service",
+      "competentAuthority": "person-registration-authority"
     },
     "datasets": [
       {

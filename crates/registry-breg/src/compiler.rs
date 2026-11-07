@@ -2328,6 +2328,24 @@ fn validate_project_header(
                     errors,
                 );
             }
+            if projection.authorities.is_empty() {
+                errors.push(Diagnostic::error(
+                    "breg.manifest-projection.authorities-empty",
+                    "project.manifestProjection.authorities",
+                    "manifestProjection.authorities must contain at least one authority",
+                ));
+            }
+            for (index, authority) in projection.authorities.iter().enumerate() {
+                let path = format!("project.manifestProjection.authorities[{index}]");
+                validate_id(&authority.id, &format!("{path}.id"), errors);
+                nonempty(
+                    &authority.name,
+                    &format!("{path}.name"),
+                    "breg.manifest-projection.authority-name-empty",
+                    errors,
+                );
+                validate_display_text(&authority.name, &format!("{path}.name"), errors);
+            }
             validate_id(
                 &projection.public_service.id,
                 "project.manifestProjection.publicService.id",
@@ -2336,6 +2354,11 @@ fn validate_project_header(
             validate_projection_text(
                 &projection.public_service.title,
                 "project.manifestProjection.publicService.title",
+                errors,
+            );
+            validate_id(
+                &projection.public_service.competent_authority,
+                "project.manifestProjection.publicService.competentAuthority",
                 errors,
             );
             if projection.datasets.is_empty() {
@@ -2480,6 +2503,23 @@ fn validate_manifest_projection(
     let Some(projection) = project.manifest_projection.as_ref() else {
         return;
     };
+    let mut authority_ids = BTreeSet::new();
+    for (index, authority) in projection.authorities.iter().enumerate() {
+        if !authority_ids.insert(authority.id.as_str()) {
+            errors.push(Diagnostic::error(
+                "breg.manifest-projection.authority-duplicate",
+                format!("project.manifestProjection.authorities[{index}].id"),
+                "an authority identifier is duplicated",
+            ));
+        }
+    }
+    if !authority_ids.contains(projection.public_service.competent_authority.as_str()) {
+        errors.push(Diagnostic::error(
+            "breg.manifest-projection.competent-authority-dangling",
+            "project.manifestProjection.publicService.competentAuthority",
+            "publicService.competentAuthority must reference manifestProjection.authorities[]",
+        ));
+    }
     let mut dataset_ids = BTreeSet::new();
     for (index, dataset) in projection.datasets.iter().enumerate() {
         if !dataset_ids.insert(dataset.id.as_str()) {
@@ -2971,17 +3011,26 @@ fn compile_manifest_projection(
         access_profile: projection.access_profile.clone(),
         classification_ceiling: projection.classification_ceiling,
         catalog: projection.catalog.clone(),
-        primary_authority: CompiledManifestAuthority {
-            id: projection.catalog.publisher.id.clone(),
-            iri: compiled_resource_iri(
-                &canonical_base_iri,
-                "authorities",
-                &projection.catalog.publisher.id,
-                projection.catalog.publisher.iri.as_deref(),
-            ),
-            name: projection.catalog.publisher.name.clone(),
-            authority_type: projection.catalog.publisher.authority_type.clone(),
-        },
+        authorities: projection
+            .authorities
+            .iter()
+            .map(|source| {
+                (
+                    source.id.clone(),
+                    CompiledManifestAuthority {
+                        id: source.id.clone(),
+                        iri: compiled_resource_iri(
+                            &canonical_base_iri,
+                            "authorities",
+                            &source.id,
+                            source.iri.as_deref(),
+                        ),
+                        name: source.name.clone(),
+                        authority_type: source.authority_type.clone(),
+                    },
+                )
+            })
+            .collect(),
         public_service: CompiledManifestPublicService {
             source: projection.public_service.clone(),
             iri: compiled_resource_iri(
@@ -2990,7 +3039,7 @@ fn compile_manifest_projection(
                 &projection.public_service.id,
                 None,
             ),
-            competent_authority: projection.catalog.publisher.id.clone(),
+            competent_authority: projection.public_service.competent_authority.clone(),
             produces: projection
                 .datasets
                 .iter()

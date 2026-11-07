@@ -136,7 +136,8 @@ fn reviewed_flow_project(profile_count: usize, proposal_operations: &[&str]) -> 
                 "title": "Review Capacity Registry",
                 "publisher": {"id": "review-authority", "name": "Review Authority"}
             },
-            "publicService": {"id": "review-service", "title": "Review Service"},
+            "authorities": [{"id": "review-authority", "name": "Review Authority"}],
+            "publicService": {"id": "review-service", "title": "Review Service", "competentAuthority": "review-authority"},
             "datasets": [{
                 "id": "cases", "title": "Cases", "owner": "Review Authority", "status": "active"
             }],

@@ -264,7 +264,8 @@ fn display_text_is_refused_at_each_breg_authoring_boundary() {
             "title":"safe\u{202e}text",
             "publisher":{"id":"facility-authority","name":"Facility authority"}
         },
-        "publicService":{"id":"facility-service","title":"Facility registry"},
+        "authorities":[{"id":"facility-authority","name":"Facility authority"}],
+        "publicService":{"id":"facility-service","title":"Facility registry","competentAuthority":"facility-authority"},
         "datasets":[{"id":"facility-registry","title":"Facility registry"}],
         "dataServices":[{
             "id":"facility-api",
@@ -754,7 +755,8 @@ fn duplicate_presentation_text_warns_in_each_breg_namespace() {
             "title":"Facility catalog",
             "publisher":{"id":"facility-authority","name":"Facility authority"}
         },
-        "publicService":{"id":"facility-service","title":"Facility registry"},
+        "authorities":[{"id":"facility-authority","name":"Facility authority"}],
+        "publicService":{"id":"facility-service","title":"Facility registry","competentAuthority":"facility-authority"},
         "datasets":[
             {"id":"first","title":"Café"},
             {"id":"second","title":{"en":"CAFE\u{301}","fr":"Deuxième"}},

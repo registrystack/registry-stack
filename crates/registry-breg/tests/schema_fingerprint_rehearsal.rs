@@ -683,7 +683,8 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
       "title": "Rehearsal Registry",
       "publisher": {{"id": "rehearsal-authority", "name": "Rehearsal Publisher"}}
     }},
-    "publicService": {{"id": "rehearsal-service", "title": "Rehearsal Registry"}},
+    "authorities": [{{"id": "rehearsal-authority", "name": "Rehearsal Publisher"}}],
+    "publicService": {{"id": "rehearsal-service", "title": "Rehearsal Registry", "competentAuthority": "rehearsal-authority"}},
     "datasets": [{{
       "id": "test-dataset", "title": "Rehearsal Dataset",
       "owner": "Rehearsal Publisher", "status": "active"
