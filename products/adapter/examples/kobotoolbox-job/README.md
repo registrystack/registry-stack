@@ -76,7 +76,7 @@ cargo run --locked -p registry-adapterctl -- job lock \
   products/adapter/examples/kobotoolbox-job/job.yaml
 cargo run --locked -p registry-adapterctl -- job lock \
   products/adapter/examples/kobotoolbox-job/job.hook.yaml
-KOBO_USERNAME=check KOBO_PASSWORD=check cargo run --locked -p registry-adapterctl -- job check \
+KOBO_TOKEN=check cargo run --locked -p registry-adapterctl -- job check \
   products/adapter/packs/kobotoolbox/pack.yaml \
   products/adapter/examples/kobotoolbox-job/job.yaml \
   --runtime products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml \

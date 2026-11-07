@@ -14,7 +14,7 @@ const STALE: &str = "sha256:0000000000000000000000000000000000000000000000000000
 const SHIPPED_MAPPING_PIN: &str =
     "sha256:6b7f1cbbccd57459e15f5ece6282b3ca96946f0525759adcf6acbcc925496da6";
 const SHIPPED_PACK_PIN: &str =
-    "sha256:cb1c31044611e3f23464291f6dd2697b00be427da0b9523d0b717fe776e5d667";
+    "sha256:7b958e8918e706d11211cbf59ae1d8b4e73b5f62376d2017133eed4e266adbcf";
 
 fn products() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter")
@@ -87,8 +87,7 @@ fn stale_job(root: &tempfile::TempDir) -> String {
 }
 
 fn job_check(root: &tempfile::TempDir, extra: &[&str]) -> (ExitCode, Value) {
-    std::env::set_var("KOBO_USERNAME", "check-contracts");
-    std::env::set_var("KOBO_PASSWORD", "check-contracts");
+    std::env::set_var("KOBO_TOKEN", "check-contracts");
     let pack = path(root, "pack/pack.yaml");
     let job = path(root, "job.yaml");
     let runtime = path(root, "job-runtime.example.yaml");
