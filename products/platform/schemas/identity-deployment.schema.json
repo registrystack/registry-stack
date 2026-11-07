@@ -1,0 +1,344 @@
+{
+  "$defs": {
+    "BrowserApp": {
+      "additionalProperties": false,
+      "description": "A browser application: an authorization-code client with PKCE.",
+      "properties": {
+        "clientSecretRef": {
+          "$ref": "#/$defs/SecretReference",
+          "allOf": [
+            {
+              "pattern": "^secret:env/[A-Z][A-Z0-9_]{0,127}$"
+            }
+          ]
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/Grant"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The OAuth client id."
+        },
+        "logoUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A public logo URL, shown on the sign-in page; omitted shows none."
+        },
+        "origin": {
+          "type": "string"
+        },
+        "product": {
+          "description": "The `product` whose audience the application's tokens carry.",
+          "type": "string"
+        },
+        "redirectUris": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "tokenAttributes": {
+          "description": "Claims the application's tokens carry from the signed-in user.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "userTypes": {
+          "description": "Extension user types (ids of `userTypes`) that may sign in, beside\nthe generated `RegistryPerson`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "clientSecretRef",
+        "origin",
+        "redirectUris",
+        "product",
+        "tokenAttributes",
+        "grants"
+      ],
+      "type": "object"
+    },
+    "ClaimValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "A static claim value."
+    },
+    "Client": {
+      "additionalProperties": false,
+      "description": "A machine client: authenticates with `private_key_jwt` against its own\npublic key set.",
+      "properties": {
+        "claims": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ClaimValue"
+          },
+          "description": "Static claims the issuer puts in the client's tokens; each name and\ntype must be one a product declares.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "allOf": [
+              {
+                "pattern": "^[A-Za-z0-9_]{1,128}$"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/Grant"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The OAuth client id."
+        },
+        "publicJwksFile": {
+          "description": "A JWKS file holding public keys only, relative to this file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "publicJwksFile",
+        "grants"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "Grant": {
+      "additionalProperties": false,
+      "description": "Access profiles of one product, granted to one principal.",
+      "properties": {
+        "accessProfiles": {
+          "description": "Ids of that product's access profiles.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "product": {
+          "description": "The `product` of a facts document.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "product",
+        "accessProfiles"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "OrganizationUnit": {
+      "additionalProperties": false,
+      "description": "The organization unit every generated resource belongs to. The handle\n`default` builds on the unit the bootstrap bundle creates.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "handle": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle",
+        "name"
+      ],
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    },
+    "User": {
+      "additionalProperties": false,
+      "description": "A user, with the claims their tokens carry stated explicitly.",
+      "properties": {
+        "claims": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "allOf": [
+              {
+                "pattern": "^[A-Za-z0-9_]{1,128}$"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        "email": {
+          "type": "string"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/Grant"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "passwordRef": {
+          "$ref": "#/$defs/SecretReference",
+          "allOf": [
+            {
+              "pattern": "^secret:env/[A-Z][A-Z0-9_]{0,127}$"
+            }
+          ]
+        },
+        "userType": {
+          "description": "An extension user type (id of `userTypes`); omitted is `RegistryPerson`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "email",
+        "passwordRef",
+        "grants"
+      ],
+      "type": "object"
+    },
+    "UserType": {
+      "additionalProperties": false,
+      "description": "An extension user type: an additional ThunderID user schema.",
+      "properties": {
+        "attributes": {
+          "description": "Optional string attributes beyond username, email and password.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "name": {
+          "description": "The ThunderID type name users of this type carry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/identity-deployment/identity-deployment.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/identity-deployment/v1",
+      "type": "string"
+    },
+    "browserApps": {
+      "items": {
+        "$ref": "#/$defs/BrowserApp"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "clients": {
+      "items": {
+        "$ref": "#/$defs/Client"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "kind": {
+      "const": "PlatformIdentityDeployment",
+      "type": "string"
+    },
+    "organizationUnit": {
+      "$ref": "#/$defs/OrganizationUnit"
+    },
+    "userTypes": {
+      "items": {
+        "$ref": "#/$defs/UserType"
+      },
+      "type": "array"
+    },
+    "users": {
+      "items": {
+        "$ref": "#/$defs/User"
+      },
+      "maxItems": 256,
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "organizationUnit"
+  ],
+  "title": "Registry Stack identity deployment",
+  "type": "object"
+}

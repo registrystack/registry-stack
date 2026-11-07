@@ -70,6 +70,91 @@
   logged while the process kept running with that signal unobserved; startup now
   fails with "the stop signals cannot be observed" and the operating-system
   cause. SIGINT is installed at startup alongside SIGTERM.
+- `registry-thunderid-tooling` adds the identity generator's two input formats
+  and its deployment-mode renderer: `registry.identity-facts/v1`
+  (`PlatformIdentityFacts`, written once per product) and
+  `registry.identity-deployment/v1` (`PlatformIdentityDeployment`, written by
+  the operator). Both ship generated JSON Schemas in `products/platform/schemas`
+  and are mapped for editors. `identity_generate` derives `deployment.yaml`,
+  `resources/`, `registry-schema/` and `identity-receipt.json` from them for an
+  HTTPS issuer. The receipt records each client's and application's `sub` under
+  `clients` and each user's under `users`, so an issuer migration can compare
+  every principal. Secrets render as `{{.NAME}}` placeholders; no secret file is
+  opened, and a JWK with private members is refused. Deployment display text
+  calls nothing local. A browser application's tokens carry
+  `registry_actor_kind` whenever a product reads it, listed in its
+  `tokenAttributes` or not, as a machine client's do; one that already lists
+  16 attributes without it is refused. They likewise carry `registry_purpose`
+  when the application's product reads it and has an access profile that
+  requires a purpose. A user's purpose is derived and checked from its grants
+  as a machine client's is; only the purposes of products that read the claim
+  count. A user reaches a product only through that product's browser
+  applications that sign in the user's type, and a grant no such application
+  can present is refused. Claims that select an ungranted access profile are
+  refused only when the product and the profile's requester clients admit a
+  client the principal signs in through. A deployment description allows 256
+  browser applications and 256 users; a development session keeps its limits
+  of 8 and 32. An access profile lists under `requiredClaims` the declared
+  claims its product refuses a token without; `sub` is never listed. A machine
+  client or user granted the profile without a value for each one is refused
+  with `identity.deployment.required-claim-missing`, and a browser application
+  whose `tokenAttributes` leave one out with
+  `identity.deployment.required-claim-not-projected`. A derived
+  `registry_actor_kind` or `registry_purpose` counts as carried. The check
+  covers presence, not value, and skips a profile reached by token exchange.
+  Products that merge may disagree on whether a claim is required, not on its
+  type. On a profile reached by token exchange, `actorKind` is the kind the
+  product requires of the client's own token: a machine client granted the
+  profile that states no kind is given it, and one that states another kind is
+  refused with `identity.deployment.profile-requires-actor-kind`. An explicit
+  `registry_actor_kind` on a client or user, and a `selectedBy` value for it,
+  must be `human`, `agent` or `service` on any profile. An access profile may
+  list `admittedActorKinds`, the kinds the product admits for it without
+  requiring one, and `refusedClaims`, declared claims that make the product
+  refuse the token; a principal of another kind, or one carrying such a claim,
+  is refused with `identity.deployment.profile-refuses-actor-kind` or
+  `identity.deployment.profile-refuses-claim`. Every list either format states
+  as a set refuses a repeated item with `config.duplicate-item` at the repeat,
+  and its schema declares `uniqueItems`.
+- `rstack identity generate thunderid --deployment FILE --output NEW_DIR` drives
+  each selected product's `generate identity-facts` command, merges the facts,
+  and writes the hosted ThunderID configuration. A product is selected with
+  its own flags (`--breg-project` and `--breg-runtime-config`,
+  `--casework-project` and `--casework-runtime-config`, `--evidence-project`
+  and `--evidence-target`, `--messaging-runtime-config`). Driven tools must be
+  the same release as `rstack`; `RSTACK_<PRODUCT>CTL_BIN` selects a tool
+  outside the installation. An existing output directory is refused. No secret
+  is read or printed. Each tool runs with a cleared environment plus the
+  variables its runtime configuration reads through `${NAME}` expressions in
+  the values the loader substitutes; a variable reached only through
+  `secret:env/NAME` is not passed. `registry-platform-config` exports
+  `substituted_variable_names`, which lists those variables from the parsed
+  values, so a name in a comment or in a member the loader refuses to fill is
+  not included and a YAML-escaped spelling is.
+- `rstack identity check FILE [--facts FILE]...` checks an identity facts
+  document or deployment file offline (CFG-CHECK-1) and exits 0, 1 or 3.
+- BREAKING: identity generation derives every principal `sub` and the scope
+  trees from the issuer, with a separate namespace for machine clients,
+  browser apps, users, extension user types, connections, organization units
+  and roles, so an identifier of one kind can no longer collide with another.
+  Every `sub` changes once: a downstream that rendered its own identifiers
+  gets different values when it moves to the generator, and a product keyed on
+  `sub` sees new principals. Update every stored `sub`, token mapping and scope
+  reference from `identity-receipt.json`. No compatibility shim exists. Every
+  `sub` is also derived from the exact issuer string, so changing the issuer
+  (even a trailing slash) re-keys every principal.
+- BREAKING: `registry-thunderid-tooling` refuses a machine-client JWKS that
+  carries private or symmetric key members (`d`, `p`, `q`, `dp`, `dq`, `qi`,
+  `k`, `oth`) in development mode too; it previously accepted one. Public key
+  files for the identity generator also accept only RSA (`n`, `e`), EC (`crv`,
+  `x`, `y`) and OKP (`crv`, `x`) keys, with `kid`, `use`, `alg` and `key_ops`
+  as the only other members, and a JWKS whose only member is `keys`. Every key
+  needs a non-empty string `kid`, unique within the file, and the lengths
+  ThunderID requires: EC `x` and `y` of 32, 48 or 66 bytes by curve, an Ed25519
+  `x` of 32 bytes, an RSA `n` of 256 to 1024 bytes, and an RSA `e` of 1 to 4
+  bytes, odd and at least 3, each without a leading zero. Whether a point lies
+  on its curve is not checked.
+
 - BREAKING: `registry-platform-script` replaces `RhaiBaseEngine::Standard`
   with `RhaiBaseEngine::Deterministic`, so a deadline checked between
   operations holds for every call a script can make. The base carries Rhai's

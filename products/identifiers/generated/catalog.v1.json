@@ -5175,7 +5175,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "bedf544af8917914aa1209e39f00f0cbbcd45a668faead9633094b2e43bdc136",
+        "sha256": "2cbf5e3d2fd943abfa3777b63f204feac0dc0f5c02241a121aa3a135f3d420c7",
         "mediaType": "application/schema+json"
       }
     },
@@ -5882,6 +5882,42 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/platform/identity-deployment/identity-deployment.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "platform",
+      "title": "Registry Stack identity deployment",
+      "description": "Registry Stack identity deployment JSON Schema.",
+      "source": {
+        "path": "crates/registry-thunderid-tooling/src/schema.rs",
+        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/identity-deployment.schema.json",
+        "sha256": "20b5224ee58a88324552ba4eef77132273ac2b6609e178db001dc57dd1d63077",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/identity-facts/identity-facts.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "platform",
+      "title": "Registry Stack identity facts",
+      "description": "Registry Stack product identity facts JSON Schema.",
+      "source": {
+        "path": "crates/registry-thunderid-tooling/src/schema.rs",
+        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/identity-facts.schema.json",
+        "sha256": "c347ed37907da3fbef25720354b8042c3ce8477437c4a38b81ce2aa718c0b96c",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/platform/mcp-runtime/mcp-runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -5909,7 +5945,7 @@
       "description": "Registry Stack task connection JSON Schema.",
       "source": {
         "path": "crates/registry-thunderid-tooling/src/schema.rs",
-        "sha256": "a0d71d083c0502cd9f9805451c1f80a1f0cf5623df094886cb1a6a140ce8bfe0"
+        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
       },
       "artifact": {
         "path": "products/platform/schemas/task-connection.schema.json",

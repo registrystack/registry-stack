@@ -16,6 +16,7 @@ import time
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import advisory_renewal
 import release_candidate
@@ -48,6 +49,10 @@ CONVENTIONAL_COMMIT_SUBJECT = re.compile(
     r"^[a-z][a-z0-9-]*(?:\([^()\r\n]+\))?!?: [^\r\n]+$"
 )
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
+# Manifests for releases after beta-57 (0.45.0) must pin the ThunderID image.
+# Earlier manifests are historical and stay valid without it.
+THUNDERID_PIN_REQUIRED_AFTER_VERSION = (0, 45, 0)
+THUNDERID_VERSION_PIN_PATH = "crates/registry-thunderid-tooling/thunderid-version.json"
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
 DOCS_RELEASE_RESUMPTION_VERSION = (0, 19, 1)
@@ -449,6 +454,83 @@ def component_artifact_versions(repo: Path, version: str) -> dict[str, str]:
             for member in release_units.load_registry().require_pilot(selection["unit"]).members}
 
 
+EXTERNAL_PIN_KIND = "image-pin"
+
+
+def is_external_pin(entry: Any) -> bool:
+    """An external entry marked kind: image-pin is an image pin, not a docset product."""
+    return isinstance(entry, dict) and entry.get("kind") == EXTERNAL_PIN_KIND
+
+
+def thunderid_pin_repo(tooling: dict[str, Any]) -> str | None:
+    """The owner/name of the ThunderID source repository named by the tooling pin."""
+    archive_url = tooling.get("source", {}).get("archiveUrl")
+    parts = urlsplit(archive_url).path.strip("/").split("/") if isinstance(archive_url, str) else []
+    return "/".join(parts[:2]) if len(parts) >= 2 else None
+
+
+def external_pin_errors(external: Any, repo_root: Path, version: str) -> list[str]:
+    errors: list[str] = []
+    if external is None:
+        external = {}
+    elif not isinstance(external, dict):
+        errors.append("external must be an object")
+        external = {}
+    for name, entry in sorted(external.items(), key=lambda item: str(item[0])):
+        label = f"external.{name}"
+        if isinstance(entry, dict) and "kind" in entry and not is_external_pin(entry):
+            errors.append(f"{label}.kind must be {EXTERNAL_PIN_KIND} when set")
+        elif isinstance(entry, dict) and "images" in entry and not is_external_pin(entry):
+            errors.append(f"{label} declares images and must set kind: {EXTERNAL_PIN_KIND}")
+        if not is_external_pin(entry):
+            continue
+        if not entry.get("repo"):
+            errors.append(f"{label}.repo is required")
+        if not HEX40.fullmatch(str(entry.get("ref", ""))):
+            errors.append(f"{label}.ref must be a 40-character commit")
+        if not entry.get("version"):
+            errors.append(f"{label}.version is required")
+        images = entry.get("images")
+        if not isinstance(images, dict) or not images:
+            errors.append(f"{label}.images must be a non-empty object")
+            continue
+        for image_name, reference in sorted(images.items(), key=lambda item: str(item[0])):
+            if not isinstance(reference, str) or not IMAGE_DIGEST_REF.fullmatch(reference):
+                errors.append(
+                    f"{label}.images.{image_name} must be pinned by sha256 digest"
+                )
+    thunderid = external.get("thunderid")
+    if thunderid is None:
+        parsed = release_version_tuple(version)
+        if parsed is not None and parsed > THUNDERID_PIN_REQUIRED_AFTER_VERSION:
+            errors.append(
+                "external.thunderid is required after release "
+                + ".".join(str(part) for part in THUNDERID_PIN_REQUIRED_AFTER_VERSION)
+            )
+    elif not is_external_pin(thunderid):
+        errors.append(f"external.thunderid must set kind: {EXTERNAL_PIN_KIND}")
+    elif isinstance(thunderid.get("images"), dict):
+        pin_path = repo_root / THUNDERID_VERSION_PIN_PATH
+        try:
+            tooling = json.loads(pin_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"cannot read {THUNDERID_VERSION_PIN_PATH}: {exc}")
+        else:
+            expected = {
+                "repo": (thunderid.get("repo"), thunderid_pin_repo(tooling)),
+                "images.thunderid": (thunderid["images"].get("thunderid"), tooling.get("image")),
+                "ref": (thunderid.get("ref"), tooling.get("source", {}).get("commit")),
+                "version": (thunderid.get("version"), tooling.get("version")),
+            }
+            for field, (actual, wanted) in expected.items():
+                if actual != wanted:
+                    errors.append(
+                        f"external.thunderid.{field} must equal {wanted!r} "
+                        f"from {THUNDERID_VERSION_PIN_PATH}"
+                    )
+    return errors
+
+
 def validate(manifest_path: Path) -> int:
     manifest = load_yaml(manifest_path)
     errors: list[str] = []
@@ -517,6 +599,11 @@ def validate(manifest_path: Path) -> int:
         expected = component_versions.get(name, version)
         if str(artifact_version) != expected:
             errors.append(f"artifact {name} version {artifact_version} does not match selected version {expected}")
+    errors.extend(external_pin_errors(
+            manifest.get("external") if isinstance(manifest, dict) else None,
+            repo_root,
+            version,
+        ))
     crosswalk = external.get("crosswalk") if isinstance(external, dict) else None
     if crosswalk is not None:
         if not isinstance(crosswalk, dict):
@@ -919,6 +1006,10 @@ def validate_docsets(
             errors.append(str(exc))
             component_versions = {}
         for name, product in sorted(products.items()):
+            if isinstance(product, dict) and "images" in product:
+                errors.append(
+                    f"docset {docset_id} product {name} must not declare images"
+                )
             if name in external:
                 continue
             actual_ref = product.get("ref") if isinstance(product, dict) else None
@@ -959,6 +1050,8 @@ def validate_docsets(
                 errors.append(
                     f"release manifest {docset_id} external {name} must be an object"
                 )
+                continue
+            if is_external_pin(expected):
                 continue
             expected_ref = expected.get("ref")
             product = products.get(name)
@@ -2176,6 +2269,8 @@ def selected_docsets(
     for name, product in sorted(products.items()):
         if not isinstance(product, dict):
             raise ReleasePlanError(f"docset {tag} product {name} must be an object")
+        if "images" in product:
+            raise ReleasePlanError(f"docset {tag} product {name} must not declare images")
         if name in external:
             expected = external[name]
             if not isinstance(expected, dict) or product.get("ref") != expected.get("ref"):
@@ -2202,7 +2297,9 @@ def selected_docsets(
                     f"docset {tag} product {name} must use version "
                     f"{expected_version} and selected source_ref"
                 )
-    for name in external:
+    for name, entry in external.items():
+        if is_external_pin(entry):
+            continue
         if name not in products:
             raise ReleasePlanError(f"docset {tag} is missing external product {name}")
     return data, selected, selected_index

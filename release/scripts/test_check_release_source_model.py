@@ -44,6 +44,20 @@ external:
     ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 """
 
+PINNED_MANIFEST_YAML = """stack:
+  release: test
+  version: 0.46.0
+
+external:
+  thunderid:
+    kind: image-pin
+    repo: thunder-id/thunderid
+    ref: 12f517c4384004e360e26eb7eb1ab0501b678bb2
+    version: 1.0.1
+    images:
+      thunderid: ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+"""
+
 NO_EXTERNAL_MANIFEST_YAML = """\
 stack:
   release: test
@@ -311,6 +325,20 @@ class MonorepoSourceModelTest(unittest.TestCase):
         )
         self.assertNotIn("registry-atlas", result.stdout)
         self.assertNotIn("esignet-relay-authenticator", result.stdout)
+
+    def test_records_image_pins_apart_from_external_source_dependencies(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(PINNED_MANIFEST_YAML, encoding="utf-8")
+
+            result = run_validator(stack_root)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            "release-source-pin registry-stack-test.yaml thunderid thunder-id/thunderid",
+            result.stdout,
+        )
+        self.assertNotIn("release-source-external registry-stack-test.yaml thunderid", result.stdout)
 
     def test_allows_no_external_source_dependencies(self) -> None:
         with MonorepoFixture() as stack_root:

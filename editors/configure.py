@@ -143,6 +143,8 @@ SCHEMAS = {
     "platform": (
         ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
+        ("products/platform/schemas/identity-facts.schema.json", "identity-facts.yaml"),
+        ("products/platform/schemas/identity-deployment.schema.json", "identity-deployment.yaml"),
         ("crates/registry-cli-api/schema/connections.schema.json", "connections.yaml"),
     ),
     "evidence": (

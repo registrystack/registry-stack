@@ -196,6 +196,7 @@ CONFIG_CHECK_PACKAGES = frozenset(
         "registry-mcp",
         "registry-messagingctl",
         "registry-render",
+        "registry-rstack",
         "registry-schedulingctl",
     }
 )

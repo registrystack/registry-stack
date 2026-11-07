@@ -982,13 +982,13 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         )?;
         if let Some(integrations) = &clients.integrations {
             let policy = crate::project::load_and_check_policy(&state.project)?;
-            integrations.prepare(root, state, Some(&mut description), &policy)?;
+            integrations.prepare(root, state, clients, Some(&mut description), &policy)?;
         }
         registry_thunderid_tooling::render::render(&description)?;
     } else if state.issuer_project.is_some() {
         if let Some(integrations) = &clients.integrations {
             let policy = crate::project::load_and_check_policy(&state.project)?;
-            integrations.prepare(root, state, None, &policy)?;
+            integrations.prepare(root, state, clients, None, &policy)?;
         }
     }
     private::create(

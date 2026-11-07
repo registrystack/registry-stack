@@ -665,6 +665,32 @@ pub(crate) fn load_active_clients(
     Ok(registrations)
 }
 
+/// An active client that presents a task authority assertion, with the
+/// access profiles it holds.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ExchangeClient {
+    pub(crate) client_id: String,
+    pub(crate) access_profiles: Vec<String>,
+    pub(crate) exchange: ActiveClientExchange,
+}
+
+/// The public registrations of active clients that exchange an assertion.
+/// Reads `access/clients/` only; no key is returned.
+pub(crate) fn active_exchange_clients(project: &Path) -> Result<Vec<ExchangeClient>> {
+    let project = canonical_project(project)?;
+    Ok(load_client_documents_if_present(&project)?
+        .into_values()
+        .filter(|document| document.status == ClientStatus::Active)
+        .filter_map(|document| {
+            Some(ExchangeClient {
+                client_id: document.client_id,
+                access_profiles: document.access_profiles,
+                exchange: document.exchange?,
+            })
+        })
+        .collect())
+}
+
 /// Public, editable client admission for local bundle compilation. Private
 /// keys are checked separately when `dev` registers the issuer generation.
 pub(crate) fn service_caller_profiles(project: &Path) -> Result<BTreeSet<String>> {

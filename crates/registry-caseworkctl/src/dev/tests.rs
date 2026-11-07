@@ -3833,7 +3833,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provi
     )
     .unwrap();
     integrations
-        .prepare(&root, &state, Some(&mut description), &policy)
+        .prepare(&root, &state, &clients, Some(&mut description), &policy)
         .unwrap();
     let agent = description
         .machine_clients
@@ -3875,6 +3875,44 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provi
         .get("taskGrantProfile")
         .is_none());
     assert_eq!(description.exchange_issuers.len(), 1);
+    assert_eq!(
+        format!("{:?}", description.exchange_issuers),
+        concat!(
+            "[ExchangeIssuer { id: \"35236b10-6fcc-762e-8dc9-11a7067054b4\", ",
+            "name: \"Casework task authority\", issuer: \"https://casework.local.example\", ",
+            "jwks_endpoint: \"http://host.docker.internal:8801/oauth2/jwks\", ",
+            "mapping: InstitutionalGrant, clients: [], token_attributes: {} }]"
+        )
+    );
+    assert_eq!(
+        format!("{:?}", agent.token_exchange),
+        concat!(
+            "Some(TokenExchangeClient { assertion_resource_server_id: ",
+            "\"6eb63e34-0128-7c21-8b5a-8433f78580bb\", assertion_scope: ",
+            "\"casework:grants:assert\", ordinary_resource_permissions: [] })"
+        )
+    );
+    assert_eq!(
+        operator["authentication"]["oidc"]["allowedClients"],
+        json!([
+            "administrator",
+            "supervisor",
+            "staff",
+            "requester",
+            "reader",
+            "task-agent",
+            "status"
+        ])
+    );
+    assert_eq!(
+        operator["taskAuthority"],
+        json!({
+            "exchangeAudience": "http://127.0.0.1:8093",
+            "issuer": "https://casework.local.example",
+            "signingKeyRef": "secret:file/task-authority-signing-key",
+            "statusClients": {"status": "urn:casework:source-group"}
+        })
+    );
     let mut wrong = integrations.clone();
     wrong.resource = "private-preflight-canary".into();
     let findings = wrong.validate(&clients, &policy).unwrap_err();
@@ -4314,7 +4352,9 @@ fn borrowed_browser_admission_requires_exact_owner_resource() {
     integrations.validate(&clients, &policy).unwrap();
     let root = project.join("private");
     private::directory(&root).unwrap();
-    integrations.prepare(&root, &state, None, &policy).unwrap();
+    integrations
+        .prepare(&root, &state, &clients, None, &policy)
+        .unwrap();
     let mut operator = config::operator(&state);
     integrations
         .operator(&state, &clients, &mut operator)
@@ -4326,7 +4366,9 @@ fn borrowed_browser_admission_requires_exact_owner_resource() {
         .any(|id| id == "app-kit"));
     let mut wrong = integrations;
     wrong.browser_clients = vec!["evidence-app".into()];
-    assert!(wrong.prepare(&root, &state, None, &policy).is_err());
+    assert!(wrong
+        .prepare(&root, &state, &clients, None, &policy)
+        .is_err());
 }
 
 #[test]
@@ -4395,7 +4437,13 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
         )
         .unwrap();
         let refusal = integrations
-            .prepare(&root, &state, None, &policy)
+            .prepare(
+                &root,
+                &state,
+                &accepted(STANDALONE_DEV_CLIENTS.as_bytes()),
+                None,
+                &policy,
+            )
             .unwrap_err();
         // The exact pairing passes this check and stops at the borrowed client
         // registration the owner has not written, which is the next check.
@@ -5095,13 +5143,25 @@ fn imported_provider_secret_files_must_be_owner_only() {
     private::directory(&root).unwrap();
     private::directory(&root.join("secrets")).unwrap();
     let error = integrations
-        .prepare(&root, &session(&project), None, &policy)
+        .prepare(
+            &root,
+            &session(&project),
+            &accepted(STANDALONE_DEV_CLIENTS.as_bytes()),
+            None,
+            &policy,
+        )
         .unwrap_err();
     assert!(!format!("{error:#}").contains("private-provider-test-canary"));
     assert!(!root.join("secrets/provider-key").exists());
     fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
     integrations
-        .prepare(&root, &session(&project), None, &policy)
+        .prepare(
+            &root,
+            &session(&project),
+            &accepted(STANDALONE_DEV_CLIENTS.as_bytes()),
+            None,
+            &policy,
+        )
         .unwrap();
     private::check(&root.join("secrets/provider-key"), false).unwrap();
 }

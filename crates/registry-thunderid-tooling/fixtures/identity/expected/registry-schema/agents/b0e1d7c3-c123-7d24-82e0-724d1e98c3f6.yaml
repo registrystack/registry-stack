@@ -1,0 +1,42 @@
+attributes:
+  registry_actor_kind: agent
+description: Deployment machine client
+id: b0e1d7c3-c123-7d24-82e0-724d1e98c3f6
+inboundAuthConfig:
+- config:
+    certificate:
+      type: JWKS
+      value: '{"keys":[{"alg":"ES256","crv":"P-256","kid":"task-agent-key-1","kty":"EC","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}]}'
+    clientId: task-agent
+    grantTypes:
+    - client_credentials
+    - urn:ietf:params:oauth:grant-type:token-exchange
+    publicClient: false
+    token:
+      accessToken:
+        clientConfig:
+          attributes:
+          - registry_actor_kind
+          validityPeriod: 300
+        userConfig:
+          attributes:
+          - registry_actor_kind
+          - registry_grant_id
+          - registry_grant_source_issuer
+          - registry_grant_client
+          - registry_grant_resource
+          - registry_purpose
+          - registry_grant_exp
+          - registry_grant_bounds
+          - identity
+          - registry_approver
+          - evidence_audience
+          - evidence_tags
+          - registry_assertion_issuer
+          validityPeriod: 300
+    tokenEndpointAuthMethod: private_key_jwt
+  type: oauth2
+name: Client task-agent
+ouHandle: registry
+resource_type: agent
+type: default

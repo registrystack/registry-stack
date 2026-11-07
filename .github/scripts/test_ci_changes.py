@@ -899,8 +899,11 @@ class CiChangesTest(unittest.TestCase):
             for step in self.workflow_jobs["config-conformance"]["steps"]
         }
         build = steps["Build configuration check commands"]["run"].split()
+        launcher = steps["Build the launcher check command"]["run"].split()
+        self.assertEqual(launcher, "cargo build --locked -p registry-rstack".split())
         self.assertEqual(
-            {build[index + 1] for index, word in enumerate(build) if word == "-p"},
+            {build[index + 1] for index, word in enumerate(build) if word == "-p"}
+            | {"registry-rstack"},
             CONFIG_CHECK_PACKAGES,
         )
         for package in sorted(CONFIG_CHECK_PACKAGES):
@@ -2244,6 +2247,7 @@ class CiChangesTest(unittest.TestCase):
             "products/platform/scripts/test_check_yaml_reader_boundary.py",
             "products/platform/scripts/check-mcp-dependencies.py",
             "products/platform/scripts/test_check_mcp_dependencies.py",
+            "products/platform/scripts/check-rstack-dependencies.py",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["platform_hygiene"])

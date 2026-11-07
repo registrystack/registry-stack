@@ -1,0 +1,24 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: casework
+issuer: https://identity.example.test/realms/registry
+audience: urn:example:casework
+allowedClients: unrestricted
+claims:
+  registry_actor_kind: string
+accessProfiles:
+- id: administrator
+  scopes:
+  - casework:admin
+  actorKind: human
+- id: requester
+  scopes:
+  - casework:request
+- id: staff
+  scopes:
+  - casework:staff
+  actorKind: human
+- id: supervisor
+  scopes:
+  - casework:supervisor
+  actorKind: human

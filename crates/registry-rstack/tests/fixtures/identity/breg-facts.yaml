@@ -1,0 +1,35 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: breg
+issuer: https://issuer.example.invalid
+audience: urn:example:generic-registry
+allowedClients:
+- generic-registry-client
+claims:
+  registry_actor_kind: string
+  registry_principal: string
+  registry_purpose: string
+  registry_record_status: string
+accessProfiles:
+- id: evidence-source
+  scopes:
+  - registry:evidence:lookup
+  purposes:
+  - evidence-source-read
+  requiredClaims:
+  - registry_principal
+- id: operator
+  scopes:
+  - registry:generic:operate
+  purposes:
+  - registry-operations
+  requiredClaims:
+  - registry_principal
+- id: record-reader
+  scopes:
+  - registry:generic:read
+  purposes:
+  - registry-reporting
+  requiredClaims:
+  - registry_principal
+  - registry_record_status
