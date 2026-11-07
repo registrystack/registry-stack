@@ -1705,9 +1705,9 @@ fn write_bundle(
         write_private_file(&bundle.join(path), bytes)?;
     }
     let config_path = bundle.join("evidence.yaml");
+    refuse_undeclared_connections(&plan.bundle, deployment_target_root.is_some())?;
     let description =
-        render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())
-            .map_err(|error| lead_with_undeclared_connections(error, &plan.bundle))?;
+        render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())?;
     // Evidence prints a description only for a bundle that declares a
     // publication, and prints nothing for one that does not. Which of the two
     // this is was decided by the bundle written just above, so nothing back
@@ -2029,23 +2029,14 @@ fn render_discovery_description(
     .into())
 }
 
-/// What Evidence reports when a Source names a connection the target omits.
-const UNDECLARED_CONNECTION_REPORT: &str = "source connection reference is not declared";
-
-/// Make a refused publication lead with the connection the target is missing.
+/// Refuse a bundle whose Source names a connection the target does not
+/// declare, leading with the Source and the connection and then the fix.
 ///
-/// Evidence loads the whole configuration to render the publication, so a
-/// Source whose connection the target does not declare surfaces there, as a
-/// nested report that names the Source and not the connection. The bundle
-/// being written knows both, so the refusal names them first and the fix with
-/// them. The code and every other refusal are unchanged.
-fn lead_with_undeclared_connections(error: anyhow::Error, bundle: &Value) -> anyhow::Error {
-    let Some(diagnostic) = error.downcast_ref::<AuthoredDiagnostic>() else {
-        return error;
-    };
-    if !diagnostic.message.contains(UNDECLARED_CONNECTION_REPORT) {
-        return error;
-    }
+/// Evidence would refuse the same bundle while rendering the publication, but
+/// as a nested report that names the Source and not the connection. The bundle
+/// being written knows both, so the refusal is computed from it before Evidence
+/// runs. The code is the publication refusal's, so callers see no new code.
+fn refuse_undeclared_connections(bundle: &Value, target_authored: bool) -> Result<()> {
     let declared = bundle.get("sourceConnections").and_then(Value::as_object);
     let missing = bundle
         .get("sources")
@@ -2060,17 +2051,21 @@ fn lead_with_undeclared_connections(error: anyhow::Error, bundle: &Value) -> any
         })
         .collect::<Vec<_>>();
     if missing.is_empty() {
-        return error;
+        return Ok(());
     }
-    AuthoredDiagnostic {
-        code: diagnostic.code.clone(),
-        path: diagnostic.path.clone(),
+    Err(AuthoredDiagnostic {
+        code: "evidence.target.publication-invalid".to_owned(),
+        path: if target_authored {
+            "target.yaml:/publication".to_owned()
+        } else {
+            "evidence.yaml:/publication".to_owned()
+        },
         message: format!(
             "{}, which target.yaml does not declare under `connections`; add it there (`evidencectl target new --local` copies the connections of the project's local-target.yaml), then run the command again",
             missing.join("; ")
         ),
     }
-    .into()
+    .into())
 }
 
 /// The longest provider publication description evidencectl accepts from the
@@ -3339,12 +3334,12 @@ mod tests {
     }
 
     #[test]
-    fn package_writer_leads_with_the_source_connection_the_target_does_not_declare() {
+    fn package_writer_refuses_an_undeclared_source_connection_without_running_evidence() {
         let root = tempfile::tempdir().unwrap();
         let evidence = root.path().join("evidence-stub");
         write_stub_evidence(
             &evidence,
-            "#!/bin/sh\necho 'evidence: the configuration reader refused the configuration' >&2\necho 'error[evidence.bundle.invalid-source] evidence.yaml:105:17 /sources/record-status/connection' >&2\necho '  source connection reference is not declared' >&2\nexit 1\n",
+            "#!/bin/sh\necho 'evidence: stub must not be consulted' >&2\nexit 1\n",
         );
         let stage = root.path().join("candidate");
         create_private_directory(&stage).unwrap();
@@ -3381,6 +3376,11 @@ mod tests {
                 "source `record-status` uses connection `starter-source`, which target.yaml does not declare"
             ),
             "{}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("stub must not be consulted"),
+            "the refusal comes from the bundle, not Evidence's stderr: {}",
             diagnostic.message
         );
         assert!(
