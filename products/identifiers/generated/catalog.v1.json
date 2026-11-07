@@ -5441,11 +5441,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "17b761abf1faaaea1d0418d32f5d9c675570ba9d68c95c6aa0f52b6cd7b4e85c"
+        "sha256": "89428c7c4d08555b71f3d7476a45e2439fd0d2ba4b97eae6ee18be78fcbf8e3e"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "17b761abf1faaaea1d0418d32f5d9c675570ba9d68c95c6aa0f52b6cd7b4e85c",
+        "sha256": "89428c7c4d08555b71f3d7476a45e2439fd0d2ba4b97eae6ee18be78fcbf8e3e",
         "mediaType": "application/yaml"
       }
     },
@@ -5607,7 +5607,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
-        "sha256": "e2c8ceaa47492ec7b9d94d2dd973b38c8eefc64c76ac4fb7bab673ece2794af1",
+        "sha256": "f91af7d0c873134675c27063eafcea7500210443225dd0f9e8309e1f6680f13d",
         "mediaType": "application/schema+json"
       }
     },
@@ -5661,7 +5661,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target-authority.schema.json",
-        "sha256": "776bed90338ce6d6466d4a9b7987119951b6014c06f6091813a453807fe2a838",
+        "sha256": "4a4b93a4cca9568c089166b2d7f2ee13306b4abcba7289f4b5290d55ef44d644",
         "mediaType": "application/schema+json"
       }
     },
