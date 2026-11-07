@@ -95,9 +95,12 @@ or refuses, with the context needed to apply it.
   PublicSchema is the first model. The derived project is ordinary source; the
   model never becomes a runtime type, and the snapshot itself is a pinned
   external input recorded in `external/README.md`.
-- `registry.action-handler/v1` runs a project-authored Rhai script inside
-  `handle(ctx)` for typed input calculation and branching. The ABI accepts
-  scalar inputs only and refuses `crs84-point` and `structured` inputs; every
+- `registry.action-plan/v1` is the one ABI an Action handler declares. A
+  project-authored Rhai script (or a Wasm module, see
+  [`wasm-action-handlers.md`](wasm-action-handlers.md)) runs behind the
+  Function's declared entrypoint for typed input calculation and branching.
+  Hook handlers use a separate ABI, `registry.hook-handler/v1`. The plan ABI
+  accepts scalar inputs only and refuses `crs84-point` and `structured` inputs; every
   effect an action can produce is a declared write slot with a fixed target,
   operation, and field list, so the script cannot reach a target, field, or
   operation the compiler did not admit. Declared refusal codes are the only

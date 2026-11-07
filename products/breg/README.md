@@ -297,8 +297,9 @@ control plane, or runtime code plugins.
 
 The focused direction for hooks is documented in
 [`EVENTS-AND-WEBHOOKS.md`](EVENTS-AND-WEBHOOKS.md). Version 1 uses explicit
-transactional events and authenticated after-commit webhooks, with future Rhai
-rules kept behind the same governed extension boundary.
+transactional events and after-commit handlers behind the same governed
+extension boundary: authenticated webhooks (`type: url`) and reviewed local
+Rhai or Wasm programs (`type: rhai`, `type: wasm`).
 
 PostgreSQL is the sole Version 1 database. The administrator installs
 `btree_gist`; neither the runtime nor migration role installs extensions.
