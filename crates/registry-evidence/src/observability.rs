@@ -190,8 +190,8 @@ pub(crate) async fn observe(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let operation = OperationId::new(TraceContext::from_headers(request.headers()));
     let route = route_template(&request);
+    let operation = OperationId::new(request_trace(route, request.headers()));
     let method = normalized_method(request.method());
     request.extensions_mut().insert(operation.clone());
 
@@ -226,6 +226,21 @@ pub(crate) async fn observe(
         "evidence request served"
     );
     response
+}
+
+/// Choose the W3C trace for one request.
+///
+/// Every route continues a valid inbound `traceparent` except the public
+/// check route. That route is unauthenticated, and an inbound trace id there
+/// would put a caller-chosen value into the operational log and let a caller
+/// tag its own checks, so the server mints a fresh trace and never reads the
+/// header.
+fn request_trace(route: &'static str, headers: &axum::http::HeaderMap) -> TraceContext {
+    if route == crate::public_check::PUBLIC_CHECK_ROUTE {
+        TraceContext::server_created()
+    } else {
+        TraceContext::from_headers(headers)
+    }
 }
 
 /// Resolve the matched route template.
@@ -899,6 +914,25 @@ mod tests {
         );
         assert_eq!(first.trace_id(), second.trace_id());
         assert_ne!(first.as_str(), second.as_str());
+    }
+
+    #[test]
+    fn the_public_check_route_mints_its_trace_and_ignores_inbound_trace_context() {
+        let inbound = "0123456789abcdef0123456789abcdef";
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            HeaderValue::from_static("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"),
+        );
+
+        let public = request_trace(crate::public_check::PUBLIC_CHECK_ROUTE, &headers);
+        let again = request_trace(crate::public_check::PUBLIC_CHECK_ROUTE, &headers);
+        assert_ne!(public.trace_id.as_str(), inbound);
+        assert_ne!(public.trace_id, again.trace_id);
+
+        for route in [crate::server::ROUTE_TEMPLATES[0], UNMATCHED_ROUTE] {
+            assert_eq!(request_trace(route, &headers).trace_id.as_str(), inbound);
+        }
     }
 
     #[test]

@@ -26,7 +26,7 @@ use axum::{
             ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, ETAG,
             IF_NONE_MATCH, RETRY_AFTER, VARY,
         },
-        HeaderMap, HeaderValue, Request, StatusCode,
+        HeaderMap, HeaderValue, Method, Request, StatusCode,
     },
     middleware::{from_fn, from_fn_with_state, Next},
     response::{IntoResponse, Response},
@@ -39,6 +39,7 @@ use registry_platform_httpsec::CspBuilder;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::{net::TcpListener, sync::Semaphore};
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     config::{ListenerConfig, ResponseFormat},
@@ -51,6 +52,7 @@ use crate::{
     },
     observability::{self, operation_id, Metrics, OperationId},
     problem::ProblemCode,
+    public_check::{parse_request as parse_public_check_request, PUBLIC_CHECK_ROUTE},
     runtime::{EvidenceRuntime, RuntimeFailure},
     EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
@@ -72,7 +74,7 @@ pub(crate) const PROTECTED_RESOURCE_METADATA_ROUTE: &str = "/.well-known/oauth-p
 ///
 /// Operational telemetry labels requests with a member of this set or with a
 /// single fixed unmatched label, so a caller cannot introduce a label value.
-pub(crate) const ROUTE_TEMPLATES: [&str; 10] = [
+pub(crate) const ROUTE_TEMPLATES: [&str; 11] = [
     EVIDENCE_ROUTE,
     EVIDENCE_BATCH_ROUTE,
     DEFINITIONS_ROUTE,
@@ -83,6 +85,7 @@ pub(crate) const ROUTE_TEMPLATES: [&str; 10] = [
     JWKS_ROUTE,
     JWT_VC_ISSUER_ROUTE,
     PROTECTED_RESOURCE_METADATA_ROUTE,
+    PUBLIC_CHECK_ROUTE,
 ];
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -90,6 +93,7 @@ const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 const RETRY_AFTER_SECONDS: &str = "1";
 const PUBLIC_METADATA_CACHE_CONTROL: &str = "public, max-age=600";
+const PUBLIC_CHECK_PREFLIGHT_MAX_AGE_SECONDS: u64 = 600;
 pub(crate) const BEARER_AUTH_CHALLENGE: &str = "Bearer realm=\"registry-evidence\"";
 
 #[derive(Clone)]
@@ -167,7 +171,12 @@ fn build_app_with_tracker_at(
         .expect("validated public origin makes a valid challenge header"),
     );
 
-    let routes = Router::new()
+    // The public check exists only when the active target authority opens
+    // it. Unregistered, its path falls to the unknown-route fallback and is
+    // indistinguishable from any other unknown path.
+    let public_check_active = state.runtime.bundle().public_check_activation().is_some();
+
+    let mut routes = Router::new()
         .route(EVIDENCE_ROUTE, post(create_evidence))
         .route(EVIDENCE_BATCH_ROUTE, post(create_evidence_batch))
         .route(DEFINITIONS_ROUTE, get(discover_evidence))
@@ -183,7 +192,16 @@ fn build_app_with_tracker_at(
         .route(
             PROTECTED_RESOURCE_METADATA_ROUTE,
             get(protected_resource_metadata),
-        )
+        );
+    if public_check_active {
+        routes = routes.route(
+            PUBLIC_CHECK_ROUTE,
+            post(public_check)
+                .fallback(unknown_route)
+                .layer(public_check_cors()),
+        );
+    }
+    let routes = routes
         .fallback(unknown_route)
         .method_not_allowed_fallback(unknown_route)
         .with_state(state)
@@ -684,6 +702,120 @@ async fn create_evidence_batch_negotiated(
         }
         Err(failure) => runtime_failure_response(failure, &operation),
     }
+}
+
+/// Answer one public certificate check, the first unauthenticated route that
+/// reads registry data.
+///
+/// The handler reads one request header, `Content-Type`, and the body.
+/// Credentials, cookies, forwarding headers, and trace context a caller sends
+/// are never read here and never reach the runtime, and the body bound is
+/// enforced while the body is collected rather than trusted from a declared
+/// length. Admission, body collection, and the evaluation hand-off are those
+/// of the relying routes, so the check shares their concurrency slots and
+/// request timeout. Evidence admits no rate here: a deployment limits its rate
+/// at the proxy.
+async fn public_check(State(state): State<Arc<ServerState>>, request: Request<Body>) -> Response {
+    let operation = operation_id(request.extensions());
+    let started = Instant::now();
+
+    if !has_exact_content_type(request.headers(), JSON_MEDIA_TYPE) {
+        return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation);
+    }
+
+    let admission_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
+    };
+    let request_slot = match tokio::time::timeout(
+        admission_budget,
+        Arc::clone(&state.request_slots).acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(_)) | Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, "admission", &operation)
+        }
+    };
+
+    let body_budget = match remaining(state.request_timeout, started) {
+        Some(remaining) => remaining,
+        None => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
+    };
+    let body = match tokio::time::timeout(
+        body_budget,
+        to_bytes(request.into_body(), state.maximum_request_bytes),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(_)) => {
+            return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation)
+        }
+        Err(_) => {
+            return problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation)
+        }
+    };
+    let check = match parse_public_check_request(&body) {
+        Ok(check) => check,
+        Err(code) => return problem_response(code, "request-shape", &operation),
+    };
+
+    // As on the relying routes, the tracker-owned task holds the admitted
+    // permit and the audited evaluation, so a client disconnect detaches it
+    // instead of cancelling an audit write.
+    let evaluation_operation = operation.clone();
+    let runtime = Arc::clone(&state.runtime);
+    #[cfg(test)]
+    let evaluation_time = state.evaluation_time;
+    let evaluation = state.evaluations.spawn(async move {
+        let _request_slot = request_slot;
+        #[cfg(test)]
+        if let Some(evaluation_time) = evaluation_time {
+            return runtime
+                .evaluate_public_check_at_for_test(&evaluation_operation, &check, evaluation_time)
+                .await;
+        }
+        runtime
+            .evaluate_public_check(&evaluation_operation, &check)
+            .await
+    });
+    let result = match evaluation.await {
+        Ok(result) => result,
+        Err(_) => {
+            return problem_response(
+                ProblemCode::ServiceUnavailable,
+                "evaluation-task",
+                &operation,
+            )
+        }
+    };
+
+    match result {
+        // The answer bytes were serialized before the durable release record
+        // and are returned unchanged.
+        Ok(answer) => bytes_response(StatusCode::OK, JSON_MEDIA_TYPE, answer),
+        Err(failure) => runtime_failure_response(failure, &operation),
+    }
+}
+
+/// The cross-origin policy of the public check route alone.
+///
+/// Any origin may read every response of the route, including its problems,
+/// so a static verification page on another origin can show a miss as well as
+/// a hit. A preflight allows exactly `POST` with `Content-Type`, and
+/// credentials are never allowed. No other route carries a CORS header.
+fn public_check_cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Method::POST)
+        .allow_headers([CONTENT_TYPE])
+        .max_age(Duration::from_secs(PUBLIC_CHECK_PREFLIGHT_MAX_AGE_SECONDS))
 }
 
 /// Resolve the closed Version 1 `Accept` matrix. Missing, `*/*`, and the exact
