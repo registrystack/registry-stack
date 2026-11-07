@@ -45,6 +45,16 @@ relevant product pages on this site rather than duplicating release notes.
     any_read_of_an_automatic_application_reads_again_at_the_read_floor;
     products/adapter/packs/kobotoolbox/pack.yaml; products/adapter/examples/kobotoolbox-job/job.yaml. */}
 
+- Evidence adds an experimental public certificate check: `POST /v1/public-check`, activated by
+  the operator, answers the status and printed fields of one certificate without authentication.
+  See the [Evidence API](../reference/apis/registry-evidence/), the
+  [Evidence security model](../security/evidence/) and
+  [API stability](../reference/api-stability/#experimental-surfaces).
+
+{/* Evidence: products/evidence/CHANGELOG.md, Unreleased, public certificate check;
+    crates/registry-evidence/src/public_check.rs; crates/registry-evidencectl/tests/public_check.rs;
+    products/evidence/examples/public-check/README.md. */}
+
 ## v0.45.0 beta-57
 
 - BREAKING: Evidence sources move into reviewed Adapter packs. A source declares `pack`,

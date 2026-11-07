@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Experimental public certificate check. An assertion definition may declare
+  `publicCheck` (`checkCodeFact`, `statusOutput`, `fieldsOutput`) and a target
+  authority may activate it with `publicCheck.definition`. Once activated,
+  `POST /v1/public-check` answers, without authentication, the status, printed
+  fields and evaluation time of one certificate from a `documentNumber` and a
+  24-character `checkCode`, under the answer schema
+  `registry.evidence.public-check/v1alpha1`. A wrong number and a wrong code
+  return the same `404 resource.not-found`. The answer is unsigned, the route
+  writes its own audit entry, and Evidence has no rate limiter on it: expose it
+  only through a path-restricted proxy that limits each client and keeps no
+  client addresses. The route, the answer schema and the new keys are
+  experimental surfaces. A static page and a code generation recipe are in
+  `examples/public-check/`.
+
 - Each target-authority access profile may carry an optional `label` and `description`, accepted for authoring and tooling; compilation drops them and Evidence does not serve them. Neither is matched against a caller, and a profile that writes neither reads as before.
 
 - A definition with `holderPresented` acquisition now answers only as a signed
