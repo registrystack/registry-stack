@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "holderName", "issuedOn", "expiresOn"],
+  "properties": {
+    "status": {"type": "string", "enum": ["active", "suspended", "revoked"]},
+    "holderName": {"type": "string", "maxLength": 128},
+    "issuedOn": {"type": "string", "format": "date"},
+    "expiresOn": {"type": "string", "format": "date"},
+    "checkCode": {"type": "string", "pattern": "^[A-Z2-7]{24}$"}
+  }
+}

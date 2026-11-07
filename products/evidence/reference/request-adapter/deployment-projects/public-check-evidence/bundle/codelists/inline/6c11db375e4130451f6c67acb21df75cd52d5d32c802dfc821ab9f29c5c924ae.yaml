@@ -1,0 +1,13 @@
+{
+  "apiVersion": "id.registrystack.org/formats/evidence/codelist/v1alpha1",
+  "codes": [
+    "valid",
+    "suspended",
+    "revoked",
+    "expired"
+  ],
+  "kind": "EvidenceCodelist",
+  "type": "code-list",
+  "uri": "urn:example:concept:certificate-status:v1:values",
+  "version": "1"
+}

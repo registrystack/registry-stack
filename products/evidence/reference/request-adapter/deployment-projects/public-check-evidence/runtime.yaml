@@ -1,0 +1,36 @@
+apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
+audit:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+authority:
+  root: /var/lib/registry-evidence/authority
+  target: public-check
+kind: EvidenceRuntimeConfig
+listener:
+  bind: 127.0.0.1:8090
+  maximumConcurrentRequests: 64
+  maximumRequestBytes: 65536
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+package:
+  root: /etc/registry-evidence/bundle
+secretProviders:
+  file:
+    root: /run/secrets/registry-evidence
+signer:
+  privateKeyRef: secret:file/signing-p256-private-jwk
+  type: local-jwk
+sourceConnections:
+  synthetic-register:
+    allowedPrivateCidrs: []
+    endpoints:
+      - baseUrl: http://127.0.0.1:8081
+        credential:
+          tokenRef: secret:file/synthetic-source-token
+          type: static-authorization
+        endpoint: register
+    id: synthetic-register

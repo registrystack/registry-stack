@@ -328,6 +328,21 @@ fn load_project_with(
             &extract_path.display().to_string(),
         );
     }
+    // A project with an activated target authority commits the compiled
+    // document beside its runtime; it is activated into a private root the
+    // way an operator does before the first start.
+    let activated_authority = local_runtime.contains(AUTHORITY_ROOT);
+    if activated_authority {
+        let authority_root = temporary.path().join("authority");
+        fs::create_dir(&authority_root).expect("temporary authority root");
+        fs::set_permissions(&authority_root, fs::Permissions::from_mode(0o700))
+            .expect("temporary authority root is private");
+        replace_once(
+            &mut local_runtime,
+            AUTHORITY_ROOT,
+            &authority_root.display().to_string(),
+        );
+    }
     let runtime_path = temporary.path().join("runtime.yaml");
     fs::write(&runtime_path, local_runtime).expect("temporary runtime writes");
     set_tree_mode(&bundle_root, 0o555, 0o444);
@@ -336,6 +351,26 @@ fn load_project_with(
     fs::set_permissions(&ca_path, fs::Permissions::from_mode(0o444))
         .expect("temporary CA is immutable");
 
+    if activated_authority {
+        // Activation is audited, so it resolves the project's audit key.
+        let audit_key = secret_root.join("audit-hmac-key");
+        fs::write(&audit_key, [0x5a_u8; 32]).expect("synthetic audit key writes");
+        fs::set_permissions(&audit_key, fs::Permissions::from_mode(0o400))
+            .expect("synthetic audit key is private");
+        let activated = Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+            .args(["authority", "activate", "--runtime-config"])
+            .arg(&runtime_path)
+            .arg("--document")
+            .arg(project_root.join("compiled-authority.yaml"))
+            .output()
+            .expect("the actual Evidence authority command starts");
+        assert!(
+            activated.status.success(),
+            "{project_name}: authority activation failed: {}",
+            String::from_utf8_lossy(&activated.stderr)
+        );
+    }
     let deployment = DeploymentInputs::load(&runtime_path).unwrap_or_else(|error| {
         panic!("{project_name}: production deployment loading failed: {error:?}")
     });
@@ -386,6 +421,10 @@ fn bound_extract_path<'a>(
     );
     binding.1.path.as_str()
 }
+
+/// The runtime path of an activated target authority, replaced by a private
+/// root for each loaded project.
+const AUTHORITY_ROOT: &str = "/var/lib/registry-evidence/authority";
 
 fn projects_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
