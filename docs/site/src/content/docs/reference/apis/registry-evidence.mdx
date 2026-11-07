@@ -56,7 +56,8 @@ exchange. The other routes take no credential and reveal no definition or entitl
 One experimental route is also unauthenticated and reads registry data: `POST /v1/public-check`,
 which exists only when the operator activates a public check. It takes a certificate number and its
 check code, reads no `Authorization` header or any other request header except `Content-Type`, and
-answers one configured requirement. An operator exposes it only through a path-restricted proxy.
+answers one configured requirement. Evidence does not enforce a path restriction: the operator
+exposes the route only through a path-restricted proxy.
 See the [public certificate check example](https://github.com/registrystack/registry-stack/blob/main/products/evidence/examples/public-check/README.md).
 
 {/* Evidence: products/evidence/generated/registry-evidence.openapi.json, bearerAuth and
