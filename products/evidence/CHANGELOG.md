@@ -263,14 +263,15 @@
   `requirements[]`, each entry with the requirement `id` and its
   `configurationRevision`. Read requirement revisions from this report; the
   field is additive.
-- A source that answers a 4xx with no closer meaning, such as 409 or 422, is
-  now recorded as a status answer: the request log and audit
+- BREAKING: A source that answers a 4xx with no closer meaning, such as 409 or
+  422, is now recorded as a status answer: the request log and audit
   `safeErrorCategory` read `source-status` instead of `source-protocol`, and
   the `evaluate --explain` trace names the endpoint that "answered a 4xx
   client error". A failure that carries an HTTP status no longer counts
-  toward `evidence_source_shape_drift_total`. The caller still receives
-  `source.unavailable`, and the `evidence_source_requests_total` outcome
-  labels are unchanged.
+  toward `evidence_source_shape_drift_total`. Update audit readers, log
+  queries and alerts that match `source-protocol` for a source 409 or 422 to
+  match `source-status`. The caller still receives `source.unavailable`, and
+  the `evidence_source_requests_total` outcome labels are unchanged.
 - When a pack source does not compile against its reviewed connection and
   runtime binding, startup and `evidence check --require-runtime-dependencies`
   (and so `evidencectl doctor`) now name the source id, the endpoint id and the
