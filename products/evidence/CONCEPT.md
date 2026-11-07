@@ -2497,8 +2497,10 @@ The choices below are this profile's; the basis column names the draft section.
 | Credential claim | `"status": {"status_list": {"idx": <int>, "uri": "<list URI>"}}`, issuer-signed, always disclosed. | Status List 6.2; SD-JWT VC 2.2.2.3. |
 | Token validation | `typ` first; signature under the issuer's pinned Evidence keys; `sub` equals `uri`; `exp`; `ttl`; `bits`; out-of-bounds `idx` rejected. | Status List 8.3. |
 
-**Public route.** The list route is the only Evidence route meant to be public
-and unauthenticated. The maintained Compose guidance binds Evidence privately
+**Public route.** The list route is, with the public certificate check of
+section 15.11, one of the two Evidence evaluation-class routes meant to be
+public and unauthenticated; the health, readiness, OpenAPI, catalogue and
+key-set routes are also unauthenticated. The maintained Compose guidance binds Evidence privately
 and leaves public TLS and routing to the operator, so the route is exposed
 through a path-restricted proxy that forwards only `GET` on the list path and
 nothing else. The route writes no per-request audit entry and keeps no client
@@ -3353,6 +3355,98 @@ of the presented credential.
 - The W3C Digital Credentials API.
 - A change to the presentation non-goals of sections 15.6 and 15.8: they
   concern credentials Evidence issues, and remain as written.
+
+### 15.11 Public certificate check
+
+A holder, or anyone the holder shows a paper certificate to, can check it
+without registering as a relying service. One route,
+`POST /v1/public-check`, takes the certificate number and a check code, both
+printed in the certificate's QR code, evaluates one configured requirement
+against current registry state, and answers the status (`valid`, `suspended`,
+`revoked` or `expired`), the printed fields and the evaluation time. It is the
+first unauthenticated route that reads registry data. It is experimental: the
+route, the answer schema `registry.evidence.public-check/v1alpha1` and the new
+configuration members are `v1alpha1`.
+
+**Two keys, no runtime switch.** The package declares the ceiling and the
+target authority grants it, as for any other disclosure.
+
+- An assertion definition may carry `publicCheck` with `checkCodeFact` (the
+  projected source fact holding the stored code), `statusOutput` (a
+  `controlled-category` output whose values lie within the four statuses) and
+  `fieldsOutput` (a `reviewed-structured-value` output whose inner `fields`
+  object becomes the answer's `fields`).
+- The target authority names `publicCheck.definition`. Activation uses the
+  existing `evidence authority activate` flow and is part of the authority
+  revision. A target authority may activate no access profiles and a public
+  check only.
+
+A package that declares `publicCheck` without an activation does not register
+the route, which then answers as an unknown route. At most one definition is
+activated per process. Packaging and startup refuse a definition whose
+`statusOutput` or `fieldsOutput` has the wrong type, whose status and fields
+are the same output, that has more than one subject role, selector profile or
+selector field, whose `checkCodeFact` is not a string property of the source's
+facts or is bound as a request input, or whose `existenceDisclosure` is not the
+default `collapse-unresolved`. Other outputs on the same definition serve only
+the relying-service path; the public answer is built from the two named outputs.
+
+**The request.** The body has exactly the string members `documentNumber` and
+`checkCode`. The code is 15 random bytes (120 bits) in unpadded RFC 4648
+base32, `^[A-Z2-7]{24}$` after ASCII upper-casing. The issuing system generates
+and stores it on the record at issuance; it is a capability, not derived from
+the number or a key. The number and code travel in a POST body so they reach no
+proxy log, browser history or `Referer`.
+
+**The identical miss.** A wrong number and a wrong code return the same
+`404 resource.not-found`: same status, headers and body, apart from the
+freshly minted trace. The collapsed cases are no match, an ambiguous match, a
+source-declared unresolved result, a missing required fact, an unresolved
+derivation input, an absent or malformed stored code, and a code mismatch. The
+code is a projected fact, never a source input. It is compared in constant time
+where the match is unpacked, then removed from the facts on every route that
+reads that source, so no derive Function and no relying service sees it.
+Malformed requests return `400` (`evidence.invalid-request` or
+`request.selector-invalid`) before any audit write or source read. A source
+failure returns `503 source.unavailable`.
+
+**Timing.** Evidence adds no delay, so response time can differ between an
+existing and a missing number. That can reveal whether a number exists and
+never anything about the code. The number is printed on the paper and is not
+the secret.
+
+**The answer is unsigned.** A static page cannot gain trust from a signature
+fetched from the origin it already trusts, so the checker trusts the page
+origin. The public answer is a separate answer type, not an Evidence response
+format; the signed JWS default of the relying-service path is unchanged for the
+same definition. Print the check origin as text beside the QR code so a forged
+paper pointing at a look-alike page is noticeable.
+
+**Audit and logs.** The route writes its own audit entry,
+`registry.evidence.audit.public-check/v1`, which holds no requester, actor,
+client, check code, raw number, request header or client address. The number
+appears only as a keyed pseudonym. The access attempt is durably accepted
+before the source read, and the release over the exact bytes before they leave;
+an audit failure returns `503` and nothing is released. The route mints its own
+trace and ignores inbound trace context, and its handler reads no request
+header except `Content-Type`. The source sees Evidence's own credentials, so a
+Base Registry Engine stays authenticated-only.
+
+**Rate limit and exposure.** Evidence has no in-process rate limiter on this
+route and never reads a client address. The operator's proxy owns the limit and
+forwards only `POST` and `OPTIONS` on `/v1/public-check`
+(`OPERATOR-CONTRACT.md`). The existing admission limit still bounds concurrent
+source reads. The route answers `OPTIONS` and sends `Access-Control-Allow-Origin: *`
+on every response, since it carries no cookie or token; the answer carries
+`Cache-Control: no-store`. A separate Evidence instance with its own signing,
+audit and subject-binding keys is recommended, not enforced.
+
+**Where the page lives.** A static page, not Evidence, calls the route. The
+runnable example is `examples/public-check/`, including the page, the code
+generation recipe and the QR URL format.
+
+**Non-goals.** A searchable register, an offline signed QR code, and any
+anonymous read in a Base Registry Engine.
 
 ## 16. Initial assertion cases
 
