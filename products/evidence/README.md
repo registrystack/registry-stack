@@ -356,6 +356,19 @@ JWKS location, and header-only bearer transport. It carries no requester-scoped
 definition or entitlement data. The complete contract and change rules are in
 [the operator contract](OPERATOR-CONTRACT.md#discovery-of-available-evidence).
 
+## Public certificate check
+
+An operator can activate one experimental public check, so that anyone holding
+a certificate can check it without registering as a relying service.
+`POST /v1/public-check` (and its `OPTIONS` preflight) takes `documentNumber` and
+`checkCode`, needs no credential, and answers the status, the printed fields and
+the evaluation time, unsigned. A wrong number and a wrong code get the same
+`404`. The route exists only when the package declares `publicCheck` and the
+target authority activates it, and it is exposed only through a path-restricted
+proxy. See [the example](examples/public-check/README.md), [section 15.11 of
+the concept](CONCEPT.md#1511-public-certificate-check) and
+[the operator contract](OPERATOR-CONTRACT.md#public-certificate-check).
+
 ## Requesting evidence
 
 `POST /v1/evidence` takes one complete request naming the requirement, purpose,
