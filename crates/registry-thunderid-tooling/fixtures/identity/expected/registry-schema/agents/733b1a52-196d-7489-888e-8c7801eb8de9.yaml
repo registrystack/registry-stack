@@ -1,0 +1,27 @@
+attributes:
+  registry_actor_kind: service
+  registry_purpose: eligibility
+description: Deployment machine client
+id: 733b1a52-196d-7489-888e-8c7801eb8de9
+inboundAuthConfig:
+- config:
+    certificate:
+      type: JWKS
+      value: '{"keys":[{"alg":"ES256","crv":"P-256","kid":"case-portal-key-1","kty":"EC","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}]}'
+    clientId: case-portal
+    grantTypes:
+    - client_credentials
+    publicClient: false
+    token:
+      accessToken:
+        clientConfig:
+          attributes:
+          - registry_actor_kind
+          - registry_purpose
+          validityPeriod: 300
+    tokenEndpointAuthMethod: private_key_jwt
+  type: oauth2
+name: Client case-portal
+ouHandle: registry
+resource_type: agent
+type: default

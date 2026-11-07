@@ -76,7 +76,7 @@ axum-test.workspace = true
 ed25519-dalek.workspace = true
 jsonschema.workspace = true
 p256.workspace = true
-registry-thunderid-tooling.workspace = true
+registry-thunderid-tooling = { workspace = true, features = ["session"] }
 reqwest.workspace = true
 tempfile.workspace = true
 uuid.workspace = true

@@ -18,7 +18,7 @@ use crate::description::{
 /// The ES256 public half of a deterministic test-only client key. It
 /// authenticates nothing; it exists so the rendered fixture carries a
 /// realistic one-key JWKS of the client's own.
-pub const SYNTHETIC_CLIENT_PUBLIC_JWKS: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","alg":"ES256","kid":"synthetic-client-key-1","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JW","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2Go0"}]}"#;
+pub const SYNTHETIC_CLIENT_PUBLIC_JWKS: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","alg":"ES256","kid":"synthetic-client-key-1","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"}]}"#;
 
 pub fn synthetic_description() -> IssuerDescription {
     let mut attributes = BTreeMap::new();

@@ -21,11 +21,13 @@ fs2.workspace = true
 hex.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-thunderid-tooling.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 rustix.workspace = true
+tempfile.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true

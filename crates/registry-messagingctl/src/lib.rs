@@ -79,6 +79,7 @@ use uuid::Uuid;
 #[cfg(test)]
 mod cli_contract_tests;
 mod dev;
+mod identity_facts;
 mod report;
 mod selected_binary;
 mod starter;
@@ -152,6 +153,19 @@ enum Command {
 enum GenerateCommand {
     /// Write every checked template version's locale and data contract.
     Templates(GenerateTemplatesArgs),
+    /// Write the identity facts this runtime states about its issuer.
+    IdentityFacts(GenerateIdentityFactsArgs),
+}
+
+#[derive(Debug, Args)]
+struct GenerateIdentityFactsArgs {
+    /// Runtime configuration file: its authentication.oidc block and the
+    /// package it names state the facts.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+    /// New YAML file to create. Existing files are never overwritten.
+    #[arg(long, value_name = "FILE")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -456,6 +470,7 @@ enum View {
     Init,
     Package,
     GenerateTemplates,
+    GenerateIdentityFacts,
     Check,
     /// A refusal whose diagnostics carry their positions, printed as the
     /// shared human report (CFG-DIAG-2).
@@ -733,6 +748,7 @@ where
         Command::Init(args) => init(&args.directory),
         Command::Package(args) => package(&args),
         Command::Generate(GenerateCommand::Templates(args)) => generate_templates(&args),
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => generate_identity_facts(&args),
         Command::Check(args) => check(&args),
         Command::Preview(args) => preview(&args),
         Command::Plan(args) => plan(&args.runtime_config),
@@ -751,6 +767,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Init(_) => "init",
         Command::Package(_) => "package",
         Command::Generate(GenerateCommand::Templates(_)) => "generate templates",
+        Command::Generate(GenerateCommand::IdentityFacts(_)) => "generate identity-facts",
         Command::Check(_) => "check",
         Command::Preview(_) => "preview",
         Command::Plan(_) => "plan",
@@ -962,6 +979,64 @@ fn generate_templates(args: &GenerateTemplatesArgs) -> Outcome {
             package_refusal(&args.project, &error)
         }
         Err(template_contracts::ExportError::Write(error))
+            if error.kind() == io::ErrorKind::AlreadyExists =>
+        {
+            Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                "output.exists",
+                "--output",
+                "the output file already exists; generate never overwrites".to_owned(),
+            )
+        }
+        Err(error) => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "output.failed",
+            "--output",
+            error.to_string(),
+        ),
+    }
+}
+
+fn generate_identity_facts(args: &GenerateIdentityFactsArgs) -> Outcome {
+    // Refuse before reading anything when the output cannot be created.
+    if args.output.exists() {
+        return Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "output.exists",
+            "--output",
+            "the output file already exists; generate never overwrites".to_owned(),
+        );
+    }
+    let config = match load_runtime(&args.runtime_config) {
+        Ok(config) => config,
+        Err(refused) => return refused,
+    };
+    let loaded = match config.load_package() {
+        Ok(loaded) => loaded,
+        Err(error) => return config_refusal(&error),
+    };
+    let facts = match identity_facts::facts(&config, &loaded) {
+        Ok(facts) => facts,
+        Err(error) => {
+            return Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                "identity.facts.unstatable",
+                "/",
+                error.to_string(),
+            )
+        }
+    };
+    match identity_facts::write(&facts, &args.output) {
+        Ok(()) => Outcome::new(
+            json!({
+                "ok": true,
+                "output": args.output,
+                "accessProfiles": facts.access_profiles.len(),
+                "claims": facts.claims.len(),
+            }),
+            View::GenerateIdentityFacts,
+        ),
+        Err(identity_facts::FactsError::Write(error))
             if error.kind() == io::ErrorKind::AlreadyExists =>
         {
             Outcome::refused(
@@ -2084,6 +2159,7 @@ fn render_human(
         View::Init => render_init(report, stdout),
         View::Package => render_package(report, stdout),
         View::GenerateTemplates => render_generate_templates(report, stdout),
+        View::GenerateIdentityFacts => render_generate_identity_facts(report, stdout),
         View::Check | View::Diagnostics => {
             render_check(report, stdout)?;
             if report.get("filesChecked").is_some() && !warned {
@@ -2127,6 +2203,12 @@ fn render_package(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> 
 fn render_generate_templates(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     writeln!(stdout, "created: {}", text(&report["output"]))?;
     writeln!(stdout, "template versions: {}", report["templates"])
+}
+
+fn render_generate_identity_facts(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    writeln!(stdout, "created: {}", text(&report["output"]))?;
+    writeln!(stdout, "access profiles: {}", report["accessProfiles"])?;
+    writeln!(stdout, "claims: {}", report["claims"])
 }
 
 fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {

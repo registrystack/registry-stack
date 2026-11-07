@@ -1,8 +1,13 @@
 //! Explicit provider connections and optional shared issuer authority for local development.
 use super::{config, private, State};
+use crate::identity;
 use anyhow::{bail, Context, Result};
 use registry_casework_core::{typed, CaseworkProject, ConfigFinding};
-use registry_thunderid_tooling::{description::*, local};
+use registry_thunderid_tooling::{
+    description::*,
+    identity_facts::{Admission, IdentityFacts},
+    local,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -96,6 +101,9 @@ pub(crate) struct TaskAuthority {
 }
 
 use registry_casework_breg::BregBinding as ContextProviderBinding;
+
+/// Seeds the local issuer's identifier for the task authority connection.
+const AUTHORITY_CONNECTION_SEED: &str = "casework-authority";
 
 const SERVICE_SCOPE_MESSAGE: &str =
     "expected an RFC 6749 scope-token of 1 to 128 bytes without '*': printable ASCII without space, '\"', or '\\'";
@@ -454,14 +462,66 @@ impl Integrations {
         Ok(())
     }
 
+    /// This session's identity facts, the same document `caseworkctl generate
+    /// identity-facts` derives for a deployment. The session supplies the
+    /// local transport for the task authority's public keys.
+    pub(super) fn facts(
+        &self,
+        state: &State,
+        clients: &config::Clients,
+        policy: &CaseworkProject,
+    ) -> IdentityFacts {
+        // A borrowed session's issuer is the shared owner's, which holds every
+        // other local project's clients as well. This list is what keeps them
+        // out of this runtime, so it names the session's clients even when
+        // the project adds none of its own beyond the ones it borrows.
+        let admitted = clients
+            .clients
+            .iter()
+            .map(|client| client.id.clone())
+            .chain(self.service_clients.iter().map(|client| client.id.clone()))
+            .chain(self.browser_clients.iter().cloned())
+            .collect::<Vec<_>>();
+        let issuer = state.issuer_origin();
+        let audience = state.audience();
+        identity::facts(&identity::Inputs {
+            issuer: &issuer,
+            audience: &audience,
+            allowed_clients: Admission::Clients(admitted),
+            human_claim: config::HUMAN_CLAIM,
+            profiles: &policy.access_profiles,
+            initiator_profiles: identity::initiator_profiles(policy),
+            authority: self
+                .task_authority
+                .as_ref()
+                .map(|authority| identity::Authority {
+                    issuer: authority.issuer.clone(),
+                    jwks_url: format!(
+                        "http://host.docker.internal:{}/oauth2/jwks",
+                        authority.jwks_port
+                    ),
+                    status_clients: authority.status_clients.keys().cloned().collect(),
+                    exchange_clients: self
+                        .service_clients
+                        .iter()
+                        .filter(|client| client.task_exchange)
+                        .map(|client| client.id.clone())
+                        .collect(),
+                }),
+        })
+    }
+
     pub(super) fn prepare(
         &self,
         root: &Path,
         state: &State,
+        clients: &config::Clients,
         mut description: Option<&mut IssuerDescription>,
         policy: &CaseworkProject,
     ) -> Result<()> {
         self.validate_session(state, policy)?;
+        let facts = self.facts(state, clients, policy);
+        let exchange = identity::task_exchange(&facts);
         if let (Some(authority), Some(owner_root)) =
             (&self.task_authority, super::borrowed_issuer(state)?)
         {
@@ -537,7 +597,7 @@ impl Integrations {
             let bytes = zeroize::Zeroizing::new(private::read(path, 64 * 1024)?);
             private::create(&root.join("secrets").join(name), &bytes)?;
         }
-        if let Some(authority) = &self.task_authority {
+        if self.task_authority.is_some() {
             let directory = root.join("task-authority");
             let public = config::keypair(&directory)?;
             private::create(
@@ -550,19 +610,16 @@ impl Integrations {
             )?);
             private::create(&root.join("secrets/task-authority-signing-key"), &key)?;
             if let Some(description) = description.as_deref_mut() {
+                let (asserted, _) = exchange.context("the task authority has no identity facts")?;
                 description.exchange_issuers.push(ExchangeIssuer {
-                id: local::agent_id("casework-authority", &authority.issuer),
-                name: "Casework task authority".into(),
-                issuer: authority.issuer.clone(),
-                jwks_endpoint: format!(
-                    "http://host.docker.internal:{}/oauth2/jwks",
-                    authority.jwks_port
-                ),
-                mapping:
-                    registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
-                clients: vec![],
-                token_attributes: BTreeMap::new(),
-            });
+                    id: local::agent_id(AUTHORITY_CONNECTION_SEED, &asserted.issuer),
+                    name: "Casework task authority".into(),
+                    issuer: asserted.issuer.clone(),
+                    jwks_endpoint: asserted.jwks_url.clone(),
+                    mapping: registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
+                    clients: vec![],
+                    token_attributes: BTreeMap::new(),
+                });
             }
         }
         for client in &self.service_clients {
@@ -640,11 +697,21 @@ impl Integrations {
                     token_attributes: attributes.keys().cloned().collect(),
                     attributes,
                     access_token_lifetime_seconds: 300,
-                    token_exchange: client.task_exchange.then(|| TokenExchangeClient {
-                        assertion_resource_server_id: server,
-                        assertion_scope: "casework:grants:assert".into(),
-                        ordinary_resource_permissions: Vec::new(),
-                    }),
+                    token_exchange: if client.task_exchange {
+                        let (_, profile) =
+                            exchange.context("a task exchange client has no task authority")?;
+                        let binding = profile
+                            .exchange
+                            .as_ref()
+                            .context("the task exchange profile has no binding")?;
+                        Some(TokenExchangeClient {
+                            assertion_resource_server_id: server,
+                            assertion_scope: binding.bootstrap_scope.clone(),
+                            ordinary_resource_permissions: Vec::new(),
+                        })
+                    } else {
+                        None
+                    },
                 });
             }
         }
@@ -664,28 +731,18 @@ impl Integrations {
         value: &mut Value,
     ) -> Result<()> {
         value["contextProviders"] = serde_json::to_value(&self.context_providers)?;
-        // A borrowed session's issuer is the shared owner's, which holds every
-        // other local project's clients as well. This list is what keeps them
-        // out of this runtime, so it names the session's clients even when
-        // the project adds none of its own beyond the ones it borrows.
-        value["authentication"]["oidc"]["allowedClients"] = json!(clients
-            .clients
-            .iter()
-            .map(|client| client.id.clone())
-            .chain(self.service_clients.iter().map(|client| client.id.clone()))
-            .chain(self.browser_clients.iter().cloned())
-            .collect::<Vec<_>>());
+        let policy = crate::project::load_and_check_policy(&state.project)?;
+        let facts = self.facts(state, clients, &policy);
+        value["authentication"]["oidc"]["allowedClients"] = match &facts.allowed_clients {
+            Admission::Clients(admitted) => json!(admitted),
+            Admission::Unrestricted => json!("unrestricted"),
+        };
         if let Some(authority) = &self.task_authority {
             // A task exchange client may present only this authority's
             // assertion. The borrowed issuer trusts every authority registered
             // by its owner, so naming the pairing here is what refuses a token
             // minted from one of the others.
-            let assertion_issuers = self
-                .service_clients
-                .iter()
-                .filter(|client| client.task_exchange)
-                .map(|client| (client.id.clone(), vec![authority.issuer.clone()]))
-                .collect::<BTreeMap<_, _>>();
+            let assertion_issuers = identity::assertion_issuers(&facts);
             if !assertion_issuers.is_empty() {
                 value["authentication"]["oidc"]["assertionIssuers"] = json!(assertion_issuers);
             }

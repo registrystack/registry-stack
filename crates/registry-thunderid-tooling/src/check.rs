@@ -26,6 +26,13 @@ pub struct FileCheck {
 
 /// Check the file at `path`, naming it as written in every diagnostic.
 pub fn check_file(path: &Path) -> FileCheck {
+    read_and_check(path, check_bytes)
+}
+
+/// Read `path` within the document size bound and hand its bytes to `check`.
+/// A file that cannot be read yields the one `platform.check.unreadable`
+/// diagnostic.
+pub(crate) fn read_and_check(path: &Path, check: impl FnOnce(&str, &[u8]) -> Report) -> FileCheck {
     let file = path.display().to_string();
     let mut bytes = Vec::new();
     let read = std::fs::File::open(path).and_then(|opened| {
@@ -38,7 +45,7 @@ pub fn check_file(path: &Path) -> FileCheck {
             "platform.check.unreadable",
             "",
             "the file cannot be read",
-            "Pass the path of an existing, readable task connection or session state file.",
+            "Pass the path of an existing, readable file.",
         );
         diagnostic.source = Some(Source {
             file,
@@ -52,7 +59,7 @@ pub fn check_file(path: &Path) -> FileCheck {
             unreadable: true,
         };
     }
-    let mut report = check_bytes(&file, &bytes);
+    let mut report = check(&file, &bytes);
     report.set_files_checked(1);
     FileCheck {
         report,

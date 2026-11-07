@@ -1,0 +1,314 @@
+{
+  "$defs": {
+    "AccessProfile": {
+      "additionalProperties": false,
+      "description": "One access profile: the scopes (and, where it is bound to them, the\npurposes) a client receives by being granted it.",
+      "properties": {
+        "actorKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `registry_actor_kind` the product requires of every principal\nthat holds this profile, when it requires one without selecting the\nprofile by it. A product that selects by the claim states it in\n`selectedBy` instead. On an exchange profile it is the kind the\nproduct requires of the client's own bootstrap token, which the\nproduct checks before it issues the assertion. Omitted: the profile\nadmits any kind."
+        },
+        "admittedActorKinds": {
+          "description": "The `registry_actor_kind` values the product admits for this profile\nwithout selecting it by them, when it admits only some kinds. A\nprofile that selects by the claim, or requires one kind, states that\nin `selectedBy` or `actorKind` instead. Omitted: the profile admits\nany kind.",
+          "items": {
+            "$ref": "#/$defs/ActorKind"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "exchange": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExchangeBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "purposes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "refusedClaims": {
+          "description": "Declared claims the product refuses a token for this profile with:\nit never selects the profile for a principal that carries any of\nthem. On an exchange profile the product applies it to the exchanged\ntoken, not to the client's own. Omitted: no claim refuses the\nprofile.",
+          "items": {
+            "pattern": "^[A-Za-z0-9_]{1,128}$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requesterClients": {
+          "description": "Narrows `allowedClients` for this profile; omitted narrows nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true
+        },
+        "requiredClaims": {
+          "description": "Declared claims the product refuses a token for this profile without.\nThe token subject (`sub`) is always present and is never listed. A\nclaim the generator derives (`registry_actor_kind`,\n`registry_purpose`) counts as carried. Omitted: the profile requires\nno claim beyond those the other members state.",
+          "items": {
+            "pattern": "^[A-Za-z0-9_]{1,128}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "selectedBy": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": "The claim values by which the product selects this profile: for each\nclaim name, the values a principal's claim must carry. A `string`\nclaim names exactly one value; a `string-array` claim names at least\none, all of which the principal must carry. Omitted: the product\ndoes not select this profile by claim values, so no claim check\napplies to it.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "allOf": [
+              {
+                "pattern": "^[A-Za-z0-9_]{1,128}$"
+              }
+            ]
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "ActorKind": {
+      "description": "The kind of principal a token represents, as `registry_actor_kind`\ncarries it.",
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "Admission": {
+      "anyOf": [
+        {
+          "const": "unrestricted"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "`unrestricted`, or the exact client ids the product admits."
+    },
+    "AssertionIssuer": {
+      "additionalProperties": false,
+      "description": "One external authority whose signed assertions a product accepts for\ntoken exchange.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "jwksUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "mapping": {
+          "$ref": "#/$defs/AssertionMapping"
+        },
+        "projectedClaims": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ClaimType"
+          },
+          "description": "The signed claims a first-party signer projects, by name.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "allOf": [
+              {
+                "pattern": "^[A-Za-z0-9_]{1,128}$"
+              }
+            ]
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "issuer",
+        "jwksUrl",
+        "mapping"
+      ],
+      "type": "object"
+    },
+    "AssertionMapping": {
+      "description": "How an assertion authority's signed claims become token claims.",
+      "oneOf": [
+        {
+          "const": "institutional-grant",
+          "description": "An institutional grant: the issuer derives grant provenance.",
+          "type": "string"
+        },
+        {
+          "const": "first-party",
+          "description": "A first-party signer: only `projectedClaims` are copied.",
+          "type": "string"
+        }
+      ]
+    },
+    "ClaimType": {
+      "description": "The type of a claim's value.",
+      "enum": [
+        "string",
+        "string-array"
+      ],
+      "type": "string"
+    },
+    "ExchangeBinding": {
+      "additionalProperties": false,
+      "description": "A profile that is reached by exchanging an assertion, not by presenting\nits scopes directly.",
+      "properties": {
+        "assertionIssuerId": {
+          "description": "The `id` of an entry of `assertionIssuers`.",
+          "type": "string"
+        },
+        "bootstrapAudience": {
+          "description": "The audience of the resource that accepts the assertion.",
+          "type": "string"
+        },
+        "bootstrapScope": {
+          "description": "The one scope a client holds to present an assertion.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "assertionIssuerId",
+        "bootstrapAudience",
+        "bootstrapScope"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/identity-facts/identity-facts.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What one product expects of the issuer.",
+  "properties": {
+    "accessProfiles": {
+      "items": {
+        "$ref": "#/$defs/AccessProfile"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "allowedClients": {
+      "$ref": "#/$defs/Admission"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/identity-facts/v1",
+      "type": "string"
+    },
+    "assertionIssuers": {
+      "items": {
+        "$ref": "#/$defs/AssertionIssuer"
+      },
+      "maxItems": 8,
+      "type": "array"
+    },
+    "audience": {
+      "type": "string"
+    },
+    "claims": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ClaimType"
+      },
+      "description": "The claims the product reads from a token, by name.",
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId",
+        "allOf": [
+          {
+            "pattern": "^[A-Za-z0-9_]{1,128}$"
+          }
+        ]
+      },
+      "type": "object"
+    },
+    "issuer": {
+      "$ref": "#/$defs/Url"
+    },
+    "kind": {
+      "const": "PlatformIdentityFacts",
+      "type": "string"
+    },
+    "product": {
+      "description": "The product that wrote these facts, as a local identifier.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "product",
+    "issuer",
+    "audience",
+    "allowedClients"
+  ],
+  "title": "Registry Stack identity facts",
+  "type": "object"
+}

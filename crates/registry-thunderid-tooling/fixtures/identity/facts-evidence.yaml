@@ -1,0 +1,32 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: evidence
+issuer: https://id.registry.example
+audience: urn:evidence:example
+allowedClients: unrestricted
+claims:
+  registry_actor_kind: string
+  evidence_audience: string
+  evidence_tags: string-array
+accessProfiles:
+  - id: invoke
+    scopes: [evidence:invoke]
+    requesterClients: [field-agent]
+    selectedBy:
+      registry_actor_kind: [service]
+      evidence_tags: [field]
+    requiredClaims: [evidence_audience, evidence_tags, registry_actor_kind]
+  - id: task-invoke
+    scopes: [evidence:task]
+    selectedBy:
+      registry_actor_kind: [agent]
+    requiredClaims: [evidence_audience, evidence_tags, registry_actor_kind]
+    exchange:
+      assertionIssuerId: authority
+      bootstrapAudience: urn:casework:example
+      bootstrapScope: casework:grants:assert
+assertionIssuers:
+  - id: authority
+    issuer: https://authority.example
+    jwksUrl: https://authority.example/jwks
+    mapping: institutional-grant

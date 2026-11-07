@@ -27,6 +27,7 @@ mod evidence_binary;
 mod file_check;
 mod fixture_record;
 mod fixtures;
+mod identity;
 mod junit;
 mod jwk;
 mod jwks;
@@ -95,6 +96,9 @@ enum Command {
     Test(TestArgs),
     /// Compile an editable project into a reviewed deployment candidate.
     Package(PackageArgs),
+    /// Generate configuration documents for other tools from this product's configuration.
+    #[command(subcommand)]
+    Generate(GenerateCommand),
     /// Configure progressive relying-party clients and fetch contract candidates.
     #[command(subcommand)]
     Client(client::ClientCommand),
@@ -248,6 +252,24 @@ struct PackageArgs {
     /// Optional source or review revision recorded in `REVISION`.
     #[arg(long)]
     revision: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum GenerateCommand {
+    /// Write the identity facts a token issuer needs to serve this deployment.
+    IdentityFacts(IdentityFactsArgs),
+}
+
+#[derive(Debug, Args)]
+struct IdentityFactsArgs {
+    /// Editable Evidence project directory.
+    project: PathBuf,
+    /// Explicit deployment target.
+    #[arg(long)]
+    target: PathBuf,
+    /// New identity facts file to create; an existing file is refused.
+    #[arg(long)]
+    output: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -649,6 +671,18 @@ fn run_entry() -> ExitCode {
                 artifact,
                 "Evidence could not compile the selected deployment candidate.",
                 "Correct the selected project or target findings and rerun package with a new output directory.",
+            )
+        }
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => {
+            let artifact = args.project.display().to_string();
+            let project = args.project.clone();
+            safe_command(
+                identity::run(args.project, args.target, args.output, format)
+                    .map_err(|error| authored::project_refusal(error, &project, &project)),
+                "evidence.generate-identity-facts.failed",
+                artifact,
+                "Evidence could not write identity facts for the selected deployment.",
+                "Correct the selected project, target, or client registrations and rerun generate identity-facts with a new output file.",
             )
         }
         Command::Client(command) => client::run(command),
@@ -1099,6 +1133,21 @@ fn safe_command(
                 path: "--output".to_owned(),
                 message: exists.to_string(),
                 suggested_action: "Pass a new directory to --output, or move the existing one away if it is a candidate you no longer need, then rerun package.".to_owned(),
+                cause: None,
+            }
+            .into();
+        }
+        if let Some(refusal) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<identity::Refusal>())
+        {
+            return SafeCliFailure {
+                operational: false,
+                code: refusal.code.to_owned(),
+                artifact,
+                path: "$".to_owned(),
+                message: refusal.message.clone(),
+                suggested_action: suggested_action.to_owned(),
                 cause: None,
             }
             .into();
@@ -1624,6 +1673,7 @@ mod tests {
         "access client add",
         "access client list",
         "access client revoke",
+        "generate identity-facts",
         "keygen signing",
         "keygen secret",
         "keygen token",
@@ -2237,6 +2287,7 @@ mod tests {
                 "evidencectl explain",
                 "evidencectl test",
                 "evidencectl package",
+                "evidencectl generate identity-facts",
                 "evidencectl artifact inspect",
             ]
             .contains(&path)

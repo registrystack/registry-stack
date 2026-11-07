@@ -1,5 +1,6 @@
 //! Common construction for local adopter sessions. Product CLIs own the
 //! declared clients and scopes, credential files, and interpretation of claims.
+#[cfg(feature = "session")]
 pub use crate::local_session::{snapshot, start, start_with_logs, stop};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,7 +41,7 @@ pub fn agent_id(session_id: &str, client_id: &str) -> String {
     derived_uuid(&format!("{session_id}:agent:{client_id}"))
 }
 
-fn derived_uuid(seed: &str) -> String {
+pub(crate) fn derived_uuid(seed: &str) -> String {
     let digest = Sha256::digest(seed.as_bytes());
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
     let mut result = String::with_capacity(36);
@@ -57,9 +58,50 @@ fn derived_uuid(seed: &str) -> String {
     result
 }
 
+/// The display text a declared scope tree carries. Identifiers and handles
+/// are the same in both; only names and descriptions differ.
+#[derive(Clone, Copy)]
+pub(crate) enum Wording {
+    /// A development session's throwaway issuer.
+    Development,
+    /// A hosted deployment's issuer, whose text calls nothing local.
+    Deployment,
+}
+
+impl Wording {
+    fn resource(self, handle: &str) -> String {
+        match self {
+            Self::Development => format!("local resource {handle}"),
+            Self::Deployment => format!("Resource {handle}"),
+        }
+    }
+
+    fn permission(self, scope: &str) -> String {
+        match self {
+            Self::Development => format!("local permission {scope}"),
+            Self::Deployment => format!("Permission {scope}"),
+        }
+    }
+
+    fn server_name(self) -> &'static str {
+        match self {
+            Self::Development => "Configured local resource",
+            Self::Deployment => "Configured resource server",
+        }
+    }
+
+    fn server_description(self) -> &'static str {
+        match self {
+            Self::Development => "Explicit local resource scope handles",
+            Self::Deployment => "Explicit resource scope handles",
+        }
+    }
+}
+
 fn add_scope(
     resources: &mut BTreeMap<Vec<String>, Resource>,
     scope: &str,
+    wording: Wording,
 ) -> Result<(), ToolingError> {
     let refuse = |reason| ToolingError::InvalidDescription { reason };
     let segments: Vec<_> = scope.split(':').collect();
@@ -90,7 +132,7 @@ fn add_scope(
         name: chain[0].clone(),
         handle: chain[0].clone(),
         parent: None,
-        description: format!("local resource {}", chain[0]),
+        description: wording.resource(&chain[0]),
         actions: vec![],
     });
     let leaf = resources.get_mut(&chain).expect("inserted resource");
@@ -102,7 +144,7 @@ fn add_scope(
         leaf.actions.push(Action {
             name: action.clone(),
             handle: action,
-            description: format!("local permission {scope}"),
+            description: wording.permission(scope),
         });
     }
     Ok(())
@@ -115,9 +157,19 @@ pub fn declare_resource(
     audience: &str,
     scopes: &[String],
 ) -> Result<String, ToolingError> {
+    declare_resource_as(description, audience, scopes, Wording::Development)
+}
+
+/// [`declare_resource`] with the display text of `wording`.
+pub(crate) fn declare_resource_as(
+    description: &mut IssuerDescription,
+    audience: &str,
+    scopes: &[String],
+    wording: Wording,
+) -> Result<String, ToolingError> {
     let mut resources = BTreeMap::new();
     for scope in scopes {
-        add_scope(&mut resources, scope)?;
+        add_scope(&mut resources, scope, wording)?;
     }
     let server = if let Some(index) = description
         .resource_servers
@@ -128,9 +180,9 @@ pub fn declare_resource(
     } else {
         description.resource_servers.push(ResourceServer {
             id: derived_uuid(&format!("{}:resource:{audience}", description.session.id)),
-            name: "Configured local resource".into(),
+            name: wording.server_name().into(),
             identifier: audience.into(),
-            description: "Explicit local resource scope handles".into(),
+            description: wording.server_description().into(),
             resources: vec![],
         });
         description
@@ -224,7 +276,7 @@ pub fn typed_local_description(
             ));
         }
         for scope in &client.scopes {
-            add_scope(&mut resources, scope)?;
+            add_scope(&mut resources, scope, Wording::Development)?;
         }
         let native_id = agent_id(&session.id, &client.client_id);
         let role_id = derived_uuid(&format!("{}:role:{}", session.id, client.client_id));

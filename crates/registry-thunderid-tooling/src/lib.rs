@@ -29,15 +29,25 @@ pub mod bootstrap;
 pub mod check;
 pub mod container;
 pub mod description;
+#[cfg(feature = "session")]
 pub mod grant;
+#[cfg(feature = "session")]
 pub mod grant_file;
+pub mod identity_check;
+pub mod identity_deployment;
+pub mod identity_facts;
+pub mod identity_generate;
 pub mod issuer;
 pub mod local;
+#[cfg(feature = "session")]
 mod local_session;
 pub mod render;
+#[cfg(test)]
+mod render_golden_tests;
 #[cfg(feature = "schema")]
 pub mod schema;
 pub mod task_connection;
+mod validate;
 pub mod version;
 
 /// Test-only fixture support. Never used by, or reachable from, any runtime
@@ -75,6 +85,15 @@ pub enum ToolingError {
         exit_code: Option<i32>,
         log_file: Option<std::path::PathBuf>,
     },
+    /// Identity generation refused its inputs. Names a structural location
+    /// (a file label and a pointer or index), never a value read from a file
+    /// (CFG-SEC-3).
+    #[error("identity generation was refused ({code}): {message} (at {location})")]
+    IdentityRefused {
+        code: &'static str,
+        message: &'static str,
+        location: String,
+    },
     #[error("the issuer did not become reachable: {step}")]
     Unreachable { step: &'static str },
     #[error("the approved task grant could not be acquired: {reason}")]
@@ -85,6 +104,10 @@ pub enum ToolingError {
     PortOccupied { detail: String },
     #[error("the filesystem refused this session: {reason}")]
     Filesystem { reason: &'static str },
+    /// A generated output path is already taken, or was taken while the
+    /// output was being written. Nothing at that path was changed.
+    #[error("the output directory already exists; choose a new directory")]
+    OutputExists,
     /// A file this crate reads was refused. Its report places every finding
     /// and repeats no value it read (CFG-SEC-3).
     #[error("{what} was refused: {fix}\n{}", .report.render_human().trim_end())]

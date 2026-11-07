@@ -221,11 +221,6 @@
       "reason": "The Evidence configuration-conventions release note records previous authoring schema identifiers, not active schema sources."
     },
     {
-      "glob": "schemas/*.schema.json",
-      "classification": "retired-product",
-      "reason": "Root Relay V1 and Notary configuration schemas are retired."
-    },
-    {
       "path": "crates/registry-adapter-core/src/naming.rs",
       "uri": "https://id.registrystack.org/problems/registry-adapter/",
       "classification": "planned-resolution",
@@ -584,6 +579,22 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Stack task connection JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/identity-facts.schema.json",
+      "sourcePath": "crates/registry-thunderid-tooling/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Registry Stack product identity facts JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/identity-deployment.schema.json",
+      "sourcePath": "crates/registry-thunderid-tooling/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Registry Stack identity deployment JSON Schema."
     },
     {
       "glob": "products/platform/schemas/check-acceptances.schema.json",

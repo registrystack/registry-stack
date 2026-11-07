@@ -162,6 +162,9 @@ export async function prepareReleaseDocsMetadata({
   const sourceRef = manifest.stack.source_ref ?? docsetId;
   // An unshipped product with archived documentation keeps the latest docset's
   // unreleased label. The held Document Store remains development-only.
+  // An external entry of kind image-pin is an image pin, not a docset product.
+  const externalProducts = Object.entries(manifest.external)
+    .filter(([, external]) => external?.kind !== 'image-pin');
   for (const productId of Object.keys(current.products)) {
     if (Object.hasOwn(manifest.external, productId)) continue;
     const productVersion = releaseProductVersion(productId, docsetId, manifest, releaseArtifacts);
@@ -173,7 +176,7 @@ export async function prepareReleaseDocsMetadata({
         : sourceRef,
     };
   }
-  for (const [productId, external] of Object.entries(manifest.external)) {
+  for (const [productId, external] of externalProducts) {
     if (!external?.ref) throw new Error(`external product ${productId} must declare ref`);
     products[productId] = { version: external.version ?? external.ref, ref: external.ref };
   }

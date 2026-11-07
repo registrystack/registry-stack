@@ -242,14 +242,8 @@ fn runtime_members(
     loaded: &LoadedPackage,
     endpoints: &Endpoints,
 ) -> Value {
-    let mut allowed_clients: Vec<String> = loaded
-        .package
-        .access_profiles()
-        .iter()
-        .flat_map(|profile| profile.requester_clients.iter().cloned())
-        .collect();
-    allowed_clients.sort();
-    allowed_clients.dedup();
+    let allowed_clients =
+        crate::identity_facts::requester_clients(loaded.package.access_profiles());
     let providers: serde_json::Map<String, Value> = loaded
         .package
         .providers()

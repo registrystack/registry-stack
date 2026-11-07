@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::identity::{self, DrivenTool, Failure, GenerateOptions, Input, ProductSpec};
 use crate::install::{self, BootstrapOptions};
 use crate::store::{GenerationStore, InvocationLease};
 use crate::ReleaseManifest;
@@ -146,8 +147,130 @@ enum Command {
         #[arg(value_name = "SHELL")]
         shell: String,
     },
+    /// Generate and check hosted identity configuration.
+    Identity {
+        #[command(subcommand)]
+        command: IdentityCommand,
+    },
     #[command(external_subcommand)]
     Product(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum IdentityCommand {
+    /// Generate identity-provider configuration from product identity facts.
+    Generate {
+        #[command(subcommand)]
+        target: IdentityTarget,
+    },
+    /// Check an identity facts document or deployment file offline.
+    Check {
+        /// Identity facts document or identity deployment file.
+        file: PathBuf,
+        /// Product facts file to check a deployment against; repeat per product.
+        #[arg(long = "facts", value_name = "FILE")]
+        facts: Vec<PathBuf>,
+        /// Exit 1 when any unaccepted warning is reported.
+        #[arg(long)]
+        deny_warnings: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum IdentityTarget {
+    /// Generate ThunderID configuration into a new directory.
+    ///
+    /// Runs each selected product's own `generate identity-facts` command and
+    /// merges the facts with the deployment file. Select every product that
+    /// admits tokens from the issuer with its flags; the deployment file never
+    /// states the issuer.
+    Thunderid(ThunderidArguments),
+}
+
+#[derive(clap::Args)]
+struct ThunderidArguments {
+    /// Operator identity deployment file.
+    #[arg(long, value_name = "FILE")]
+    deployment: PathBuf,
+    /// New directory to write; an existing path is refused.
+    #[arg(long, value_name = "DIR")]
+    output: PathBuf,
+    /// Base Registry Engine project directory.
+    #[arg(long, value_name = "DIR", requires = "breg_runtime_config")]
+    breg_project: Option<PathBuf>,
+    /// Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "FILE", requires = "breg_project")]
+    breg_runtime_config: Option<PathBuf>,
+    /// Check the Base Registry Engine runtime as a production runtime.
+    #[arg(long, requires = "breg_runtime_config")]
+    breg_production: bool,
+    /// Casework project directory.
+    #[arg(long, value_name = "DIR", requires = "casework_runtime_config")]
+    casework_project: Option<PathBuf>,
+    /// Casework runtime configuration file.
+    #[arg(long, value_name = "FILE", requires = "casework_project")]
+    casework_runtime_config: Option<PathBuf>,
+    /// Evidence project directory.
+    #[arg(long, value_name = "DIR", requires = "evidence_target")]
+    evidence_project: Option<PathBuf>,
+    /// Evidence target file.
+    #[arg(long, value_name = "FILE", requires = "evidence_project")]
+    evidence_target: Option<PathBuf>,
+    /// Messaging runtime configuration file.
+    #[arg(long, value_name = "FILE")]
+    messaging_runtime_config: Option<PathBuf>,
+}
+
+impl ThunderidArguments {
+    fn inputs(&self) -> Vec<Input> {
+        let by_name = |name: &str| {
+            identity::PRODUCTS
+                .iter()
+                .find(|product| product.name == name)
+                .expect("a driven product is listed")
+        };
+        let mut inputs = Vec::new();
+        let mut push =
+            |name: &str, project: &Option<PathBuf>, config: &Option<PathBuf>, production| {
+                if let Some(config) = config {
+                    inputs.push(Input {
+                        product: by_name(name),
+                        project: project.clone(),
+                        config: config.clone(),
+                        production,
+                    });
+                }
+            };
+        push(
+            "breg",
+            &self.breg_project,
+            &self.breg_runtime_config,
+            self.breg_production,
+        );
+        push(
+            "casework",
+            &self.casework_project,
+            &self.casework_runtime_config,
+            false,
+        );
+        push(
+            "evidence",
+            &self.evidence_project,
+            &self.evidence_target,
+            false,
+        );
+        push("messaging", &None, &self.messaging_runtime_config, false);
+        inputs
+    }
+}
+
+impl From<Failure> for CliFailure {
+    fn from(failure: Failure) -> Self {
+        match failure {
+            Failure::Domain(message) => CliFailure::domain(message),
+            Failure::Operational(message) => CliFailure::operational(message),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -567,6 +690,51 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
                 PRODUCTS.join(" ")
             );
         }
+        Some(Command::Identity { command }) => match command {
+            IdentityCommand::Generate {
+                target: IdentityTarget::Thunderid(arguments),
+            } => {
+                let inputs = arguments.inputs();
+                if inputs.is_empty() {
+                    return Err("select at least one product with its project and configuration flags, for example --breg-project and --breg-runtime-config".into());
+                }
+                let options = GenerateOptions {
+                    deployment: arguments.deployment.clone(),
+                    output: arguments.output.clone(),
+                    inputs,
+                };
+                let summary =
+                    identity::generate_thunderid(&options, &|product| driven_tool(&cli, product))?;
+                match format {
+                    ReportFormat::Human => {
+                        reportln!(
+                            "{}",
+                            identity::generate_report_human(&summary, &options.output)
+                        )
+                    }
+                    ReportFormat::Json => reportln!(
+                        "{}",
+                        identity::generate_report_json(&summary, &options.output)
+                    ),
+                }
+            }
+            IdentityCommand::Check {
+                file,
+                facts,
+                deny_warnings,
+            } => {
+                let outcome = identity::check(
+                    file,
+                    facts,
+                    *deny_warnings,
+                    matches!(format, ReportFormat::Json),
+                );
+                reportln!("{}", outcome.text);
+                if outcome.code != 0 {
+                    return Err(CliFailure::reported(outcome.code));
+                }
+            }
+        },
         Some(Command::Product(arguments)) => {
             let product = arguments
                 .first()
@@ -587,6 +755,51 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// The tool of the selected release that writes a product's identity facts:
+/// the product's `RSTACK_<PRODUCT>CTL_BIN` override when set, otherwise the
+/// installed component.
+fn driven_tool(cli: &Cli, product: &ProductSpec) -> Result<DrivenTool, Failure> {
+    if let Some(path) = std::env::var_os(product.variable) {
+        return Ok(DrivenTool {
+            path: PathBuf::from(path),
+            _lease: None,
+        });
+    }
+    let missing = || {
+        Failure::Domain(format!(
+            "component {} is missing; run rstack install {}",
+            product.name, product.name
+        ))
+    };
+    let Some((lease, selection, _)) = selected_state(cli).map_err(|failure| {
+        if failure.code == 1 {
+            Failure::Domain(failure.message)
+        } else {
+            Failure::Operational(failure.message)
+        }
+    })?
+    else {
+        return Err(missing());
+    };
+    if !selection.components.iter().any(|name| name == product.name) {
+        return Err(missing());
+    }
+    let tool = lease
+        .path()
+        .join("components")
+        .join(product.name)
+        .join(product.binary)
+        .join(product.binary);
+    if tool.is_file() {
+        Ok(DrivenTool {
+            path: tool,
+            _lease: Some(lease),
+        })
+    } else {
+        Err(missing())
+    }
 }
 
 fn product_help_request(

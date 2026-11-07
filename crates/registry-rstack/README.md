@@ -93,6 +93,13 @@ mutation revisions, idempotency keys, and Evidence verification retain their
 own API meanings. See [API connections](../../docs/site/src/content/docs/configure/api-connections.mdx)
 for local and remote setup.
 
+## Identity configuration
+
+`rstack identity generate thunderid` derives hosted ThunderID configuration
+from the products' own configuration and one operator deployment file, and
+`rstack identity check FILE` checks that file or a product's identity facts
+offline. See [Generate ThunderID configuration](../../docs/site/src/content/docs/operate/advanced/generate-identity-configuration.mdx).
+
 ## Command migration
 
 | Previous local command | Managed command |

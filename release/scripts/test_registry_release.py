@@ -5259,6 +5259,176 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("validated", result.stdout)
 
+    def _manifest_with_externals(self, directory: Path, externals: dict, **kwargs) -> Path:
+        manifest = write_manifest(directory, **kwargs)
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        data["external"].update(externals)
+        manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        return manifest
+
+    def test_validate_accepts_matching_external_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), thunderid_and_authenticator_pins())
+            result = run_tool("validate", str(manifest))
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_rejects_tag_only_pin_image(self) -> None:
+        pins = thunderid_and_authenticator_pins()
+        pins["esignet-relay-authenticator"]["images"]["oidc-ui"] = (
+            "ghcr.io/registrystack/esignet-oidc-ui:0.6.1"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), pins)
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "external.esignet-relay-authenticator.images.oidc-ui must be pinned by sha256 digest",
+            result.stderr,
+        )
+
+    def test_validate_rejects_thunderid_pin_drift(self) -> None:
+        pins = thunderid_and_authenticator_pins()
+        pins["thunderid"]["images"]["thunderid"] = "ghcr.io/thunder-id/thunderid:1.0.0@sha256:" + "0" * 64
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), pins)
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.thunderid.images.thunderid must equal", result.stderr)
+
+    def test_validate_rejects_pin_without_source_record(self) -> None:
+        pins = thunderid_and_authenticator_pins()
+        pins["esignet-relay-authenticator"]["ref"] = "not-a-commit"
+        pins["esignet-relay-authenticator"]["images"] = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), pins)
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.esignet-relay-authenticator.ref must be a 40-character commit", result.stderr)
+        self.assertIn("external.esignet-relay-authenticator.images must be a non-empty object", result.stderr)
+
+    def test_validate_rejects_images_on_an_unclassified_external_entry(self) -> None:
+        pins = thunderid_and_authenticator_pins()
+        del pins["esignet-relay-authenticator"]["kind"]
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), pins)
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "external.esignet-relay-authenticator declares images and must set kind: image-pin",
+            result.stderr,
+        )
+
+    def test_validate_rejects_unknown_external_kind(self) -> None:
+        pins = thunderid_and_authenticator_pins()
+        pins["esignet-relay-authenticator"]["kind"] = "mirror"
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), pins)
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.esignet-relay-authenticator.kind must be image-pin", result.stderr)
+
+    def test_validate_rejects_thunderid_pin_repo_drift(self) -> None:
+        pins = thunderid_and_authenticator_pins()
+        pins["thunderid"]["repo"] = "example/thunderid-fork"
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), pins)
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.thunderid.repo must equal 'thunder-id/thunderid'", result.stderr)
+
+    def test_validate_accepts_a_digest_without_a_tag(self) -> None:
+        pins = thunderid_and_authenticator_pins()
+        pins["esignet-relay-authenticator"]["images"]["oidc-ui"] = (
+            "ghcr.io/registrystack/esignet-oidc-ui@sha256:" + "2" * 64
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(Path(tmp), pins)
+            result = run_tool("validate", str(manifest))
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_docsets_rejects_images_on_a_docset_product(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_dir, docsets = write_docset_fixture(Path(tmp))
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["docsets"][0]["products"]["registry-stack"]["images"] = {
+                "x": "ghcr.io/example/x@sha256:" + "1" * 64
+            }
+            docsets.write_text(yaml.safe_dump(data), encoding="utf-8")
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir", str(manifest_dir),
+                "--docsets", str(docsets),
+            )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("docset v0.8.0 product registry-stack must not declare images", result.stderr)
+
+    def test_validate_requires_thunderid_pin_after_beta_57(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(
+                Path(tmp), {}, version="0.46.0", source_ref=git(ROOT, "rev-parse", "HEAD")
+            )
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.thunderid is required after release 0.45.0", result.stderr)
+
+    def test_validate_requires_thunderid_pin_whatever_external_holds(self) -> None:
+        for label, external in (("missing", None), ("list", []), ("text", "none")):
+            with self.subTest(external=label), tempfile.TemporaryDirectory() as tmp:
+                manifest = write_manifest(
+                    Path(tmp), version="0.46.0", source_ref=git(ROOT, "rev-parse", "HEAD")
+                )
+                data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+                if external is None:
+                    del data["external"]
+                else:
+                    data["external"] = external
+                manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+                result = run_tool("validate", str(manifest))
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("external.thunderid is required after release 0.45.0", result.stderr)
+
+    def test_validate_rejects_unparsable_stack_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(Path(tmp), version="0.19.0")
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["stack"]["version"] = "next"
+            data["stack"]["source_tag"] = "vnext"
+            manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            result = run_tool("validate", str(manifest))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("version must be canonical semantic version text", result.stderr)
+
+    def test_validate_does_not_require_thunderid_pin_through_beta_57(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._manifest_with_externals(
+                Path(tmp), {}, version="0.45.0", source_ref=git(ROOT, "rev-parse", "HEAD")
+            )
+            result = run_tool("validate", str(manifest))
+        self.assertNotIn("external.thunderid", result.stderr)
+
+    def test_validate_accepts_every_historical_manifest(self) -> None:
+        for manifest in sorted((ROOT / "release/manifests").glob("registry-stack-*.yaml")):
+            version = yaml.safe_load(manifest.read_text(encoding="utf-8"))["stack"]["version"]
+            if tuple(int(part) for part in str(version).split(".")) < (0, 19, 0):
+                continue  # validate refuses pre-v0.19 manifests by design
+            with self.subTest(manifest=manifest.name):
+                result = run_tool("validate", str(manifest))
+                self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_docsets_skips_external_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_dir, docsets = write_docset_fixture(Path(tmp))
+            manifest_path = manifest_dir / "registry-stack-beta-6.yaml"
+            data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            data["external"].update(thunderid_and_authenticator_pins())
+            manifest_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir", str(manifest_dir),
+                "--docsets", str(docsets),
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_validate_current_selects_highest_semver_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest_dir = Path(tmp) / "manifests"
@@ -5277,6 +5447,7 @@ class RegistryReleaseTest(TestCase):
                 data["stack"]["release"] = release_id
                 data["stack"].pop("source_ref")
                 data["stack"].pop("status")
+                data["external"]["thunderid"] = thunderid_and_authenticator_pins()["thunderid"]
                 catalog_bytes = (
                     ROOT / "products/identifiers/generated/catalog.v1.json"
                 ).read_bytes()
@@ -6035,6 +6206,36 @@ def write_manifest(
     path = directory / "release-manifest.yaml"
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     return path
+
+
+def thunderid_and_authenticator_pins() -> dict[str, dict]:
+    """The two external pins a release carries, with ThunderID read from its tooling pin."""
+    thunderid = json.loads(
+        (ROOT / "crates/registry-thunderid-tooling/thunderid-version.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return {
+        "thunderid": {
+            "kind": "image-pin",
+            "repo": "thunder-id/thunderid",
+            "ref": thunderid["source"]["commit"],
+            "version": thunderid["version"],
+            "images": {"thunderid": thunderid["image"]},
+        },
+        "esignet-relay-authenticator": {
+            "kind": "image-pin",
+            "repo": "registrystack/esignet-relay-authenticator",
+            "ref": "9030f38aac2c85b2e7a2980ec23e2f8e72da97ff",
+            "version": "0.6.1",
+            "images": {
+                "authenticator": "ghcr.io/registrystack/esignet-relay-authenticator:0.6.1@sha256:"
+                + "826ff864a981379dbbdd9bff0f663cd4c1952a1f1fa7c84a076bccce58931dd4",
+                "oidc-ui": "ghcr.io/registrystack/esignet-oidc-ui:0.6.1@sha256:"
+                + "2629150e0733ad443d1e563d48790922c88968e93bbf5989a1b9c1974bc109c7",
+            },
+        },
+    }
 
 
 def write_docset_fixture(root: Path) -> tuple[Path, Path]:

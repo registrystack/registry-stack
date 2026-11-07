@@ -456,6 +456,10 @@ class ConfigureTests(unittest.TestCase):
             schemas,
             {
                 (managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")],
+                (managed / "identity-facts.schema.json").as_uri(): [str(project / "identity-facts.yaml")],
+                (managed / "identity-deployment.schema.json").as_uri(): [
+                    str(project / "identity-deployment.yaml")
+                ],
                 (managed / "connections.schema.json").as_uri(): [str(project / "connections.yaml")],
                 (managed / "check-acceptances.schema.json").as_uri(): [
                     str(project / "check-acceptances.yaml")

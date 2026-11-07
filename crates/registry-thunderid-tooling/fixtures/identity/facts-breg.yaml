@@ -1,0 +1,18 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: breg
+issuer: https://id.registry.example
+audience: urn:breg:example
+allowedClients:
+  - case-portal
+  - staff-portal
+claims:
+  registry_actor_kind: string
+  registry_purpose: string
+  registry_role: string
+accessProfiles:
+  - id: case-read
+    scopes: [records:get, records:search]
+    purposes: [eligibility]
+  - id: case-write
+    scopes: [records:patch]
