@@ -989,8 +989,15 @@ refuses to start from any earlier release rather than skipping the check.
 `v0.43.0` continued the forward state path from `v0.42.0`; `v0.44.0` retained
 Evidence and Messaging state while starting the product baselines described
 below; `v0.45.0` retained Messaging state and moved Evidence projects to Adapter
-packs, described above. Current source reads the retained state `v0.45.0`
-wrote, so older state must first move through each intervening release.
+packs, described above. Current source reads the retained database state
+`v0.45.0` wrote, so older state must first move through each intervening
+release. It does not read the Messaging package `v0.45.0` wrote: `v0.46.0`
+renames an access profile's `role` to `actsAs`, so the rehearsal re-authors the
+retained Messaging project as the Messaging changelog documents, repackages it
+with the binaries under test, activates that package, and keeps the database
+state, which must still serve every captured view. Once `FORWARD_PATH_FLOOR`
+reaches `v0.46.0`, delete `MESSAGING_ACTS_AS_BOUNDARY` and its step from
+`rehearse-upgrade.py`; a unit test fails until then.
 The retained path started at `v0.42.0` because no product reads `v0.41.0` state:
 BReg and Casework start on a fresh database, Evidence starts at its normalized
 `v0.42.0` baseline, and Messaging and Scheduling each install a fresh schema
