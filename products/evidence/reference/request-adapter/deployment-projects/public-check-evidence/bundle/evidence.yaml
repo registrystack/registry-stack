@@ -1,0 +1,144 @@
+apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+assuranceProfile: local
+audit:
+  hashKeyRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+authentication:
+  oidc:
+    algorithms:
+      - RS256
+    allowedClients: unrestricted
+    audience: urn:example:resource:certificate-check
+    evidenceAudienceClaim: evidence_audience
+    issuer: http://127.0.0.1:8082
+    jwksSource:
+      type: uri
+      uri: http://127.0.0.1:8082/oauth2/jwks
+    maximumTokenLifetimeSeconds: 300
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    requiredScopes:
+      - evidence:request
+    revokedKeyIds: []
+    tokenTypes:
+      - at+jwt
+authorityProfiles: {}
+issuer:
+  uri: urn:example:issuer:certificate-check
+kind: EvidenceBundle
+project: certificate-check
+rateLimits:
+  burstPerPrincipal: 16
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
+  requestsPerPrincipalPerMinute: 60
+requirements:
+  - acquisition:
+      source: certificate-record
+    concepts:
+      - constraints:
+          maximumSerializedBytes: 1024
+          schema: urn:example:schema:certificate-printed-fields
+        handle: printed
+        required: true
+        type: reviewed-structured-value
+        uri: urn:example:concept:certificate-printed-fields:v1
+      - constraints:
+          categoryScheme: urn:example:concept:certificate-status:v1:values
+          codelist: codelists/inline/6c11db375e4130451f6c67acb21df75cd52d5d32c802dfc821ab9f29c5c924ae.yaml
+          maximumBytes: 9
+          schemeVersion: '1'
+        handle: status
+        required: true
+        type: controlled-category
+        uri: urn:example:concept:certificate-status:v1
+    derivation:
+      parameters: {}
+      script: derivations/certificate-status.rhai
+    disclosureGuard:
+      families:
+        - urn:example:requirement:certificate-status:v1
+    evidenceType: urn:example:evidence-type:certificate-status:v1
+    existenceDisclosure: collapse-unresolved
+    fixtures: fixtures/certificate-status.yaml
+    grantCeiling:
+      actorKinds:
+        - service
+      audiences:
+        - urn:example:audience:certificate-check
+      authorities:
+        - organizational
+      valueOrigins:
+        - request
+    handle: certificate-status
+    kind: information-requirement
+    observationTimezone: UTC
+    publicCheck:
+      checkCodeFact: checkCode
+      fieldsOutput: printed
+      statusOutput: status
+    purposes:
+      - certificate-check
+    question: What is the current status of this certificate, and what does it state?
+    referenceFrameworks:
+      - urn:example:framework:certificate-check:v1
+    representations:
+      - signed-jws
+    subjectBinding: audience-scoped
+    subjectRoles:
+      - cardinality: one
+        role: certificate
+        selectorProfiles:
+          - certificate-number
+    uri: urn:example:requirement:certificate-status:v1
+    validitySeconds: 300
+responseFormats:
+  - signed-jws
+selectorProfiles:
+  certificate-number:
+    fields:
+      number:
+        maximumBytes: 32
+        minimumBytes: 4
+        type: string
+    maximumAggregateBytes: 32
+service:
+  providerId: urn:example:provider:certificate-check
+  publicOrigin: http://127.0.0.1:8090
+  trustDomain: urn:example:trust:certificate-check
+signing:
+  activePublicJwkFile: public-keys/YPd9IRAUgKR5XyvBdEDO_9sL4MkiVDN497l6XyEy934.jwk.json
+  algorithm: ES256
+  format: flattened-jws-json
+  jwksPath: /.well-known/evidence/jwks.json
+  maximumAssertionValiditySeconds: 300
+  publishedPublicJwkFiles: []
+  revokedKeyIds: []
+  verifierClockSkewSeconds: 30
+sourceConnections:
+  synthetic-register:
+    endpoints:
+      - authentication:
+          type: static-authorization
+        baseUrl: http://127.0.0.1:8081
+        clientIdentity: forbidden
+        endpoint: register
+sources:
+  certificate-record:
+    connection: synthetic-register
+    factSchema: schemas/source-facts/certificate-record.schema.json
+    inputs:
+      recordId:
+        selector:
+          field: number
+          profile: certificate-number
+          role: certificate
+    pack:
+      artifactPrefix: adapter-packs/synthetic-register/2a4ee0077a5144f933be41905cea908c17477483b2253612370e64f179efc00f
+      digest: sha256:2a4ee0077a5144f933be41905cea908c17477483b2253612370e64f179efc00f
+      id: synthetic-register
+      version: '1'
+    posture: record-transformed
+    route: certificate
+subjectBinding:
+  keyVersion: 1
+  secretRef: secret:file/subject-binding-hmac-key

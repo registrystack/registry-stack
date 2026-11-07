@@ -1,0 +1,24 @@
+accessProfiles:
+  certificate-service:
+    actorKind: service
+    grants:
+      - audienceFrom: authenticated-requester
+        purpose: certificate-check
+        requirement: urn:example:requirement:certificate-status:v1
+        responseFormats:
+          - signed-jws
+        subjectBindingModes:
+          - audience-scoped
+        subjects:
+          - role: certificate
+            selectorProfile: certificate-number
+            valueOrigin: request
+    kind: organizational
+    requesterTags:
+      - certificate-service
+apiVersion: id.registrystack.org/formats/evidence/compiled-target-authority/v1alpha1
+kind: EvidenceCompiledTargetAuthority
+project: certificate-check
+publicCheck:
+  requirement: urn:example:requirement:certificate-status:v1
+target: public-check
