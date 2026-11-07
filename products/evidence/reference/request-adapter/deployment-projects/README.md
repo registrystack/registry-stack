@@ -48,6 +48,14 @@ the same fixtures with `evidence evaluate` before deployment, and can add
 - [`sqlite-extract-evidence/`](sqlite-extract-evidence/) answers professional
   licence status from one reviewed statement over a published, read-only
   SQLite extract, without an outbound source credential or network request.
+- [`public-check-evidence/`](public-check-evidence/) is the packaged form of the
+  public certificate check example: it answers the unauthenticated
+  `POST /v1/public-check` route for one certificate from its number and check
+  code, and activates the check through a committed target authority. Unlike
+  the others, it is packaged under the `local` assurance profile with loopback
+  endpoints, because it is the example's own package and tests serve the
+  example on one machine; a deployment packages its own target with a
+  deployable profile and HTTPS hosts.
 
 Every hostname, issuer, identifier, and fixture value is synthetic. `.example`
 hosts must be replaced during deployment. Secret files are referenced only by

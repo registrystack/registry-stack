@@ -13,8 +13,20 @@
   writes its own audit entry, and Evidence has no rate limiter on it: expose it
   only through a path-restricted proxy that limits each client and keeps no
   client addresses. The route, the answer schema and the new keys are
-  experimental surfaces. A static page and a code generation recipe are in
-  `examples/public-check/`.
+  experimental surfaces. A static page, a code generation recipe and a runnable
+  project are in `examples/public-check/`, and its packaged form is the
+  `public-check-evidence` deployment reference. `evidencectl check` and package
+  loading refuse a `publicCheck` definition that declares an entity-reference
+  Output (`public-check-entity-reference-output`), since a public check has no
+  relying party to scope it to. `evidencectl audit show` and the local audit
+  view list public check entries.
+
+- The problem contract and the security invariant matrix now state what the
+  runtime does with a selector value that passes its profile but that a Source
+  binds to a request path segment the value cannot occupy: it is refused after
+  the durable access-attempt audit entry and before credential acquisition or
+  any source request, as `503 source.unavailable`, and it does not count
+  against the caller's selector-failure budget.
 
 - Each target-authority access profile may carry an optional `label` and `description`, accepted for authoring and tooling; compilation drops them and Evidence does not serve them. Neither is matched against a caller, and a profile that writes neither reads as before.
 
