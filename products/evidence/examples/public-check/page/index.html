@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://check.example.org; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="check-endpoint" content="https://check.example.org/v1/public-check">
+<title>Check a certificate</title>
+<link rel="stylesheet" href="check.css">
+</head>
+<body>
+<main>
+  <h1>Check a certificate</h1>
+  <form id="check-form" novalidate>
+    <label for="number">Certificate number</label>
+    <input id="number" name="number" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+    <label for="code">Check code</label>
+    <input id="code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+    <button type="submit">Check</button>
+  </form>
+  <section id="result" aria-live="polite" hidden>
+    <p id="message"></p>
+    <dl id="answer"></dl>
+    <p id="observed"></p>
+  </section>
+  <p id="origin"></p>
+</main>
+<script type="module" src="check.js"></script>
+</body>
+</html>

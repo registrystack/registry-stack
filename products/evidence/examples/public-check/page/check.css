@@ -1,0 +1,12 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; padding: 1rem; }
+main { max-width: 32rem; margin: 0 auto; }
+label { display: block; margin-top: 1rem; font-weight: 600; }
+input { box-sizing: border-box; width: 100%; padding: 0.5rem; font: inherit; }
+button { margin-top: 1rem; padding: 0.5rem 1rem; font: inherit; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+dt { font-weight: 600; }
+dd { margin: 0; }
+#message[data-kind="valid"] { font-weight: 700; }
+#message[data-kind="problem"] { font-weight: 700; }
+#origin { margin-top: 2rem; font-size: 0.875rem; }
