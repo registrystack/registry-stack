@@ -204,12 +204,19 @@ fn render_events(
     if let [CoreAuditEvent::Refusal(refusal)] = view.events.as_slice() {
         return render_refusal(refusal);
     }
+    if view
+        .events
+        .iter()
+        .any(|event| matches!(event, CoreAuditEvent::PublicCheck(_)))
+    {
+        return render_public_check(view, questions);
+    }
     let authorized = view
         .events
         .iter()
         .map(|event| match event {
             CoreAuditEvent::Authorized(event) => Ok(event),
-            CoreAuditEvent::Refusal(_) => Err(failed()),
+            CoreAuditEvent::Refusal(_) | CoreAuditEvent::PublicCheck(_) => Err(failed()),
         })
         .collect::<Result<Vec<_>>>()?;
     // One access entry per source call, then the terminal entry when the
@@ -223,6 +230,175 @@ fn render_events(
         Some(_) => render_authorized(&authorized, None, questions),
         None => Err(failed()),
     }
+}
+
+/// The definition an entry names, checked to be one this presentation can
+/// print aliases for.
+fn declared_question<'a>(
+    questions: &'a [dev::ReadyDefinitionState],
+    requirement: &str,
+    purpose: &str,
+) -> Result<&'a dev::ReadyDefinitionState> {
+    let question = questions
+        .iter()
+        .find(|question| question.requirement_uri == requirement && question.purpose == purpose)
+        .ok_or_else(failed)?;
+    if !valid_alias(&question.alias)
+        || question.concepts.is_empty()
+        || question.concepts.len() > 16
+        || question.concepts.iter().any(|concept| {
+            !valid_alias(&concept.alias)
+                || !valid_uri(&concept.uri)
+                || !registry_evidence_authoring::output::TYPES.contains(&concept.form.as_str())
+        })
+        || !valid_purpose(&question.purpose)
+    {
+        return Err(failed());
+    }
+    Ok(question)
+}
+
+/// One public certificate check: its access entry, then at most one terminal
+/// entry. The entries name the definition, the Source and adapter read, and
+/// how the check ended, and no subject: the presented document number and
+/// check code are never recorded, so there is nothing of either to print.
+fn render_public_check(
+    view: &CoreAuditOperation,
+    questions: &[dev::ReadyDefinitionState],
+) -> Result<String> {
+    let events = view
+        .events
+        .iter()
+        .map(|event| match event {
+            CoreAuditEvent::PublicCheck(event) => Ok(event),
+            CoreAuditEvent::Authorized(_) | CoreAuditEvent::Refusal(_) => Err(failed()),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let (access, terminal) = match events.as_slice() {
+        [access] => (*access, None),
+        [access, terminal] => (*access, Some(*terminal)),
+        _ => return Err(failed()),
+    };
+    if events
+        .iter()
+        .any(|event| event.phase == Phase::Unrecognized || event.decision == Decision::Unrecognized)
+    {
+        return Err(unrecognized_outcome());
+    }
+    let question = declared_question(questions, &access.requirement, &access.purpose)?;
+    validate_public_check_entry(access, question)?;
+    if access.phase != Phase::AccessAttempt
+        || access.decision != Decision::Authorized
+        || access.disclosed_concepts != Presence::Absent
+        || access.safe_error_category != Presence::Absent
+    {
+        return Err(failed());
+    }
+    let mut rendered = format!(
+        "PUBLIC CHECK ACCESS AUTHORIZED {} {} source={} adapter={} operation={} at={}\n",
+        question.alias,
+        question.purpose,
+        access.source_id,
+        access.adapter_id,
+        view.operation,
+        access.occurred_at
+    );
+    let Some(terminal) = terminal else {
+        return Ok(rendered);
+    };
+    validate_public_check_entry(terminal, question)?;
+    if terminal.source_id != access.source_id
+        || terminal.adapter_id != access.adapter_id
+        || terminal.authority_revision != access.authority_revision
+        || terminal.effective_grant_digest != access.effective_grant_digest
+        || parse_time(&terminal.occurred_at)? < parse_time(&access.occurred_at)?
+    {
+        return Err(failed());
+    }
+    let category = match &terminal.safe_error_category {
+        Presence::Present(category) if valid_alias(category) => Some(category.as_str()),
+        Presence::Absent => None,
+        Presence::Present(_) => return Err(failed()),
+    };
+    match (terminal.phase, terminal.decision, category) {
+        (Phase::DisclosureRelease, Decision::Released, None) => {
+            let Presence::Present(released) = &terminal.disclosed_concepts else {
+                return Err(failed());
+            };
+            let aliases = released
+                .iter()
+                .map(|uri| {
+                    question
+                        .concepts
+                        .iter()
+                        .find(|concept| &concept.uri == uri)
+                        .map(|concept| concept.alias.as_str())
+                        .ok_or_else(failed)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            // The check releases its status and its printed fields, and
+            // nothing else.
+            if aliases.len() != 2 || released[0] == released[1] {
+                return Err(failed());
+            }
+            rendered.push_str(&format!(
+                "PUBLIC CHECK RELEASED {} at={}\n",
+                aliases.join(", "),
+                terminal.occurred_at
+            ));
+        }
+        (
+            Phase::Denial,
+            Decision::NoMatch
+            | Decision::Ambiguous
+            | Decision::Unresolved
+            | Decision::FactMissing
+            | Decision::CodeMismatch,
+            Some(category),
+        ) => rendered.push_str(&public_check_outcome_line("DENIED", terminal, category)?),
+        (
+            Phase::TransientFailure,
+            Decision::DependencyFailure | Decision::EvaluationFailure,
+            Some(category),
+        ) => rendered.push_str(&public_check_outcome_line(
+            "TRANSIENT FAILURE",
+            terminal,
+            category,
+        )?),
+        _ => return Err(failed()),
+    }
+    if terminal.phase != Phase::DisclosureRelease && terminal.disclosed_concepts != Presence::Absent
+    {
+        return Err(failed());
+    }
+    Ok(rendered)
+}
+
+fn public_check_outcome_line(
+    outcome: &str,
+    terminal: &CorePublicCheckAuditEvent,
+    category: &str,
+) -> Result<String> {
+    Ok(format!(
+        "PUBLIC CHECK {outcome} reason={} category={category} at={}\n",
+        terminal.decision.reason().ok_or_else(failed)?,
+        terminal.occurred_at
+    ))
+}
+
+fn validate_public_check_entry(
+    event: &CorePublicCheckAuditEvent,
+    question: &dev::ReadyDefinitionState,
+) -> Result<()> {
+    if event.requirement != question.requirement_uri
+        || event.purpose != question.purpose
+        || !valid_alias(&event.source_id)
+        || !valid_alias(&event.adapter_id)
+    {
+        return Err(failed());
+    }
+    parse_time(&event.occurred_at)?;
+    Ok(())
 }
 
 fn render_refusal(refusal: &CoreRefusalAuditEvent) -> Result<String> {
@@ -257,24 +433,7 @@ fn render_authorized(
         return Err(unrecognized_outcome());
     }
     let (access, _) = accesses.split_first().ok_or_else(failed)?;
-    let question = questions
-        .iter()
-        .find(|question| {
-            question.requirement_uri == access.requirement && question.purpose == access.purpose
-        })
-        .ok_or_else(failed)?;
-    if !valid_alias(&question.alias)
-        || question.concepts.is_empty()
-        || question.concepts.len() > 16
-        || question.concepts.iter().any(|concept| {
-            !valid_alias(&concept.alias)
-                || !valid_uri(&concept.uri)
-                || !registry_evidence_authoring::output::TYPES.contains(&concept.form.as_str())
-        })
-        || !valid_purpose(&question.purpose)
-    {
-        return Err(failed());
-    }
+    let question = declared_question(questions, &access.requirement, &access.purpose)?;
 
     let mut rendered = String::new();
     let mut previous: Option<&CoreAuthorizedAuditEvent> = None;
@@ -603,6 +762,7 @@ struct CoreAuditOperation {
 enum CoreAuditEvent {
     Authorized(CoreAuthorizedAuditEvent),
     Refusal(CoreRefusalAuditEvent),
+    PublicCheck(CorePublicCheckAuditEvent),
 }
 
 #[derive(Debug, Deserialize)]
@@ -637,6 +797,24 @@ struct CoreRefusalAuditEvent {
     safe_error_category: SafeErrorCategory,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CorePublicCheckAuditEvent {
+    occurred_at: String,
+    phase: Phase,
+    decision: Decision,
+    requirement: String,
+    purpose: String,
+    authority_revision: registry_platform_yaml::Digest,
+    effective_grant_digest: registry_platform_yaml::Digest,
+    source_id: String,
+    adapter_id: String,
+    #[serde(default, deserialize_with = "deserialize_presence")]
+    disclosed_concepts: Presence<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_presence")]
+    safe_error_category: Presence<String>,
+}
+
 /// The core's closed phase vocabulary. A phase a later core adds reads as
 /// `Unrecognized`, which is named as such rather than refused as unreadable.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -661,6 +839,7 @@ enum Decision {
     Ambiguous,
     Unresolved,
     FactMissing,
+    CodeMismatch,
     DependencyFailure,
     EvaluationFailure,
     SigningFailure,
@@ -677,6 +856,7 @@ impl Decision {
             Self::Ambiguous => "ambiguous",
             Self::Unresolved => "unresolved",
             Self::FactMissing => "fact-missing",
+            Self::CodeMismatch => "code-mismatch",
             Self::DependencyFailure => "dependency-failure",
             Self::EvaluationFailure => "evaluation-failure",
             Self::SigningFailure => "signing-failure",

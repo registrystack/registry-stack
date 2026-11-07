@@ -358,51 +358,7 @@ fn structured_sd_jwt_release_uses_the_same_minimized_audit_view() {
 #[test]
 fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
     let fixture = Fixture::new();
-    let state_path = fixture.root.join(".evidence/dev/state.json");
-    let mut state: Value =
-        serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
-    state["definitions"][1]["concepts"] = json!([
-        {
-            "alias": "is_adult",
-            "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-            "form": "boolean"
-        },
-        {
-            "alias": "age_years",
-            "uri": "urn:registrystack:evidence:local:concept:adult-status:age_years",
-            "form": "bounded-integer"
-        }
-    ]);
-    fs::write(
-        &state_path,
-        serde_json::to_vec(&state).expect("state renders"),
-    )
-    .expect("state writes");
-    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
-
-    let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
-    let mut bundle: Value =
-        serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle")).expect("bundle YAML");
-    bundle["requirements"][1]["concepts"] = json!([
-        {
-            "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-            "type": "boolean"
-        },
-        {
-            "uri": "urn:registrystack:evidence:local:concept:adult-status:age_years",
-            "type": "bounded-integer"
-        }
-    ]);
-    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
-        .expect("open bundle for fixture update");
-    fs::write(
-        &bundle_path,
-        serde_norway::to_string(&bundle).expect("bundle renders"),
-    )
-    .expect("bundle writes");
-    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
-        .expect("seal updated bundle");
-    refresh_package_envelope(&fixture.root.join(".evidence/dev/bundle"));
+    declare_adult_status_with_age_years(&fixture);
 
     let mut view = successful_view();
     view["events"][1]["disclosedConcepts"] = json!([
@@ -755,6 +711,56 @@ fn core_failure_oversized_output_and_non_stopped_state_are_value_free() {
     .expect("state writes");
     fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
     assert_closed_failure(&fixture.show(), "running state");
+}
+
+/// Declare a second concept, `age_years`, on the `adult-status` definition in
+/// both the stopped presentation state and the sealed bundle.
+fn declare_adult_status_with_age_years(fixture: &Fixture) {
+    let state_path = fixture.root.join(".evidence/dev/state.json");
+    let mut state: Value =
+        serde_json::from_slice(&fs::read(&state_path).expect("state")).expect("state JSON");
+    state["definitions"][1]["concepts"] = json!([
+        {
+            "alias": "is_adult",
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+            "form": "boolean"
+        },
+        {
+            "alias": "age_years",
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:age_years",
+            "form": "bounded-integer"
+        }
+    ]);
+    fs::write(
+        &state_path,
+        serde_json::to_vec(&state).expect("state renders"),
+    )
+    .expect("state writes");
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).expect("state mode");
+
+    let bundle_path = fixture.root.join(".evidence/dev/bundle/evidence.yaml");
+    let mut bundle: Value =
+        serde_norway::from_slice(&fs::read(&bundle_path).expect("bundle")).expect("bundle YAML");
+    bundle["requirements"][1]["concepts"] = json!([
+        {
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+            "type": "boolean"
+        },
+        {
+            "uri": "urn:registrystack:evidence:local:concept:adult-status:age_years",
+            "type": "bounded-integer"
+        }
+    ]);
+    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o600))
+        .expect("open bundle for fixture update");
+    fs::write(
+        &bundle_path,
+        serde_norway::to_string(&bundle).expect("bundle renders"),
+    )
+    .expect("bundle writes");
+    fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
+        .expect("seal updated bundle");
+    refresh_package_envelope(&fixture.root.join(".evidence/dev/bundle"));
 }
 
 fn successful_view() -> Value {
@@ -1294,4 +1300,277 @@ fn an_unavailable_evidence_binary_is_an_operational_failure() {
         "evidence.audit.runtime-unavailable"
     );
     assert!(report["diagnostics"][0].get("cause").is_none());
+}
+
+const ADULT_STATUS: &str = "urn:registrystack:evidence:local:concept:adult-status:is_adult";
+const AGE_YEARS: &str = "urn:registrystack:evidence:local:concept:adult-status:age_years";
+const DOCUMENT_NUMBER_CANARY: &str = "DOC-2026-0042-CANARY";
+const CHECK_CODE_CANARY: &str = "CHECK-CODE-CANARY";
+
+fn public_check_access() -> Value {
+    json!({
+        "occurredAt": "2026-08-04T00:00:01.000Z",
+        "phase": "access-attempt",
+        "decision": "authorized",
+        "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+        "authorityRevision": format!("sha256:{}", "a".repeat(64)),
+        "effectiveGrantDigest": format!("sha256:{}", "b".repeat(64)),
+        "purpose": "age-check",
+        "sourceId": "certificate-record",
+        "adapterId": "synthetic-register"
+    })
+}
+
+/// A public check view: the access entry, then a terminal entry of `phase` and
+/// `decision`. A release names its two concepts; any other terminal names a
+/// safe failure category.
+fn public_check_view(phase: &str, decision: &str) -> Value {
+    let mut terminal = public_check_access();
+    terminal["occurredAt"] = json!("2026-08-04T00:00:02.000Z");
+    terminal["phase"] = json!(phase);
+    terminal["decision"] = json!(decision);
+    if phase == "disclosure-release" {
+        terminal["disclosedConcepts"] = json!([ADULT_STATUS, AGE_YEARS]);
+    } else {
+        terminal["safeErrorCategory"] = json!("evidence-unavailable");
+    }
+    json!({
+        "schema": "registry.evidence.local-audit-operation/v2",
+        "operation": "public-check-operation-0001",
+        "unmatchedEarlierOperations": 0,
+        "events": [public_check_access(), terminal]
+    })
+}
+
+const PUBLIC_CHECK_ACCESS_LINE: &str = "PUBLIC CHECK ACCESS AUTHORIZED adult-status age-check \
+    source=certificate-record adapter=synthetic-register \
+    operation=public-check-operation-0001 at=2026-08-04T00:00:01.000Z\n";
+
+#[test]
+fn a_released_public_check_prints_its_definition_ids_and_released_concepts() {
+    let fixture = Fixture::new();
+    declare_adult_status_with_age_years(&fixture);
+    fixture.write_core_json(&public_check_view("disclosure-release", "released"));
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "{PUBLIC_CHECK_ACCESS_LINE}\
+             PUBLIC CHECK RELEASED is_adult, age_years at=2026-08-04T00:00:02.000Z\n"
+        )
+    );
+    assert!(output.stderr.is_empty());
+
+    fixture.write_core_json(&public_check_view("disclosure-release", "released"));
+    let output = fixture.show_json();
+    assert_success(&output);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON report");
+    assert_eq!(report["command"], "audit show");
+    assert_eq!(
+        report["operation"]["operation"],
+        "public-check-operation-0001"
+    );
+    assert_eq!(
+        report["operation"]["events"][0]["sourceId"],
+        "certificate-record"
+    );
+    assert_eq!(
+        report["rendered"][1],
+        "PUBLIC CHECK RELEASED is_adult, age_years at=2026-08-04T00:00:02.000Z"
+    );
+}
+
+#[test]
+fn a_public_check_miss_or_failure_prints_its_reason_and_category() {
+    let fixture = Fixture::new();
+    for (phase, decision, outcome) in [
+        ("denial", "no-match", "DENIED reason=no-match"),
+        ("denial", "ambiguous", "DENIED reason=ambiguous"),
+        ("denial", "unresolved", "DENIED reason=unresolved"),
+        ("denial", "fact-missing", "DENIED reason=fact-missing"),
+        ("denial", "code-mismatch", "DENIED reason=code-mismatch"),
+        (
+            "transient-failure",
+            "dependency-failure",
+            "TRANSIENT FAILURE reason=dependency-failure",
+        ),
+        (
+            "transient-failure",
+            "evaluation-failure",
+            "TRANSIENT FAILURE reason=evaluation-failure",
+        ),
+    ] {
+        fixture.write_core_json(&public_check_view(phase, decision));
+        let output = fixture.show();
+        assert_success(&output);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!(
+                "{PUBLIC_CHECK_ACCESS_LINE}PUBLIC CHECK {outcome} \
+                 category=evidence-unavailable at=2026-08-04T00:00:02.000Z\n"
+            ),
+            "{phase} {decision}"
+        );
+    }
+}
+
+#[test]
+fn a_public_check_without_a_terminal_entry_prints_only_its_access() {
+    let fixture = Fixture::new();
+    let mut view = public_check_view("denial", "no-match");
+    view["events"].as_array_mut().expect("events").pop();
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        PUBLIC_CHECK_ACCESS_LINE
+    );
+}
+
+/// The entry carries neither the document number nor the check code, so a
+/// view that names either, or a subject, is not the closed shape the core
+/// publishes and is refused with nothing printed.
+#[test]
+fn a_public_check_view_never_shows_a_document_number_or_check_code() {
+    let fixture = Fixture::new();
+    declare_adult_status_with_age_years(&fixture);
+    fixture.write_core_json(&public_check_view("disclosure-release", "released"));
+    for stream in [fixture.show(), fixture.show_json()] {
+        assert_success(&stream);
+        let text = String::from_utf8_lossy(&stream.stdout);
+        for canary in [
+            DOCUMENT_NUMBER_CANARY,
+            CHECK_CODE_CANARY,
+            "hmac-sha256",
+            "subject",
+        ] {
+            assert!(!text.contains(canary), "printed {canary}");
+        }
+    }
+    for (field, value) in [
+        ("documentNumber", json!(DOCUMENT_NUMBER_CANARY)),
+        ("checkCode", json!(CHECK_CODE_CANARY)),
+        ("subjects", json!([{"role": "certificate"}])),
+        ("requesterPseudonym", json!(PSEUDONYM)),
+    ] {
+        let mut view = public_check_view("disclosure-release", "released");
+        view["events"][1][field] = value;
+        fixture.write_core_json(&view);
+        let output = fixture.show();
+        assert_closed_failure(&output, field);
+        let output = fixture.show_json();
+        assert!(!output.status.success(), "{field}");
+        let report = String::from_utf8_lossy(&output.stdout);
+        for canary in [DOCUMENT_NUMBER_CANARY, CHECK_CODE_CANARY] {
+            assert!(!report.contains(canary), "{field} leaked {canary}");
+        }
+    }
+}
+
+#[test]
+fn incoherent_or_mixed_public_check_views_fail_without_partial_output() {
+    let fixture = Fixture::new();
+    declare_adult_status_with_age_years(&fixture);
+    let mut cases: Vec<(&str, Value)> = vec![
+        (
+            "a release paired with a failure phase",
+            public_check_view("transient-failure", "released"),
+        ),
+        (
+            "a denial paired with a failure decision",
+            public_check_view("denial", "dependency-failure"),
+        ),
+        (
+            "a release carrying a failure decision",
+            public_check_view("disclosure-release", "no-match"),
+        ),
+    ];
+    let mut with_edit = |label: &'static str, edit: &dyn Fn(&mut Value)| {
+        let mut view = public_check_view("disclosure-release", "released");
+        edit(&mut view);
+        cases.push((label, view));
+    };
+    with_edit("an unknown requirement", &|view| {
+        view["events"][0]["requirement"] = json!("urn:example:requirement:other");
+        view["events"][1]["requirement"] = json!("urn:example:requirement:other");
+    });
+    with_edit("an unknown purpose", &|view| {
+        view["events"][0]["purpose"] = json!("other-purpose");
+        view["events"][1]["purpose"] = json!("other-purpose");
+    });
+    with_edit("a terminal under another source", &|view| {
+        view["events"][1]["sourceId"] = json!("other-source");
+    });
+    with_edit("a terminal under another adapter", &|view| {
+        view["events"][1]["adapterId"] = json!("other-adapter");
+    });
+    with_edit("a terminal under another authority", &|view| {
+        view["events"][1]["authorityRevision"] = json!(format!("sha256:{}", "c".repeat(64)));
+    });
+    with_edit("a terminal before its access", &|view| {
+        view["events"][1]["occurredAt"] = json!("2026-08-04T00:00:00.000Z");
+    });
+    with_edit("a release of one concept", &|view| {
+        view["events"][1]["disclosedConcepts"] = json!([ADULT_STATUS]);
+    });
+    with_edit(
+        "a release of a concept the definition does not declare",
+        &|view| {
+            view["events"][1]["disclosedConcepts"] =
+                json!([ADULT_STATUS, "urn:example:concept:undeclared"]);
+        },
+    );
+    with_edit("a release of one concept twice", &|view| {
+        view["events"][1]["disclosedConcepts"] = json!([ADULT_STATUS, ADULT_STATUS]);
+    });
+    with_edit("a release carrying a failure category", &|view| {
+        view["events"][1]["safeErrorCategory"] = json!("evidence-unavailable");
+    });
+    with_edit("an access carrying a release field", &|view| {
+        view["events"][0]["disclosedConcepts"] = json!([ADULT_STATUS, AGE_YEARS]);
+    });
+    with_edit("a source id outside the name alphabet", &|view| {
+        view["events"][0]["sourceId"] = json!("Source With Spaces");
+        view["events"][1]["sourceId"] = json!("Source With Spaces");
+    });
+    with_edit("two terminal entries", &|view| {
+        let terminal = view["events"][1].clone();
+        view["events"]
+            .as_array_mut()
+            .expect("events")
+            .push(terminal);
+    });
+    with_edit("a public check mixed with an authorized event", &|view| {
+        view["events"]
+            .as_array_mut()
+            .expect("events")
+            .push(successful_view()["events"][1].clone());
+    });
+    let mut denied_without_category = public_check_view("denial", "no-match");
+    denied_without_category["events"][1]
+        .as_object_mut()
+        .expect("terminal")
+        .remove("safeErrorCategory");
+    cases.push(("a denial without its category", denied_without_category));
+    let mut malformed_time = public_check_view("denial", "no-match");
+    malformed_time["events"][1]["occurredAt"] = json!("yesterday");
+    cases.push(("a malformed time", malformed_time));
+    for (label, view) in cases {
+        fixture.write_core_json(&view);
+        assert_closed_failure(&fixture.show(), label);
+    }
+
+    let mut unknown = public_check_view("denial", "no-match");
+    unknown["events"][1]["decision"] = json!("a-future-decision");
+    fixture.write_core_json(&unknown);
+    let output = fixture.show();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("evidence.audit.unrecognized-outcome"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
