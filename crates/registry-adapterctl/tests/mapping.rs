@@ -2052,8 +2052,7 @@ fn check_warns_when_a_pack_script_header_names_a_model_outside_the_pack() {
 
 #[test]
 fn job_check_warns_when_the_destination_mapping_drifts_from_its_model() {
-    std::env::set_var("KOBO_USERNAME", "check-contracts");
-    std::env::set_var("KOBO_PASSWORD", "check-contracts");
+    std::env::set_var("KOBO_TOKEN", "check-contracts");
     let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter");
     let root = tempfile::tempdir().unwrap();
     copy_tree(&products.join("examples/kobotoolbox-job"), root.path());
@@ -2155,8 +2154,7 @@ fn job_check_warns_when_the_destination_mapping_drifts_from_its_model() {
 
 #[test]
 fn job_check_warns_when_a_generated_pack_script_drifts_from_its_model() {
-    std::env::set_var("KOBO_USERNAME", "check-contracts");
-    std::env::set_var("KOBO_PASSWORD", "check-contracts");
+    std::env::set_var("KOBO_TOKEN", "check-contracts");
     let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter");
     let root = tempfile::tempdir().unwrap();
     copy_tree(&products.join("examples/kobotoolbox-job"), root.path());
@@ -2261,8 +2259,7 @@ fn job_check_warns_when_a_generated_pack_script_drifts_from_its_model() {
 /// assignments are `assignments` (YAML lines under `assignments:`), the job
 /// pinned to the generated script.
 fn unprojected_workspace(assignments: &str) -> tempfile::TempDir {
-    std::env::set_var("KOBO_USERNAME", "check-contracts");
-    std::env::set_var("KOBO_PASSWORD", "check-contracts");
+    std::env::set_var("KOBO_TOKEN", "check-contracts");
     let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter");
     let root = tempfile::tempdir().unwrap();
     copy_tree(&products.join("examples/kobotoolbox-job"), root.path());
