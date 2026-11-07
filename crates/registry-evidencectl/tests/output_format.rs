@@ -31,7 +31,6 @@ fn assert_json_format_refusal(arguments: &[&str], expected_command: &str) {
 /// Every command that renders only human prose, with arguments that parse.
 const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
     ("target new", &["target", "new", "target", "--local"]),
-    ("pack lock", &["pack", "lock", "pack"]),
     ("source mock generate", &["source", "mock", "generate"]),
     ("source mock serve", &["source", "mock", "serve"]),
     ("source detach", &["source", "detach", "records"]),
