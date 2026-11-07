@@ -2415,7 +2415,7 @@ formats:
         whenOmitted: open
       - pointer: /signing/seals/*/withoutTimestamp
         whenOmitted: closed
-      - pointer: /signing/seals/*/trust
+      - pointer: /assuranceProfile
         whenOmitted: refused
     restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers, /signing/seals/*/allowedClients]
   - id: render/data-schema

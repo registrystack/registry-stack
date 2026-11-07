@@ -790,14 +790,7 @@
       "type": "string"
     },
     "assuranceProfile": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AssuranceProfile"
-        },
-        {
-          "type": "null"
-        }
-      ],
+      "$ref": "#/$defs/AssuranceProfile",
       "description": "The assurance boundary of this deployment's seals, the same member\nand values Evidence declares. Required when `signing` declares a\nseal, and unused otherwise. `local` signs with a `local-jwk` key\nfile and marks every seal a test seal; `production` signs through\n`transit` only, so a production key never leaves Transit."
     },
     "audit": {
