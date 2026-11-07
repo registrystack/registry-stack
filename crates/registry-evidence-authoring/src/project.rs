@@ -235,7 +235,34 @@ pub struct AssertionDefinition {
     pub disclosure_guard: Option<Value>,
     #[serde(default = "collapse_unresolved")]
     pub existence_disclosure: String,
+    /// Experimental (`v1alpha1`). Declares that this definition may answer the
+    /// unauthenticated public certificate check once a target authority
+    /// activates it. Declaring it grants nothing by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_check: Option<PublicCheck>,
 }
+
+/// The public certificate check's view of one assertion definition: where the
+/// stored check code is read from, and which two outputs form the answer. Other
+/// outputs of the definition stay on the relying-service path.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicCheck {
+    /// Name of a string fact of the acquiring Source holding the stored check
+    /// code. The code is compared and then removed; no Output can carry it.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
+    pub check_code_fact: String,
+    /// Output id of a controlled category whose values lie within `valid`,
+    /// `suspended`, `revoked` and `expired`.
+    pub status_output: LocalId,
+    /// Output id of a reviewed structured value whose `fields` object is the
+    /// printed content of the answer.
+    pub fields_output: LocalId,
+}
+
+/// The only statuses a public check answer may carry.
+pub const PUBLIC_CHECK_STATUSES: [&str; 4] = ["valid", "suspended", "revoked", "expired"];
 fn utc() -> String {
     "UTC".to_owned()
 }
@@ -1472,6 +1499,91 @@ fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Find
                 }
             }
         }
+    }
+    for (id, definition) in &project.assertion_definitions {
+        if let Some(public_check) = &definition.public_check {
+            let at = FieldPath::root()
+                .key("assertionDefinitions")
+                .map_key(id.to_string())
+                .key("publicCheck");
+            findings.extend(validate_public_check(
+                project,
+                definition,
+                public_check,
+                &at,
+            ));
+        }
+    }
+    findings
+}
+
+/// The offline refusals of a `publicCheck` declaration that need no Source
+/// facts schema. The code fact is checked against that schema when the project
+/// compiles.
+fn validate_public_check(
+    project: &EvidenceProject,
+    definition: &AssertionDefinition,
+    public_check: &PublicCheck,
+    at: &FieldPath,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let status = definition.outputs.get(&public_check.status_output);
+    if !status.is_some_and(|output| {
+        output.value_type == "controlled-category"
+            && !output.values.is_empty()
+            && output
+                .values
+                .iter()
+                .all(|value| PUBLIC_CHECK_STATUSES.contains(&value.as_str()))
+    }) {
+        findings.push(Finding::new(
+            at.clone().key("statusOutput"),
+            "public-check-status-output",
+            "statusOutput must name an Output of type controlled-category with inline values drawn only from valid, suspended, revoked and expired",
+        ));
+    }
+    let fields = definition.outputs.get(&public_check.fields_output);
+    if !fields.is_some_and(|output| output.value_type == "reviewed-structured-value") {
+        findings.push(Finding::new(
+            at.clone().key("fieldsOutput"),
+            "public-check-fields-output",
+            "fieldsOutput must name an Output of type reviewed-structured-value",
+        ));
+    }
+    if public_check.status_output == public_check.fields_output {
+        findings.push(Finding::new(
+            at.clone().key("fieldsOutput"),
+            "public-check-same-output",
+            "statusOutput and fieldsOutput must name two different Outputs",
+        ));
+    }
+    let one_number = definition.subjects.len() == 1
+        && definition.subjects[0].selectors.len() == 1
+        && project
+            .selector_profiles
+            .get(&definition.subjects[0].selectors[0])
+            .is_some_and(|profile| profile.fields.len() == 1);
+    if !one_number {
+        findings.push(Finding::new(
+            at.clone(),
+            "public-check-subject-shape",
+            "a public check takes one certificate number: declare exactly one subject role with one selector profile that has exactly one field",
+        ));
+    }
+    if definition.existence_disclosure != "collapse-unresolved" {
+        findings.push(Finding::new(
+            at.clone(),
+            "public-check-existence-disclosure",
+            "a public check requires existenceDisclosure collapse-unresolved so that a wrong number and a wrong code answer alike",
+        ));
+    }
+    if definition.acquisition.source.is_none() || definition.acquisition.holder_presented.is_some()
+    {
+        findings.push(Finding::new(
+            at.clone(),
+            "public-check-acquisition",
+            "a public check reads one record through exactly one Source: declare acquisition.source and remove acquisition.holderPresented",
+        ));
     }
     findings
 }

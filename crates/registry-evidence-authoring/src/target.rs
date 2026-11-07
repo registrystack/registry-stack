@@ -80,6 +80,18 @@ pub struct EvidenceTargetAuthority {
     pub target: LocalId,
     pub project: LocalId,
     pub access_profiles: BTreeMap<LocalId, AccessProfile>,
+    /// Experimental (`v1alpha1`). Activates the unauthenticated public
+    /// certificate check for one definition that declares `publicCheck`. A
+    /// check-only instance leaves `accessProfiles` empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_check: Option<PublicCheckActivation>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicCheckActivation {
+    /// The definition whose `publicCheck` declaration this target serves.
+    pub definition: LocalId,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -335,6 +347,19 @@ pub fn validate_authority(
             "target authority must name this EvidenceProject",
         ));
     }
+    if let Some(activation) = &authority.public_check {
+        if !project
+            .assertion_definitions
+            .get(&activation.definition)
+            .is_some_and(|definition| definition.public_check.is_some())
+        {
+            findings.push(Finding::new(
+                FieldPath::root().key("publicCheck").key("definition"),
+                "authority-public-check",
+                "publicCheck must name an existing AssertionDefinition that declares publicCheck",
+            ));
+        }
+    }
     for (id, profile) in &authority.access_profiles {
         let at = FieldPath::root()
             .key("accessProfiles")
@@ -528,7 +553,9 @@ pub fn compile_authority(
         if let Some(issuer) = &profile.grant_source_issuer { compiled["grantSourceIssuer"] = json!(issuer); }
         (id.as_str(), compiled)
     }).collect::<BTreeMap<_, _>>();
-    Ok(
-        json!({"apiVersion":"id.registrystack.org/formats/evidence/compiled-target-authority/v1alpha1","kind":"EvidenceCompiledTargetAuthority","target":authority.target,"project":authority.project,"accessProfiles":profiles}),
-    )
+    let mut compiled = json!({"apiVersion":"id.registrystack.org/formats/evidence/compiled-target-authority/v1alpha1","kind":"EvidenceCompiledTargetAuthority","target":authority.target,"project":authority.project,"accessProfiles":profiles});
+    if let Some(activation) = &authority.public_check {
+        compiled["publicCheck"] = json!({"requirement": project.assertion_definitions[&activation.definition].semantics.requirement});
+    }
+    Ok(compiled)
 }

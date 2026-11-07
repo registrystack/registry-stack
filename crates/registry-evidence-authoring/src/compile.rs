@@ -594,6 +594,39 @@ pub fn compile_with_pack_routes(
         if let Some(fixtures) = &definition.fixtures {
             requirement["fixtures"] = json!(fixtures);
         }
+        if let Some(public_check) = &definition.public_check {
+            let at = FieldPath::root()
+                .key("assertionDefinitions")
+                .map_key(id.to_string())
+                .key("publicCheck")
+                .key("checkCodeFact");
+            let facts = definition
+                .acquisition
+                .source
+                .as_ref()
+                .and_then(|source| source_facts.get(source.as_str()));
+            let is_string_fact = facts.is_some_and(|schema| {
+                schema["properties"][public_check.check_code_fact.as_str()]["type"] == "string"
+            });
+            let is_input = definition
+                .acquisition
+                .source
+                .as_ref()
+                .is_some_and(|source| {
+                    project.sources[source].inputs.iter().any(|(name, input)| {
+                        name.as_str() == public_check.check_code_fact
+                            || input.selector.field.as_str() == public_check.check_code_fact
+                    })
+                });
+            if !is_string_fact || is_input {
+                return Err(vec![Finding::new(
+                    at,
+                    "public-check-code-fact",
+                    "checkCodeFact must name a string fact of the acquiring Source's facts schema, and the Source must not bind it as a request input",
+                )]);
+            }
+            requirement["publicCheck"] = json!(public_check);
+        }
         requirements.push(requirement);
     }
     let mut model = json!({"project":project.id,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size,"selectorProfiles":project.selector_profiles.iter().map(|(id,profile)|(id.to_string(),json!({"fields":profile.fields.iter().map(|(name,value)|(name.to_string(),crate::selector::compiled(value))).collect::<Map<_,_>>(),"maximumAggregateBytes":profile.maximum_aggregate_bytes}))).collect::<Map<_,_>>(),"sources":sources,"requirements":requirements});
