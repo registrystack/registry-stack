@@ -473,81 +473,75 @@ async fn the_observation_ends_with_the_wait() {
     );
 }
 
+impl Harness {
+    /// Assert the wait's next read is due at the read floor after its last
+    /// read, not at `resultCheckSeconds`.
+    async fn next_read_at_the_floor(&self, run: Uuid) {
+        let (floor, next, _) = self.schedule_against_last_read(run).await;
+        assert!(
+            (29.9..=30.1).contains(&floor),
+            "the read floor is thirty seconds after the last read: {floor}"
+        );
+        assert!(
+            next >= floor - 0.001 && next < floor + 10.0,
+            "the next read is due at the read floor: {next} against {floor}"
+        );
+    }
+}
+
+/// BReg applies a review-free Proposal just after Submit. A read that shows it
+/// `submitted` with nobody's turn schedules the next read at the read floor,
+/// so the run settles within about the floor rather than `resultCheckSeconds`.
 #[tokio::test]
-async fn a_first_read_of_an_automatic_application_reads_once_more_seconds_later() {
+async fn a_first_read_of_an_automatic_application_reads_again_at_the_read_floor() {
     let h = harness().await;
     let fake = Fake::new(vec![waiting("nobody"), applied()]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
-    assert_eq!(fake.reads(), 2, "the start read and one follow-up read");
+    assert_eq!(fake.reads(), 1, "one read per attempt");
+    assert_eq!(h.status(run).await, ("running".into(), None, None));
+    h.next_read_at_the_floor(run).await;
+
+    h.make_due(run).await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 2);
     assert_eq!(
         h.status(run).await,
         ("finished".into(), Some("applied".into()), None),
-        "the run settles without waiting for resultCheckSeconds"
+        "the run settles at the second read"
     );
 }
 
+/// The read floor applies to whichever read sees the automatic application;
+/// a Proposal someone must act on keeps `resultCheckSeconds`.
 #[tokio::test]
-async fn the_follow_up_read_is_once_and_only_for_an_automatic_application() {
+async fn any_read_of_an_automatic_application_reads_again_at_the_read_floor() {
     let h = harness().await;
-    let fake = Fake::new(vec![waiting("official")]);
+    let fake = Fake::new(vec![waiting("official"), waiting("nobody"), applied()]);
     let worker = Worker::new(h.store.clone(), fake.clone());
-    let reviewed = h.admit().await;
+    let run = h.admit().await;
     h.drain(&worker).await;
-    assert_eq!(fake.reads(), 1, "a Proposal an official holds is read once");
-
-    let fake = Fake::new(vec![
-        waiting("nobody"),
-        waiting("nobody"),
-        waiting("nobody"),
-    ]);
-    let worker = Worker::new(h.store.clone(), fake.clone());
-    let queued = h
-        .admit_following("1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e")
-        .await;
-    h.drain(&worker).await;
-    assert_eq!(
-        fake.reads(),
-        2,
-        "one follow-up read, then the scheduled spacing"
-    );
-    assert_eq!(h.status(queued).await.0, "running");
-    let due = h.due_in(queued).await.expect("the next read is scheduled");
+    assert_eq!(fake.reads(), 1);
+    let due = h.due_in(run).await.expect("the next read is scheduled");
     assert!(
         due > 60.0,
-        "the next read waits for resultCheckSeconds: {due}"
+        "a Proposal an official holds waits for resultCheckSeconds: {due}"
     );
 
-    h.make_due(queued).await;
+    h.make_due(run).await;
     h.drain(&worker).await;
-    assert_eq!(fake.reads(), 3, "a later read has no follow-up");
-    assert_eq!(h.status(reviewed).await.0, "running");
-}
+    assert_eq!(fake.reads(), 2);
+    assert_eq!(h.status(run).await.0, "running");
+    h.next_read_at_the_floor(run).await;
 
-#[tokio::test]
-async fn a_follow_up_read_that_cannot_settle_keeps_the_first_read() {
-    for failed in [
-        CompletionObservation::Hold {
-            code: "proposal-not-found".into(),
-        },
-        CompletionObservation::Retryable {
-            code: "dependency-outage".into(),
-            retry_after: None,
-        },
-    ] {
-        let h = harness().await;
-        let fake = Fake::new(vec![waiting("nobody"), failed]);
-        let worker = Worker::new(h.store.clone(), fake.clone());
-        let run = h.admit().await;
-        h.drain(&worker).await;
-        assert_eq!(fake.reads(), 2, "the start read and one follow-up read");
-        assert_eq!(
-            h.status(run).await,
-            ("running".into(), None, None),
-            "an unanswered follow-up does not hold a Proposal the first read saw pending"
-        );
-    }
+    h.make_due(run).await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 3);
+    assert_eq!(
+        h.status(run).await,
+        ("finished".into(), Some("applied".into()), None)
+    );
 }
 
 #[tokio::test]
@@ -627,7 +621,7 @@ async fn a_wait_read_early_many_times_still_reaches_its_timeout_route() {
 #[tokio::test]
 async fn check_now_on_a_followed_proposal_keeps_the_read_floor_and_counts_against_the_budget() {
     let h = harness().await;
-    let fake = Fake::new(vec![waiting("official"), waiting("nobody")]);
+    let fake = Fake::new(vec![waiting("official"), waiting("party")]);
     let worker = Worker::new(h.store.clone(), fake.clone());
     let run = h.admit().await;
     h.drain(&worker).await;
@@ -680,7 +674,7 @@ async fn check_now_on_a_followed_proposal_keeps_the_read_floor_and_counts_agains
     assert_eq!(h.wait_view(run).await["observations"], 2);
     assert_eq!(
         h.kept(run).await.unwrap().observation.unwrap()["turn"],
-        "nobody"
+        "party"
     );
     let due = h.due_in(run).await.expect("the wait is still scheduled");
     assert!(

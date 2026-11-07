@@ -60,10 +60,11 @@
   it uses `curry`: settle runs with the 0.45.0 binaries, then check and
   promote the project again.
 
-- A Proposal wait whose first read shows BReg applying the Proposal
-  automatically (`submitted`, `turn: nobody`) reads once more about three
-  seconds later, so a review-free Proposal settles at once instead of after
-  `resultCheckSeconds`.
+- A Proposal wait whose read shows BReg applying the Proposal automatically
+  (`submitted`, `turn: nobody`) schedules its next read at the read floor,
+  `minimumObservationIntervalSeconds` (default 30 seconds), instead of after
+  `resultCheckSeconds` (default 900), so a review-free Proposal settles within
+  about the floor. The read floor and observation budget still apply.
 - `GET /v1/runs` and `coordinatorctl list` take `outcome=<name>`
   (`--outcome`) for the runs that finished with that workflow outcome, matched
   exactly. List cursors carry it; a cursor from a list without it continues
