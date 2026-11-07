@@ -203,6 +203,19 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
+    "PublicCheckActivation": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The definition whose `publicCheck` declaration this target serves."
+        }
+      },
+      "required": [
+        "definition"
+      ],
+      "type": "object"
+    },
     "Representation": {
       "enum": [
         "signed-jws",
@@ -251,6 +264,17 @@
     },
     "project": {
       "$ref": "#/$defs/LocalId"
+    },
+    "publicCheck": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PublicCheckActivation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Experimental (`v1alpha1`). Activates the unauthenticated public\ncertificate check for one definition that declares `publicCheck`. A\ncheck-only instance leaves `accessProfiles` empty."
     },
     "target": {
       "$ref": "#/$defs/LocalId"

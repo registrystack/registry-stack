@@ -69,6 +69,21 @@ instant and does not let a caller supply a clock. `existenceDisclosure`
 defaults to `collapse-unresolved`. An optional `disclosureGuard` governs
 combinations of Outputs under the retained disclosure contract.
 
+`publicCheck` is experimental (`v1alpha1`). It declares that a definition can
+answer an unauthenticated certificate check once a target authority activates
+it. `checkCodeFact` names the Source fact that carries the check code.
+`statusOutput` names an Output of type `controlled-category` with inline values
+drawn only from `valid`, `suspended`, `revoked` and `expired`. `fieldsOutput`
+names an Output of type `reviewed-structured-value`. The two name different
+Outputs; any other Output on the definition stays on the relying path and is
+never part of a public answer. The definition has exactly one subject role
+whose one selector profile has exactly one field, acquires through exactly one
+Source with no `holderPresented` block, keeps `existenceDisclosure` at
+`collapse-unresolved`, and the check code fact must be a string property of that
+Source's facts schema that the Source does not bind as an input. Each rule has
+its own diagnostic in `evidencectl check`. Declaring `publicCheck` opens
+nothing on its own; the target authority's `publicCheck` activation does.
+
 ## Sources, acquisition and Functions
 
 Each Source selects one reviewed Adapter `pack` by id and version, one `route`
@@ -421,6 +436,14 @@ references grant no authority themselves. Private selector values, source
 responses, credentials, and secret values remain outside public inspection
 and generated declarations, which describe their types.
 
+The authority may also carry `publicCheck: {definition: <id>}`, experimental
+(`v1alpha1`), which activates one definition that declares `publicCheck`. At
+most one definition is activated, and naming an undeclared or unknown definition
+is refused. `accessProfiles` may then be an empty map, which makes a check-only
+authority. The activation is part of the authority revision and of the
+effective grant digest, so adding or removing it is a new activation. The
+target still requires `authentication`.
+
 ## Target bindings and complete grants
 
 A target names its own `id`, the exact `project`, a package installation `root`
@@ -625,6 +648,10 @@ assertionDefinitions.*.outputs.*.type
 assertionDefinitions.*.outputs.*.unique
 assertionDefinitions.*.outputs.*.values
 assertionDefinitions.*.outputs.*.values[]
+assertionDefinitions.*.publicCheck
+assertionDefinitions.*.publicCheck.checkCodeFact
+assertionDefinitions.*.publicCheck.fieldsOutput
+assertionDefinitions.*.publicCheck.statusOutput
 assertionDefinitions.*.purpose
 assertionDefinitions.*.question
 assertionDefinitions.*.representations
@@ -989,6 +1016,8 @@ accessProfiles.*.requesterTags[]
 apiVersion
 kind
 project
+publicCheck
+publicCheck.definition
 target
 ```
 <!-- evidence-authoring-target-authority-key-paths:end -->

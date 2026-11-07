@@ -210,6 +210,10 @@ fn tooling_editor_publishes_its_setup_report_in_json() {
 /// A `publicCheck` declaration the definition cannot satisfy is refused by the
 /// offline check, with a diagnostic that names the rule and not a generic
 /// schema failure.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test reads back the YAML the scaffold wrote to edit it; it reads no operator configuration"
+)]
 #[test]
 fn check_refuses_an_unsatisfiable_public_check_declaration() {
     let workspace = tempfile::tempdir().expect("temporary workspace");

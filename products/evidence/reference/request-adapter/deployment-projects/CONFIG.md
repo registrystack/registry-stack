@@ -272,6 +272,17 @@ The compiled document names `target`, `project`, and `accessProfiles`; its grant
 reference exact Requirement URIs after local definition names are resolved.
 Authors do not supply trusted revision or digest values.
 
+Both documents carry experimental (`v1alpha1`) public-check members. A
+requirement may declare `publicCheck` with `checkCodeFact`, `statusOutput` and
+`fieldsOutput` (concept handles); the member is omitted when absent so existing
+configuration revisions do not change. A compiled authority may carry
+`publicCheck: {requirement: <Requirement URI>}`, which activates that
+requirement as a public check and is part of the authority revision and the
+effective grant digest. A compiled authority with an empty `accessProfiles` map
+and a `publicCheck` is an activated check-only authority; startup no longer
+reads an empty profile map as "no authority activated" when an activation is
+present.
+
 Activation validates each complete grant against the package's authority kind,
 actor kind, value origin, audience, purpose, subject-role selector profiles,
 representation and binding ceilings. A normalized access profile must explicitly
@@ -1360,6 +1371,10 @@ requirements[].grantCeiling.valueOrigins[]
 requirements[].handle
 requirements[].kind
 requirements[].observationTimezone
+requirements[].publicCheck
+requirements[].publicCheck.checkCodeFact
+requirements[].publicCheck.fieldsOutput
+requirements[].publicCheck.statusOutput
 requirements[].purposes
 requirements[].purposes[]
 requirements[].question
