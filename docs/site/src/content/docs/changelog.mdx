@@ -18,14 +18,16 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
-- BREAKING: Evidence records a source 4xx with no closer meaning, such as 409 or 422, as a
-  status answer. The request log and audit `safeErrorCategory` read `source-status` instead of
-  `source-protocol`; the caller still receives `source.unavailable`. Update audit readers, log
-  queries and alerts that match `source-protocol` for these answers.
+- BREAKING: Evidence records a source 409 or 422 as a status answer. The request log and audit
+  `safeErrorCategory` read `source-status` instead of `source-protocol`; the caller still
+  receives `source.unavailable`. Another 4xx, such as 400 or 415, stays `source-protocol` and
+  still counts toward `evidence_source_shape_drift_total`. Update audit readers, log queries and
+  alerts that match `source-protocol` for a source 409 or 422.
 
 {/* Evidence: products/evidence/CHANGELOG.md, Unreleased, source-status;
     crates/registry-evidence/src/runtime_tests.rs,
-    current_pack_metrics_preserve_closed_http_status_outcomes_without_sensitive_labels. */}
+    current_pack_metrics_preserve_closed_http_status_outcomes_without_sensitive_labels and
+    current_pack_metrics_count_a_source_400_or_415_as_shape_drift. */}
 
 ## v0.45.0 beta-57
 
