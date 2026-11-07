@@ -14570,6 +14570,54 @@ async fn current_pack_metrics_preserve_closed_http_status_outcomes_without_sensi
     assert!(!metrics.render().contains("evidence_signer_requests_total{"));
 }
 
+/// A source 400 or 415 is the host's own request breaking the source's
+/// contract, not a status answer: it stays a protocol fault and counts as
+/// shape drift, unlike a 409 or 422.
+#[tokio::test]
+async fn current_pack_metrics_count_a_source_400_or_415_as_shape_drift() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_pack_variant(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        AcceptancePackVariant::ExactRegistry,
+        |_| {},
+    );
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("the shape drift runtime initializes"),
+    );
+    let metrics =
+        crate::observability::Metrics::new(runtime.rate_limiter(), runtime.source_diagnostics());
+
+    for (status, drift) in [(400, 1), (415, 2)] {
+        Mock::given(method("POST"))
+            .and(path(
+                "/v2/resources/residence-record/lookups/by-record-reference",
+            ))
+            .respond_with(ResponseTemplate::new(status))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let operation = format!("operation-source-protocol-{status}");
+        let failure = runtime
+            .evaluate(&operation, &access_token(None), &residence_request())
+            .await
+            .expect_err("a rejected upstream status releases no Evidence");
+        assert_eq!(failure.problem(), ProblemCode::DependencyUnavailable);
+        assert_eq!(failure.category(), "source-protocol", "status {status}");
+        let rendered = metrics.render();
+        assert!(
+            rendered.contains(&format!(
+                "evidence_source_shape_drift_total{{source=\"source-b\"}} {drift}"
+            )),
+            "status {status} counts as shape drift: {rendered}"
+        );
+        server.reset().await;
+    }
+}
+
 fn signed_evidence_metric_protocol_config() -> Vec<u8> {
     serde_json::to_vec(&json!({
         "contract": {

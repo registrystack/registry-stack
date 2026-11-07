@@ -1199,7 +1199,7 @@ fn evidence_http_diagnostic(
         _ if matches!(refusal, Some(HostProtocolResponseRefusal::Verification)) => {
             Some(EvidenceHttpDiagnostic::Verification)
         }
-        Some(400..=499) => Some(EvidenceHttpDiagnostic::OtherClientStatus),
+        Some(409 | 422) => Some(EvidenceHttpDiagnostic::OtherClientStatus),
         _ => None,
     }
 }
@@ -1289,7 +1289,8 @@ pub enum EvidenceHttpDiagnostic {
     Verification,
     UndeclaredNotFound,
     DeclaredNotFoundMismatch,
-    /// A 4xx with no closer meaning above, such as 409 or 422.
+    /// A 409 or 422: the source understood the request and answered a status.
+    /// Other 4xx answers stay protocol faults and count as shape drift.
     OtherClientStatus,
 }
 
@@ -4645,11 +4646,20 @@ mod evidence_http_diagnostic_tests {
     use super::*;
 
     #[test]
-    fn every_other_client_status_is_a_source_answer_not_a_silent_fault() {
-        for status in [400, 405, 409, 410, 412, 415, 422, 499] {
+    fn only_conflict_and_unprocessable_are_source_status_answers() {
+        for status in [409, 422] {
             assert_eq!(
                 evidence_http_diagnostic(Some(status), None),
                 Some(EvidenceHttpDiagnostic::OtherClientStatus),
+                "status {status}"
+            );
+        }
+        // A malformed request or unsupported media type is the host's own
+        // contract breaking, so it stays a protocol fault.
+        for status in [400, 405, 410, 412, 415, 499] {
+            assert_eq!(
+                evidence_http_diagnostic(Some(status), None),
+                None,
                 "status {status}"
             );
         }
