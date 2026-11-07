@@ -41,7 +41,7 @@ problem. It returns a `SealedDocument`: the signed PDF bytes, `document_digest`
 to pin it), warnings, and `seal` facts (`id`, a `SealLevel` of `BaselineB` for
 `B-B` or `BaselineT` for `B-T`, `certificate_digest`, `timestamped_at`, the
 timestamp authority's time, at `B-T` only, and `test_only` for a seal the
-server declares `trust: test-only`). There is no `pdfDigest`.
+server declares `assuranceProfile: local`). There is no `pdfDigest`.
 
 A success body may carry members this client does not know; it ignores them
 and still checks every member above. `SealedDocument`, `SealFacts` and

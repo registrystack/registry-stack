@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SEAL: &str = "    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n      trust: test-only\n";
+const SEAL: &str = "    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
 
 fn registry_render() -> Command {
     Command::new(env!("CARGO_BIN_EXE_registry-render"))
@@ -85,7 +85,10 @@ fn check_resolves_bundle_seals_against_the_runtime_bindings() {
     let bundle = sealed_bundle(&home);
 
     // A bound seal passes, and the report names the seal each document uses.
-    let bound = runtime(&home, &format!("signing:\n  seals:\n{SEAL}"));
+    let bound = runtime(
+        &home,
+        &format!("assuranceProfile: local\nsigning:\n  seals:\n{SEAL}"),
+    );
     let (exit, report) = check(&bundle, &bound);
     assert_eq!(exit, Some(0), "{report}");
     assert!(codes(&report).is_empty(), "{report}");
@@ -113,7 +116,7 @@ fn check_resolves_bundle_seals_against_the_runtime_bindings() {
     let other = runtime(
         &home,
         &format!(
-            "signing:\n  seals:\n{}",
+            "assuranceProfile: local\nsigning:\n  seals:\n{}",
             SEAL.replace("ministry", "regional")
         ),
     );
@@ -171,7 +174,10 @@ fn oversized(params: &mut rcgen::CertificateParams, bytes: usize) {
 /// `chain`.
 fn check_chain(home: &Path, bundle: &Path, chain: &Path) -> (Option<i32>, serde_json::Value) {
     let seal = SEAL.replace("/etc/render/seal/chain.pem", &chain.display().to_string());
-    let runtime = runtime(home, &format!("signing:\n  seals:\n{seal}"));
+    let runtime = runtime(
+        home,
+        &format!("assuranceProfile: local\nsigning:\n  seals:\n{seal}"),
+    );
     let output = registry_render()
         .args(["check", "--bundle"])
         .arg(bundle)
@@ -432,7 +438,7 @@ fn check_with_the_environment_refuses_a_seal_too_large_for_a_document_pdf_standa
     let runtime = runtime(
         &home,
         &format!(
-            "signing:\n  seals:\n{}",
+            "assuranceProfile: local\nsigning:\n  seals:\n{}",
             SEAL.replace("/etc/render/seal/chain.pem", &chain.display().to_string())
         ),
     );

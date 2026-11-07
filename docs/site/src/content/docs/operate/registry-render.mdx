@@ -310,6 +310,7 @@ authentication:
     issuer: https://issuer.example.invalid
     audience: urn:example:render
     allowedClients: [portal, records-service]
+assuranceProfile: production
 signing:
   seals:
     ministry:
@@ -325,7 +326,6 @@ signing:
         url: https://tsa.example.invalid/tsr
         attemptTimeoutMilliseconds: 10000
       allowedClients: [records-service]
-      trust: production
 ```
 
 Render reads the issuer's signing keys from its OpenID Connect discovery document, or from
@@ -333,10 +333,11 @@ Render reads the issuer's signing keys from its OpenID Connect discovery documen
 (`type: static` with `documentRef`, such as `secret:file/jwks.json`).
 [Connect an OIDC issuer](../advanced/connect-an-oidc-issuer/) covers each choice.
 
-- `trust` is required. `production` marks an official seal, and it signs through `transit` only:
-  Render refuses a production seal with a key file
-  (`render.runtime.seal-signer-assurance-mismatch`). `test-only` marks a test seal; see
-  [Use a test seal in development](#use-a-test-seal-in-development).
+- `assuranceProfile` is required at the top of the runtime file once it declares a seal, with the
+  same member and values Evidence uses. `production` means every seal signs through `transit`:
+  Render refuses a production runtime with a key file
+  (`render.runtime.signer-assurance-mismatch`). `local` means every seal is a test seal signed
+  with a key file; see [Use a test seal in development](#use-a-test-seal-in-development).
 - `signer.unixSocketPath` is the proxy's socket, an absolute path. `mount`, `keyName`, and
   `keyVersion` name one Transit key version: pinning the version means a rotation in Transit never
   changes the key behind your certificate unnoticed. `attemptTimeoutMilliseconds` (1 to 30000)
@@ -400,8 +401,8 @@ problems, and response shapes.
 
 ### Use a test seal in development
 
-Issue a test certificate from your own test authority and set `trust: test-only` on the seal. A
-test seal may keep its key in a file instead of Transit: `signer.type: local-jwk` with
+Issue a test certificate from your own test authority and set `assuranceProfile: local` in the runtime file.
+Under that profile every seal keeps its key in a file instead of Transit: `signer.type: local-jwk` with
 `privateKeyRef` naming one ES256, ES384, RS256, or RS384 private JWK under the file secret
 provider, such as `secret:file/seal.jwk`; an environment reference is refused
 (`render.runtime.seal-key-requires-file-provider`). `registry-render keygen --key <file> --csr
@@ -462,6 +463,7 @@ cat seal.pem test-root.pem > chain.pem
 without a timestamp:
 
 ```yaml
+assuranceProfile: local
 signing:
   seals:
     ministry:
@@ -471,10 +473,9 @@ signing:
       certificateChainFile: /absolute/path/to/chain.pem
       withoutTimestamp: seal-stops-validating-when-certificate-expires
       allowedClients: [records-service]
-      trust: test-only
 ```
 
-Put this `signing` block in a runtime file that has the `authentication` block from
+Put `assuranceProfile` and this `signing` block in a runtime file that has the `authentication` block from
 [Enable a seal](#enable-a-seal). Name the seal in the document type's `manifest.yaml` entry with
 `seal: ministry`, and run `registry-render package` again. Then run `check --environment` and
 `serve` as above. Callers need a token from your issuer that carries `render:seal`, issued to a
