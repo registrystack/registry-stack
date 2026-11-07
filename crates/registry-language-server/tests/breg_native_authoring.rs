@@ -235,6 +235,25 @@ fn module_extension_generated_identifier_scopes_use_the_extended_record_type() {
     }));
 }
 
+#[test]
+fn manifest_competent_authority_reports_an_unresolved_reference() {
+    let project = Project::new(&[file(
+        "registry.yaml",
+        "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: authorities}\nmanifestProjection:\n  authorities:\n    - {id: registry-authority, name: Registry Authority}\n  publicService: {id: registry-service, title: Registry service, competentAuthority: <|missing|>service-agency}\n",
+    )]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
+    let path = project.path("registry.yaml");
+    assert!(
+        index.diagnostics().iter().any(|diagnostic| {
+            diagnostic.path == path
+                && diagnostic.range.start == project.cursor("registry.yaml", "missing")
+                && diagnostic.message.contains("service-agency")
+        }),
+        "{:?}",
+        index.diagnostics()
+    );
+}
+
 #[tokio::test]
 async fn canonical_function_reference_changes_are_visible_through_lsp() {
     let project = facility();
