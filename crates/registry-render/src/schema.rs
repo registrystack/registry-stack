@@ -224,6 +224,13 @@ fn set_signing_constraints(schema: &mut Value) {
         member.remove("anyOf");
         member.insert("$ref".to_owned(), json!("#/$defs/SigningRuntime"));
     }
+    if let Some(member) = schema
+        .pointer_mut("/properties/assuranceProfile")
+        .and_then(Value::as_object_mut)
+    {
+        member.remove("anyOf");
+        member.insert("$ref".to_owned(), json!("#/$defs/AssuranceProfile"));
+    }
     if let Some(seals) = schema
         .pointer_mut("/$defs/SigningRuntime/properties/seals")
         .and_then(Value::as_object_mut)
@@ -881,6 +888,8 @@ mod tests {
                 false,
             ),
             (&no_seals, "/assuranceProfile", Some(json!("local")), true),
+            (&base, "/assuranceProfile", Some(Value::Null), false),
+            (&no_seals, "/assuranceProfile", Some(Value::Null), false),
             (
                 &base,
                 &format!("{authority}/url"),
