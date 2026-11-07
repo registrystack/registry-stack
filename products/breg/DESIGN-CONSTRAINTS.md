@@ -34,7 +34,9 @@ or refuses, with the context needed to apply it.
   The server does not maintain a second catalogue model or claim conformance
   that was not explicitly authored.
 - One Registry project may contain several explicitly identified master
-  datasets under one primary publisher authority, public service, and catalogue.
+  datasets under one catalogue publisher and one public service. The public
+  service names its competent authority from the project's identified
+  authorities; the compiler never infers it from the publisher.
   Every entity belongs to exactly one primary dataset; data services and
   distributions carry resolved dataset membership. Dataset-specific access and
   classification values inherit from explicit project defaults. The compiled
