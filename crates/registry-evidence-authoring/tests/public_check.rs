@@ -301,7 +301,10 @@ fn refusal_7_the_check_acquires_through_one_source_only() {
 #[test]
 fn refusal_8_an_entity_reference_output_is_refused() {
     for (value_type, extra) in [
-        ("audience-scoped-entity-reference", json!({"maximumBytes": 64})),
+        (
+            "audience-scoped-entity-reference",
+            json!({"maximumBytes": 64}),
+        ),
         (
             "entity-reference-list",
             json!({"minimumItems": 1, "maximumItems": 2, "unique": true}),
