@@ -53,7 +53,12 @@ the reference wins.
 
 Registry Evidence's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/batch`, and
 `GET /v1/evidence-definitions`. Its operational routes are `/health`, `/ready`, `/openapi.json`,
-`/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`.
+`/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. The public certificate check,
+`POST /v1/public-check`, is a versioned route that stays outside the promise: see
+[experimental surfaces](#experimental-surfaces).
+
+{/* Evidence: products/evidence/examples/public-check/README.md;
+    products/evidence/CONCEPT.md, "Public certificate check". */}
 
 {/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE;
     crates/registry-breg/src/contract.rs, ACTION_PLAN_ABI_V1;
@@ -89,6 +94,9 @@ release without deprecation:
 - the Base Registry Engine statistics routes under `/v1/statistics/`, and the
   `statisticalDatasets` declarations behind them
 - the Base Registry Engine spatial adapter routes under `/v1/gis`
+- the Registry Evidence public certificate check: the `POST /v1/public-check` route, its
+  `registry.evidence.public-check/v1alpha1` answer, and the `publicCheck` members of an Evidence
+  project and of a target authority
 - calling Evidence from a Base Registry Engine governed action handler: the action's `evidence`
   declaration, and `evidence::resolve` inside the handler
 - the `scheduling` variant of a Casework task grant's bounds

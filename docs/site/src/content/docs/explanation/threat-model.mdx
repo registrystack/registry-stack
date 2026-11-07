@@ -43,6 +43,7 @@ production boundary and do not establish a production freshness or replay-protec
 | BReg to PostgreSQL | Compiled schema and operations, least-privilege database identity |
 | Evidence to source | Fixed destination and request, credential isolation, transport and response bounds |
 | Evidence to verifier | Signed assertion, published verification material, audience and expiry checks |
+| Public checker to Evidence through the operator proxy | Operator proxy limits the path and the request rate and keeps no client address; holder-held 120-bit check code; identical not-found answer; fixed answer fields; no request header read |
 | Product to audit storage | Value-free records, durable append path, fail-closed behavior where required |
 | Operator to package | Closed schemas, digest verification, reviewed activation and rollback |
 
@@ -50,8 +51,10 @@ production boundary and do not establish a production freshness or replay-protec
 
 Registry Evidence runs one reviewed OIDC bearer profile with one trusted issuer and exact audience,
 token-type, and algorithm allowlists. One configured principal claim is authoritative; it does not
-fall back to `client_id`, `azp`, a proxy header, or a request field. Only operational and discovery
-routes are unauthenticated, and none reveals enabled definitions or requester permissions.
+fall back to `client_id`, `azp`, a proxy header, or a request field. Operational and discovery
+routes are unauthenticated, and none reveals enabled definitions or requester permissions. The
+experimental public check route is the first unauthenticated route that reads registry data; it
+exists only when an operator activates it and is reachable only through a path-restricted proxy.
 
 The caller names a predefined requirement revision, purpose, and bounded subject selectors. One
 authorization decision binds the requester, requirement, purpose, roles, selector profiles,

@@ -90,6 +90,23 @@ Inside a successful response, an item that could not be produced is the result
 {/* Evidence: products/evidence/contracts/problem-contract.yaml, request_batch;
     products/evidence/contracts/request-batch-response.schema.yaml. */}
 
+## Public check
+
+`POST /v1/public-check` is experimental and uses the same problem shape and codes. It adds no code.
+
+- `evidence.invalid-request` (400): the body is not JSON with exactly the string members
+  `documentNumber` and `checkCode`, or `checkCode` is not 24 characters of `A` to `Z` and `2` to `7`.
+- `request.selector-invalid` (400): `documentNumber` does not fit the number format the route accepts.
+- `resource.not-found` (404): no certificate matches. A wrong number, a wrong code, and a record with
+  no stored code give the same answer, so a caller cannot tell which part was wrong.
+- `source.unavailable` (503): the registry could not be read. Retry later.
+- `service.unavailable` (503): Evidence could not complete the check. Retry later.
+
+The two 400 problems come before any registry read.
+
+{/* Evidence: products/evidence/examples/public-check/README.md, "The request and the answer";
+    products/evidence/contracts/problem-contract.yaml, codes. */}
+
 ## Next
 
 [Registry Evidence API](../apis/registry-evidence/)

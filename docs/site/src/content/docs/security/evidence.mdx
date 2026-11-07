@@ -96,6 +96,41 @@ and no configuration key changes that.
     crates/registry-breg/tests/postgres_action_evidence.rs, holder-presented;
     crates/registry-breg/src/problem.rs, ActionEvidenceFailed. */}
 
+## The public certificate check
+
+The experimental `POST /v1/public-check` route is the first unauthenticated route that reads
+registry data. It exists only when the package declares `publicCheck` and the target authority
+activates it. It answers one configured requirement with a status, the printed fields, and the
+evaluation time, and nothing else.
+
+- **Enumeration.** The check code is 120 random bits stored on the record at issuance, not derived
+  from the number or from any key, so guessing is not feasible. Evidence has no rate limiter on this
+  route and never reads a client address. The operator's proxy limits each client and the whole path.
+- **Identical miss.** A wrong number, a wrong code, an ambiguous match, a record with no usable
+  stored code, and the other unresolved cases return the same `404`, with the same headers and body
+  apart from the fresh trace identifier.
+- **Code confinement.** The code is compared in constant time and removed from the facts before any
+  Function runs, on every route that reads that source. It is never a source input, and it appears in
+  no log, audit record, or answer.
+- **Timing.** Evidence adds no delay, so a response can take longer when the number exists than when
+  it does not. That can reveal whether a number exists. It reveals nothing about the code. The
+  certificate number is printed on the paper and is not the secret, so this residual is accepted. If
+  the number alone would reveal sensitive membership in your deployment, do not activate the route.
+- **Checker privacy.** The number and code travel in a POST body, never in a path or query. Evidence
+  mints its own trace identifier on this route, ignores inbound trace context, and reads no request
+  header except `Content-Type`. The audit record holds a keyed pseudonym of the number, not the number.
+  The operator's proxy keeps no client addresses for this location.
+- **Unsigned answer.** The answer carries no signature, subject identifier, or nonce. The checker
+  trusts the page origin and its TLS, so print that origin as text beside the QR code. A party that
+  needs a provable answer uses the signed relying-service path.
+- **Blast radius.** Run the check on its own Evidence instance with its own signing, audit, and
+  subject-binding keys, so a flood or a compromise on the public path does not reach institutional
+  keys or starve relying services.
+
+{/* Evidence: products/evidence/examples/public-check/README.md;
+    products/evidence/OPERATOR-CONTRACT.md, "Public certificate check";
+    products/evidence/CONCEPT.md, "Public certificate check". */}
+
 ## How the guarantees are held
 
 The [invariant matrix](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/security-invariant-matrix.yaml)
