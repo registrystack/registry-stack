@@ -6,8 +6,7 @@ Add document rendering through an app-owned host route. App Kit provides the
 `project/docs/customization.md`, “Add a host route”. Repository access is
 currently private and must be granted by Registry Stack maintainers.
 
-App Kit has no built-in public check page or documents configuration block.
-Keep Render destinations and credentials in app-owned server configuration;
+App Kit has no built-in documents configuration block. Keep Render destinations and credentials in app-owned server configuration;
 the closed host configuration schema does not accept arbitrary extensions.
 
 ## Decide the disclosure
@@ -16,11 +15,13 @@ Agree the fields printed on each document type, the wording beside its QR,
 the public check URL, and who reviews each template package version before
 writing the template. Paper remains readable after the caller's session ends.
 
-The app owns the public check route and the answer it discloses. Its server-side
-Evidence relying service obtains and verifies the minimum assertion needed for
-that answer under its own authority. A scanned URL or a Render hash grants no
-registry access. Render only prints the app-supplied URL and performs no work
-when the QR is scanned.
+The check is answered by Registry Evidence's public check route and a static
+page; see `products/evidence/examples/public-check/README.md`. The app or issuing
+workflow generates a check code at issuance, stores it on the record, and
+supplies the QR URL (`https://check.example.org/#n=<number>&c=<code>`). Print
+the check origin as text beside the QR code. A scanned URL or a Render hash
+grants no registry access. Render only prints the app-supplied URL and performs
+no work when the QR is scanned.
 
 ## Author and package
 
