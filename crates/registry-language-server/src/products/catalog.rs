@@ -78,6 +78,7 @@ const BREG_DECLARATIONS: &[N] = &[
         )
     },
     N::global("manifestProjection/dataServices/*/id", "BReg data service"),
+    N::global("manifestProjection/authorities/*/id", "BReg authority"),
 ];
 
 const BREG_REFERENCES: &[N] = &[
@@ -446,6 +447,10 @@ const BREG_REFERENCES: &[N] = &[
     N::global(
         "manifestProjection/distributions/*/accessService",
         "BReg data service",
+    ),
+    N::global(
+        "manifestProjection/publicService/competentAuthority",
+        "BReg authority",
     ),
 ];
 

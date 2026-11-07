@@ -173,6 +173,32 @@ fn generated_identifier_scopes_navigate_and_complete_within_the_record_type() {
 }
 
 #[test]
+fn manifest_competent_authority_navigates_and_completes_to_declared_authorities() {
+    let project = Project::new(&[file(
+        "registry.yaml",
+        "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: authorities}\nmanifestProjection:\n  authorities:\n    - {id: registry-authority, name: Registry Authority}\n    - {id: <|authority|>service-agency, name: Service Agency}\n  publicService: {id: registry-service, title: Registry service, competentAuthority: <|competent|>service-agency}\n",
+    )]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    let path = project.path("registry.yaml");
+    let position = project.cursor("registry.yaml", "competent");
+    let definitions = index.definitions_at(&path, position);
+    assert_eq!(definitions.len(), 1, "{definitions:?}");
+    assert_eq!(
+        definitions[0].range.start,
+        project.cursor("registry.yaml", "authority")
+    );
+    assert!(index.hover_at(&path, position).is_some());
+    let candidates = index.completions_at(&path, position);
+    for expected in ["registry-authority", "service-agency"] {
+        assert!(
+            candidates.iter().any(|item| item.label == expected),
+            "{expected}: {candidates:?}"
+        );
+    }
+}
+
+#[test]
 fn module_extension_generated_identifier_scopes_use_the_extended_record_type() {
     let project = Project::new(&[
         file(
