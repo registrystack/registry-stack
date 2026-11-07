@@ -7,6 +7,6 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; font: inherit; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
 dt { font-weight: 600; }
 dd { margin: 0; }
-#message[data-kind="valid"] { font-weight: 700; }
+#message[data-kind="answer"] { font-weight: 700; }
 #message[data-kind="problem"] { font-weight: 700; }
 #origin { margin-top: 2rem; font-size: 0.875rem; }

@@ -81,6 +81,7 @@ export function describeAnswer(answer) {
     String(value),
   ]);
   return {
+    statusCode: answer.status,
     status: STATUS_LABELS[answer.status] ?? answer.status,
     rows,
     observedAt: answer.observedAt,
@@ -120,12 +121,14 @@ function show(document, outcome) {
   const observed = document.getElementById('observed');
   list.replaceChildren();
   observed.textContent = '';
+  delete message.dataset.status;
   if ('problem' in outcome) {
     message.dataset.kind = 'problem';
     message.textContent = outcome.problem;
   } else {
-    const { status, rows, observedAt } = outcome.answer;
-    message.dataset.kind = 'valid';
+    const { statusCode, status, rows, observedAt } = outcome.answer;
+    message.dataset.kind = 'answer';
+    message.dataset.status = statusCode;
     message.textContent = `Status: ${status}`;
     for (const [label, value] of rows) {
       const term = document.createElement('dt');
