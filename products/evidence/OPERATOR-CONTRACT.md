@@ -224,6 +224,41 @@ names do not replace either value. Container images and their provenance are
 operator responsibilities; Version 1 proves this journey with released bare
 binaries, not generated containers or orchestrator manifests.
 
+### Public certificate check
+
+The public certificate check (`CONCEPT.md` section 15.11) is the first
+unauthenticated Evidence route that reads registry data. It exists only when the
+package declares `publicCheck` and the target authority activates
+`publicCheck.definition`; otherwise `POST /v1/public-check` answers as an
+unknown route. Evidence has no rate limiter on it and never reads a client
+address, so the operator's proxy carries these duties:
+
+1. Forward exactly `POST` and `OPTIONS` on `/v1/public-check`. Every other path
+   and method on that host is answered 404 by the proxy, so no relying-service
+   route is reachable.
+2. Apply a per-client request limit and a cap on the whole path. The admission
+   limit `maximumConcurrentRequests` still bounds concurrent source reads, but
+   a flood that passes the proxy can occupy those slots.
+3. Keep no access log with client addresses or request headers for that
+   location. The check code is in the request body, never in a path or query,
+   so a log of the path holds no code; a log of addresses would let the
+   operator correlate checkers with certificates.
+4. Terminate TLS on the check origin printed on the certificate.
+
+Run the check on its own Evidence instance, with only the check requirement and
+its own signing, audit and subject-binding keys, so a flood or a compromise on
+the public path reaches no institutional signing key and does not starve
+relying services. This is recommended, not enforced. The cost is a second
+process with its own package, runtime file, keys and audit destination.
+
+A check-only instance still needs a minimal `authentication` block in its
+target, because the target schema requires one and startup proves that the
+issuer's key source answers. The example target
+(`examples/public-check/public-check-target.yaml`) shows the smallest working
+block. The cost is an OIDC issuer that the instance never uses for the check
+but whose key source must be reachable at startup. The target authority may
+carry `accessProfiles: {}` with `publicCheck` as its only grant.
+
 ### Git-managed environments
 
 Use one protected branch and complete named environment targets. The maintained
