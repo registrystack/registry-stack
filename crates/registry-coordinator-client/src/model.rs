@@ -451,7 +451,26 @@ impl ProposalTurn {
 /// Proposal; `turn` selects runs whose Proposal wait last showed that turn;
 /// `outcome` selects runs that finished with that workflow outcome, matched
 /// exactly.
+///
+/// Build it with [`RunListQuery::new`] and the `with_*` methods, or set its
+/// fields afterwards. A later filter is a new field, so a struct literal is
+/// refused:
+///
+/// ```compile_fail
+/// use registry_coordinator_client::RunListQuery;
+///
+/// let _ = RunListQuery {
+///     limit: 20,
+///     cursor: None,
+///     state: None,
+///     attention: None,
+///     proposal: None,
+///     turn: None,
+///     outcome: None,
+/// };
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RunListQuery {
     pub limit: u32,
     pub cursor: Option<String>,
@@ -474,6 +493,36 @@ impl RunListQuery {
             turn: None,
             outcome: None,
         }
+    }
+    #[must_use]
+    pub fn with_cursor(mut self, value: impl Into<String>) -> Self {
+        self.cursor = Some(value.into());
+        self
+    }
+    #[must_use]
+    pub fn with_state(mut self, value: RunListState) -> Self {
+        self.state = Some(value);
+        self
+    }
+    #[must_use]
+    pub fn with_attention(mut self, value: bool) -> Self {
+        self.attention = Some(value);
+        self
+    }
+    #[must_use]
+    pub fn with_proposal(mut self, value: Uuid) -> Self {
+        self.proposal = Some(value);
+        self
+    }
+    #[must_use]
+    pub fn with_turn(mut self, value: ProposalTurn) -> Self {
+        self.turn = Some(value);
+        self
+    }
+    #[must_use]
+    pub fn with_outcome(mut self, value: impl Into<String>) -> Self {
+        self.outcome = Some(value.into());
+        self
     }
 }
 

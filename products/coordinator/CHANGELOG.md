@@ -70,8 +70,12 @@
   exactly. List cursors carry it; a cursor from a list without it continues
   unchanged. The Rust client's `RunListQuery` gains `outcome`, and the Node.js
   and Python `list` take it as a last argument.
-- BREAKING: Rust callers that build `RunListQuery` as a struct literal must
-  set `outcome`.
+- BREAKING: The Rust client's `RunListQuery` is `#[non_exhaustive]`, so a
+  struct literal no longer compiles. Construct it with
+  `RunListQuery::new(limit)` and chain `with_cursor`, `with_state`,
+  `with_attention`, `with_proposal`, `with_turn` and `with_outcome`, or set
+  the public fields on the value `new` returns. A later filter is then added
+  without breaking callers; this is the last break of its kind.
 
 ## 0.45.0 - 2026-11-03
 

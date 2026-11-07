@@ -1052,12 +1052,12 @@ async fn a_list_page_carries_the_cursor_and_filters_without_interpreting_the_cur
     matching["state"] = json!("attention");
     let server = Server::new(json!({"runs":[matching],"nextCursor":"cursor-next"})).await;
     let client = server.client();
-    let mut query = RunListQuery::new(1);
-    query.cursor = Some("cursor-before".into());
-    query.state = Some(RunListState::Attention);
-    query.attention = Some(true);
-    query.proposal = Some(Uuid::parse_str("0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d").unwrap());
-    query.turn = Some(ProposalTurn::Official);
+    let query = RunListQuery::new(1)
+        .with_cursor("cursor-before")
+        .with_state(RunListState::Attention)
+        .with_attention(true)
+        .with_proposal(Uuid::parse_str("0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d").unwrap())
+        .with_turn(ProposalTurn::Official);
 
     let page = client.list_page(&token(), &query).await.unwrap().value;
 
@@ -1076,10 +1076,7 @@ async fn a_list_page_by_outcome_carries_it_and_must_hold_only_runs_that_finished
     applied["outcome"] = json!("applied");
     let server = Server::new(json!({"runs":[applied]})).await;
     let client = server.client();
-    let query = RunListQuery {
-        outcome: Some("applied".into()),
-        ..RunListQuery::new(1)
-    };
+    let query = RunListQuery::new(1).with_outcome("applied");
 
     assert!(client.list_page(&token(), &query).await.is_ok());
     assert_eq!(
@@ -1103,10 +1100,7 @@ async fn a_list_page_by_outcome_carries_it_and_must_hold_only_runs_that_finished
 
     let before = server.count();
     for outcome in ["", "a.b", "has space", &"a".repeat(65)] {
-        let query = RunListQuery {
-            outcome: Some(outcome.into()),
-            ..RunListQuery::new(1)
-        };
+        let query = RunListQuery::new(1).with_outcome(outcome);
         assert!(
             matches!(
                 client.list_page(&token(), &query).await,
@@ -1136,11 +1130,9 @@ async fn list_responses_must_satisfy_the_requested_effective_state_and_attention
         let name = serde_json::to_value(state).unwrap();
         for selected in std::iter::once(None).chain(states.into_iter().map(Some)) {
             for attention in [None, Some(false), Some(true)] {
-                let query = RunListQuery {
-                    state: selected,
-                    attention,
-                    ..RunListQuery::new(1)
-                };
+                let mut query = RunListQuery::new(1);
+                query.state = selected;
+                query.attention = attention;
                 let mut run = status();
                 run["state"] = name.clone();
                 if state == RunListState::Finished {
@@ -1165,11 +1157,9 @@ async fn list_responses_must_satisfy_the_requested_effective_state_and_attention
             }
         }
     }
-    let query = RunListQuery {
-        state: Some(RunListState::Running),
-        attention: Some(true),
-        ..RunListQuery::new(20)
-    };
+    let query = RunListQuery::new(20)
+        .with_state(RunListState::Running)
+        .with_attention(true);
     server.answer(200, "application/json", "{\"runs\":[]}");
     assert!(
         client.list_page(&token(), &query).await.is_ok(),
