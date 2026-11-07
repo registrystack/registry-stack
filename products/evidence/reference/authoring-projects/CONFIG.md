@@ -76,7 +76,10 @@ it. `checkCodeFact` names the Source fact that carries the check code.
 drawn only from `valid`, `suspended`, `revoked` and `expired`. `fieldsOutput`
 names an Output of type `reviewed-structured-value`. The two name different
 Outputs; any other Output on the definition stays on the relying path and is
-never part of a public answer. The definition has exactly one subject role
+never part of a public answer, except that no Output may be of type
+`audience-scoped-entity-reference` or `entity-reference-list`: a public check
+has no relying party to scope a reference to, so the definition is refused with
+`public-check-entity-reference-output`. The definition has exactly one subject role
 whose one selector profile has exactly one field, acquires through exactly one
 Source with no `holderPresented` block, keeps `existenceDisclosure` at
 `collapse-unresolved`, and the check code fact must be a string property of that

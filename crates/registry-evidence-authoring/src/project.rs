@@ -1557,6 +1557,18 @@ fn validate_public_check(
             "statusOutput and fieldsOutput must name two different Outputs",
         ));
     }
+    if definition.outputs.values().any(|output| {
+        matches!(
+            output.value_type.as_str(),
+            "audience-scoped-entity-reference" | "entity-reference-list"
+        )
+    }) {
+        findings.push(Finding::new(
+            at.clone().key("outputs"),
+            "public-check-entity-reference-output",
+            "a public check answers with no audience, so an Output of type audience-scoped-entity-reference or entity-reference-list cannot be released: remove it from the definition",
+        ));
+    }
     let one_number = definition.subjects.len() == 1
         && definition.subjects[0].selectors.len() == 1
         && project

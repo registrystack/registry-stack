@@ -298,6 +298,26 @@ fn refusal_7_the_check_acquires_through_one_source_only() {
     );
 }
 
+#[test]
+fn refusal_8_an_entity_reference_output_is_refused() {
+    for (value_type, extra) in [
+        ("audience-scoped-entity-reference", json!({"maximumBytes": 64})),
+        (
+            "entity-reference-list",
+            json!({"minimumItems": 1, "maximumItems": 2, "unique": true}),
+        ),
+    ] {
+        let project = project_with(|d| {
+            let mut output = json!({"concept": "urn:example:concept:owner:v1", "type": value_type});
+            for (key, field) in extra.as_object().unwrap() {
+                output[key] = field.clone();
+            }
+            d["outputs"]["owner"] = output;
+        });
+        only_code(&project, "public-check-entity-reference-output");
+    }
+}
+
 fn authority_value(public_check: Value) -> Value {
     let mut value =
         json!({"target": "public-check", "project": "certificate-check", "accessProfiles": {}});
