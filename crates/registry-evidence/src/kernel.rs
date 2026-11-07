@@ -259,6 +259,11 @@ pub struct OfflineKernel {
     fact_schemas: BTreeMap<String, JSONSchema>,
     reviewed_schemas: BTreeMap<String, ReviewedSchema>,
     codelist_handles: BTreeMap<String, BTreeMap<String, CodelistHandle>>,
+    /// Per requirement, the Source facts no derivation may read: every check
+    /// code fact a public-check declaration names on a Source the requirement
+    /// acquires through. Declared, not activated, decides this, so the code
+    /// never reaches a script or a signed value on any route.
+    withheld_facts: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl std::fmt::Debug for OfflineKernel {
@@ -326,6 +331,7 @@ impl OfflineKernel {
                     .map(|handles| (requirement.id.clone(), handles))
             })
             .collect::<Result<_, _>>()?;
+        let withheld_facts = withheld_facts(&bundle.config.requirements);
         Ok(Self {
             bundle,
             runtime,
@@ -333,6 +339,7 @@ impl OfflineKernel {
             fact_schemas,
             reviewed_schemas,
             codelist_handles,
+            withheld_facts,
         })
     }
 
@@ -417,6 +424,18 @@ impl OfflineKernel {
             .get(requirement_id)
             .ok_or(KernelError::Bundle)?;
         let evaluation_context = self.evaluation_context(requirement, observed_at)?;
+        let withheld;
+        let facts = match self.withheld_facts.get(requirement_id) {
+            Some(names) => {
+                withheld = facts
+                    .iter()
+                    .filter(|(name, _)| !names.contains(*name))
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                &withheld
+            }
+            None => facts,
+        };
         let derived = self
             .runtime
             .derive(script, facts, selectors, evaluation_context)
@@ -626,6 +645,31 @@ fn compile_schema(artifact: &str, schema: &Value) -> Result<JSONSchema, KernelEr
         .with_format("uuid", crate::selector::canonical_uuid)
         .compile(schema)
         .map_err(|_| refuse_artifact(artifact, "schema is not a valid JSON Schema"))
+}
+
+/// For each requirement, the check code facts declared on any Source it
+/// acquires through. A requirement that shares a Source with a public-check
+/// declaration loses the fact as surely as the declaring requirement does.
+fn withheld_facts(requirements: &[RequirementConfig]) -> BTreeMap<String, BTreeSet<String>> {
+    let declared = requirements
+        .iter()
+        .filter_map(|requirement| {
+            let public_check = requirement.public_check.as_ref()?;
+            let source = requirement.acquisition.source_channel_source()?;
+            Some((source, public_check.check_code_fact.as_str()))
+        })
+        .collect::<Vec<_>>();
+    requirements
+        .iter()
+        .filter_map(|requirement| {
+            let names = declared
+                .iter()
+                .filter(|(source, _)| requirement.acquisition.uses_source(source))
+                .map(|(_, fact)| (*fact).to_owned())
+                .collect::<BTreeSet<_>>();
+            (!names.is_empty()).then(|| (requirement.id.clone(), names))
+        })
+        .collect()
 }
 
 fn build_codelist_handles(
@@ -1241,6 +1285,32 @@ mod tests {
     const SUPPORTED_VALUE_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
     /// A value a diagnostic must never echo, in the shape a script scalar has.
     const SCRIPT_CANARY: &str = "0451-mrs-hunt-was-born-in-caracas";
+
+    #[test]
+    fn a_declared_check_code_is_withheld_from_every_requirement_on_its_source() {
+        let mut requirements = crate::config::public_check_test_config().requirements;
+        let declaring = requirements[0].clone();
+        let mut sharing = declaring.clone();
+        sharing.id = "urn:example:fixture:requirement:sharing".to_owned();
+        sharing.public_check = None;
+        let mut elsewhere = sharing.clone();
+        elsewhere.id = "urn:example:fixture:requirement:elsewhere".to_owned();
+        elsewhere.acquisition.source = "another-source".to_owned();
+        requirements.extend([sharing, elsewhere]);
+
+        let withheld = withheld_facts(&requirements);
+        let check_code = BTreeSet::from(["check_code".to_owned()]);
+        assert_eq!(withheld.get(&declaring.id), Some(&check_code));
+        assert_eq!(
+            withheld.get("urn:example:fixture:requirement:sharing"),
+            Some(&check_code),
+            "a definition without a declaration still loses the fact on a shared Source"
+        );
+        assert!(!withheld.contains_key("urn:example:fixture:requirement:elsewhere"));
+
+        requirements[0].public_check = None;
+        assert!(withheld_facts(&requirements).is_empty());
+    }
 
     /// Opt-in CPU measurement with startup and source I/O outside the clock.
     /// Run with `cargo test --locked --release -p registry-evidence --lib

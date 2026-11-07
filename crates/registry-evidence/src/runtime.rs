@@ -26,17 +26,18 @@ use crate::{
         AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
         AuthorityKind as AuditAuthorityKind, EvidenceAuditError, EvidenceAuditEvent,
         EvidenceAuditLog, EvidenceAuthorizationRefusalAuditEvent, EvidenceExecutionBounds,
-        EvidenceRequestBatchAuditDecision, EvidenceRequestBatchAuditEvent,
-        EvidenceRequestBatchAuditItemGroup, EvidenceRequestBatchAuditOutcome,
-        EvidenceRequestBatchAuditOutcomeKind, EvidenceRequestBatchAuditPhase, ResponseProtection,
+        EvidencePublicCheckAuditEvent, EvidenceRequestBatchAuditDecision,
+        EvidenceRequestBatchAuditEvent, EvidenceRequestBatchAuditItemGroup,
+        EvidenceRequestBatchAuditOutcome, EvidenceRequestBatchAuditOutcomeKind,
+        EvidenceRequestBatchAuditPhase, PublicCheckAuditDecision, ResponseProtection,
     },
     auth::{AuthenticatedContext, AuthenticationError, Authenticator},
     bundle::{Bundle, DeploymentInputs, RuntimeDocument},
     config::{
         subject_binding_permits_response_format, AcquisitionConfig, AssuranceProfile,
-        AuthorityKind, ConceptForm, RequirementKind, ResponseFormat, RuntimeConfig,
-        RuntimeSignerConfig, SelectorField, SelectorInput, SubjectBindingMode, SubjectCardinality,
-        ValueOrigin, MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
+        AuthorityKind, ConceptForm, RequirementConfig, RequirementKind, ResponseFormat,
+        RuntimeConfig, RuntimeSignerConfig, SelectorField, SelectorInput, SubjectBindingMode,
+        SubjectCardinality, ValueOrigin, MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
     },
     contracts::definitions_contract_accepts,
     kernel::{EvidenceConstruction, EvidenceScope, KernelError, OfflineKernel, ValueProjection},
@@ -46,20 +47,22 @@ use crate::{
         EvidenceDefinitionSelector, EvidenceDefinitionSubject, EvidenceDefinitions,
         EvidenceRequest, EvidenceRequestBatch, EvidenceSelectorField, FlattenedJws, JwksDocument,
         LookupResult, RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope,
-        SdJwtVcBatchEnvelopeType, SubjectBinding, UnsignedEnvelopeType, UnsignedEnvelopeWarning,
-        UnsignedEvidenceEnvelope, UnsignedIntegrityProtection, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
+        SdJwtVcBatchEnvelopeType, SelectorValue, SubjectBinding, UnsignedEnvelopeType,
+        UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
+        EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     observability::SourceDiagnostics,
     pack_source::{PackSourceError, PackSourceExecutor, PackSourceFailure},
     presented::{construction_channel, PresentedFacts},
     problem::ProblemCode,
+    public_check::{stored_code_matches, PublicCheckAnswer, PublicCheckRequest},
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
     sdjwt_vc,
     secrets::{ProtectedSecret, SecretResolver},
     selector::{
-        match_entitlement, resolve_selectors, validate_entitlement_context,
-        validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
-        ResolvedAuthorization, ResolvedSubjectScope,
+        match_entitlement, resolve_public_check_subject, resolve_selectors,
+        validate_entitlement_context, validate_subject_binding_key, AuthorizationError,
+        MatchedEntitlement, ResolvedAuthorization, ResolvedSubject, ResolvedSubjectScope,
     },
     signing::{EvidenceSigner, EvidenceSigningError},
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
@@ -74,6 +77,9 @@ use registry_evidence_verifier::model::{
 use zeroize::Zeroizing;
 
 const MAX_OPERATION_BYTES: usize = 128;
+/// The requester a Source that requires access attribution is told about for
+/// a public check: the route has no caller to name.
+const PUBLIC_CHECK_REQUESTER: &str = "public-check";
 const MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES: usize = 1_048_576;
 
 #[derive(Debug, Error)]
@@ -2045,10 +2051,14 @@ impl EvidenceRuntime {
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
         let stage = self
             .execute_source_stage(
-                &material,
+                SourceStageRequest {
+                    requirement,
+                    purpose: &resolved.purpose,
+                    subjects: &resolved.subjects,
+                    requester: context.principal(),
+                },
+                SourceStageAudit::Relying(&material),
                 operation,
-                &resolved,
-                context.principal(),
                 started,
                 observed_at,
             )
@@ -2083,7 +2093,7 @@ impl EvidenceRuntime {
             }
         };
         let derivation_selectors =
-            selector_input_value(&resolved, &requirement.derivation.selector_inputs)?;
+            selector_input_value(&resolved.subjects, &requirement.derivation.selector_inputs)?;
         let values = match self.kernel.derive_and_validate_with_selectors(
             &request.requirement,
             &facts,
@@ -2507,6 +2517,307 @@ impl EvidenceRuntime {
         })
     }
 
+    /// Answer one public certificate check, the first unauthenticated route
+    /// that reads registry data.
+    ///
+    /// The active authority's `publicCheck` activation is the only admission.
+    /// The presented document number resolves the activated subject, the
+    /// Source is read with Evidence's own credentials, and the stored check
+    /// code is compared in constant time and removed before anything else sees
+    /// the facts. Every miss answers one identical not-found problem and is
+    /// audited with its own decision. The answer bytes are serialized before
+    /// the durable release record and returned unchanged after it.
+    pub async fn evaluate_public_check(
+        &self,
+        operation: &str,
+        request: &PublicCheckRequest,
+    ) -> Result<Vec<u8>, RuntimeFailure> {
+        self.evaluate_public_check_at(operation, request, None)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn evaluate_public_check_at_for_test(
+        &self,
+        operation: &str,
+        request: &PublicCheckRequest,
+        evaluation_time: chrono::DateTime<Utc>,
+    ) -> Result<Vec<u8>, RuntimeFailure> {
+        self.evaluate_public_check_at(operation, request, Some(evaluation_time))
+            .await
+    }
+
+    async fn evaluate_public_check_at(
+        &self,
+        operation: &str,
+        request: &PublicCheckRequest,
+        evaluation_time: Option<chrono::DateTime<Utc>>,
+    ) -> Result<Vec<u8>, RuntimeFailure> {
+        if operation.len() < 16
+            || operation.len() > MAX_OPERATION_BYTES
+            || operation.bytes().any(|byte| byte.is_ascii_whitespace())
+        {
+            return Err(failure(ProblemCode::ServiceUnavailable, "operation-id"));
+        }
+        // The server registers the route only for an activated check, so a
+        // runtime without one answers exactly as an unknown route would.
+        let activation = self
+            .bundle()
+            .public_check_activation()
+            .ok_or_else(|| failure(ProblemCode::ResourceNotFound, "unknown-route"))?;
+        let requirement = self
+            .kernel
+            .requirement(&activation.requirement)
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
+        // The definition declares its purposes; a public check has no caller
+        // to choose one, so it is attributed to the first.
+        let purpose = requirement
+            .purposes
+            .first()
+            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
+        let subject = self.public_check_subject(requirement, &request.document_number)?;
+        let started = Instant::now();
+        // One clock read, as on the relying path: the Source, the derivation
+        // and the answer all see this one instant.
+        let observed_at = evaluation_time.unwrap_or_else(Utc::now).trunc_subsecs(0);
+        let material = self.public_check_audit_material(requirement, purpose, &subject)?;
+        let subjects = std::slice::from_ref(&subject);
+        let stage = self
+            .execute_source_stage(
+                SourceStageRequest {
+                    requirement,
+                    purpose,
+                    subjects,
+                    requester: PUBLIC_CHECK_REQUESTER,
+                },
+                SourceStageAudit::PublicCheck(&material),
+                operation,
+                started,
+                observed_at,
+            )
+            .await?;
+        let (source_id, adapter_id, acquisition_deadline) = (
+            stage.source_id,
+            stage.adapter_id,
+            stage.acquisition_deadline,
+        );
+        let terminal = |decision: PublicCheckAuditDecision, category: &'static str| {
+            self.append_public_check_failure(
+                &material,
+                operation,
+                decision,
+                category,
+                &source_id,
+                &adapter_id,
+                started,
+            )
+        };
+
+        let mut facts = match stage.lookup {
+            LookupResult::Match(facts) => facts,
+            LookupResult::NoMatch => {
+                terminal(PublicCheckAuditDecision::NoMatch, "no-match").await?;
+                return Err(public_check_miss());
+            }
+            LookupResult::Ambiguous => {
+                terminal(PublicCheckAuditDecision::Ambiguous, "ambiguous").await?;
+                return Err(public_check_miss());
+            }
+            LookupResult::Unresolved => {
+                terminal(PublicCheckAuditDecision::Unresolved, "unresolved").await?;
+                return Err(public_check_miss());
+            }
+        };
+        // The code is compared once, here, and leaves the fact set before
+        // derivation. An absent or malformed stored code costs the same
+        // comparison and is the same miss.
+        let code_matches =
+            stored_code_matches(&request.check_code, facts.get(&activation.check_code_fact));
+        facts.remove(&activation.check_code_fact);
+        if !code_matches {
+            terminal(PublicCheckAuditDecision::CodeMismatch, "code-mismatch").await?;
+            return Err(public_check_miss());
+        }
+
+        let selectors =
+            match selector_input_value(subjects, &requirement.derivation.selector_inputs) {
+                Ok(selectors) => selectors,
+                Err(error) => {
+                    terminal(
+                        PublicCheckAuditDecision::EvaluationFailure,
+                        error.category(),
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            };
+        // No relying party and no holder key exist here, so values project
+        // under the scope-free holder-bound form.
+        let values = match self.kernel.derive_and_validate_with_selectors(
+            &activation.requirement,
+            &facts,
+            &selectors,
+            observed_at,
+            ValueProjection {
+                scope: EvidenceScope::HolderBound,
+                binding_key: self.subject_binding_secret.expose_secret(),
+                binding_key_version: self.bundle().config.subject_binding.key_version.get(),
+            },
+        ) {
+            Ok(values) => values,
+            Err(error) => {
+                let category = kernel_failure_category(&error);
+                let (decision, outcome) = match error {
+                    KernelError::Extraction | KernelError::DerivationInput => {
+                        (PublicCheckAuditDecision::FactMissing, public_check_miss())
+                    }
+                    KernelError::SourceProtocol => (
+                        PublicCheckAuditDecision::DependencyFailure,
+                        failure(kernel_failure_problem(&error), category),
+                    ),
+                    _ => (
+                        PublicCheckAuditDecision::EvaluationFailure,
+                        failure(kernel_failure_problem(&error), category),
+                    ),
+                };
+                terminal(decision, category).await?;
+                return Err(outcome);
+            }
+        };
+
+        let concept_uri = |handle: &str| {
+            requirement
+                .concepts
+                .iter()
+                .find(|concept| concept.handle == handle)
+                .map(|concept| concept.id.clone())
+        };
+        let answer = concept_uri(&activation.status_output)
+            .zip(concept_uri(&activation.fields_output))
+            .and_then(|(status, fields)| {
+                PublicCheckAnswer::from_values(values.as_slice(), &status, &fields, observed_at)
+                    .ok()
+                    .map(|answer| (answer, vec![status, fields]))
+            })
+            .and_then(|(answer, concepts)| {
+                serde_json::to_vec(&answer)
+                    .ok()
+                    .map(|bytes| (bytes, concepts))
+            });
+        let Some((bytes, disclosed_concepts)) = answer else {
+            terminal(
+                PublicCheckAuditDecision::EvaluationFailure,
+                "public-check-answer",
+            )
+            .await?;
+            return Err(failure(
+                ProblemCode::ServiceUnavailable,
+                "public-check-answer",
+            ));
+        };
+
+        // Admission to the release append is the disclosure-begin boundary,
+        // exactly as on the relying path.
+        if tokio::time::Instant::now() >= acquisition_deadline {
+            terminal(
+                PublicCheckAuditDecision::DependencyFailure,
+                "acquisition-budget",
+            )
+            .await?;
+            return Err(failure(
+                ProblemCode::DependencyUnavailable,
+                "acquisition-budget",
+            ));
+        }
+        let mut release = material.event(
+            operation,
+            AuditPhase::DisclosureRelease,
+            PublicCheckAuditDecision::Released,
+            &source_id,
+            &adapter_id,
+            elapsed_millis(started),
+        );
+        release.disclosed_concepts = Some(disclosed_concepts);
+        self.audit
+            .append_public_check(release)
+            .await
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "release-audit"))?;
+        Ok(bytes)
+    }
+
+    /// The one subject of the activated definition, resolved from the
+    /// presented document number. Validation proved the definition has one
+    /// role with one single-field profile, so anything else is a package
+    /// fault, not a caller error.
+    fn public_check_subject(
+        &self,
+        requirement: &RequirementConfig,
+        document_number: &str,
+    ) -> Result<ResolvedSubject, RuntimeFailure> {
+        let package_fault = || failure(ProblemCode::ServiceUnavailable, "public-check-subject");
+        let role = requirement
+            .subject_roles
+            .first()
+            .ok_or_else(package_fault)?;
+        let profile_name = role.selector_profiles.first().ok_or_else(package_fault)?;
+        let profile = self
+            .bundle()
+            .config
+            .selector_profiles
+            .get(profile_name)
+            .ok_or_else(package_fault)?;
+        let mut fields = profile.fields.keys();
+        let (Some(field), None) = (fields.next(), fields.next()) else {
+            return Err(package_fault());
+        };
+        let values = BTreeMap::from([(
+            field.to_owned(),
+            SelectorValue::String(document_number.to_owned()),
+        )]);
+        resolve_public_check_subject(self.bundle(), &role.role, profile_name, profile, &values)
+            .map_err(|_| failure(ProblemCode::InvalidSelector, "selector"))
+    }
+
+    fn public_check_audit_material(
+        &self,
+        requirement: &RequirementConfig,
+        purpose: &str,
+        subject: &ResolvedSubject,
+    ) -> Result<PublicCheckAuditMaterial, RuntimeFailure> {
+        let bundle = self.bundle();
+        let scope = audit_scope_public_check(&bundle.config.service.trust_domain, purpose);
+        let protected = subject
+            .public_check_audit_pseudonym_input(purpose)
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "subject-pseudonym"))?;
+        let pseudonym = self
+            .audit
+            .pseudonym("subject-selector-bundle", &scope, &protected)
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        // A public check exists only under an activated authority, so both
+        // authority members are always present.
+        let (Some(authority_revision), Some(effective_grant_digest)) =
+            (bundle.authority_revision(), bundle.effective_grant_digest())
+        else {
+            return Err(failure(
+                ProblemCode::ServiceUnavailable,
+                "authority-revision",
+            ));
+        };
+        Ok(PublicCheckAuditMaterial {
+            assurance_profile: bundle.config.assurance_profile,
+            requirement: requirement.id.clone(),
+            bundle_revision: bundle.package_digest().to_owned(),
+            authority_revision: authority_revision.to_owned(),
+            effective_grant_digest: effective_grant_digest.to_owned(),
+            purpose: purpose.to_owned(),
+            subject: AuditSubject {
+                role: subject.role.clone(),
+                selector_profile: subject.selector_profile.clone(),
+                selector_bundle_pseudonym: Some(pseudonym),
+            },
+        })
+    }
+
     fn request_batch_item_audit_material(
         &self,
         scope: &str,
@@ -2592,8 +2903,10 @@ impl EvidenceRuntime {
             .kernel
             .requirement(&item.request.requirement)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
-        let derivation_selectors =
-            selector_input_value(&item.resolved, &requirement.derivation.selector_inputs)?;
+        let derivation_selectors = selector_input_value(
+            &item.resolved.subjects,
+            &requirement.derivation.selector_inputs,
+        )?;
         let values = match self.kernel.derive_and_validate_with_selectors(
             &item.request.requirement,
             &facts.values,
@@ -2773,39 +3086,59 @@ impl EvidenceRuntime {
         Err(error)
     }
 
+    /// Read the one Source a requirement acquires through for the presented
+    /// subjects. The stage sees the requirement, the purpose, the subjects and
+    /// the requester the Source is told about, never a grant: the relying path
+    /// reaches it after authorization, and a public check reaches it with the
+    /// active authority's `publicCheck` activation as its only admission.
     async fn execute_source_stage(
         &self,
-        material: &AuditMaterial,
+        request: SourceStageRequest<'_>,
+        audit: SourceStageAudit<'_>,
         operation: &str,
-        resolved: &ResolvedAuthorization,
-        requester: &str,
         started: Instant,
         observed_at: chrono::DateTime<Utc>,
     ) -> Result<SourceStageOutcome, RuntimeFailure> {
-        let requirement = self
-            .kernel
-            .requirement(&resolved.requirement)
-            .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "requirement"))?;
-        let source_id = acquisition_source(&requirement.acquisition, resolved)?;
+        let source_id =
+            acquisition_source_for_subjects(&request.requirement.acquisition, request.subjects)?;
         let (source_id, adapter_id) = self.source_identity(source_id)?;
         let executor = self
             .sources
             .get(&source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let inputs = executor.inputs(resolved).map_err(pack_source_failure)?;
-        let attribution = source_attribution(executor, requester, &resolved.purpose)?;
-        let mut access = material.event(
-            operation,
-            AuditPhase::AccessAttempt,
-            AuditDecision::Authorized,
-            elapsed_millis(started),
-        );
-        access.source_id = Some(source_id.clone());
-        access.adapter_id = Some(adapter_id.clone());
-        access.execution_bounds = Some(self.source_execution_bounds());
+        let inputs = executor
+            .inputs_for_subjects(request.subjects)
+            .map_err(pack_source_failure)?;
+        let attribution = source_attribution(executor, request.requester, request.purpose)?;
+        let access = match audit {
+            SourceStageAudit::Relying(material) => {
+                let mut access = material.event(
+                    operation,
+                    AuditPhase::AccessAttempt,
+                    AuditDecision::Authorized,
+                    elapsed_millis(started),
+                );
+                access.source_id = Some(source_id.clone());
+                access.adapter_id = Some(adapter_id.clone());
+                access.execution_bounds = Some(self.source_execution_bounds());
+                SourceAccessEvent::Single(access)
+            }
+            SourceStageAudit::PublicCheck(material) => {
+                let mut access = material.event(
+                    operation,
+                    AuditPhase::AccessAttempt,
+                    PublicCheckAuditDecision::Authorized,
+                    &source_id,
+                    &adapter_id,
+                    elapsed_millis(started),
+                );
+                access.execution_bounds = Some(self.source_execution_bounds());
+                SourceAccessEvent::PublicCheck(access)
+            }
+        };
         let hooks = Arc::new(SourceAccessIntent::new(
             Arc::clone(&self.audit),
-            SourceAccessEvent::Single(access),
+            access,
             executor.intent(),
         ));
         let lookup = match executor
@@ -2817,16 +3150,32 @@ impl EvidenceRuntime {
                 let category = error.category();
                 let failure = pack_source_diagnosed_failure(error);
                 if category != PackSourceError::Audit {
-                    self.append_failure(
-                        material,
-                        operation,
-                        AuditDecision::DependencyFailure,
-                        failure.category(),
-                        &source_id,
-                        &adapter_id,
-                        started,
-                    )
-                    .await?;
+                    match audit {
+                        SourceStageAudit::Relying(material) => {
+                            self.append_failure(
+                                material,
+                                operation,
+                                AuditDecision::DependencyFailure,
+                                failure.category(),
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                        }
+                        SourceStageAudit::PublicCheck(material) => {
+                            self.append_public_check_failure(
+                                material,
+                                operation,
+                                PublicCheckAuditDecision::DependencyFailure,
+                                failure.category(),
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                        }
+                    }
                 }
                 return Err(failure);
             }
@@ -3043,6 +3392,41 @@ impl EvidenceRuntime {
             .map(|_| ())
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "failure-audit"))
     }
+
+    /// Record how a public check that reached its Source ended without a
+    /// release. Every miss is a denial and every failure is transient, each
+    /// with its own decision, though the caller sees one not-found problem for
+    /// every miss.
+    #[allow(clippy::too_many_arguments)]
+    async fn append_public_check_failure(
+        &self,
+        material: &PublicCheckAuditMaterial,
+        operation: &str,
+        decision: PublicCheckAuditDecision,
+        category: &'static str,
+        source_id: &str,
+        adapter_id: &str,
+        started: Instant,
+    ) -> Result<(), RuntimeFailure> {
+        let phase = match decision {
+            PublicCheckAuditDecision::DependencyFailure
+            | PublicCheckAuditDecision::EvaluationFailure => AuditPhase::TransientFailure,
+            _ => AuditPhase::Denial,
+        };
+        let mut event = material.event(
+            operation,
+            phase,
+            decision,
+            source_id,
+            adapter_id,
+            elapsed_millis(started),
+        );
+        event.safe_error_category = Some(category.to_owned());
+        self.audit
+            .append_public_check(event)
+            .await
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "failure-audit"))
+    }
 }
 
 fn source_attribution(
@@ -3183,6 +3567,7 @@ impl RequestBatchAuditMaterial {
 enum SourceAccessEvent {
     Single(EvidenceAuditEvent),
     Batch(EvidenceRequestBatchAuditEvent),
+    PublicCheck(EvidencePublicCheckAuditEvent),
 }
 
 /// One complete authorization's durable acquisition intent. Taking the event
@@ -3226,6 +3611,9 @@ impl registry_adapter_engine::evidence::EvidenceHostHooks for SourceAccessIntent
             match event {
                 SourceAccessEvent::Single(event) => self.audit.append(event).await,
                 SourceAccessEvent::Batch(event) => self.audit.append_request_batch(event).await,
+                SourceAccessEvent::PublicCheck(event) => {
+                    self.audit.append_public_check(event).await
+                }
             }
             .map_err(|_| EvidenceHookError::Audit)
         })
@@ -3329,8 +3717,17 @@ pub(crate) fn acquisition_source<'a>(
     acquisition: &'a AcquisitionConfig,
     resolved: &ResolvedAuthorization,
 ) -> Result<&'a str, RuntimeFailure> {
+    acquisition_source_for_subjects(acquisition, &resolved.subjects)
+}
+
+/// The one Source the presented subjects acquire through, under the rules of
+/// [`acquisition_source`].
+fn acquisition_source_for_subjects<'a>(
+    acquisition: &'a AcquisitionConfig,
+    subjects: &[ResolvedSubject],
+) -> Result<&'a str, RuntimeFailure> {
     let mut selected = None;
-    for subject in &resolved.subjects {
+    for subject in subjects {
         let source = acquisition
             .source_for_profile(&subject.selector_profile)
             .ok_or_else(|| failure(ProblemCode::NotAuthorized, "acquisition-channel"))?;
@@ -3406,6 +3803,22 @@ fn pack_source_diagnosed_failure(error: PackSourceFailure) -> RuntimeFailure {
     }
 }
 
+/// What one source stage reads for. It carries no grant: the relying path's
+/// authorization and a public check's activation are both decided before it.
+struct SourceStageRequest<'a> {
+    requirement: &'a RequirementConfig,
+    purpose: &'a str,
+    subjects: &'a [ResolvedSubject],
+    requester: &'a str,
+}
+
+/// The audit family one source stage records its access and failure in.
+#[derive(Clone, Copy)]
+enum SourceStageAudit<'a> {
+    Relying(&'a AuditMaterial),
+    PublicCheck(&'a PublicCheckAuditMaterial),
+}
+
 struct SourceStageOutcome {
     lookup: LookupResult,
     source_id: String,
@@ -3477,6 +3890,46 @@ impl AuditMaterial {
     }
 }
 
+/// The fixed members of every audit record of one public check. Nothing here
+/// names a caller: the route has none.
+struct PublicCheckAuditMaterial {
+    assurance_profile: AssuranceProfile,
+    requirement: String,
+    bundle_revision: String,
+    authority_revision: String,
+    effective_grant_digest: String,
+    purpose: String,
+    subject: AuditSubject,
+}
+
+impl PublicCheckAuditMaterial {
+    fn event(
+        &self,
+        operation: &str,
+        phase: AuditPhase,
+        decision: PublicCheckAuditDecision,
+        source_id: &str,
+        adapter_id: &str,
+        duration_milliseconds: u64,
+    ) -> EvidencePublicCheckAuditEvent {
+        EvidencePublicCheckAuditEvent::new(
+            self.assurance_profile,
+            operation.to_owned(),
+            phase,
+            self.requirement.clone(),
+            self.bundle_revision.clone(),
+            self.authority_revision.clone(),
+            self.effective_grant_digest.clone(),
+            self.purpose.clone(),
+            self.subject.clone(),
+            source_id.to_owned(),
+            adapter_id.to_owned(),
+            decision,
+            duration_milliseconds,
+        )
+    }
+}
+
 /// The assertion scope a resolved authorization issues under.
 ///
 /// A holder-bound resolution names no relying party, so its assertion carries
@@ -3507,12 +3960,12 @@ fn map_response_protection(format: ResponseFormat) -> ResponseProtection {
 }
 
 fn selector_input_value(
-    resolved: &ResolvedAuthorization,
+    subjects: &[ResolvedSubject],
     inputs: &[SelectorInput],
 ) -> Result<Value, RuntimeFailure> {
     let mut selectors = JsonMap::new();
     for input in inputs {
-        let (subject, alternative) = selector_input_subject(resolved, input)?;
+        let (subject, alternative) = selector_input_subject(subjects, input)?;
         let mut values = JsonMap::new();
         for name in &alternative.fields {
             let field = subject
@@ -3539,17 +3992,16 @@ fn selector_input_value(
 }
 
 fn selector_input_subject<'a>(
-    resolved: &'a ResolvedAuthorization,
+    subjects: &'a [ResolvedSubject],
     input: &'a SelectorInput,
 ) -> Result<
     (
-        &'a crate::selector::ResolvedSubject,
+        &'a ResolvedSubject,
         &'a crate::config::SelectorInputAlternative,
     ),
     RuntimeFailure,
 > {
-    let subject = resolved
-        .subjects
+    let subject = subjects
         .iter()
         .find(|subject| subject.role == input.role)
         .ok_or_else(selector_contract_failure)?;
@@ -3571,6 +4023,12 @@ fn failure(problem: ProblemCode, category: &'static str) -> RuntimeFailure {
 
 fn evidence_unavailable_failure() -> RuntimeFailure {
     failure(ProblemCode::EvidenceNotAvailable, "evidence-unavailable")
+}
+
+/// The one failure every public-check miss returns. The audit keeps each
+/// class apart; the caller and the operational log see one.
+fn public_check_miss() -> RuntimeFailure {
+    failure(ProblemCode::ResourceNotFound, "public-check-miss")
 }
 
 fn map_authority(error: AuthorizationError) -> RuntimeFailure {
@@ -3696,6 +4154,17 @@ fn authorization_refusal_audit_scope(trust_domain: &str, purpose: &str, audience
 fn audit_scope_holder_bound(trust_domain: &str, purpose: &str) -> String {
     format!(
         "v1-holder:{}:{trust_domain}:{}:{purpose}",
+        trust_domain.len(),
+        purpose.len()
+    )
+}
+
+/// Audit scope for a public check, which has neither an audience nor a holder
+/// key. The distinct `v1-public-check:` prefix keeps it domain-separated from
+/// both relying-path scopes.
+fn audit_scope_public_check(trust_domain: &str, purpose: &str) -> String {
+    format!(
+        "v1-public-check:{}:{trust_domain}:{}:{purpose}",
         trust_domain.len(),
         purpose.len()
     )

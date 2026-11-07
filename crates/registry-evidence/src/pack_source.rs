@@ -7,7 +7,7 @@ use crate::{
     observability::{DependencyOutcome, SourceLookupOutcome, SourceObserver, UndeclaredNotFound},
     presented::PresentedFacts,
     secrets::SecretResolver,
-    selector::ResolvedAuthorization,
+    selector::{ResolvedAuthorization, ResolvedSubject},
 };
 use chrono::{DateTime, Utc};
 use registry_adapter_core::{
@@ -436,7 +436,18 @@ impl PackSourceExecutor {
     /// Validate and minimize before the engine can record access intent,
     /// resolve credentials or perform source effects.
     pub fn inputs(&self, resolved: &ResolvedAuthorization) -> Result<Value, PackSourceError> {
-        let inputs = authorized_route_inputs(&self.source, resolved)?;
+        self.inputs_for_subjects(&resolved.subjects)
+    }
+
+    /// Validate and minimize the presented subjects alone, before the engine
+    /// can record access intent, resolve credentials or perform source
+    /// effects. A public check reaches the Source through this with no
+    /// authorization behind it.
+    pub(crate) fn inputs_for_subjects(
+        &self,
+        subjects: &[ResolvedSubject],
+    ) -> Result<Value, PackSourceError> {
+        let inputs = route_inputs_for_subjects(&self.source, subjects)?;
         if !self.program.input_schema().validate(&inputs) {
             return Err(PackSourceError::Inputs);
         }
@@ -862,10 +873,18 @@ pub fn authorized_route_inputs(
     source: &SourceConfig,
     resolved: &ResolvedAuthorization,
 ) -> Result<Value, PackSourceError> {
+    route_inputs_for_subjects(source, &resolved.subjects)
+}
+
+/// Project only reviewed route inputs from the presented subjects, under the
+/// rules of [`authorized_route_inputs`].
+pub(crate) fn route_inputs_for_subjects(
+    source: &SourceConfig,
+    presented: &[ResolvedSubject],
+) -> Result<Value, PackSourceError> {
     let mut result = Map::new();
     for (name, binding) in &source.inputs {
-        let mut subjects = resolved
-            .subjects
+        let mut subjects = presented
             .iter()
             .filter(|subject| subject.role == binding.selector.role.as_str());
         let Some(subject) = subjects.next() else {
