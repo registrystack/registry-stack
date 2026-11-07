@@ -739,7 +739,7 @@ impl Bundle {
             invalid_artifact("effective target authority violates the package contract")
         })?;
         let mut effective = self.config.clone();
-        effective.authority_profiles = document.access_profiles.clone();
+        document.apply_to(&mut effective);
         validate_source_authority_paths(&effective, &self.source_packs)
     }
 
@@ -772,7 +772,7 @@ impl Bundle {
     ) -> Result<(), crate::authority::AuthorityError> {
         document.validate_for(target, &self.config)?;
         let mut effective = self.config.clone();
-        effective.authority_profiles = document.access_profiles.clone();
+        document.apply_to(&mut effective);
         source_authority_path_refusal(&effective, &self.source_packs)
             .map_err(crate::authority::AuthorityError::SourceRouteInputs)
     }
@@ -807,7 +807,7 @@ impl Bundle {
             .effective_grant_digest(&self.config)
             .map_err(|_| invalid_artifact("effective target authority does not canonicalize"))?;
         let mut effective = self.config.clone();
-        effective.authority_profiles = snapshot.profiles().clone();
+        snapshot.apply_to(&mut effective);
         effective.validate().map_err(|_| {
             invalid_artifact("effective target authority violates the package contract")
         })?;
@@ -826,6 +826,11 @@ impl Bundle {
 
     pub fn effective_grant_digest(&self) -> Option<&str> {
         self.effective_grant_digest.as_deref()
+    }
+
+    /// The public check the bound target authority activates, when it does.
+    pub fn public_check_activation(&self) -> Option<crate::config::PublicCheckActivation> {
+        self.config.public_check_activation()
     }
 
     pub fn root(&self) -> &Path {

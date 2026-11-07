@@ -457,10 +457,11 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
             .remove("kind");
         let canonical = canonicalize_json(&body).context("canonicalizing target authority")?;
         let ceilings = compiled.model["requirements"].as_array().context("compiled definitions")?.iter().map(|definition| json!({"requirement":definition["uri"],"grantCeiling":definition["grantCeiling"],"purposes":definition["purposes"],"subjects":definition["subjectRoles"],"representations":definition["representations"],"subjectBinding":definition["subjectBinding"]})).collect::<Vec<_>>();
-        let effective = canonicalize_json(
-            &json!({"ceilings":ceilings,"accessProfiles":document["accessProfiles"]}),
-        )
-        .context("canonicalizing effective grants")?;
+        let mut grants = json!({"ceilings":ceilings,"accessProfiles":document["accessProfiles"]});
+        if let Some(activation) = document.get("publicCheck") {
+            grants["publicCheck"] = activation.clone();
+        }
+        let effective = canonicalize_json(&grants).context("canonicalizing effective grants")?;
         authority = json!({"target":target.id,"effectiveGrantDigest":registry_platform_config::sha256_uri(&effective),"authorityRevision":format!("sha256:{}", hex::encode(domain_separated_sha256(b"registry.evidence.target-authority/v1\0", &canonical))),"digest":registry_platform_config::sha256_uri(&canonical),"accessProfiles":document["accessProfiles"],"effectiveCeilings":project.assertion_definitions.iter().map(|(id,d)| (id.as_str(),json!({"grantCeiling":d.grant_ceiling,"purpose":d.purpose,"subjects":d.subjects,"representations":d.representations,"subjectBinding":d.subject_binding}))).collect::<BTreeMap<_,_>>()});
     }
     let definitions = project.assertion_definitions.iter().map(|(id, definition)| json!({"id":id,"label":definition.label,"description":definition.description,"question":definition.question,"requirement":definition.semantics.requirement,"acquisition":definition.acquisition,"derive":definition.derive,"outputs":definition.outputs,"grantCeiling":definition.grant_ceiling,"representations":definition.representations,"subjectBinding":definition.subject_binding,"validitySeconds":definition.validity_seconds})).collect::<Vec<_>>();

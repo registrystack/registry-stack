@@ -56,6 +56,19 @@ pub struct AuthorityDocument {
     pub target: String,
     pub project: String,
     pub access_profiles: OrderedMap<AuthorityProfile>,
+    /// Experimental (`v1alpha1`). Opens one definition as an unauthenticated
+    /// public check. Omitted when absent so a document without it keeps its
+    /// existing revision and effective grant digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_check: Option<AuthorityPublicCheck>,
+}
+
+/// The compiled public-check activation: the Requirement URI the authority
+/// opens as a public check.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorityPublicCheck {
+    pub requirement: String,
 }
 
 #[derive(Debug, Error)]
@@ -68,6 +81,8 @@ pub enum AuthorityError {
     InvalidDocument,
     #[error("target authority exceeds a package ceiling or names another project")]
     OutsideCeiling,
+    #[error("target authority activates a public check for a requirement that does not declare publicCheck")]
+    PublicCheckUndeclared,
     /// The cause is the fixed, value-free rule the authority path breaks.
     #[error("target authority does not fit a source route's inputs: {0}")]
     SourceRouteInputs(&'static str),
@@ -140,11 +155,28 @@ impl AuthorityDocument {
         }) {
             return Err(AuthorityError::OutsideCeiling);
         }
+        if let Some(activation) = &self.public_check {
+            if !config.requirements.iter().any(|definition| {
+                definition.id == activation.requirement && definition.public_check.is_some()
+            }) {
+                return Err(AuthorityError::PublicCheckUndeclared);
+            }
+        }
         let mut effective = config.clone();
-        effective.authority_profiles = self.access_profiles.clone();
+        self.apply_to(&mut effective);
         effective
             .validate()
             .map_err(|_| AuthorityError::OutsideCeiling)
+    }
+
+    /// Install this authority's grants and public-check activation on an
+    /// effective configuration.
+    pub fn apply_to(&self, config: &mut EvidenceConfig) {
+        config.authority_profiles = self.access_profiles.clone();
+        config.public_check_requirement = self
+            .public_check
+            .as_ref()
+            .map(|activation| activation.requirement.clone());
     }
 }
 
@@ -185,6 +217,12 @@ impl AuthoritySnapshot {
         &self.active.document.access_profiles
     }
 
+    /// Install the snapshot's grants and public-check activation on an
+    /// effective configuration.
+    pub fn apply_to(&self, config: &mut EvidenceConfig) {
+        self.active.document.apply_to(config);
+    }
+
     pub fn effective_grant_digest(
         &self,
         config: &EvidenceConfig,
@@ -203,7 +241,11 @@ impl AuthoritySnapshot {
                 })
             })
             .collect::<Vec<_>>();
-        digest_value(&serde_json::json!({"ceilings":ceilings,"accessProfiles":self.profiles()}))
+        let mut grants = serde_json::json!({"ceilings":ceilings,"accessProfiles":self.profiles()});
+        if let Some(activation) = &self.active.document.public_check {
+            grants["publicCheck"] = serde_json::json!(activation);
+        }
+        digest_value(&grants)
     }
 }
 
@@ -629,6 +671,7 @@ mod tests {
             target: "local".to_owned(),
             project: "standalone-evidence".to_owned(),
             access_profiles: config.authority_profiles.clone(),
+            public_check: None,
         };
         config.authority_profiles = OrderedMap::default();
         for definition in &mut config.requirements {
@@ -643,6 +686,90 @@ mod tests {
         }
         let package = sha256_uri(b"synthetic-package");
         (config, authority, package)
+    }
+
+    fn check_only() -> (EvidenceConfig, AuthorityDocument, String) {
+        let config = crate::config::public_check_test_config();
+        let document = AuthorityDocument {
+            target: "local".to_owned(),
+            project: "standalone-evidence".to_owned(),
+            access_profiles: OrderedMap::default(),
+            public_check: Some(AuthorityPublicCheck {
+                requirement: config.requirements[0].id.clone(),
+            }),
+        };
+        (config, document, sha256_uri(b"synthetic-package"))
+    }
+
+    #[test]
+    fn check_only_authority_activates_with_no_profiles_and_installs_the_activation() {
+        let (config, document, package) = check_only();
+        document
+            .validate_for("local", &config)
+            .expect("an empty profile map is a valid check-only authority");
+        let root = tempfile::tempdir().unwrap();
+        let snapshot = activate(root.path(), "local", &config, &package, &document).unwrap();
+        assert!(snapshot.profiles().is_empty());
+        let mut effective = config.clone();
+        snapshot.apply_to(&mut effective);
+        let activation = effective
+            .public_check_activation()
+            .expect("the snapshot installs the activation");
+        assert_eq!(activation.requirement, config.requirements[0].id);
+        assert_eq!(activation.status_output, "status");
+        assert_eq!(activation.fields_output, "fields");
+        assert_eq!(activation.check_code_fact, "check_code");
+    }
+
+    #[test]
+    fn adding_or_removing_the_activation_changes_revision_and_grant_digest() {
+        let (config, document, package) = check_only();
+        let mut without = document.clone();
+        without.public_check = None;
+        let root = tempfile::tempdir().unwrap();
+        let with = activate(root.path(), "local", &config, &package, &document).unwrap();
+        let bare = activate(root.path(), "local", &config, &package, &without).unwrap();
+        assert_ne!(with.revision(), bare.revision());
+        assert_ne!(with.digest(), bare.digest());
+        assert_ne!(
+            with.effective_grant_digest(&config).unwrap(),
+            bare.effective_grant_digest(&config).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_document_without_an_activation_serializes_no_member() {
+        let (_, mut document, _) = check_only();
+        document.public_check = None;
+        let value = serde_json::to_value(&document).unwrap();
+        assert!(value.get("publicCheck").is_none());
+    }
+
+    #[test]
+    fn activation_naming_an_undeclared_or_unknown_requirement_is_refused() {
+        let (mut config, document, _) = check_only();
+        config.requirements[0].public_check = None;
+        assert!(matches!(
+            document.validate_for("local", &config),
+            Err(AuthorityError::PublicCheckUndeclared)
+        ));
+
+        let (config, mut unknown, _) = check_only();
+        unknown.public_check = Some(AuthorityPublicCheck {
+            requirement: "urn:example:fixture:requirement:missing:v1".to_owned(),
+        });
+        assert!(matches!(
+            unknown.validate_for("local", &config),
+            Err(AuthorityError::PublicCheckUndeclared)
+        ));
+    }
+
+    #[test]
+    fn the_activation_member_is_closed() {
+        let (_, document, _) = check_only();
+        let mut value = serde_json::to_value(&document).unwrap();
+        value["publicCheck"]["extra"] = true.into();
+        assert!(serde_json::from_value::<AuthorityDocument>(value).is_err());
     }
 
     #[test]

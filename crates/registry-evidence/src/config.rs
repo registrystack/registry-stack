@@ -870,6 +870,11 @@ pub struct EvidenceConfig {
     pub maximum_holder_bound_batch_size:
         Option<BoundedU32<1, { MAXIMUM_HOLDER_BOUND_BATCH_SIZE as u32 }>>,
     pub requirements: Vec<RequirementConfig>,
+    /// The Requirement URI of the one definition the activated target
+    /// authority opens as a public check. Startup installs it from the
+    /// activated authority snapshot; a bundle never carries it.
+    #[serde(skip)]
+    pub public_check_requirement: Option<String>,
     /// Retired. An empty list is read and ignored for one release.
     #[serde(default, rename = "acquisitionCapabilities", skip_serializing)]
     pub retired_acquisition_capabilities: RetiredAcquisitionCapabilities,
@@ -1561,7 +1566,7 @@ impl EvidenceConfig {
         let Some(source) = self.sources.get(source_id) else {
             return Vec::new();
         };
-        if self.project.is_some() && self.authority_profiles.is_empty() {
+        if self.no_authority_activated() {
             return self
                 .declared_source_selector_sets(source_id)
                 .unwrap_or_default();
@@ -1604,7 +1609,57 @@ impl EvidenceConfig {
                 sets.insert(set);
             }
         }
+        if let Some((requirement, subject)) = self.public_check_subject() {
+            if requirement.acquisition.uses_source(source_id) {
+                let mut set = source_selector_pairs(source)
+                    .into_iter()
+                    .filter(|pair| *pair == subject)
+                    .collect::<SourceSelectorSet>();
+                set.sort();
+                sets.insert(set);
+            }
+        }
         sets.into_iter().collect()
+    }
+
+    /// Whether a normalized project has no target authority yet: no profiles
+    /// and no public-check activation. A check-only authority activates a
+    /// definition with no profiles, so an empty profile map alone is not it.
+    fn no_authority_activated(&self) -> bool {
+        self.project.is_some()
+            && self.authority_profiles.is_empty()
+            && self.public_check_requirement.is_none()
+    }
+
+    /// The activated public-check requirement and its one `(role, selector
+    /// profile)` subject. Validation has already proven the subject is single.
+    fn public_check_subject(&self) -> Option<(&RequirementConfig, (String, String))> {
+        let uri = self.public_check_requirement.as_deref()?;
+        let requirement = self
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == uri)?;
+        let role = requirement.subject_roles.first()?;
+        let profile = role.selector_profiles.first()?;
+        Some((requirement, (role.role.to_string(), profile.to_string())))
+    }
+
+    /// The loaded public-check activation, when the activated target authority
+    /// opens one definition as a public check.
+    pub fn public_check_activation(&self) -> Option<PublicCheckActivation> {
+        let uri = self.public_check_requirement.as_deref()?;
+        let requirement = self
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == uri)?;
+        let declared = requirement.public_check.as_ref()?;
+        Some(PublicCheckActivation {
+            requirement: requirement.id.clone(),
+            handle: requirement.handle.clone(),
+            check_code_fact: declared.check_code_fact.clone(),
+            status_output: declared.status_output.clone(),
+            fields_output: declared.fields_output.clone(),
+        })
     }
 
     /// Prove each effective complete grant can fill the reviewed input shape of
@@ -1616,7 +1671,7 @@ impl EvidenceConfig {
         &self,
         contracts: &BTreeMap<String, SourceInputPresenceContract>,
     ) -> Result<(), ConfigError> {
-        if self.project.is_some() && self.authority_profiles.is_empty() {
+        if self.no_authority_activated() {
             return Ok(());
         }
 
@@ -1664,6 +1719,30 @@ impl EvidenceConfig {
                     if let Some(reason) = contract.path_refusal(&available) {
                         return invalid(reason);
                     }
+                }
+            }
+        }
+        // The public subject is the activated definition's own one selector
+        // profile; it must fill the Source's route inputs by itself.
+        if let Some((requirement, subject)) = self.public_check_subject() {
+            for source_id in requirement.acquisition.source_ids() {
+                let source = self.sources.get(source_id).ok_or(ConfigError::Invalid(
+                    "requirement acquisition references an unknown source",
+                ))?;
+                let contract = contracts.get(source_id).ok_or(ConfigError::Invalid(
+                    "configured source input contract is unavailable",
+                ))?;
+                let available = source
+                    .inputs
+                    .iter()
+                    .filter(|(_, input)| {
+                        input.selector.role.as_str() == subject.0
+                            && input.selector.profile.as_str() == subject.1
+                    })
+                    .map(|(name, _)| name.as_str())
+                    .collect::<BTreeSet<_>>();
+                if let Some(reason) = contract.path_refusal(&available) {
+                    return invalid(reason);
                 }
             }
         }
@@ -1767,6 +1846,32 @@ impl EvidenceConfig {
                 }
             }
             validate_derivation_selector_inputs(requirement, &self.selector_profiles).at(&at)?;
+            if requirement.public_check.is_some() {
+                let one_number = requirement.subject_roles.len() == 1
+                    && requirement.subject_roles[0].selector_profiles.len() == 1
+                    && self
+                        .selector_profiles
+                        .get(requirement.subject_roles[0].selector_profiles[0].as_str())
+                        .is_some_and(|profile| profile.fields.len() == 1);
+                if !one_number {
+                    return invalid(
+                        "publicCheck requires one subject role with one selector profile that has one field",
+                    )
+                    .at(format!("{at}/subjectRoles"));
+                }
+            }
+        }
+        if let Some(uri) = &self.public_check_requirement {
+            if !self
+                .requirements
+                .iter()
+                .any(|requirement| requirement.id == *uri && requirement.public_check.is_some())
+            {
+                return invalid(
+                    "the activated public check names a requirement without publicCheck",
+                )
+                .at("/publicCheck");
+            }
         }
 
         let requirements = self
@@ -4757,6 +4862,35 @@ pub struct RequirementConfig {
     pub fixtures: Option<ArtifactPath>,
     pub disclosure_guard: DisclosureGuard,
     pub existence_disclosure: ExistenceDisclosure,
+    /// Experimental (`v1alpha1`). Declares that this definition can answer an
+    /// unauthenticated certificate check once a target authority activates it.
+    /// The key is omitted when absent, so a definition without it keeps exactly
+    /// the projected configuration, and therefore exactly the
+    /// `configurationRevision`, it already had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_check: Option<PublicCheckConfig>,
+}
+
+/// The public-check declaration of one requirement: which Source fact carries
+/// the check code, and which two concepts form the public answer.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicCheckConfig {
+    pub check_code_fact: String,
+    pub status_output: String,
+    pub fields_output: String,
+}
+
+/// The loaded public-check activation: the requirement the activated target
+/// authority opens, with the concept handles and Source fact its answer reads.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PublicCheckActivation {
+    pub requirement: String,
+    /// The requirement's stable application-facing handle.
+    pub handle: String,
+    pub check_code_fact: String,
+    pub status_output: String,
+    pub fields_output: String,
 }
 
 /// The dimensions not already bounded by the definition's purposes, subjects,
@@ -4894,7 +5028,43 @@ impl RequirementConfig {
         if let Some(fixtures) = &self.fixtures {
             require_artifact_prefix(fixtures, "fixtures/")?;
         }
+        self.validate_public_check()?;
         self.disclosure_guard.validate()
+    }
+
+    /// The checks of a `publicCheck` declaration that need only this
+    /// requirement. The subject shape needs the selector profiles and is
+    /// checked with the cross references.
+    fn validate_public_check(&self) -> Result<(), ConfigError> {
+        let Some(public_check) = &self.public_check else {
+            return Ok(());
+        };
+        validate_string(
+            &public_check.check_code_fact,
+            1,
+            128,
+            "publicCheck checkCodeFact",
+        )?;
+        let form_of = |handle: &str| {
+            self.concepts
+                .iter()
+                .find(|concept| concept.handle == handle)
+                .map(|concept| concept.form)
+        };
+        if form_of(&public_check.status_output) != Some(ConceptForm::ControlledCategory) {
+            return invalid("publicCheck statusOutput must name a controlled-category concept");
+        }
+        if form_of(&public_check.fields_output) != Some(ConceptForm::ReviewedStructuredValue) {
+            return invalid(
+                "publicCheck fieldsOutput must name a reviewed-structured-value concept",
+            );
+        }
+        if self.acquisition.source_channel_source().is_none()
+            || self.acquisition.holder_presented.is_some()
+        {
+            return invalid("publicCheck requires one Source and no holderPresented acquisition");
+        }
+        Ok(())
     }
 }
 
@@ -6138,6 +6308,46 @@ fn validate_strings(
 
 fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
     Err(ConfigError::Invalid(reason))
+}
+
+/// A normalized-project configuration that declares a public check: one
+/// subject role, one selector profile with one field, a status and a fields
+/// output, and no effective authority profiles.
+#[cfg(test)]
+pub(crate) fn public_check_test_config() -> EvidenceConfig {
+    const FIXTURE: &str =
+        include_str!("../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml");
+    let text = FIXTURE
+        .replace(
+            "      family_name:\n        type: string\n        minimumBytes: 1\n        maximumBytes: 200\n      birth_date:\n        type: date\n",
+            "",
+        )
+        .replace(
+            "      family_name:\n        selector:\n          role: subject\n          profile: person-demographics-v1\n          field: family_name\n      birth_date:\n        selector:\n          role: subject\n          profile: person-demographics-v1\n          field: birth_date\n",
+            "",
+        )
+        .replace(
+            "      - handle: is_adult\n        uri: urn:example:fixture:concept:adult-status\n        type: boolean\n        required: true\n        constraints: {}\n",
+            "      - handle: status\n        uri: urn:example:fixture:concept:status\n        type: controlled-category\n        required: true\n        constraints:\n          categoryScheme: urn:example:fixture:scheme:status\n          schemeVersion: \"1\"\n          maximumBytes: 16\n          codelist: codelists/status.yaml\n      - handle: fields\n        uri: urn:example:fixture:concept:fields\n        type: reviewed-structured-value\n        required: true\n        constraints:\n          schema: urn:example:fixture:schema:fields:v1\n          maximumSerializedBytes: 512\n      - handle: relying_only\n        uri: urn:example:fixture:concept:relying-only\n        type: boolean\n        required: false\n        constraints: {}\n",
+        )
+        .replace(
+            "    existenceDisclosure: collapse-unresolved\n",
+            "    existenceDisclosure: collapse-unresolved\n    publicCheck:\n      checkCodeFact: check_code\n      statusOutput: status\n      fieldsOutput: fields\n",
+        );
+    let mut config = EvidenceConfig::parse_yaml(text.as_bytes())
+        .expect("public check fixture configuration parses");
+    config.project = Some("standalone-evidence".to_owned());
+    config.authority_profiles = OrderedMap::default();
+    for definition in &mut config.requirements {
+        definition.grant_ceiling = Some(GrantCeiling {
+            authorities: vec![AuthorityKind::Statutory],
+            actor_kinds: vec![registry_platform_oidc::ActorKind::Service],
+            value_origins: vec![ValueOrigin::Request],
+            audiences: vec!["urn:example:audience:relying-party".to_owned()],
+        });
+        definition.representations = Some(vec![ResponseFormat::SignedJws]);
+    }
+    config
 }
 
 #[cfg(test)]
@@ -13040,6 +13250,180 @@ outboundTls:
                 .map(|diagnostic| diagnostic.code.as_str())
                 .collect();
             assert_eq!(codes, ["config.unknown-variant"], "{rejected}");
+        }
+    }
+
+    mod public_check {
+        use super::*;
+
+        fn config() -> EvidenceConfig {
+            public_check_test_config()
+        }
+
+        #[test]
+        fn declaration_is_a_closed_member_of_the_requirement() {
+            let config = config();
+            let declared = config.requirements[0]
+                .public_check
+                .as_ref()
+                .expect("the fixture declares a public check");
+            assert_eq!(declared.check_code_fact, "check_code");
+            assert_eq!(declared.status_output, "status");
+            assert_eq!(declared.fields_output, "fields");
+            config.validate().expect("the declaration validates");
+
+            let mut value = serde_json::to_value(&config).expect("serializes");
+            value["requirements"][0]["publicCheck"]["extra"] = true.into();
+            assert!(EvidenceConfig::parse_projection(&value).is_err());
+        }
+
+        #[test]
+        fn requirement_without_a_declaration_projects_no_member() {
+            let mut config = config();
+            config.requirements[0].public_check = None;
+            let value = serde_json::to_value(&config).expect("serializes");
+            assert!(value["requirements"][0].get("publicCheck").is_none());
+        }
+
+        #[test]
+        fn status_output_must_be_a_controlled_category() {
+            let mut config = config();
+            config.requirements[0]
+                .public_check
+                .as_mut()
+                .unwrap()
+                .status_output = "relying_only".to_owned();
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::Invalid(
+                    "publicCheck statusOutput must name a controlled-category concept"
+                ))
+            ));
+            config.requirements[0]
+                .public_check
+                .as_mut()
+                .unwrap()
+                .status_output = "missing".to_owned();
+            assert!(config.validate().is_err());
+        }
+
+        #[test]
+        fn fields_output_must_be_a_reviewed_structured_value() {
+            let mut config = config();
+            config.requirements[0]
+                .public_check
+                .as_mut()
+                .unwrap()
+                .fields_output = "relying_only".to_owned();
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::Invalid(
+                    "publicCheck fieldsOutput must name a reviewed-structured-value concept"
+                ))
+            ));
+        }
+
+        #[test]
+        fn status_and_fields_must_be_two_outputs() {
+            let mut config = config();
+            config.requirements[0]
+                .public_check
+                .as_mut()
+                .unwrap()
+                .fields_output = "status".to_owned();
+            assert!(config.validate().is_err());
+        }
+
+        #[test]
+        fn definition_with_extra_outputs_still_validates() {
+            config()
+                .validate()
+                .expect("an extra relying-only concept is allowed");
+        }
+
+        #[test]
+        fn subject_must_be_one_role_one_profile_one_field() {
+            let mut two_fields = config();
+            let profile = &mut two_fields.selector_profiles.0[0].1;
+            let field = profile.fields.0[0].1.clone();
+            profile.fields.0.push(("second".to_owned(), field));
+            assert!(matches!(
+                two_fields.validate(),
+                Err(ConfigError::Invalid(
+                    "publicCheck requires one subject role with one selector profile that has one field"
+                ))
+            ));
+
+            let mut two_roles = config();
+            let role = two_roles.requirements[0].subject_roles[0].clone();
+            let mut second = role;
+            second.role = "other".to_owned();
+            two_roles.requirements[0].subject_roles.push(second);
+            assert!(two_roles.validate().is_err());
+        }
+
+        #[test]
+        fn acquisition_must_be_one_source_without_holder_presented() {
+            let mut config = config();
+            let source = config.requirements[0]
+                .acquisition
+                .initial_source()
+                .to_owned();
+            config.requirements[0].acquisition.holder_presented =
+                Some(HolderPresentedAcquisition {
+                    source,
+                    selector_profiles: vec!["person-demographics-v1".to_owned()],
+                });
+            assert!(matches!(
+                config.requirements[0].validate_public_check(),
+                Err(ConfigError::Invalid(
+                    "publicCheck requires one Source and no holderPresented acquisition"
+                ))
+            ));
+        }
+
+        /// An activated check-only authority has no profiles, yet it is not
+        /// "no authority": the activated requirement's source must still be
+        /// able to fill its route inputs from the public subject.
+        #[test]
+        fn activated_check_only_authority_is_not_the_no_authority_sentinel() {
+            let mut config = config();
+            let uri = config.requirements[0].id.clone();
+            let incomplete = SourceInputPresenceContract::new(
+                SourceInputPresenceRequirement::Required(BTreeSet::from([
+                    "no_such_input".to_owned()
+                ])),
+                None,
+            );
+            let contracts = BTreeMap::from([("source-a".to_owned(), incomplete)]);
+
+            config
+                .validate_source_authority_paths(&contracts)
+                .expect("with no activation, an empty profile map means no authority yet");
+
+            config.public_check_requirement = Some(uri.clone());
+            config
+                .validate_source_authority_paths(&contracts)
+                .expect_err("an activated check-only authority is checked against the route");
+            assert_eq!(
+                config.source_selector_sets("source-a"),
+                vec![vec![(
+                    "subject".to_owned(),
+                    "person-demographics-v1".to_owned()
+                )]]
+            );
+            let activation = config
+                .public_check_activation()
+                .expect("the activation is exposed");
+            assert_eq!(activation.requirement, uri);
+            assert_eq!(activation.status_output, "status");
+            assert_eq!(activation.fields_output, "fields");
+            assert_eq!(activation.check_code_fact, "check_code");
+        }
+
+        #[test]
+        fn activation_is_absent_when_no_requirement_is_activated() {
+            assert!(config().public_check_activation().is_none());
         }
     }
 }
