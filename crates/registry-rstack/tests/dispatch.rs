@@ -407,7 +407,7 @@ fn selected_product_preserves_arguments_directory_and_exit_status() {
     assert_eq!(listing["schema_version"], "registry.rstack.components.v1");
     assert_eq!(listing["release"], current_release());
     let components = listing["components"].as_array().unwrap();
-    assert_eq!(components.len(), 9);
+    assert_eq!(components.len(), 10);
     let evidence = components
         .iter()
         .find(|component| component["name"] == "evidence")

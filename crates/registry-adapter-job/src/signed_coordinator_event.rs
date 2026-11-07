@@ -16,7 +16,10 @@ use registry_adapter_core::JobIdentity;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use crate::destination::{DeliverableItem, DeliveryIdentity, HandOffOutcome, JobDestination};
+use crate::destination::{
+    coordinator_item_code, DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome,
+    JobDestination,
+};
 
 const REVISED_ITEM: &str = "adapter.job.revised-item";
 const EVENT_UNSIGNABLE: &str = "adapter.event-unsignable";
@@ -123,6 +126,7 @@ impl JobDestination for SignedCoordinatorEventDestination {
     ) -> Option<DeliveryIdentity> {
         let selected = self.selected(item)?;
         Some(DeliveryIdentity {
+            family: DeliveryFamily::Coordinator,
             receiver: selected.identity,
             canonical_body: projected_event(job, item, &event_id(job, item)).and_then(|event| {
                 self.connector
@@ -175,13 +179,13 @@ impl JobDestination for SignedCoordinatorEventDestination {
                     code: EVENT_UNSIGNABLE.to_string(),
                 },
                 CoordinatorEventOutcome::Refused { code } => HandOffOutcome::Refused {
-                    code: code.to_string(),
+                    code: coordinator_item_code(code),
                 },
                 CoordinatorEventOutcome::Stop { code } => HandOffOutcome::StopPass {
-                    code: code.to_string(),
+                    code: coordinator_item_code(code),
                 },
                 CoordinatorEventOutcome::Uncertain => HandOffOutcome::StopPass {
-                    code: EVENT_UNCERTAIN.to_string(),
+                    code: coordinator_item_code(EVENT_UNCERTAIN),
                 },
             }
         })

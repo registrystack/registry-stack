@@ -298,6 +298,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.add("registry-render")
         if release_roster.coordinator_binaries_in_release(parsed_version):
             expected_inventory.update({"coordinator", "coordinatorctl"})
+        if release_roster.adapter_in_release(parsed_version):
+            expected_inventory.update({"adapter", "adapterctl"})
         if release_roster.rstack_in_release(parsed_version):
             expected_inventory.update({"rstack", "rstack-installer"})
         expected_inventory.update(
@@ -4665,7 +4667,7 @@ def main() -> int:
         "--reviewed-at", required=True, help="human review date, YYYY-MM-DD"
     )
     renew_advisory_parser.add_argument(
-        "--today", help="evaluation date for expiry checks, YYYY-MM-DD (default: today)"
+        "--today", help="evaluation date for expiry checks, YYYY-MM-DD (default: today in UTC)"
     )
     renew_advisory_parser.add_argument("--repo", type=Path, default=ROOT)
     renew_advisory_parser.add_argument(

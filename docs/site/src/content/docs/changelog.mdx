@@ -18,6 +18,15 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: Evidence records a source 4xx with no closer meaning, such as 409 or 422, as a
+  status answer. The request log and audit `safeErrorCategory` read `source-status` instead of
+  `source-protocol`; the caller still receives `source.unavailable`. Update audit readers, log
+  queries and alerts that match `source-protocol` for these answers.
+
+{/* Evidence: products/evidence/CHANGELOG.md, Unreleased, source-status;
+    crates/registry-evidence/src/runtime_tests.rs,
+    current_pack_metrics_preserve_closed_http_status_outcomes_without_sensitive_labels. */}
+
 ## v0.45.0 beta-57
 
 - BREAKING: Evidence sources move into reviewed Adapter packs. A source declares `pack`,
@@ -39,9 +48,7 @@ relevant product pages on this site rather than duplicating release notes.
   See the [Evidence from BReg tutorial](../tutorials/evidence-from-breg/).
 
 {/* Evidence: products/evidence/CHANGELOG.md, Unreleased, the sources-to-packs,
-    acquisitionCapabilities and audit /v3 entries; products/breg/CHANGELOG.md, Unreleased;
-    release/scripts/test_rehearse_upgrade.py,
-    test_evidence_is_skipped_only_when_the_rehearsal_crosses_the_source_pack_boundary. */}
+    acquisitionCapabilities and audit /v3 entries; products/breg/CHANGELOG.md, Unreleased. */}
 
 - BREAKING: an Evidence target connection binds each pack endpoint under
   `connections.<id>.endpoints.<endpoint id>`. Move the flat `origin`, `authentication` and
@@ -77,6 +84,16 @@ relevant product pages on this site rather than duplicating release notes.
     decode_refuses_mixed_or_open_subject_shapes;
     crates/registry-breg/tests/postgres_proposal_hooks.rs,
     native_observers_capture_filter_fanout_replay_and_private_values_atomically. */}
+
+- From 0.46.0, releases publish the Registry Adapter binaries `adapter` and `adapterctl`
+  for Linux amd64, Linux arm64, and macOS arm64, with an installer and an `adapter`
+  component for `rstack install`. The Adapter has no image, and `adapter-job` is not yet
+  released. See
+  [Platform support](../explanation/known-limitations/#platform-support).
+
+{/* Evidence: release/scripts/release_roster.py, ADAPTER_FIRST_RELEASE;
+    release/scripts/rstack_components.py, adapter; crates/registry-adapter/install.sh;
+    products/adapter/CHANGELOG.md, Unreleased. */}
 
 ## v0.44.0 beta-56
 

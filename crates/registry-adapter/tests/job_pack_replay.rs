@@ -25,12 +25,7 @@ mod upstream;
 fn set_credentials() {
     static CREDENTIALS: Once = Once::new();
     CREDENTIALS.call_once(|| {
-        for name in [
-            "KOBO_USERNAME",
-            "KOBO_PASSWORD",
-            "ODK_EMAIL",
-            "ODK_PASSWORD",
-        ] {
+        for name in ["KOBO_TOKEN", "ODK_EMAIL", "ODK_PASSWORD"] {
             std::env::set_var(name, "replay");
         }
     });
@@ -40,15 +35,48 @@ fn adapter_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter")
 }
 
+/// The runtime credential binding of one replayed source, in the kind
+/// its pack endpoint declares.
+#[derive(Clone, Copy)]
+enum Credential {
+    Basic {
+        username_ref: &'static str,
+        password_ref: &'static str,
+    },
+    StaticAuthorization {
+        token_ref: &'static str,
+    },
+}
+
+impl Credential {
+    fn to_value(self) -> Value {
+        match self {
+            Self::Basic {
+                username_ref,
+                password_ref,
+            } => json!({
+                "type": "basic",
+                "usernameRef": username_ref,
+                "passwordRef": password_ref,
+            }),
+            Self::StaticAuthorization { token_ref } => json!({
+                "type": "static-authorization",
+                "tokenRef": token_ref,
+            }),
+        }
+    }
+}
+
 /// One replayed source: the pack, its example workspace, the endpoint
-/// the route sends to, the credential references, and the base path the
+/// the route sends to, the credential binding with the `Authorization`
+/// header it yields for the stand-in values, and the base path the
 /// runtime binds (the deployment-owned scoping of the pack header).
 struct Source {
     pack: &'static str,
     example: &'static str,
     endpoint: &'static str,
-    username_ref: &'static str,
-    password_ref: &'static str,
+    credential: Credential,
+    authorization: &'static str,
     base_path: &'static str,
 }
 
@@ -56,8 +84,10 @@ const KOBO: Source = Source {
     pack: "kobotoolbox",
     example: "kobotoolbox-job",
     endpoint: "kobo-api",
-    username_ref: "secret:env/KOBO_USERNAME",
-    password_ref: "secret:env/KOBO_PASSWORD",
+    credential: Credential::StaticAuthorization {
+        token_ref: "secret:env/KOBO_TOKEN",
+    },
+    authorization: "Token replay",
     base_path: "/api/v2/assets/aFixtureUid0000000000000000000001/data",
 };
 
@@ -65,8 +95,12 @@ const ODK: Source = Source {
     pack: "odk-central",
     example: "odk-central-job",
     endpoint: "odk-odata",
-    username_ref: "secret:env/ODK_EMAIL",
-    password_ref: "secret:env/ODK_PASSWORD",
+    credential: Credential::Basic {
+        username_ref: "secret:env/ODK_EMAIL",
+        password_ref: "secret:env/ODK_PASSWORD",
+    },
+    // base64 of `replay:replay`, the stand-in values set above.
+    authorization: "Basic cmVwbGF5OnJlcGxheQ==",
     base_path: "/v1/projects/1/forms/fixture-form.svc/Submissions",
 };
 
@@ -109,11 +143,7 @@ fn compile(
         "endpoints": [{
             "endpoint": source.endpoint,
             "baseUrl": double.url(source.base_path),
-            "credential": {
-                "type": "basic",
-                "usernameRef": source.username_ref,
-                "passwordRef": source.password_ref,
-            },
+            "credential": source.credential.to_value(),
         }],
         "allowedPrivateCidrs": ["10.0.0.0/8"],
     });
@@ -212,6 +242,11 @@ async fn replay_entry(source: &Source, route: Option<&str>, label: &str, entry: 
             format!("{}{path}?{query}", source.base_path)
         };
         assert_eq!(request.target, target, "{label}: the request target");
+        assert_eq!(
+            request.header("authorization"),
+            Some(source.authorization),
+            "{label}: the request carries the pack's authentication kind"
+        );
     }
 
     let expected = &entry["expected"];

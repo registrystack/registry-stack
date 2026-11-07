@@ -53,8 +53,7 @@ fn check_compiles_the_maintained_job_examples_with_explicit_artifacts() {
     for source in ["kobotoolbox", "odk-central"] {
         let example = root.join(format!("products/adapter/examples/{source}-job"));
         let output = Command::new(env!("CARGO_BIN_EXE_adapter-job"))
-            .env("KOBO_USERNAME", "canary-user")
-            .env("KOBO_PASSWORD", "canary-password")
+            .env("KOBO_TOKEN", "canary-token")
             .env("ODK_EMAIL", "canary@example.invalid")
             .env("ODK_PASSWORD", "canary-password")
             .arg("check")

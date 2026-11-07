@@ -278,6 +278,8 @@ in `v0.44.0`, as set by `COORDINATOR_BINARY_FIRST_RELEASE`. Its unified Node.js
 and Python client namespace also joins in `v0.44.0`, under
 `COORDINATOR_CLIENT_FIRST_RELEASE`. Its image remains held while
 `COORDINATOR_FIRST_RELEASE` is unset.
+Registry Adapter binaries join in `v0.46.0`, as set by
+`ADAPTER_FIRST_RELEASE`; the Adapter has no image.
 The Registry Document Store is held out of every release while
 `DOCUMENTS_FIRST_RELEASE` is `None`, and no release roster names it.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
@@ -379,6 +381,10 @@ operator tool `coordinatorctl` join that verified binary payload under
 `COORDINATOR_BINARY_FIRST_RELEASE`; its separately governed image remains held.
 From `v0.44.0`, the unified Node.js and Python client packages carry the
 `coordinator` namespace under `COORDINATOR_CLIENT_FIRST_RELEASE`.
+From `v0.46.0`, the Adapter runtime `adapter` and author tool `adapterctl`
+join that payload on all three platforms with their installer pair, under
+`ADAPTER_FIRST_RELEASE`. The ingestion-job host `adapter-job` is not
+released; build it from the release source.
 No release payload carries the Document Store runtime `documents` or operator tool
 `documentsctl`; build them from the release source.
 

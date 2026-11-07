@@ -248,7 +248,7 @@
         "components": {
           "type": "object",
           "propertyNames": {
-            "enum": ["breg", "casework", "discovery", "evidence", "manifest", "messaging", "render", "scheduling", "coordinator"]
+            "enum": ["breg", "casework", "discovery", "evidence", "manifest", "messaging", "render", "scheduling", "coordinator", "adapter"]
           },
           "additionalProperties": {"$ref": "#/$defs/rstackComponent"}
         }

@@ -143,25 +143,9 @@ pub(crate) fn read_pack_routes(
         let pack_relative = format!("adapter-packs/{}/pack.yaml", source.pack.id);
         let pack_path = safe_asset(root, &pack_relative)?;
         let pack_bytes = authored::read_authored_file(&pack_path, "reviewed Adapter pack")?;
-        let format = registry_platform_yaml::FormatSpec {
-            kind: registry_adapter_core::ADAPTER_PACK_KIND,
-            envelope: registry_platform_yaml::EnvelopeRule::ApiVersionKind {
-                api_versions: &[registry_platform_yaml::ApiVersion::current(
-                    registry_adapter_core::ADAPTER_PACK_API_VERSION,
-                )],
-                retired_api_versions: &[],
-            },
-            removed_keys: &[],
-        };
-        let pack = registry_platform_yaml::Reader::new(pack_relative.as_str())
-            .decode::<registry_adapter_core::AdapterPack>(
-                &pack_bytes,
-                &registry_platform_yaml::Expect::one(&format),
-            )
-            .map_err(|_| {
-                anyhow::anyhow!("Adapter pack must satisfy the current AdapterPack contract")
-            })?
-            .value;
+        let pack = decode_adapter_pack(pack_relative.as_str(), &pack_bytes).map_err(|_| {
+            anyhow::anyhow!("Adapter pack must satisfy the current AdapterPack contract")
+        })?;
         let document = serde_json::to_value(&pack).context("Adapter pack cannot be represented")?;
         let pack_root = pack_path
             .parent()
@@ -227,6 +211,29 @@ pub(crate) fn read_pack_routes(
         );
     }
     Ok(routes.into_values().collect())
+}
+
+/// Decode a pack document against the current AdapterPack contract.
+pub(crate) fn decode_adapter_pack(
+    file: &str,
+    bytes: &[u8],
+) -> Result<registry_adapter_core::AdapterPack, registry_platform_yaml::Report> {
+    let format = registry_platform_yaml::FormatSpec {
+        kind: registry_adapter_core::ADAPTER_PACK_KIND,
+        envelope: registry_platform_yaml::EnvelopeRule::ApiVersionKind {
+            api_versions: &[registry_platform_yaml::ApiVersion::current(
+                registry_adapter_core::ADAPTER_PACK_API_VERSION,
+            )],
+            retired_api_versions: &[],
+        },
+        removed_keys: &[],
+    };
+    registry_platform_yaml::Reader::new(file)
+        .decode::<registry_adapter_core::AdapterPack>(
+            bytes,
+            &registry_platform_yaml::Expect::one(&format),
+        )
+        .map(|decoded| decoded.value)
 }
 
 fn add_pack_reference(references: &mut BTreeMap<String, String>, reference: &Value) -> Result<()> {

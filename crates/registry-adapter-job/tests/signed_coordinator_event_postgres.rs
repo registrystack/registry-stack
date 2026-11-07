@@ -286,7 +286,7 @@ async fn a_lost_signed_event_answer_recovers_one_run_through_the_job_store() {
     assert_eq!(
         first.stopped,
         Some(StopReason::DestinationStop {
-            code: "coordinator.event.outcome-uncertain".to_string()
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
         })
     );
     let client = pool.get().await.expect("a pooled client");
@@ -382,7 +382,7 @@ async fn pending_job_version_drift_stops_before_wire_and_restore_recovers() {
     assert_eq!(
         first.stopped,
         Some(StopReason::DestinationStop {
-            code: "coordinator.event.outcome-uncertain".to_string()
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
         })
     );
     assert_eq!(receiver.bodies.lock().expect("the body lock").len(), 1);
@@ -555,7 +555,7 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
     assert_eq!(
         destination.deliver(&job, &deliverable(&first)).await,
         HandOffOutcome::StopPass {
-            code: "coordinator.event.outcome-uncertain".to_string()
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
         }
     );
 
@@ -715,19 +715,19 @@ async fn coordinator_item_and_deployment_failures_never_fall_back() {
     assert_eq!(
         destination.deliver(&job, &item).await,
         HandOffOutcome::Refused {
-            code: "event.invalid".to_string()
+            code: "adapter.job.coordinator.event.invalid".to_string()
         }
     );
     assert_eq!(
         destination.deliver(&job, &item).await,
         HandOffOutcome::StopPass {
-            code: "event.unauthenticated".to_string()
+            code: "adapter.job.coordinator.event.unauthenticated".to_string()
         }
     );
     assert_eq!(
         destination.deliver(&job, &item).await,
         HandOffOutcome::StopPass {
-            code: "idempotency.key-reused".to_string()
+            code: "adapter.job.coordinator.idempotency.key-reused".to_string()
         }
     );
     assert_eq!(

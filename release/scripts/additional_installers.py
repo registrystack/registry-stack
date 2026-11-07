@@ -24,6 +24,7 @@ TITLES = {
     "registry-render": "Render",
     "registry-manifest": "Manifest",
     "coordinator": "Coordinator",
+    "adapter": "Adapter",
 }
 
 

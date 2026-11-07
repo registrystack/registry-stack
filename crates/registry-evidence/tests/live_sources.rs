@@ -441,6 +441,7 @@ fn dhis2_lookup_query(
             "orgUnits",
             required(config, "DHIS2_TEST_ORG_UNIT_ID")?.to_owned(),
         ),
+        ("orgUnitMode", "SELECTED".to_owned()),
         (
             "trackedEntities",
             required(config, "DHIS2_TEST_TRACKED_ENTITY_ID")?.to_owned(),
@@ -863,6 +864,7 @@ mod tests {
                 == Ok(vec![
                     ("program", "PROGRAM-CANARY".to_owned()),
                     ("orgUnits", "ORG-UNIT-CANARY".to_owned()),
+                    ("orgUnitMode", "SELECTED".to_owned()),
                     ("trackedEntities", "TRACKED-ENTITY-CANARY".to_owned()),
                     (
                         "fields",

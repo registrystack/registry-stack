@@ -686,10 +686,7 @@ fn credential_header(
     if authentication.kind() != credential.kind() {
         // The checks refuse a kind mismatch; this is the same refusal,
         // held defensively on a workspace they already accepted.
-        return CredentialOutcome::Wait(
-            CALLER_SOURCED,
-            "the credential kind does not match the endpoint's declared kind".to_owned(),
-        );
+        return kind_mismatch(authentication, credential);
     }
     match (authentication, credential) {
         (
@@ -781,11 +778,24 @@ fn credential_header(
         }
         // Kind equality already matched the pairs above; this arm only
         // covers a shape the checks refused.
-        _ => CredentialOutcome::Wait(
-            CALLER_SOURCED,
-            "the credential kind does not match the endpoint's declared kind".to_owned(),
-        ),
+        _ => kind_mismatch(authentication, credential),
     }
+}
+
+/// The kind mismatch refusal, naming both kinds; each is a fixed tag that
+/// carries no value.
+fn kind_mismatch(
+    authentication: &EndpointAuthentication,
+    credential: &RuntimeCredential,
+) -> CredentialOutcome {
+    CredentialOutcome::Wait(
+        CALLER_SOURCED,
+        format!(
+            "the runtime credential's kind (`{}`) does not match the endpoint's declared kind (`{}`)",
+            credential.kind(),
+            authentication.kind()
+        ),
+    )
 }
 
 /// Why the frozen destination policy refuses a binding.
@@ -1143,6 +1153,26 @@ fn drive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kind mismatch names the endpoint's declared kind and the bound
+    /// kind, both fixed tags that carry no value.
+    #[test]
+    fn credential_kind_mismatch_names_the_declared_and_the_bound_kind() {
+        let resolver = SecretResolver::new([SecretProvider::Environment], std::path::Path::new(""))
+            .expect("resolver");
+        let outcome = credential_header(
+            &EndpointAuthentication::Basic {},
+            Some(&RuntimeCredential::None {}),
+            &resolver,
+        );
+        let CredentialOutcome::Wait(_, message) = outcome else {
+            panic!("a kind mismatch waits for the engine");
+        };
+        assert_eq!(
+            message,
+            "the runtime credential's kind (`none`) does not match the endpoint's declared kind (`basic`)"
+        );
+    }
 
     #[test]
     fn live_facade_probe_does_not_drive_evidence_extract_sends() {

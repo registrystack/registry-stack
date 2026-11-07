@@ -119,7 +119,7 @@ class AdditionalInstallersTest(unittest.TestCase):
             ]
             result = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(0, result.returncode, result.stderr)
-            for name in release_roster.ADDITIONAL_INSTALLERS:
+            for name in release_roster.additional_installers((0, 44, 0)):
                 pinned = output / f"{name}-v0.44.0-install.sh"
                 alias = output / f"{name}-install.sh"
                 self.assertEqual(pinned.read_bytes(), alias.read_bytes())
@@ -156,6 +156,33 @@ class AdditionalInstallersTest(unittest.TestCase):
             )
             self.assertEqual([], list(scratch.iterdir()))
             self.assertFalse((bundle / "SHA256SUMS").exists())
+
+    def test_adapter_installer_joins_the_numbered_release_from_v0_46_0(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            before = Path(temporary) / "before"
+            current = Path(temporary) / "current"
+            for output, version in ((before, "0.45.0"), (current, "0.46.0")):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(additional_installers.__file__)),
+                        "--package",
+                        str(output),
+                        "--version",
+                        version,
+                        "--tag",
+                        f"v{version}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse(any(path.name.startswith("adapter") for path in before.iterdir()))
+            pinned = (current / "adapter-v0.46.0-install.sh").read_text()
+            self.assertEqual(pinned, (current / "adapter-install.sh").read_text())
+            self.assertIn('default_version="v0.46.0"', pinned)
+            self.assertIn("binaries=(adapter adapterctl)", pinned)
+            self.assertIn("ADAPTER_INSTALL_DIR", pinned)
 
     def test_stack_carry_forward_excludes_discovery_installers(self):
         with tempfile.TemporaryDirectory() as temporary:

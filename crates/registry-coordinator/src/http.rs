@@ -97,9 +97,25 @@ struct List {
     attention: Option<bool>,
     proposal: Option<Uuid>,
     turn: Option<ProposalTurn>,
+    #[serde(default, deserialize_with = "outcome_name")]
+    outcome: Option<String>,
 }
 fn limit() -> u32 {
     20
+}
+/// A workflow outcome name, as a definition declares one.
+fn outcome_name<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    if crate::definition::valid_name(&name) {
+        Ok(Some(name))
+    } else {
+        Err(serde::de::Error::custom(
+            "an outcome is 1 to 64 letters, digits, hyphens or underscores",
+        ))
+    }
 }
 pub fn router(state: HttpState) -> Router {
     let ready_state = state.clone();
@@ -885,6 +901,21 @@ mod list_query_tests {
             Some(Uuid::parse_str("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d").unwrap())
         );
         assert_eq!(query.turn, Some(ProposalTurn::Nobody));
+        let query = parse("/v1/runs?outcome=needs_review-2").unwrap();
+        assert_eq!(query.outcome.as_deref(), Some("needs_review-2"));
+        assert_eq!(parse("/v1/runs").unwrap().outcome, None);
+        let longest = format!("/v1/runs?outcome={}", "a".repeat(64));
+        assert!(parse(&longest).is_ok());
+        let too_long = format!("/v1/runs?outcome={}", "a".repeat(65));
+        for refused in [
+            "/v1/runs?outcome=",
+            "/v1/runs?outcome=has%20space",
+            "/v1/runs?outcome=a.b",
+            "/v1/runs?outcome=%C3%A9",
+            too_long.as_str(),
+        ] {
+            assert!(parse(refused).is_err(), "{refused}");
+        }
         for refused in [
             "/v1/runs?state=waiting",
             "/v1/runs?state=ATTENTION",
@@ -1110,6 +1141,7 @@ async fn list(
                             attention: q.attention,
                             proposal: q.proposal,
                             turn: q.turn,
+                            outcome: q.outcome,
                         },
                         &c.actor,
                         workflows,
@@ -1678,7 +1710,8 @@ pub fn openapi() -> Value {
                 {"name":"state","in":"query","schema":run_state},
                 {"name":"attention","in":"query","description":"True selects effective states attention and failed; false excludes both. Composes with state.","schema":{"type":"boolean"}},
                 {"name":"proposal","in":"query","description":"Selects runs waiting on this BReg Proposal, matched through the keyed wait commitment.","schema":{"type":"string","format":"uuid"}},
-                {"name":"turn","in":"query","description":"Selects runs whose Proposal wait last observed this turn.","schema":{"type":"string","enum":["party","official","nobody"]}}
+                {"name":"turn","in":"query","description":"Selects runs whose Proposal wait last observed this turn.","schema":{"type":"string","enum":["party","official","nobody"]}},
+                {"name":"outcome","in":"query","description":"Selects runs that finished with this workflow outcome, matched exactly. A name no run finished with selects none.","schema":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"}}
             ]);
         }
         if id == "cancelRun" {

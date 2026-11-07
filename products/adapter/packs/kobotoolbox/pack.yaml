@@ -43,10 +43,13 @@
 # (kobotoolbox/docs source/migrating_api.md) or with Basic auth over
 # TLS (the same documentation retrieves the token with
 # `curl -u username:password`). An endpoint declares one kind, so this
-# pack declares `basic`; a deployment that prefers the token swaps the
-# kind to `static-authorization` with `scheme: Token` and binds
-# tokenRef in the runtime config. Both sides of the kind match must
-# move together. The endpoint declares no request or response header
+# pack declares `static-authorization` with `scheme: Token` and the
+# runtime config binds tokenRef. The token reads the API only; a Kobo
+# password also signs in to the web UI, so a leaked adapter credential
+# stays an API credential rather than a full account login. A
+# deployment that must use Basic swaps the kind to `basic` and binds
+# usernameRef and passwordRef; both sides of the kind match must move
+# together. The endpoint declares no request or response header
 # allowlists: the documented data read consumes no header the engine
 # would copy, so the engine sends and copies nothing beyond its own.
 #
@@ -65,7 +68,7 @@
 #
 # Error clauses: the 401 answer never reaches the route - the engine's
 # authentication plan raises the uncatchable `credential.rejected` for
-# a refused Basic credential - so the pack adds no clause for it. The
+# a refused token - so the pack adds no clause for it. The
 # transport faults redeliver once, like the dhis2-tracker reads; a GET
 # is safe to repeat. Every other error propagates as its own class.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
@@ -77,7 +80,8 @@ endpoints:
   - id: kobo-api
     component: http
     authentication:
-      type: basic
+      type: static-authorization
+      scheme: Token
     attemptTimeoutMilliseconds: 10000
     maximumResponseBytes: 1048576
     operations:

@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
 
 from release.scripts import release_candidate, rstack_components
 
@@ -13,6 +15,24 @@ def payloads(version: str) -> list[dict[str, object]]:
         {"name": name, "kind": kind, "size": 17, "sha256": "a" * 64}
         for name, kind in release_candidate._release_payload_inventory(version).items()
     ]
+
+
+def component_name_enum(node: object) -> list[str]:
+    """Return the enum that closes the candidate's rstack component names."""
+    if isinstance(node, dict):
+        components = node.get("components")
+        if isinstance(components, dict) and "propertyNames" in components:
+            return components["propertyNames"]["enum"]
+        children = node.values()
+    elif isinstance(node, list):
+        children = node
+    else:
+        return []
+    for child in children:
+        found = component_name_enum(child)
+        if found:
+            return found
+    return []
 
 
 class ComponentManifestTests(unittest.TestCase):
@@ -41,6 +61,33 @@ class ComponentManifestTests(unittest.TestCase):
             set(document["components"]["manifest"]["platforms"]),
             set(rstack_components.PLATFORMS),
         )
+
+    def test_adapter_installs_from_v0_46_0_with_its_job_host_as_a_capability(self) -> None:
+        self.assertNotIn(
+            "adapter",
+            rstack_components.build_component_manifest("0.45.0", payloads("0.45.0"))["components"],
+        )
+        adapter = rstack_components.build_component_manifest("0.46.0", payloads("0.46.0"))[
+            "components"
+        ]["adapter"]
+        self.assertEqual("adapterctl", adapter["entrypoint"])
+        self.assertEqual(set(rstack_components.PLATFORMS), set(adapter["platforms"]))
+        for platform, supported in adapter["platforms"].items():
+            with self.subTest(platform=platform):
+                self.assertEqual(
+                    {"tooling": True, "runtime": True},
+                    supported["capabilities"],
+                )
+
+    def test_candidate_schemas_admit_every_component_name(self) -> None:
+        schemas = Path(__file__).resolve().parent.parent / "schemas"
+        for schema_name in ("release-candidate-v2.schema.json", "release-candidate-v3.schema.json"):
+            with self.subTest(schema=schema_name):
+                schema = json.loads((schemas / schema_name).read_text(encoding="utf-8"))
+                self.assertEqual(
+                    set(rstack_components.PRODUCTS),
+                    set(component_name_enum(schema)),
+                )
 
     def test_plain_macos_binary_is_limited_to_registry_manifest(self) -> None:
         self.assertEqual(

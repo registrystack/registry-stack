@@ -877,6 +877,26 @@ with `evidence.target.trust-profile-unused` at
 | `sourceExtracts` | no | Closed map of at most 64 logical extract names, each a local identifier of the same grammar. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
 
+You own the `sourceAcquisition` budget. The runtime accepts any positive value
+for each of the three members and sets no upper limit, so a typo such as an
+extra zero is accepted and widens what one request may spend on the source.
+Raise a member above its default only for a route that needs it, and keep each
+value near what the heaviest reviewed route uses:
+
+- `maximumDataOperations`: the most data calls that route makes, plus a small
+  margin. A search followed by a fetch is 2; 5 covers most routes, and a value
+  above about 64 deserves a second look.
+- `acquisitionDeadlineMilliseconds`: below the time your callers wait, because
+  the acquisition and the release append share it. Stay at the 30,000
+  default unless a slow source needs more; a value above about 600,000 (ten
+  minutes) is almost certainly a mistake.
+- `maximumResponseBytes`: the total of the largest responses that route reads,
+  and no more. The 1 MiB default matches the per-endpoint ceiling; a value above
+  about 16 MiB is unusual.
+
+Each acquisition's audit record captures the effective values as
+`executionBounds`, so you can review what a deployment ran with.
+
 A runtime file written in the earlier grammar is refused before anything else
 is read, with the replacement named: `version` gives way to `apiVersion` and
 `kind`, `bundleDirectory` to `package.root`, and `listener.bindHost` with
@@ -950,7 +970,9 @@ read-only file. Read-only is a correctness requirement rather than hygiene: the
 statement executor opens the file as immutable, and an immutable connection
 over a file that can change is undefined behaviour. Startup digests each file
 without reading it into memory and retains that content digest with the opened
-extract, so replacing an extract requires restart. Startup
+extract, so replacing an extract requires restart. An extract whose
+`publishedAt` is in the future counts as fresh, so keep the publisher's clock
+correct; see [the operator contract](../../../OPERATOR-CONTRACT.md). Startup
 refuses a profile the bundle names and the runtime does not bind, and a profile
 the runtime binds and no source reads, naming the profile in each case.
 

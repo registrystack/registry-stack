@@ -1199,6 +1199,7 @@ fn evidence_http_diagnostic(
         _ if matches!(refusal, Some(HostProtocolResponseRefusal::Verification)) => {
             Some(EvidenceHttpDiagnostic::Verification)
         }
+        Some(400..=499) => Some(EvidenceHttpDiagnostic::OtherClientStatus),
         _ => None,
     }
 }
@@ -1288,6 +1289,8 @@ pub enum EvidenceHttpDiagnostic {
     Verification,
     UndeclaredNotFound,
     DeclaredNotFoundMismatch,
+    /// A 4xx with no closer meaning above, such as 409 or 422.
+    OtherClientStatus,
 }
 
 impl EvidenceRouteDiagnostic {
@@ -4634,6 +4637,35 @@ mod served_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod evidence_http_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn every_other_client_status_is_a_source_answer_not_a_silent_fault() {
+        for status in [400, 405, 409, 410, 412, 415, 422, 499] {
+            assert_eq!(
+                evidence_http_diagnostic(Some(status), None),
+                Some(EvidenceHttpDiagnostic::OtherClientStatus),
+                "status {status}"
+            );
+        }
+        assert_eq!(
+            evidence_http_diagnostic(Some(401), None),
+            Some(EvidenceHttpDiagnostic::Unauthorized)
+        );
+        assert_eq!(
+            evidence_http_diagnostic(Some(429), None),
+            Some(EvidenceHttpDiagnostic::RateLimited)
+        );
+        assert_eq!(
+            evidence_http_diagnostic(Some(404), None),
+            Some(EvidenceHttpDiagnostic::UndeclaredNotFound)
+        );
+        assert_eq!(evidence_http_diagnostic(Some(302), None), None);
     }
 }
 

@@ -999,7 +999,7 @@ of the row (section 14).
 | Idempotent Consumer | `components/next/eips/idempotentConsumer-eip.html` | `idempotentConsumer` over the PostgreSQL store | Duplicates replay the recorded response | 2 |
 | Type Converter | `manual/type-converter.html`, `components/next/eips/convertBodyTo-eip.html`, `convertHeaderTo-eip.html` | `convertBodyTo`, `convertHeaderTo`, `convertPropertyTo` (addition) with `type: codeMap:<id>`; Rhai `code_map`; `conversion.unmapped` on a miss | Explicit tables of scalar values, no converter chains, no `charset` | 1 |
 | Event Notifier | `manual/event-notifier.html` | The audit journal's event kinds (section 11) | Synchronous, value-free, before the response | 1 |
-| `file` (job source) `[ingestion]` | `components/next/file-component.html` | `file:<endpointId>` read through the job-only `pollEnrich` step (section 17.2); `noop` strategy forced; `include`, fixed ascending filename order (no authored `sortBy` expression), `doneFileName`, `readLock` restricted to none or changed, `maxMessagesPerPoll` where they apply | Read-only always: `delete`, `move`, `rename`, `markerFile`, and the `fileLock` strategy are not ported (each writes or locks the source); base directory fixed in runtime configuration, traversal and symlink escape refused; a delivered file is identified by namespace plus content digest, never by name or modification time alone | 4 |
+| `file` (job source) `[ingestion]` | `components/next/file-component.html` | `file:<endpointId>` read through the job-only `pollEnrich` step (section 17.2); `noop` strategy forced; `include`, fixed ascending filename order (no authored `sortBy` expression), `doneFileName`, `readLock` restricted to none or changed, `maxMessagesPerPoll` where they apply; each source declares completion through `doneFileName`, `readLock: changed`, or `producerAtomicHandover: true`, and one declaring none refuses | Read-only always: `delete`, `move`, `rename`, `markerFile`, and the `fileLock` strategy are not ported (each writes or locks the source); base directory fixed in runtime configuration, traversal and symlink escape refused; a delivered file is identified by namespace plus content digest, never by name or modification time alone | 4 |
 | `sftp` (job source) `[ingestion]` | `components/next/sftp-component.html` | `sftp:<endpointId>` through the same read step, sharing the `file` decoders | Host key pinned, secret references only; complete files detected through a ready manifest or completed-name handover; interrupted transfers and replaced same-name files handled by digest identity; no source writes; SSH dependency and host-key rules in section 17.4 | 4 |
 | `rabbitmq` (job source) `[ingestion]` | `components/next/spring-rabbitmq-component.html` | `rabbitmq:<endpointId>` through the job-only read step, one manually settled message per page | AMQPS only in production; fixed durable queue and a dead-letter exchange the host proves exist by passive declares (it declares the topology itself only under `declareTopology: true`); source acknowledgement follows the durable destination outcome, held items remain unsettled, and explicit refusals reject without requeue; local outstanding-delivery bounds because `basic.get` is not governed by consumer prefetch; broker `max_message_size` is an operator prerequisite because Lapin assembles the body before the retained-byte check | 4 |
 | SQL (read-only job source) `[ingestion]` | `components/next/sql-component.html` | `postgres:<endpointId>` send with a digest-pinned `queryFile`, required stable `keyColumn`, and reviewed `parameterOrder` mapping names to native `$1`-onward positions; omit `parameterOrder` for a zero-argument query | One fixed, read-only `SELECT` with root `ORDER BY` and no root `LIMIT` or `OFFSET`, paged by an engine-appended `OFFSET` bound from the cursor; exact named parameters only, bound as text, checked integers, double-precision numbers, or booleans; result columns of text, integer, float, boolean, `numeric`, `date`, `timestamp`, `timestamptz` and `uuid` types, or `NULL`, cross as JSON values (the type table is in `CAMEL-INGESTION-PORTS.md`), and any other type stops the page under `adapter.job.postgres-column-type` naming the column; read-only transaction with statement timeout, bounded fetch, and cancellation; each page uses its own read-committed statement snapshot, so ordering alone does not prevent offset drift across concurrent source edits; no user-supplied SQL; Camel's `onConsume` progress updates not ported because they write the source | 4 |
@@ -2011,7 +2011,12 @@ reaches may declare `maximumResponseBytes` up to the platform's 16 MiB
 response-body cap; the runtime binding may lower it, never raise it. The profile also bounds what the facade never sees: the
 page deadline of one route run, the read size and page size of the read
 step, and the row and field limits of the decoders. Every read has a
-count, byte, and deadline bound, tested at the edge.
+count, byte, and deadline bound, tested at the edge. The `read` block
+(`maximumFileBytes`, `maximumRowBytes`, `maximumFieldBytes`,
+`maximumRowsPerPage`) bounds the file and PostgreSQL readers, so a job
+whose source route reaches neither (an HTTP-only route) may omit it, and
+`check` refuses an omitted `read` with `adapter.job.profile-read-required`
+where a `pollEnrich` or a `postgres:` send or enrich is reachable.
 
 The item contract is a core type: `{items: [{key, revision?, value}],
 next}`. `key` is the source's stable identifier for the item inside the
@@ -2045,8 +2050,12 @@ destination. A path walks nested objects of `value`, and the projected item
 carries one member per path, named by the path as written:
 `household.household_size` reads `{"household": {"household_size": 3}}`
 and hands off `{"household.household_size": 3}`. A source with flat rows,
-such as the PostgreSQL source, projects its column names, or groups columns
-in its route when a workflow expects a grouped path. The item digest covers the projected fields by default
+such as the PostgreSQL source or a CSV file, projects its column names, or groups columns
+in its route when a workflow expects a grouped path. A flat member whose
+name is the dotted path (a CSV column headed `household.household_size`)
+is not that path: the pass stops as `adapter.job.projection-flat-dotted-name`
+before staging the page, rather than hand off a `null`, and the fix is to
+group the columns into a nested object in the route. The item digest covers the projected fields by default
 (`digestOf: projection`); a job may declare `digestOf: value` to digest
 the route's whole `value` together with the sorted declared field list
 instead, so a field-list edit still changes every digest. The store records the projection
@@ -2164,9 +2173,16 @@ need:
 sends it under keys derived from the item, so a lost response is recovered
 by sending the same request again and BReg replays its receipt. The job
 stores no prepared attempt: a retry re-reads the source, re-maps, and
-resends. If the item changed, or the mapping now produces different bytes,
-BReg answers `idempotency.key-reused` and the item is held for an
-operator, which is the safe direction. A Proposal uses two command
+resends. The job freezes two public digests durably before the first send:
+the receiver (BReg deployment, caller, access profile, Action and mode) and
+the mapped operation. A possibly accepted `pending` sequence whose receiver
+or mapped operation differs on retry stops the pass before any BReg call,
+with the position unchanged, as `adapter.job.breg-receiver-changed` or
+`adapter.job.breg-body-changed`; restoring the original configuration lets
+it settle. A pending row staged before the digests were recorded stops as
+`adapter.job.breg-identity-unrecorded`. If the item itself changed, BReg
+answers `idempotency.key-reused` and the item is held for an operator, which
+is the safe direction. A Proposal uses two command
 identities, start and submit, derived from the same item key and
 sequence; the start receipt returns the Proposal ID that submit needs.
 The receipt horizon falls on the job: BReg keeps a receipt for
@@ -2276,7 +2292,13 @@ the shape a CronJob drives, or loops on the job's interval trigger; `status`
 counts the item table's statuses and refusal codes, says whether a pass is
 overdue, and says why the last pass stopped; `inspect` goes from an item
 to its destination reference; and `rescan` runs one pass from the first
-page, in which unchanged items skip by digest and refused items retry. A
+page, in which unchanged items skip by digest and refused items retry.
+A refusal the receiver answers is stored under the destination's own
+prefix, with the receiver's word kept as the last segment:
+`adapter.job.breg.<word>` for a direct BReg answer and
+`adapter.job.coordinator.<word>` for a Coordinator answer, so a status
+count never mixes two destinations that use the same word. Codes the Adapter
+itself owns carry no destination segment. A
 preview pass reads the actual source, delivers nothing, writes nothing, and
 records what a destination would have received. Every output is value-free by
 default; only an explicit preview `--show-values` prints projected values.
@@ -2419,7 +2441,7 @@ diagnostics carry no values, and its row below passes.
 | Duplicate read and restart | Unchanged items send nothing; a repeat recovers the same Proposal, receipt, or Run |
 | Crash or lost response at any point | The next pass sends the same identity, and nothing is skipped or duplicated |
 | Changed item after a first hand-off | Held, or sent as `revised` to Coordinator; never a second registration |
-| Item changed before a lost response is recovered | `idempotency.key-reused`, and the item is held |
+| Item changed before a lost response is recovered | `adapter.job.breg.idempotency.key-reused`, and the item is held |
 | Pending row past BReg's receipt horizon | Held for reconciliation, and status warned before it |
 | Item-scoped refusal | Recorded with its code; the pass continues until the stop rule |
 | Deployment-scoped answer | The pass stops with the position unchanged, and status names the code |

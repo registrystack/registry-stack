@@ -195,7 +195,8 @@ fn runtime_json(source: &Path, component: &str) -> String {
     if component == "file" {
         runtime["sources"] = json!({"file": {"submissions": {
             "directory": source,
-            "namespace": "submissions"
+            "namespace": "submissions",
+            "producerAtomicHandover": true
         }}});
     }
     serde_json::to_string_pretty(&runtime).expect("the runtime config renders")
@@ -408,6 +409,61 @@ async fn the_actual_pass_reads_a_file_into_the_destination_seam() {
     assert_eq!(
         body["projected"],
         json!({"id": "007", "status": "new", "note": "ready"})
+    );
+}
+
+/// A CSV column named `household.size` is one flat member, not the
+/// nested path the projection field names: the pass stops with the
+/// closed code and its fix, before any item is delivered, rather than
+/// hand the destination a null.
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn a_flat_dotted_column_stops_the_pass_before_delivery() {
+    let store_url = isolated_store_url().await;
+    let fixture = FileFixture::new("csv", "file", 1_048_576);
+    let job_text = std::fs::read_to_string(&fixture.job).expect("the job");
+    std::fs::write(
+        &fixture.job,
+        job_text.replace("fields: [id, status, note]", "fields: [id, household.size]"),
+    )
+    .expect("the dotted-field job");
+    fixture.write_source("submissions.csv", b"id,household.size\n007,4\n");
+    let receiver = FixtureReceiver::start(Vec::new()).await;
+    let job = fixture.job.clone();
+    let pack = fixture.pack.clone();
+    let runtime = fixture.runtime.clone();
+    let receiver_url = receiver.url.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_adapter-job"))
+            .env("JOB_TEST_DB", store_url)
+            .arg("pass")
+            .arg(job)
+            .arg("--pack")
+            .arg(pack)
+            .arg("--runtime")
+            .arg(runtime)
+            .arg("--fixture")
+            .arg("--fixture-url")
+            .arg(receiver_url)
+            .output()
+            .expect("run adapter-job pass")
+    })
+    .await
+    .expect("the adapter-job pass joins");
+    assert!(!output.status.success(), "the flat dotted pass must stop");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("the stop report is JSON");
+    assert_eq!(
+        report["stopped"]["code"],
+        "page-fault:adapter.job.projection-flat-dotted-name"
+    );
+    assert_eq!(report["itemsAcknowledged"], 0);
+    let next = report["stopped"]["next"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the stop names its fix: {report}"));
+    assert!(next.contains("Group the columns"), "{next}");
+    assert!(
+        receiver.requests().is_empty(),
+        "no item crosses the seam with a null in place of the column"
     );
 }
 

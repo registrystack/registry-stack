@@ -652,6 +652,9 @@ fn print_pass_report(
     );
 }
 
+/// The page fault code for a page larger than `profile.maximumPageBytes`.
+const PAGE_BYTES_BOUND: &str = registry_adapter_core::ItemPageFault::BytesBound.code();
+
 /// The one step that clears a stop an operator can clear, for the stop
 /// report. Value-free and fixed per code.
 fn stop_next_step(reason: &StopReason) -> Option<&'static str> {
@@ -667,6 +670,16 @@ fn next_step_for_stop_text(text: &str) -> Option<&'static str> {
         Some("A pending signed delivery was staged before store schema 103 recorded its receiver and body identity, so this binary cannot prove a retry is the same event. Restore the pre-upgrade database backup, run passes with the previous binary until adapter-job status lists no pending items, then upgrade and run init-store again.")
     } else if text.contains(registry_adapter_job::pass::COORDINATOR_BODY_CHANGED) {
         Some("A pending delivery was first attempted under a different job.version or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else if text.contains(registry_adapter_job::pass::BREG_IDENTITY_UNRECORDED) {
+        Some("A pending BReg delivery was staged before store schema 103 recorded its receiver and operation identity, so this binary cannot prove a retry is the same write. Restore the pre-upgrade database backup, run passes with the previous binary until adapter-job status lists no pending items, then upgrade and run init-store again.")
+    } else if text.contains(registry_adapter_job::pass::BREG_BODY_CHANGED) {
+        Some("A pending BReg delivery was first attempted under a different job.version, mapping or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else if text.contains(registry_adapter_job::pass::BREG_RECEIVER_CHANGED) {
+        Some("A pending BReg delivery was first attempted against a different BReg binding, caller, access profile or Action. Restore the original destination configuration and run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+    } else if text.contains(registry_adapter_job::pass::PROJECTION_FLAT_DOTTED_NAME) {
+        Some("A dotted field in projection.fields (household.size) reads a nested object, but the source row carries it as one flat column of that name. Group the columns into a nested object in the route (a setBody that builds {\"household\": {\"size\": ...}}), or read a source that delivers the nested object, then run the job again. Nothing on the page was delivered.")
+    } else if text.contains(PAGE_BYTES_BOUND) {
+        Some("The page built was larger than profile.maximumPageBytes and the cursor did not move. Lower profile.read.maximumRowsPerPage (or the file source's maxMessagesPerPoll) so a page fits, or raise profile.maximumPageBytes (at most profile.maximumResponseBytes), then run the job again.")
     } else {
         None
     }
@@ -949,9 +962,15 @@ fn compile(
         .map_err(|error| job_error_message(&error))
 }
 
+/// The job authors a hook trigger this build cannot serve.
+const HOOK_TRIGGER_NOT_COMPILED: &str = "adapter.job.hook-not-compiled-trigger";
+/// The runtime configures `hookIngress` this build cannot serve.
+#[cfg(not(feature = "job-hook"))]
+const HOOK_INGRESS_NOT_COMPILED: &str = "adapter.job.hook-not-compiled-ingress";
+
 fn require_compiled_hooks(job: &AdapterJob) -> Result<(), &'static str> {
     if job.triggers.iter().any(|trigger| trigger.kind == "hook") && !cfg!(feature = "job-hook") {
-        return Err("adapter.job.hook-not-compiled");
+        return Err(HOOK_TRIGGER_NOT_COMPILED);
     }
     Ok(())
 }
@@ -966,7 +985,7 @@ fn check_hook_runtime(job: &AdapterJob, runtime: &JobRuntimeConfig) -> Result<()
     #[cfg(not(feature = "job-hook"))]
     {
         if runtime.hook_ingress.is_some() {
-            return Err("adapter.job.hook-not-compiled".to_string());
+            return Err(HOOK_INGRESS_NOT_COMPILED.to_string());
         }
         Ok(())
     }
@@ -1264,6 +1283,89 @@ mod tests {
     }
 
     #[test]
+    fn a_breg_fence_stop_carries_a_breg_next_step() {
+        let drift = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_BODY_CHANGED.to_owned(),
+        };
+        let next = stop_next_step(&drift).expect("operation drift names its recovery");
+        for step in ["BReg", "mapping", "Restore the previous job definition"] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        assert_eq!(
+            next_step_for_stop_text("destination-stop:adapter.job.breg-body-changed"),
+            Some(next)
+        );
+        let unrecorded = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_IDENTITY_UNRECORDED.to_owned(),
+        };
+        let next = stop_next_step(&unrecorded).expect("an unrecorded identity names its recovery");
+        for step in [
+            "BReg",
+            "schema 103",
+            "backup",
+            "previous binary",
+            "init-store",
+        ] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        let receiver = StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_RECEIVER_CHANGED.to_owned(),
+        };
+        let next = stop_next_step(&receiver).expect("receiver drift names its recovery");
+        for step in ["BReg", "original", "binding"] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+    }
+
+    #[test]
+    fn a_page_over_the_byte_bound_names_the_profile_members_to_change() {
+        let stop = StopReason::PageFault {
+            code: "adapter.job.page-bytes-bound".to_owned(),
+            record: None,
+        };
+        let next = stop_next_step(&stop).expect("a byte-bound stop names its fix");
+        for step in [
+            "profile.read.maximumRowsPerPage",
+            "profile.maximumPageBytes",
+            "maximumResponseBytes",
+        ] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        assert_eq!(
+            next_step_for_stop_text("page-fault:adapter.job.page-bytes-bound"),
+            Some(next),
+            "status repeats the same step from the recorded text"
+        );
+        let items = StopReason::PageFault {
+            code: "adapter.job.page-items-bound".to_owned(),
+            record: None,
+        };
+        assert_eq!(stop_next_step(&items), None);
+    }
+
+    #[test]
+    fn a_flat_dotted_projection_stop_names_the_route_grouping_fix() {
+        let stop = StopReason::PageFault {
+            code: registry_adapter_job::pass::PROJECTION_FLAT_DOTTED_NAME.to_owned(),
+            record: None,
+        };
+        let next = stop_next_step(&stop).expect("a flat dotted name stop names its fix");
+        for step in [
+            "projection.fields",
+            "Group the columns",
+            "route",
+            "nested object",
+        ] {
+            assert!(next.contains(step), "missing {step:?}: {next}");
+        }
+        assert_eq!(
+            next_step_for_stop_text("page-fault:adapter.job.projection-flat-dotted-name"),
+            Some(next),
+            "status repeats the same step from the recorded text"
+        );
+    }
+
+    #[test]
     fn an_unreadable_store_line_names_the_cause_the_retry_and_the_fix() {
         let line = store_unreachable_line("sqlstate-57P01", Duration::from_millis(3000));
         assert!(
@@ -1311,8 +1413,26 @@ mod tests {
         #[cfg(not(feature = "job-hook"))]
         assert_eq!(
             require_compiled_hooks(&job),
-            Err("adapter.job.hook-not-compiled")
+            Err("adapter.job.hook-not-compiled-trigger")
         );
+    }
+
+    #[cfg(not(feature = "job-hook"))]
+    #[test]
+    fn a_hook_ingress_without_the_host_feature_has_its_own_code() {
+        let job = example_job("job.yaml");
+        let mut runtime =
+            JobRuntimeConfig::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../products/adapter/examples/kobotoolbox-job/job-runtime.hook.example.yaml",
+            ))
+            .expect("the maintained hook runtime reads");
+        assert!(runtime.hook_ingress.is_some());
+        assert_eq!(
+            check_hook_runtime(&job, &runtime),
+            Err("adapter.job.hook-not-compiled-ingress".to_string())
+        );
+        runtime.hook_ingress = None;
+        assert_eq!(check_hook_runtime(&job, &runtime), Ok(()));
     }
 
     #[test]
@@ -1366,13 +1486,13 @@ mod tests {
             ),
             (
                 &direct.destination,
-                "idempotency.key-reused",
+                "adapter.job.breg.idempotency.key-reused",
                 "proposal-reused",
                 "breg",
             ),
             (
                 &direct.destination,
-                "idempotency.expired",
+                "adapter.job.breg.idempotency.expired",
                 "proposal-expired",
                 "breg",
             ),
@@ -1384,7 +1504,7 @@ mod tests {
             ),
             (
                 &coordinator.destination,
-                "coordinator.event.start-conflict",
+                "adapter.job.coordinator.event.start-conflict",
                 "run-conflict",
                 "coordinator",
             ),
@@ -1454,13 +1574,13 @@ mod tests {
         for (destination, code, authority, records) in [
             (
                 &direct.destination,
-                "idempotency.expired",
+                "adapter.job.breg.idempotency.expired",
                 "BReg's own authority",
                 "BReg admission and idempotency records",
             ),
             (
                 &coordinator.destination,
-                "coordinator.event.start-conflict",
+                "adapter.job.coordinator.event.start-conflict",
                 "Coordinator's own authority",
                 "Coordinator admission and event-idempotency records",
             ),
@@ -1512,7 +1632,7 @@ mod tests {
         let guidance = hold_guidance(
             &direct.destination,
             ItemStatus::Held,
-            Some("idempotency.key-reused"),
+            Some("adapter.job.breg.idempotency.key-reused"),
             HoldGuidanceScope::Item(Some("proposal-a")),
         )
         .expect("the held item has guidance");

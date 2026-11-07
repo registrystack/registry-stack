@@ -275,7 +275,8 @@ coordinatorctl inspect --run <run-id> \
 
 `list` returns the 20 newest runs, or up to 100 with `--limit`, with a `nextCursor`. Add
 `--proposal <id>` for the runs waiting on one BReg request, or `--turn party`, `official` or
-`nobody` for runs whose request last read that turn. `inspect` shows
+`nobody` for runs whose request last read that turn. Add `--outcome <name>` for the runs that
+finished with that workflow outcome. `inspect` shows
 each step, every effect as `accepted` or `unknown`, and a wait's timing, never inputs, product
 responses, or prepared commands.
 [How Registry Coordinator works](../../explanation/how-coordinator-works/#how-do-you-inspect-and-recover-a-run)

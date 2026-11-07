@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
 #
-# Bad-corpus member adapter.job.trigger-hook-unserved: this artifact set must be refused with
-# exactly adapter.job.trigger-hook-unserved. Clean baseline pack; the job's hook has no runtime binding.
+# Bad-corpus member adapter.job.trigger-hook-path: this artifact set must be refused with
+# exactly adapter.job.trigger-hook-path. Clean baseline pack; the job's hook path does not start with a slash.
 #
 # Refuse with:
-#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-unserved/project.yaml
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.job.trigger-hook-path/project.yaml
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: case-api-pack

@@ -9,38 +9,16 @@ use std::{
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Command, Output},
-    time::{Duration, Instant},
 };
 
 use registry_platform_yaml::Reader;
 
+#[path = "support/executable.rs"]
+mod executable;
+use executable::{output_waiting_for_busy_binary, retry_while_busy, wait_until_executable};
+
 fn evidencectl() -> Command {
     Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-}
-
-/// Run `command`, waiting out Linux ETXTBSY for a binary written moments ago.
-/// A concurrent test's fork can hold the writer descriptor of a freshly copied
-/// binary until its own exec closes it, so the first exec of the copy may be
-/// refused. Nothing else is retried.
-fn output_waiting_for_busy_binary(command: &mut Command) -> std::io::Result<Output> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    retry_while_busy(|| command.output(), || Instant::now() < deadline)
-}
-
-fn retry_while_busy<T>(
-    mut run: impl FnMut() -> std::io::Result<T>,
-    mut keep_waiting: impl FnMut() -> bool,
-) -> std::io::Result<T> {
-    loop {
-        match run() {
-            Err(error)
-                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && keep_waiting() =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            result => return result,
-        }
-    }
 }
 
 #[test]
@@ -95,7 +73,7 @@ fn a_copy_still_held_open_for_writing_is_waited_for() {
         .open(&ctl)
         .expect("hold the copy open for writing");
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(std::time::Duration::from_millis(200));
         drop(held);
     });
 
@@ -245,6 +223,7 @@ exit 0
     let mut permissions = fs::metadata(&path).expect("stat stub").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod stub");
+    wait_until_executable(&path);
     path
 }
 
@@ -1440,6 +1419,50 @@ fn a_fresh_local_target_journey_checks_and_explains_complete_normalized_grants()
         stderr_of(&checked)
     );
     assert!(stdout_of(&checked).contains("13 cases"));
+}
+
+/// `init` declares the connections its Sources reference in the project's
+/// local-target.yaml, and a target made for the same project must declare them
+/// too, or packaging it refuses every Source.
+#[test]
+fn a_local_target_carries_the_connections_the_project_declares() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    let created = evidencectl()
+        .args(["init"])
+        .arg(&project)
+        .args(["--transport", "sqlite-extract", "--profile", "local"])
+        .output()
+        .expect("create SQLite starter");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+    let declared = yaml_value(&project.join("local-target.yaml"))["connections"].clone();
+    assert!(
+        declared.as_object().is_some_and(|map| !map.is_empty()),
+        "the starter declares a connection for its Source: {declared}"
+    );
+
+    let target = project.join("targets/local");
+    let created = evidencectl()
+        .args(["target", "new"])
+        .arg(&target)
+        .arg("--project")
+        .arg(&project)
+        .arg("--local")
+        .output()
+        .expect("create the local target");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+
+    assert_eq!(
+        yaml_value(&target.join("target.yaml"))["connections"],
+        declared,
+        "the target declares the connections the project declares"
+    );
+    assert!(
+        stdout_of(&created).contains("starter-source"),
+        "the command says which connections it carried over: {}",
+        stdout_of(&created)
+    );
 }
 
 #[test]

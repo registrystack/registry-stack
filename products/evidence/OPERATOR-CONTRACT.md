@@ -1317,6 +1317,15 @@ to publish a fresh extract and restart. Startup itself does not refuse an
 already-stale extract because a restart racing a republish would otherwise
 crashloop.
 
+Age is measured from the extract's `publishedAt` to the evaluation instant. An
+extract whose `publishedAt` is in the future counts as fresh: its age is
+negative, so it passes the check until that instant plus
+`maximumExtractAgeSeconds`. Evidence does not allow for clock skew or refuse a
+future date. The publisher's clock is therefore yours to run: keep it
+synchronised (NTP), and treat a `publishedAt` ahead of the time you published
+as a publishing fault. A wrong publisher clock can make an old extract look
+fresh and Evidence will not notice.
+
 The access-token issuer's `jwksSource.uri` is retrieved once at startup and again on
 each readiness check, subject to the verifier cache lifecycle and a short
 suppression interval after a failure. Both report and neither refuses: a

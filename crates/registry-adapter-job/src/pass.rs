@@ -36,7 +36,7 @@ use registry_platform_config::sha256_uri;
 use serde_json::Value;
 
 use crate::destination::{
-    DeliverableItem, HandOffOutcome, JobDestination, DESTINATION_ANSWER_INVALID,
+    DeliverableItem, DeliveryFamily, HandOffOutcome, JobDestination, DESTINATION_ANSWER_INVALID,
     MAXIMUM_ANSWER_BYTES,
 };
 use crate::projection;
@@ -88,10 +88,36 @@ pub const COORDINATOR_IDENTITY_UNRECORDED: &str = "adapter.job.coordinator-ident
 /// pending item settle.
 pub const COORDINATOR_BODY_CHANGED: &str = "adapter.job.coordinator-body-changed";
 
+/// A pending direct BReg delivery selected a BReg deployment, caller, Action
+/// or mode other than the public configuration frozen for the sequence. The
+/// pass stops before any BReg call and leaves the position unchanged;
+/// restoring the original configuration recovers it.
+pub const BREG_RECEIVER_CHANGED: &str = "adapter.job.breg-receiver-changed";
+
+/// A pending direct BReg delivery was staged before the store recorded
+/// receiver and body identity (store schema 103), so the host cannot prove a
+/// retry reaches the same BReg with the same operation. The pass stops before
+/// any BReg call; the recovery is to settle the item with the binary that
+/// staged it.
+pub const BREG_IDENTITY_UNRECORDED: &str = "adapter.job.breg-identity-unrecorded";
+
+/// A pending direct BReg delivery would now map to a different operation (the
+/// mapping, the projection or the job definition changed since it was first
+/// attempted). The pass stops before any BReg call, because a new operation
+/// could write a second time for the same item; restoring the previous
+/// definition lets the pending item settle.
+pub const BREG_BODY_CHANGED: &str = "adapter.job.breg-body-changed";
+
 /// The positive durable delivery-attempt counter cannot advance without
 /// leaving PostgreSQL's signed bigint domain. The pass stops with its source
 /// position unchanged rather than panicking or wrapping the counter.
 pub const DELIVERY_ATTEMPT_EXHAUSTED: &str = "adapter.job.delivery-attempt-exhausted";
+
+/// A declared dotted projection field misses as a path while the item value
+/// carries a flat member of that exact name. The pass stops before staging
+/// any item of the page, with the position unchanged; the fix is to group
+/// the columns into a nested object in the route.
+pub const PROJECTION_FLAT_DOTTED_NAME: &str = "adapter.job.projection-flat-dotted-name";
 
 /// The governed file/SFTP item identity cannot be adopted over non-empty
 /// legacy state or changed in place. The operator accepts a change with
@@ -339,6 +365,26 @@ pub async fn run_pass(
     let source_receipt = page_result.source_receipt;
     let page = page_result.page;
     report.items_read = page.items.len() as u32;
+    // A flat dotted member would project as null; refuse the page before
+    // any item is staged, so nothing is delivered without the field.
+    if page
+        .items
+        .iter()
+        .any(|item| projection::flat_dotted_member(&job.projection, &item.value).is_some())
+    {
+        return finish_stopped(
+            db,
+            job_id,
+            &options,
+            lease_token,
+            report,
+            StopReason::PageFault {
+                code: PROJECTION_FLAT_DOTTED_NAME.to_owned(),
+                record: None,
+            },
+        )
+        .await;
+    }
     // Steps 3 to 6: per item, compare, stage, deliver, record.
     let mut consecutive = ConsecutiveRefusals::new(options.refusal_limit);
     for item in &page.items {
@@ -539,6 +585,10 @@ pub async fn run_pass(
                 let body_identity = match identity.canonical_body {
                     Ok(body_identity) => Some(body_identity),
                     Err(()) if staged.receipt_uncertain => {
+                        let code = match identity.family {
+                            DeliveryFamily::Coordinator => COORDINATOR_RECEIVER_CHANGED,
+                            DeliveryFamily::Breg => BREG_BODY_CHANGED,
+                        };
                         return finish_stopped(
                             db,
                             job_id,
@@ -546,7 +596,7 @@ pub async fn run_pass(
                             lease_token,
                             report,
                             StopReason::DestinationStop {
-                                code: COORDINATOR_RECEIVER_CHANGED.to_owned(),
+                                code: code.to_owned(),
                             },
                         )
                         .await;
@@ -569,7 +619,7 @@ pub async fn run_pass(
                     )
                     .await
                     {
-                        let reason = delivery_identity_stop_reason(&error);
+                        let reason = delivery_identity_stop_reason(identity.family, &error);
                         return finish_stopped(db, job_id, &options, lease_token, report, reason)
                             .await;
                     }
@@ -880,13 +930,26 @@ pub const STORE_REFUSED: &str = "adapter.job.store-refused";
 
 /// The stop for a refused delivery identity fence: a changed receiver, a
 /// changed body, or a legacy row whose identity was never recorded each stop
-/// under their own closed code; anything else is a store refusal.
-fn delivery_identity_stop_reason(error: &store::StoreError) -> StopReason {
+/// under their own closed code, named for the destination the operator
+/// configured; anything else is a store refusal.
+fn delivery_identity_stop_reason(family: DeliveryFamily, error: &store::StoreError) -> StopReason {
+    let (receiver_changed, unrecorded, body_changed) = match family {
+        DeliveryFamily::Coordinator => (
+            COORDINATOR_RECEIVER_CHANGED,
+            COORDINATOR_IDENTITY_UNRECORDED,
+            COORDINATOR_BODY_CHANGED,
+        ),
+        DeliveryFamily::Breg => (
+            BREG_RECEIVER_CHANGED,
+            BREG_IDENTITY_UNRECORDED,
+            BREG_BODY_CHANGED,
+        ),
+    };
     let code = match error {
-        store::StoreError::ReceiverIdentityChanged => COORDINATOR_RECEIVER_CHANGED,
+        store::StoreError::ReceiverIdentityChanged => receiver_changed,
         store::StoreError::ReceiverIdentityUnknown
-        | store::StoreError::CanonicalBodyIdentityUnknown => COORDINATOR_IDENTITY_UNRECORDED,
-        store::StoreError::CanonicalBodyIdentityChanged => COORDINATOR_BODY_CHANGED,
+        | store::StoreError::CanonicalBodyIdentityUnknown => unrecorded,
+        store::StoreError::CanonicalBodyIdentityChanged => body_changed,
         error => return store_refused_reason(error),
     };
     StopReason::DestinationStop {
@@ -1173,24 +1236,57 @@ mod tests {
         let stop = |code: &str| StopReason::DestinationStop {
             code: code.to_owned(),
         };
+        let family = DeliveryFamily::Coordinator;
         for unrecorded in [
             store::StoreError::ReceiverIdentityUnknown,
             store::StoreError::CanonicalBodyIdentityUnknown,
         ] {
             assert_eq!(
-                delivery_identity_stop_reason(&unrecorded),
+                delivery_identity_stop_reason(family, &unrecorded),
                 stop(COORDINATOR_IDENTITY_UNRECORDED),
                 "a legacy row is not a changed receiver: {unrecorded}"
             );
         }
         assert_eq!(
-            delivery_identity_stop_reason(&store::StoreError::ReceiverIdentityChanged),
+            delivery_identity_stop_reason(family, &store::StoreError::ReceiverIdentityChanged),
             stop(COORDINATOR_RECEIVER_CHANGED)
         );
         assert_eq!(
-            delivery_identity_stop_reason(&store::StoreError::CanonicalBodyIdentityChanged),
+            delivery_identity_stop_reason(family, &store::StoreError::CanonicalBodyIdentityChanged),
             stop(COORDINATOR_BODY_CHANGED)
         );
+    }
+
+    #[test]
+    fn a_refused_breg_fence_stops_under_breg_codes() {
+        let stop = |code: &str| StopReason::DestinationStop {
+            code: code.to_owned(),
+        };
+        let family = DeliveryFamily::Breg;
+        for unrecorded in [
+            store::StoreError::ReceiverIdentityUnknown,
+            store::StoreError::CanonicalBodyIdentityUnknown,
+        ] {
+            assert_eq!(
+                delivery_identity_stop_reason(family, &unrecorded),
+                stop(BREG_IDENTITY_UNRECORDED),
+                "{unrecorded}"
+            );
+        }
+        assert_eq!(
+            delivery_identity_stop_reason(family, &store::StoreError::ReceiverIdentityChanged),
+            stop(BREG_RECEIVER_CHANGED)
+        );
+        assert_eq!(
+            delivery_identity_stop_reason(family, &store::StoreError::CanonicalBodyIdentityChanged),
+            stop(BREG_BODY_CHANGED)
+        );
+        assert_eq!(BREG_RECEIVER_CHANGED, "adapter.job.breg-receiver-changed");
+        assert_eq!(
+            BREG_IDENTITY_UNRECORDED,
+            "adapter.job.breg-identity-unrecorded"
+        );
+        assert_eq!(BREG_BODY_CHANGED, "adapter.job.breg-body-changed");
     }
 
     #[test]

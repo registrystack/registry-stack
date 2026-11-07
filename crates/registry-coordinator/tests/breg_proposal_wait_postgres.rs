@@ -474,6 +474,83 @@ async fn the_observation_ends_with_the_wait() {
 }
 
 #[tokio::test]
+async fn a_first_read_of_an_automatic_application_reads_once_more_seconds_later() {
+    let h = harness().await;
+    let fake = Fake::new(vec![waiting("nobody"), applied()]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 2, "the start read and one follow-up read");
+    assert_eq!(
+        h.status(run).await,
+        ("finished".into(), Some("applied".into()), None),
+        "the run settles without waiting for resultCheckSeconds"
+    );
+}
+
+#[tokio::test]
+async fn the_follow_up_read_is_once_and_only_for_an_automatic_application() {
+    let h = harness().await;
+    let fake = Fake::new(vec![waiting("official")]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let reviewed = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 1, "a Proposal an official holds is read once");
+
+    let fake = Fake::new(vec![
+        waiting("nobody"),
+        waiting("nobody"),
+        waiting("nobody"),
+    ]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let queued = h
+        .admit_following("1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e")
+        .await;
+    h.drain(&worker).await;
+    assert_eq!(
+        fake.reads(),
+        2,
+        "one follow-up read, then the scheduled spacing"
+    );
+    assert_eq!(h.status(queued).await.0, "running");
+    let due = h.due_in(queued).await.expect("the next read is scheduled");
+    assert!(
+        due > 60.0,
+        "the next read waits for resultCheckSeconds: {due}"
+    );
+
+    h.make_due(queued).await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 3, "a later read has no follow-up");
+    assert_eq!(h.status(reviewed).await.0, "running");
+}
+
+#[tokio::test]
+async fn a_follow_up_read_that_cannot_settle_keeps_the_first_read() {
+    for failed in [
+        CompletionObservation::Hold {
+            code: "proposal-not-found".into(),
+        },
+        CompletionObservation::Retryable {
+            code: "dependency-outage".into(),
+            retry_after: None,
+        },
+    ] {
+        let h = harness().await;
+        let fake = Fake::new(vec![waiting("nobody"), failed]);
+        let worker = Worker::new(h.store.clone(), fake.clone());
+        let run = h.admit().await;
+        h.drain(&worker).await;
+        assert_eq!(fake.reads(), 2, "the start read and one follow-up read");
+        assert_eq!(
+            h.status(run).await,
+            ("running".into(), None, None),
+            "an unanswered follow-up does not hold a Proposal the first read saw pending"
+        );
+    }
+}
+
+#[tokio::test]
 async fn inspection_offers_the_configured_request_link() {
     let h = harness().await;
     let fake = Fake::new(vec![]);
@@ -712,7 +789,7 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
         turn: Some(ProposalTurn::Official),
         ..RunListFilter::default()
     };
-    let page = h.page(1, None, filter).await.unwrap();
+    let page = h.page(1, None, filter.clone()).await.unwrap();
     assert_eq!(page.runs[0].run_id, second);
     let cursor = page.next_cursor.expect("another page");
     assert!(
@@ -721,7 +798,7 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
     );
     let decoded = String::from_utf8(URL_SAFE_NO_PAD.decode(&cursor).unwrap()).unwrap();
     assert!(!decoded.contains(PROPOSAL), "{decoded}");
-    let next = h.page(1, Some(&cursor), filter).await.unwrap();
+    let next = h.page(1, Some(&cursor), filter.clone()).await.unwrap();
     assert_eq!(next.runs[0].run_id, first);
 
     for changed in [
@@ -729,11 +806,11 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
         on_turn(ProposalTurn::Official),
         RunListFilter {
             proposal: Some(Uuid::parse_str(OTHER_PROPOSAL).unwrap()),
-            ..filter
+            ..filter.clone()
         },
         RunListFilter {
             turn: Some(ProposalTurn::Party),
-            ..filter
+            ..filter.clone()
         },
     ] {
         assert_eq!(
@@ -749,6 +826,74 @@ async fn a_list_cursor_carries_the_proposal_and_turn_filters() {
     assert_eq!(
         h.page(1, Some(&earlier), filter).await.unwrap_err().code,
         "request.invalid"
+    );
+}
+
+fn finished_with(outcome: &str) -> RunListFilter {
+    RunListFilter {
+        outcome: Some(outcome.into()),
+        ..RunListFilter::default()
+    }
+}
+
+#[tokio::test]
+async fn runs_are_listed_by_the_outcome_they_finished_with_and_the_cursor_carries_it() {
+    let h = harness().await;
+    let fake = Fake::new(vec![applied(), applied()]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let first = h.admit().await;
+    h.drain(&worker).await;
+    let second = h.admit().await;
+    h.drain(&worker).await;
+    let waiting_run = h.admit().await;
+    h.drain(&worker).await;
+    assert_eq!(h.status(waiting_run).await.0, "running");
+
+    assert_eq!(h.listed(finished_with("applied")).await, [second, first]);
+    assert!(h.listed(finished_with("rejected")).await.is_empty());
+    assert!(
+        h.listed(finished_with("not-an-outcome-here"))
+            .await
+            .is_empty(),
+        "a well-formed name no run finished with selects nothing"
+    );
+    assert_eq!(
+        h.listed(RunListFilter {
+            state: Some(registry_coordinator::store::RunListState::Running),
+            ..finished_with("applied")
+        })
+        .await,
+        Vec::<Uuid>::new(),
+        "the outcome composes with the other filters"
+    );
+
+    let page = h.page(1, None, finished_with("applied")).await.unwrap();
+    assert_eq!(page.runs[0].run_id, second);
+    let cursor = page.next_cursor.expect("another page");
+    let next = h
+        .page(1, Some(&cursor), finished_with("applied"))
+        .await
+        .unwrap();
+    assert_eq!(next.runs[0].run_id, first);
+    for changed in [RunListFilter::default(), finished_with("rejected")] {
+        assert_eq!(
+            h.page(1, Some(&cursor), changed).await.unwrap_err().code,
+            "request.invalid"
+        );
+    }
+    let unfiltered = h
+        .page(1, None, RunListFilter::default())
+        .await
+        .unwrap()
+        .next_cursor
+        .expect("another page");
+    assert_eq!(
+        h.page(1, Some(&unfiltered), finished_with("applied"))
+            .await
+            .unwrap_err()
+            .code,
+        "request.invalid",
+        "a cursor from an unfiltered list does not continue a filtered one"
     );
 }
 

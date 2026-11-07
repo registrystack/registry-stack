@@ -24,6 +24,12 @@ It always sorts candidates by filename in ascending order.
 There is no authored `sortBy` expression.
 
 `readLock` defaults to `none`.
+A source must declare how it knows a file is complete: a `doneFileName`, `readLock: changed`, or
+`producerAtomicHandover: true` when the producer writes each file elsewhere and renames it into
+the directory (the SFTP source's `completed-name` declaration).
+`adapterctl job check` and startup refuse a source that declares none, because a read could
+otherwise take a file the producer is still writing; `readLock: none` alone is no declaration.
+This differs from Camel, whose file consumer reads with no lock by default.
 For `changed`, `readLockTimeoutMilliseconds` defaults to `10000`, and
 `readLockCheckIntervalMilliseconds` defaults to `1000`.
 The Adapter requires each bound to remain inside its declared finite range.
@@ -131,6 +137,9 @@ expression, or a query with more than 16 positional parameters.
 The engine pages the statement itself: it appends `OFFSET $n+1` after the reviewed positions and
 binds the cursor's offset, zero on the first page.
 A root `LIMIT`, `OFFSET` or `FETCH` therefore refuses at compile.
+Each page is read with that `OFFSET`, so the database scans every earlier row
+again and the cost grows with table size; on a very large table, point the source at a
+narrower view, for example one limited to recently changed rows.
 Runtime values bind as text, checked integers, double-precision numbers, or booleans.
 
 Each result column crosses as one JSON value, by its PostgreSQL type:

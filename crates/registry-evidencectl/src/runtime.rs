@@ -236,7 +236,6 @@ fn runtime_diagnostic_is_dependency_failure(diagnostic: &[u8]) -> bool {
         "runtime secret initialization failed",
         "runtime audit initialization failed",
         "runtime signing initialization failed",
-        "runtime source initialization failed",
         "runtime rate-limit initialization failed",
     ]
     .iter()
@@ -423,6 +422,7 @@ mod tests {
         )
         .expect("script");
         drop(script);
+        crate::evidence_binary::wait_until_executable(&binary);
 
         let outcome =
             invoke_check(&binary, &runtime, true, Some(root.path()), false).expect("preflight");

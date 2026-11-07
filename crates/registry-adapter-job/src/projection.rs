@@ -37,14 +37,34 @@ pub fn project(declaration: &ProjectionDecl, value: &serde_json::Value) -> serde
 
 /// Walk one dotted path through an object value, `null` on every miss.
 fn lookup(value: &serde_json::Value, path: &str) -> serde_json::Value {
-    let mut current = value;
-    for segment in path.split('.') {
-        match current.get(segment) {
-            Some(next) => current = next,
-            None => return MISSING_FIELD,
-        }
-    }
-    current.clone()
+    walk(value, path).cloned().unwrap_or(MISSING_FIELD)
+}
+
+fn walk<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    path.split('.')
+        .try_fold(value, |current, segment| current.get(segment))
+}
+
+/// The first declared dotted field the item value misses as a path but
+/// carries as one flat member of that exact name, as a flat-row source
+/// (CSV, a SQL row) does when its columns are named `household.size`.
+/// The projection would carry `null` for it, silently, so the pass
+/// refuses instead and names the fix: group the columns in the route, or
+/// read a nested object.
+#[must_use]
+pub fn flat_dotted_member<'a>(
+    declaration: &'a ProjectionDecl,
+    value: &serde_json::Value,
+) -> Option<&'a str> {
+    declaration
+        .fields
+        .iter()
+        .find(|field| {
+            field.contains('.')
+                && walk(value, field).is_none()
+                && value.get(field.as_str()).is_some()
+        })
+        .map(String::as_str)
 }
 
 /// The bytes the item digest covers, per the job's `digestOf`
@@ -164,19 +184,28 @@ mod tests {
     fn a_dotted_path_reads_a_nested_member_never_a_flat_dotted_name() {
         // The path walks objects and names the projected member as
         // written, so a source with flat rows groups the member in its
-        // route before the projection can read it.
-        let declaration = declaration(&["household.household_size"]);
-        let nested = serde_json::json!({"household": {"household_size": 4}});
+        // route before the projection can read it. A flat member whose
+        // name is the dotted path refuses rather than project a null.
+        let declaration = declaration(&["id", "household.household_size"]);
+        let nested = serde_json::json!({"id": "a", "household": {"household_size": 4}});
         assert_eq!(
             project(&declaration, &nested),
-            serde_json::json!({"household.household_size": 4})
+            serde_json::json!({"id": "a", "household.household_size": 4})
         );
-        let flat = serde_json::json!({"household.household_size": 4});
+        assert_eq!(flat_dotted_member(&declaration, &nested), None);
+        let flat = serde_json::json!({"id": "a", "household.household_size": 4});
         assert_eq!(
-            project(&declaration, &flat),
-            serde_json::json!({"household.household_size": null}),
+            flat_dotted_member(&declaration, &flat),
+            Some("household.household_size"),
             "a flat member whose name holds a dot is not the dotted path"
         );
+        // A plain miss, or a nested null, is not a flat dotted name.
+        for value in [
+            serde_json::json!({"id": "a"}),
+            serde_json::json!({"id": "a", "household": {"household_size": null}}),
+        ] {
+            assert_eq!(flat_dotted_member(&declaration, &value), None, "{value}");
+        }
     }
 
     #[test]

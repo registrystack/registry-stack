@@ -3045,8 +3045,8 @@ fn job_send_checks(
                     ));
                 }
                 for member in postgres_send_member_faults(parameters) {
-                    findings.push(finding(
-                        CheckCode::RouteGraphQlSendMembers,
+                    findings.push(job_finding(
+                        JobCode::PostgresSendMembers,
                         &format!("{pointer}/parameters/{member}"),
                         "the postgres send carries a member its component does not take",
                         "A postgres send carries queryParameters only; the HTTP request members ride an http send.",
@@ -3125,7 +3125,7 @@ fn poll_enrich_checks(
         }
     }
     if !poll.valid_key_pointer() {
-        findings.push(job_finding(JobCode::DecoderUnknown,
+        findings.push(job_finding(JobCode::PollKeyPointer,
             &format!("{pointer}/keyPointer"),
             "the row identity selector is missing, malformed, overbound, or selected for a non-row decoder",
             "Declare one RFC 6901 keyPointer of at most 512 bytes for csv or jsonl only; the selected row key must be a non-empty string."));
@@ -6815,32 +6815,40 @@ pub fn check_endpoint_bindings(
                 crate::auth::EndpointAuthenticationPolicyFault::AnonymousHttpsConflict => (
                     CheckCode::AuthAnonymousHttpsConflict,
                     "anonymousHttps",
-                    "anonymousHttps is present without matching none authentication and an explicit none credential",
+                    "anonymousHttps is present without matching none authentication and an explicit none credential".to_owned(),
                     "Remove anonymousHttps, or set the pack authentication and runtime credential types to none.",
                 ),
                 crate::auth::EndpointAuthenticationPolicyFault::AnonymousHttpsRequiresTls => (
                     CheckCode::AuthAnonymousHttpsRequiresTls,
                     "anonymousHttps",
-                    "anonymousHttps is present on a plain-HTTP source origin",
+                    "anonymousHttps is present on a plain-HTTP source origin".to_owned(),
                     "Serve the source over verified HTTPS, or remove anonymousHttps; numeric loopback remains available without it.",
                 ),
                 crate::auth::EndpointAuthenticationPolicyFault::KindMismatch => (
                     CheckCode::AuthKindMismatch,
                     "credential",
-                    "the runtime credential's kind does not match the endpoint's declared kind",
+                    // Both kinds are fixed tags, never secret values.
+                    format!(
+                        "the runtime credential's kind ({}) does not match the endpoint's declared kind (`{}`)",
+                        binding
+                            .credential
+                            .as_ref()
+                            .map_or_else(|| "no credential".to_owned(), |credential| format!("`{}`", credential.kind())),
+                        endpoint.authentication.kind()
+                    ),
                     "Bind an explicit credential whose type equals the endpoint's authentication kind.",
                 ),
                 crate::auth::EndpointAuthenticationPolicyFault::NoneNotAdmitted => (
                     CheckCode::AuthNoneNotLoopback,
                     "credential",
-                    "a none credential reaches an origin without numeric-loopback, mTLS, or acknowledged HTTPS admission",
+                    "a none credential reaches an origin without numeric-loopback, mTLS, or acknowledged HTTPS admission".to_owned(),
                     "Add an mTLS client identity over TLS, use numeric loopback, or set anonymousHttps to operator-approved for a reviewed HTTPS source.",
                 ),
             };
             findings.push(finding(
                 code,
                 &format!("{prefix}/{member}"),
-                message,
+                &message,
                 action,
             ));
         }
@@ -13834,6 +13842,36 @@ mod tests {
         assert_has(&findings, CheckCode::AuthKindMismatch);
     }
 
+    /// The mismatch names the endpoint's declared kind and the bound kind,
+    /// both fixed tags that carry no value, so an operator can see which
+    /// side to change; an unbound credential reads as such.
+    #[test]
+    fn runtime_kind_mismatch_names_the_declared_and_the_bound_kind() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let mut mismatched = oauth_binding("https://cases.example.invalid");
+        mismatched.credential = Some(RuntimeCredential::None {});
+        let mut unbound = oauth_binding("https://cases.example.invalid");
+        unbound.credential = None;
+        for (binding, bound) in [(mismatched, "`none`"), (unbound, "no credential")] {
+            let runtime = runtime_builder(vec![binding]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&runtime);
+            let findings = check_runtime(&ws, &runtime);
+            let finding = findings
+                .iter()
+                .find(|finding| finding.code == CheckCode::AuthKindMismatch.code())
+                .expect("the mismatch is reported");
+            assert!(
+                finding.message.contains("`oauth2-client-credentials`")
+                    && finding.message.contains(bound),
+                "{}",
+                finding.message
+            );
+        }
+    }
+
     /// A `none` credential leans on the transport alone. The named
     /// acknowledgement admits a fixed HTTPS source, while its absence keeps
     /// the existing numeric-loopback and mTLS-only admissions unchanged.
@@ -17078,7 +17116,8 @@ mod tests {
             );
             if !accepted {
                 assert!(
-                    findings.iter().all(|f| f.path == "/pollEnrich/keyPointer"),
+                    findings.iter().all(|f| f.path == "/pollEnrich/keyPointer"
+                        && f.code == JobCode::PollKeyPointer.code()),
                     "{findings:?}"
                 );
             }
@@ -17121,7 +17160,7 @@ mod tests {
         assert_eq!(
             findings
                 .iter()
-                .filter(|finding| finding.code == CheckCode::RouteGraphQlSendMembers.code())
+                .filter(|finding| finding.code == JobCode::PostgresSendMembers.code())
                 .count(),
             2,
             "the httpMethod member and the url query refuse on a postgres send: {findings:?}"

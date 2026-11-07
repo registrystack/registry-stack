@@ -136,6 +136,13 @@ def rosters(
                 f"coordinatorctl-{tag}-linux-amd64",
             ]
         )
+    if release_roster.adapter_in_release(parsed):
+        common.extend(
+            [
+                f"adapter-{tag}-linux-amd64",
+                f"adapterctl-{tag}-linux-amd64",
+            ]
+        )
     core.extend(common)
     historical_images = ["evidence", "mint"]
     if release_roster.relay_in_release(parsed):

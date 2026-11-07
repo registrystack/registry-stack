@@ -597,6 +597,26 @@ test('list forwards the Proposal and turn filters', async (context) => {
   assert.equal(requests.length, 1);
 });
 
+test('list forwards the outcome filter and refuses a name no workflow could declare', async (context) => {
+  const FINISHED = { ...STATUS, state: 'finished', outcome: 'needs_review-2' };
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: { runs: [FINISHED] } }));
+  const { CoordinatorClient } = require('../client');
+  const client = new CoordinatorClient({ baseUrl });
+
+  assert.deepEqual(
+    await client.list('secret', 1, null, 'finished', null, null, null, 'needs_review-2'),
+    { kind: 'complete', value: { runs: [FINISHED] } },
+  );
+  assert.equal(requests[0].path, '/v1/runs?limit=1&state=finished&outcome=needs_review-2');
+  for (const outcome of ['', 'a.b', 'needs review', 'é', 'o'.repeat(65)]) {
+    await assert.rejects(
+      async () => client.list('secret', 20, null, null, null, null, null, outcome),
+      (error) => error.kind === 'invalid-request',
+    );
+  }
+  assert.equal(requests.length, 1);
+});
+
 test('an invalid retry or cancellation reason fails before I/O', async (context) => {
   const { baseUrl, requests } = await serve(context, () => ({ status: 500, document: {} }));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');

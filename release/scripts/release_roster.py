@@ -48,6 +48,12 @@ its image-specific security evidence join. They remain held until that evidence
 is ready. ``COORDINATOR_BINARY_FIRST_RELEASE`` independently adds the runtime,
 operator CLI, and installer in v0.44.0. Client facades are governed independently.
 
+``ADAPTER_FIRST_RELEASE`` decides when the Registry Adapter binaries join the
+Stack train: the ``adapter`` facade, the ``adapterctl`` author tool and their
+installer, on every supported platform, from v0.46.0. The facade has no image
+yet. The ``adapter-job`` host stays source-build only until its release build
+enables a destination.
+
 ``DOCUMENTS_FIRST_RELEASE`` is the single place that decides which release
 first ships the Registry Document Store binaries, ``documents`` and
 ``documentsctl``, and any image or security evidence of theirs. No release
@@ -93,6 +99,8 @@ DOCUMENTS_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_BINARY_FIRST_RELEASE: tuple[int, int, int] = (0, 44, 0)
 
+ADAPTER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 46, 0)
+
 ALL_PLATFORMS_FIRST_RELEASE = (0, 44, 0)
 
 # Each pair is built separately to retain the product's feature boundary.
@@ -106,6 +114,8 @@ ADDITIONAL_PLATFORM_BUILDS = (
     ("registry-manifest-cli", "registry-manifest"),
     ("registry-coordinator", "coordinator"),
     ("registry-coordinator", "coordinatorctl"),
+    ("registry-adapter", "adapter"),
+    ("registry-adapterctl", "adapterctl"),
 )
 
 ADDITIONAL_INSTALLERS = {
@@ -116,6 +126,7 @@ ADDITIONAL_INSTALLERS = {
     "registry-render": ("registry-render", "REGISTRY_RENDER", ("registry-render",)),
     "registry-manifest": ("registry-manifest-cli", "REGISTRY_MANIFEST", ("registry-manifest",)),
     "coordinator": ("registry-coordinator", "COORDINATOR", ("coordinator", "coordinatorctl")),
+    "adapter": ("registry-adapter", "ADAPTER", ("adapter", "adapterctl")),
 }
 
 
@@ -130,6 +141,8 @@ def additional_platform_builds(version: tuple[int, int, int]):
         "registry-discoveryctl": discoveryctl_in_release(version),
         "registry-render": render_in_release(version),
         "registry-coordinator": coordinator_binaries_in_release(version),
+        "registry-adapter": adapter_in_release(version),
+        "registry-adapterctl": adapter_in_release(version),
     }
     return tuple((crate, binary) for crate, binary in ADDITIONAL_PLATFORM_BUILDS if enabled.get(crate, True))
 
@@ -141,7 +154,8 @@ def additional_installers(version: tuple[int, int, int]):
                "breg-review": breg_services_in_release(version),
                "messaging": messaging_in_release(version),
                "registry-render": render_in_release(version),
-               "coordinator": coordinator_binaries_in_release(version)}
+               "coordinator": coordinator_binaries_in_release(version),
+               "adapter": adapter_in_release(version)}
     return {name: spec for name, spec in ADDITIONAL_INSTALLERS.items() if enabled.get(name, True)}
 
 PYTHON_311_ABI_FIRST_RELEASE: tuple[int, int, int] = (0, 41, 0)
@@ -256,6 +270,15 @@ def coordinator_binaries_in_release(version: tuple[int, int, int]) -> bool:
     return tuple(version) >= COORDINATOR_BINARY_FIRST_RELEASE or coordinator_in_release(version)
 
 
+def adapter_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release at ``version`` ships the Registry Adapter binaries.
+
+    The constant is read at call time so tests can patch it.
+    """
+    first_release = ADAPTER_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
 def python_wheel_abi_tag(version: tuple[int, int, int]) -> str:
     """Return the interpreter and ABI tag of the release's Python client wheels.
 
@@ -303,6 +326,12 @@ def main(argv: list[str] | None = None) -> int:
     coordinator_binaries = commands.add_parser("coordinator-binaries-in-release")
     coordinator_binaries.add_argument("version", type=version_argument)
     coordinator_binaries.set_defaults(in_release=coordinator_binaries_in_release)
+    adapter = commands.add_parser(
+        "adapter-in-release",
+        help="print true when the numbered release ships the Adapter binaries, else false",
+    )
+    adapter.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    adapter.set_defaults(in_release=adapter_in_release)
     breg_services = commands.add_parser(
         "breg-services-in-release",
         help="print true when the release version ships breg-mcp and breg-review, else false",

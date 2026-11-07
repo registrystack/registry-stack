@@ -228,6 +228,39 @@
   `authorizedClients` is refused as an unknown key. Rename the member in each
   `runtime.yaml`.
 
+- `evidencectl pack lock <pack-directory>` recomputes the digest pins in a
+  reviewed Adapter pack's `pack.yaml` from the files beside it, rewrites only
+  the stale digests, and reports each as `old -> new`. It refuses a missing
+  file, a symbolic link, or a path outside the pack directory without writing.
+- `evidencectl target new --local` now declares the source connections of the
+  project's `local-target.yaml` in the new target, so a fresh starter packages
+  against it. Previously the target declared none and `package` refused every
+  Source.
+- When `package` refuses because a Source names a connection the target does
+  not declare, the first line of the refusal names the Source, the connection
+  and the fix. The code `evidence.target.publication-invalid` is unchanged.
+- The `evidencectl package --format json` report now carries
+  `requirements[]`, each entry with the requirement `id` and its
+  `configurationRevision`. Read requirement revisions from this report; the
+  field is additive.
+- BREAKING: A source that answers a 4xx with no closer meaning, such as 409 or
+  422, is now recorded as a status answer: the request log and audit
+  `safeErrorCategory` read `source-status` instead of `source-protocol`, and
+  the `evaluate --explain` trace names the endpoint that "answered a 4xx
+  client error". A failure that carries an HTTP status no longer counts
+  toward `evidence_source_shape_drift_total`. Update audit readers, log
+  queries and alerts that match `source-protocol` for a source 409 or 422 to
+  match `source-status`. The caller still receives `source.unavailable`, and
+  the `evidence_source_requests_total` outcome labels are unchanged.
+- When a pack source does not compile against its reviewed connection and
+  runtime binding, startup and `evidence check --require-runtime-dependencies`
+  (and so `evidencectl doctor`) now name the source id, the endpoint id and the
+  rule it broke, for example ``source `population-tracker` endpoint `tracker`:
+  the runtime `baseUrl` differs from the reviewed `baseUrl` ``. The reason is a
+  fixed sentence and never carries an origin, a secret reference or trust
+  bytes. The check reports it as `evidence.deployment.refused`; startup no
+  longer reports the bare `runtime source initialization failed`.
+
 ## 0.45.0 - 2026-11-03
 
 - BREAKING: Source acquisition moves into reviewed Adapter packs. Authored

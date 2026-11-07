@@ -208,6 +208,24 @@ fn retry_fits(
         .is_some_and(|latest| latest < expires_at)
 }
 
+/// How long after a wait's first read a Proposal BReg is applying automatically
+/// is read once more. A review-free Proposal is applied asynchronously just
+/// after Submit, so this read settles it without waiting `resultCheckSeconds`.
+const PROPOSAL_FOLLOW_UP_DELAY: Duration = Duration::from_secs(3);
+
+/// A Proposal read showing a submission no one needs to act on, so BReg's
+/// automatic application is queued or running.
+fn awaits_automatic_application(read: &CompletionObservation) -> bool {
+    matches!(
+        read,
+        CompletionObservation::Followed { proposal, read }
+            if proposal.state == "submitted"
+                && proposal.turn.as_deref() == Some("nobody")
+                && proposal.handoff_refusal.is_none()
+                && matches!(**read, CompletionObservation::Pending { .. })
+    )
+}
+
 /// One authenticated observation. Business refusal is a typed terminal result;
 /// unavailable or invalid evidence can never enter a success/refusal edge.
 fn wait_result(
@@ -376,8 +394,10 @@ impl Worker {
                     )
                     .await
                     .map_err(|_| DispatchError::Unavailable)?;
-                let timed_out = match permit {
-                    Some(crate::store::ObservationPermit::Observe { timed_out }) => timed_out,
+                let (timed_out, first) = match permit {
+                    Some(crate::store::ObservationPermit::Observe { timed_out, first }) => {
+                        (timed_out, first)
+                    }
                     Some(crate::store::ObservationPermit::Pause { seconds }) => {
                         return Ok(accepted(Detail {
                             recheck_seconds: Some(seconds),
@@ -410,7 +430,7 @@ impl Worker {
                         recheck_seconds,
                     ));
                 };
-                let read = tokio::time::timeout(budget, async {
+                let mut read = tokio::time::timeout(budget, async {
                     if matches!(completion.kind, CompletionKind::BoundedPoll { .. }) {
                         // The only repeated command is the immutable read frozen
                         // before the original accepted call. No mutation is allowed.
@@ -437,6 +457,33 @@ impl Worker {
                 })
                 .await
                 .ok();
+                if first
+                    && matches!(completion.kind, CompletionKind::BregProposal {})
+                    && read.as_ref().is_some_and(awaits_automatic_application)
+                {
+                    if let Some(budget) = job
+                        .remaining_budget(std::time::SystemTime::now())
+                        .and_then(|budget| budget.checked_sub(PROPOSAL_FOLLOW_UP_DELAY))
+                    {
+                        tokio::time::sleep(PROPOSAL_FOLLOW_UP_DELAY).await;
+                        // Only a follow-up that settles or follows the Proposal
+                        // replaces the first read. Any other answer (unavailable,
+                        // held, uncertain, no answer in time) keeps it, and the
+                        // wait falls back to its scheduled spacing.
+                        if let Ok(
+                            follow_up @ (CompletionObservation::Settled(_)
+                            | CompletionObservation::Followed { .. }),
+                        ) = tokio::time::timeout(
+                            budget,
+                            self.adapters
+                                .observe_completion(request, accepted_value, completion),
+                        )
+                        .await
+                        {
+                            read = Some(follow_up);
+                        }
+                    }
+                }
                 Ok(wait_result(
                     completion_contract,
                     read,

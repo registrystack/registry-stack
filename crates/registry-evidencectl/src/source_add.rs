@@ -2237,6 +2237,7 @@ assertionDefinitions:
             let path = root.path().join(name);
             fs::write(&path, format!("#!/bin/sh\necho '{reported}'\n")).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            crate::evidence_binary::wait_until_executable(&path);
             path
         };
         for binary in [
@@ -2273,6 +2274,7 @@ assertionDefinitions:
             )
             .unwrap();
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            crate::evidence_binary::wait_until_executable(path);
         };
         script(&selected);
         script(&conflicting_directory.join("bregctl"));
@@ -2308,6 +2310,7 @@ assertionDefinitions:
             )
             .unwrap();
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            crate::evidence_binary::wait_until_executable(path);
         }
 
         let error = resolve_bregctl_with_environment(

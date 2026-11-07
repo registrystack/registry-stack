@@ -764,6 +764,32 @@ fn a_retired_flat_target_connection_names_where_each_member_moved() {
             diagnostic.suggested_action
         );
     }
+    // Concurrency left the authored target but not the deployment: the
+    // operator still sets it in the runtime file, so the refusal names that
+    // member instead of only saying to delete it.
+    let concurrency = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/connections/synthetic-register/maximumConcurrency")
+        .expect("maximumConcurrency is diagnosed");
+    assert!(
+        concurrency
+            .suggested_action
+            .contains("sourceConnections.<id>.endpoints.<id>.maximumConcurrency"),
+        "maximumConcurrency does not name its runtime member: {}",
+        concurrency.suggested_action
+    );
+    for member in ["admissionTimeoutMilliseconds", "tokenTimeoutMilliseconds"] {
+        let path = format!("/connections/synthetic-register/{member}");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == path)
+            .expect("retired timeout is diagnosed");
+        assert!(
+            !diagnostic.suggested_action.contains("maximumConcurrency"),
+            "{path} points at the concurrency member: {}",
+            diagnostic.suggested_action
+        );
+    }
 }
 
 #[test]

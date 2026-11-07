@@ -116,6 +116,28 @@
     },
     "FileSource": {
       "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "doneFileName"
+          ]
+        },
+        {
+          "properties": {
+            "readLock": {
+              "const": "changed"
+            }
+          },
+          "required": [
+            "readLock"
+          ]
+        },
+        {
+          "required": [
+            "producerAtomicHandover"
+          ]
+        }
+      ],
       "description": "The runtime binding of one `file` source endpoint: the absolute base\ndirectory the read never leaves, the namespace the item keys carry,\nand the read behavior of the camel-file port.",
       "properties": {
         "directory": {
@@ -140,6 +162,11 @@
         "namespace": {
           "description": "The namespace every item key of this source carries.",
           "type": "string"
+        },
+        "producerAtomicHandover": {
+          "const": true,
+          "description": "The producer's declaration that a file appears in the directory\nonly once complete, renamed in after it is written. A source\ndeclares this, a `doneFileName`, or `readLock: changed`; one with\nnone refuses.",
+          "type": "boolean"
         },
         "readLock": {
           "$ref": "#/$defs/ReadLock",

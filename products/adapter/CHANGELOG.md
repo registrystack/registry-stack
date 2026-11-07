@@ -177,6 +177,71 @@
 - A `writable-read` binding that no Write Update names as its companion read
   is refused by `adapterctl check` and at load, naming the binding, instead of
   stopping the Adapter.
+- A credential kind mismatch names the bound kind and the endpoint's
+  declared kind, for example ``the runtime credential's kind (`none`) does
+  not match the endpoint's declared kind (`basic`)``, in `adapterctl check`,
+  `adapterctl verify`, and the facade and job startup refusals.
+- A job pass stops as the new `adapter.job.projection-flat-dotted-name`
+  when a declared dotted projection field (`household.size`) misses as a
+  path but the row carries a flat member of exactly that name, as a CSV
+  column or SQL alias can. The projection handed off `null` for it. The
+  stop comes before any item of the page is staged, and its next step says
+  to group the columns into a nested object in the route.
+- BREAKING: a local file job source must declare how it knows a file is
+  complete, so a read never takes a file the producer is still writing.
+  `adapterctl job check` and `adapter-job` startup refuse a source with no
+  `doneFileName`, no `readLock: changed`, and no `producerAtomicHandover:
+  true` (the SFTP `completed-name` promise, for a producer that renames each
+  finished file into the directory). Migration: add one of the three to
+  each `sources.file` entry; `readLock: changed` suits a producer you do not
+  control.
+- BREAKING: the maintained `kobotoolbox` pack authenticates with the
+  account's API token (`static-authorization`, `scheme: Token`) instead of
+  Basic, so a leaked adapter credential no longer signs in to the Kobo web
+  UI. The pack digest changes. Migration: in the runtime, replace the
+  `kobo-api` credential's `usernameRef` and `passwordRef` with `type:
+  static-authorization` and a `tokenRef` naming the token, and repin the pack
+  digest in `project.yaml` and the job file. A deployment that must keep
+  Basic pins its own copy of the pack with `type: basic`.
+- The maintained `dhis2-tracker` pack's two Evidence lookups send
+  `orgUnitMode=SELECTED` with their organisation unit, so the lookup scope
+  stays that one unit on a DHIS2 version whose default mode differs. The pack
+  digest changes, and the DHIS2 Evidence reference bundle captures the new
+  pack.
+- BREAKING: the maintained Kobo Coordinator workflow gives the unresolved-lookup
+  revision its own finish outcome, `unresolved-reviewed`; it finished as
+  `revised-reviewed`, the same as a resolved one. Its README lists every
+  outcome, notes that a review or Proposal timeout finishes the Run as
+  `review-timeout` or `proposal-timeout` rather than raising attention, and a
+  new `scenarios.yaml` covers the revised branches and the timeout. A client
+  that matches the outcome of an unresolved revision must now match
+  `unresolved-reviewed`.
+- An Adapter job profile may omit `read` when its source route reads no file
+  and no PostgreSQL row (an HTTP-only route). A route that reaches a
+  `pollEnrich` step or a `postgres:` send or enrich still needs the bounds,
+  and `adapterctl job check` refuses their absence with the new
+  `adapter.job.profile-read-required`. Existing jobs are unaffected.
+- BREAKING: job item and check codes are renamed in one pass, with no alias.
+  A refusal a destination answered is now stored as
+  `adapter.job.breg.<word>` or `adapter.job.coordinator.<word>` (the
+  destination's own word is the last segment), so `holdsByCode` and
+  `adapter-job status` counts no longer mix the two destinations. A stored
+  item row written by an earlier release keeps its old spelling; a script
+  that matches a code must match both spellings until those rows are
+  settled. Folded authoring codes are split so each names its own fault:
+  `adapter.job.trigger-hook-unserved` is retired for
+  `adapter.job.trigger-hook-binding` (a hook trigger with no binding, or a
+  repeated one), `adapter.job.trigger-hook-path` (a missing, malformed or
+  repeated path) and `adapter.job.trigger-member` (a member the trigger kind
+  does not accept, such as `path` on an interval trigger); the Postgres send
+  member faults move to `adapter.job.postgres-send-members` and the missing
+  JSONL key pointer to `adapter.job.poll-key-pointer`. The `adapter-job`
+  host codes `adapter.job.hook-configuration` and
+  `adapter.job.hook-not-compiled` are split by cause:
+  `adapter.job.hook-configuration-trigger`, `-ingress-missing`,
+  `-ingress-unused`, `-binding` and `-path`, and
+  `adapter.job.hook-not-compiled-trigger` and `-ingress`. Each authoring
+  code has a bad-corpus member.
 - BREAKING: `asyncCompletion.mode` is renamed `asyncCompletion.type` in an
   Adapter project binding. There is no alias and the project `apiVersion` is
   unchanged, so a project that still writes `mode` is refused at that key
@@ -192,3 +257,21 @@
   primitive in `registry-platform-crypto`. The wire format is unchanged (golden
   tokens pin it), so a cursor issued before the upgrade still opens, including
   under the previous key after a rotation.
+- A pending direct BReg delivery is now fenced before it is retried: the job
+  freezes the BReg deployment, caller, access profile, Action and mode, and
+  the mapped operation, and a retry that differs stops the pass before any
+  BReg call as `adapter.job.breg-receiver-changed` or
+  `adapter.job.breg-body-changed`. A direct BReg item left pending by
+  v0.45.0 has no recorded identity, so its first retry under this release
+  adopts the current destination and mapping: settle pending direct BReg
+  items with v0.45.0, or keep the destination and mapping unchanged, before
+  upgrading. A row staged before store schema 103 stops as
+  `adapter.job.breg-identity-unrecorded`.
+- Registry Stack releases publish the `adapter` and `adapterctl` binaries for
+  Linux amd64, Linux arm64, and macOS arm64, with an `adapter-<tag>-install.sh`
+  installer and an `adapter` component for `rstack install`. `rstack adapter`
+  runs `adapterctl`. There is no Adapter container image. `adapter-job` is not
+  released yet; build it from source.
+- `adapter` gains `--version`, and `adapter-job --version` reports the
+  Registry Stack display version instead of its crate version, as the other
+  release binaries do.

@@ -199,6 +199,8 @@ jobs:
               "messagingctl": "messagingctl",
               "coordinator": "coordinator",
               "coordinatorctl": "coordinatorctl",
+              "adapter": "adapter",
+              "adapterctl": "adapterctl",
           }
           # Historical repeatability still compares the immutable Relay bytes,
           # while current manifests cannot reintroduce them.

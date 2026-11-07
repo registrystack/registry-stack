@@ -928,7 +928,7 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
     assert_eq!(
         first.stopped,
         Some(StopReason::DestinationStop {
-            code: "coordinator.event.outcome-uncertain".to_string()
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
         })
     );
     let second = run_pass(&pool, &program, &destination, PassOptions::default()).await;
@@ -1019,7 +1019,7 @@ async fn maintained_kobo_pack_reaches_proposal_repeat_and_resolved_revision_revi
     assert_eq!(
         first.stopped,
         Some(StopReason::DestinationStop {
-            code: "coordinator.event.outcome-uncertain".to_string()
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
         })
     );
     assert_eq!(first.items_read, 1);
@@ -1320,7 +1320,7 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
         &issuer,
         &coordinator.origin,
         &no_prior_run,
-        "revised-reviewed",
+        "unresolved-reviewed",
     )
     .await;
     assert_revised_run_used_unresolved_review(&issuer, &coordinator.origin, &no_prior_run).await;

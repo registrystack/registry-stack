@@ -120,6 +120,29 @@ class ReleaseRosterTest(TestCase):
         self.assertTrue(release_roster.coordinator_binaries_in_release((0, 44, 0)))
         self.assertFalse(release_roster.coordinator_in_release((0, 44, 0)))
 
+    def test_adapter_binaries_join_the_stack_train_from_v0_46_0(self) -> None:
+        self.assertEqual((0, 46, 0), release_roster.ADAPTER_FIRST_RELEASE)
+        self.assertFalse(release_roster.adapter_in_release((0, 45, 0)))
+        self.assertTrue(release_roster.adapter_in_release((0, 46, 0)))
+        adapter_builds = (
+            ("registry-adapter", "adapter"),
+            ("registry-adapterctl", "adapterctl"),
+        )
+        for build in adapter_builds:
+            with self.subTest(build=build):
+                self.assertNotIn(build, release_roster.additional_platform_builds((0, 45, 0)))
+                self.assertIn(build, release_roster.additional_platform_builds((0, 46, 0)))
+        # adapter-job stays source-build only until a release build enables a destination.
+        self.assertNotIn(
+            ("registry-adapter-job", "adapter-job"),
+            release_roster.additional_platform_builds((0, 46, 0)),
+        )
+        self.assertNotIn("adapter", release_roster.additional_installers((0, 45, 0)))
+        self.assertEqual(
+            ("registry-adapter", "ADAPTER", ("adapter", "adapterctl")),
+            release_roster.additional_installers((0, 46, 0))["adapter"],
+        )
+
     def test_relay_is_retired_from_v0_39(self) -> None:
         self.assertEqual((0, 39, 0), release_roster.RELAY_RETIREMENT_RELEASE)
         self.assertTrue(release_roster.relay_in_release((0, 38, 0)))
@@ -171,6 +194,25 @@ class ReleaseRosterTest(TestCase):
                         result = release_roster.main([command, version])
                     self.assertEqual(0, result)
                     self.assertEqual(expected, stdout.getvalue())
+
+        with self.subTest(command="additional-platform-builds", version="0.46.0"):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                result = release_roster.main(["additional-platform-builds", "0.46.0"])
+            self.assertEqual(0, result)
+            lines = stdout.getvalue().splitlines()
+            self.assertIn("registry-adapter adapter", lines)
+            self.assertIn("registry-adapterctl adapterctl", lines)
+            self.assertNotIn("registry-adapter-job adapter-job", lines)
+            self.assertIn("registry-coordinator coordinator", lines)
+
+        for version, expected in (("0.45.0", "false\n"), ("v0.46.0", "true\n")):
+            with self.subTest(command="adapter-in-release", version=version):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                    result = release_roster.main(["adapter-in-release", version])
+                self.assertEqual(0, result)
+                self.assertEqual(expected, stdout.getvalue())
 
         for version, expected in (("0.38.99", "true\n"), ("v0.39.0", "false\n")):
             with self.subTest(command="relay-in-release", version=version):

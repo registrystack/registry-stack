@@ -67,38 +67,29 @@ output.chmod(0o755)
         return result, output
 
     def test_every_binary_is_built_separately_and_smoked(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            result, output = self.run_builder(root, "0.44.0")
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual(
-                {
-                    f"{binary}-v0.44.0-linux-arm64"
-                    for _, binary in release_roster.ADDITIONAL_PLATFORM_BUILDS
-                },
-                {path.name for path in output.iterdir()},
-            )
-            calls = [
-                json.loads(line)
-                for line in (root / "calls.jsonl").read_text().splitlines()
-            ]
-            self.assertEqual(
-                [
-                    [
-                        "build",
-                        "--release",
-                        "--locked",
-                        "-p",
-                        crate,
-                        "--bin",
-                        binary,
-                        "--target",
-                        "aarch64-unknown-linux-gnu",
-                    ]
-                    for crate, binary in release_roster.ADDITIONAL_PLATFORM_BUILDS
-                ],
-                calls,
-            )
+        for version in ("0.44.0", "0.46.0"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                builds = release_roster.additional_platform_builds(
+                    release_roster.parse_version(version)
+                )
+                result, output = self.run_builder(root, version)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(
+                    {f"{binary}-v{version}-linux-arm64" for _, binary in builds},
+                    {path.name for path in output.iterdir()},
+                )
+                calls = [
+                    json.loads(line)
+                    for line in (root / "calls.jsonl").read_text().splitlines()
+                ]
+                expected = [
+                    ["build", "--release", "--locked", "-p", crate, "--bin", binary,
+                     "--target", "aarch64-unknown-linux-gnu"]
+                    for crate, binary in builds
+                ]
+                self.assertEqual(expected, calls)
+                self.assertFalse(any(path.name.startswith("adapter-job") for path in output.iterdir()))
 
     def test_historical_release_has_no_additional_builds(self):
         with tempfile.TemporaryDirectory() as temporary:

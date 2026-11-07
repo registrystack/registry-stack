@@ -1335,6 +1335,90 @@ fn check_refuses_an_already_stale_bound_extract_with_only_the_governed_source() 
 }
 
 #[test]
+fn check_names_the_source_endpoint_and_rule_when_a_runtime_origin_drifts_from_review() {
+    let root = tempfile::tempdir().expect("temporary deployment");
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence",
+    );
+    let bundle = root.path().join("bundle");
+    copy_tree(&project.join("bundle"), &bundle);
+    let bundle_configuration = bundle.join("evidence.yaml");
+    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
+    fs::write(
+        &bundle_configuration,
+        bundle_document.replace("        tlsTrustProfile: government-internal-pki\n", ""),
+    )
+    .expect("drop the private trust profile");
+
+    let secret_root = root.path().join("secrets");
+    fs::create_dir(&secret_root).expect("create private secret root");
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+        .expect("set private secret-root mode");
+
+    let reviewed_origin = "https://dhis2.gov.example";
+    let drifted_origin = "https://drifted-tracker.gov.example";
+    let runtime = fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
+    let runtime = runtime
+        .replacen(
+            "/etc/registry-evidence/bundle",
+            bundle.to_str().expect("bundle path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/run/secrets/registry-evidence",
+            secret_root.to_str().expect("secret path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/var/lib/registry-evidence/audit/evidence.jsonl",
+            root.path()
+                .join("audit.jsonl")
+                .to_str()
+                .expect("audit path is UTF-8"),
+            1,
+        )
+        .replacen(reviewed_origin, drifted_origin, 1)
+        .replace("        tlsTrustProfile: government-internal-pki\n", "")
+        .replace(
+            "    outboundTls:\n      trustProfiles:\n        government-internal-pki:\n          caBundleFile: /etc/registry-evidence/ca/government-internal.pem\n",
+            "",
+        );
+    let runtime_path = root.path().join("runtime.yaml");
+    fs::write(&runtime_path, runtime).expect("stage runtime");
+    refresh_package_envelope(&bundle);
+    set_tree_mode(&bundle, 0o555, 0o444);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).expect("seal runtime");
+
+    let output = invoke(&runtime_path, &["check", "--require-runtime-dependencies"]);
+
+    set_tree_mode(&bundle, 0o755, 0o644);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o644)).expect("unseal runtime");
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.deployment.refused",
+        "source pack or connection binding failed compilation: source `population-tracker` endpoint `tracker`: the runtime `baseUrl` differs from the reviewed `baseUrl`",
+    );
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    for withheld in [
+        reviewed_origin,
+        drifted_origin,
+        "gov.example",
+        "secret:",
+        "dhis2-username",
+        "dhis2-password",
+        "government-internal",
+        "BEGIN CERTIFICATE",
+        secret_root.to_str().expect("secret path is UTF-8"),
+    ] {
+        assert!(
+            !diagnostic.contains(withheld),
+            "the binding refusal carried `{withheld}`: {diagnostic}"
+        );
+    }
+}
+
+#[test]
 fn check_reports_a_current_over_budget_extract_as_unavailable_not_stale() {
     let root = tempfile::tempdir().expect("temporary deployment");
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
@@ -1646,6 +1730,32 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
 /// cannot tell an undeclared not-found from a refused response shape.
 #[test]
 fn a_reference_case_whose_source_answers_an_undeclared_404_names_the_endpoint_and_status() {
+    assert_eq!(
+        acquire_details_when_the_source_answers(404),
+        json!([concat!(
+            "endpoint `events` answered 404 with an undeclared shape; ",
+            "declare the not-found answer in the pack, or correct the recorded response"
+        )])
+    );
+}
+
+/// A 409 or 422 is the source answering, not a protocol fault: the trace names
+/// the endpoint and says it was a client error, so the author looks at the
+/// request the pack sent rather than at the response shape.
+#[test]
+fn a_reference_case_whose_source_answers_another_4xx_names_a_client_error() {
+    for status in [409, 422] {
+        assert_eq!(
+            acquire_details_when_the_source_answers(status),
+            json!(["endpoint `events` answered a 4xx client error"]),
+            "status {status}"
+        );
+    }
+}
+
+/// Run the reference `positive` case with its source exchange answering
+/// `status`, and return the details of the failed acquire stage.
+fn acquire_details_when_the_source_answers(status: u16) -> Value {
     let project = ReferenceProject::stage();
     project.mutate_yaml("bundle/fixtures/adult-status-cases.yaml", |fixture| {
         let case = fixture_case_mut(fixture, "positive");
@@ -1661,7 +1771,7 @@ fn a_reference_case_whose_source_answers_an_undeclared_404_names_the_endpoint_an
                     && exchange.pointer("/request/tokenRequest").is_none()
             })
             .expect("the reference case carries its source exchange");
-        exchange["response"]["status"] = json!(404);
+        exchange["response"]["status"] = json!(status);
     });
     let output = project.sealed(|runtime| {
         invoke(
@@ -1677,9 +1787,14 @@ fn a_reference_case_whose_source_answers_an_undeclared_404_names_the_endpoint_an
         )
     });
 
-    assert!(!output.status.success(), "the 404 was accepted");
+    assert!(!output.status.success(), "the {status} was accepted");
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
-    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    let report: Value = serde_json::from_str(stdout).unwrap_or_else(|error| {
+        panic!(
+            "stdout is not one JSON document ({error}); stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
     let refused = report["cases"]
         .as_array()
         .expect("cases is an array")
@@ -1695,13 +1810,7 @@ fn a_reference_case_whose_source_answers_an_undeclared_404_names_the_endpoint_an
         json!(["source registered-birth-date, pack opencrvs-events, route evidence-birth-date"]),
         "ids are written as authored, not as Rust values"
     );
-    assert_eq!(
-        refused["stages"][1]["details"],
-        json!([concat!(
-            "endpoint `events` answered 404 with an undeclared shape; ",
-            "declare the not-found answer in the pack, or correct the recorded response"
-        )])
-    );
+    refused["stages"][1]["details"].clone()
 }
 
 /// A reference case whose scalar expectation misses by class says so, and the

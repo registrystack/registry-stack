@@ -21,6 +21,9 @@ use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
 use registry_platform_crypto::PublicJwk;
 use serde_json::{json, Value};
 
+#[path = "support/executable.rs"]
+mod executable;
+
 const TOKEN: &str = "secret.token.canary";
 const BINDING: &str = "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const AGE_CHECKS_TAG: &str = "age-checks";
@@ -920,6 +923,7 @@ impl Fixture {
             &evidence,
             b"#!/bin/sh\ncase \"$1\" in\n  prepare-local-relying-procedure)\n    printf '%s\\n' \"$@\" > \"$0.prepare.args\"\n    [ \"$2\" = '--runtime-config' ] || exit 40\n    [ \"$4\" = '--input' ] || exit 41\n    cp \"$5\" \"$0.input\" || exit 42\n    if IFS= read -r unexpected; then exit 43; fi\n    printf 'stdin-empty\\n' > \"$0.prepare.stdin\"\n    [ ! -f \"$0.fail-prepare\" ] || exit 44\n    cat \"$0.procedure\"\n    ;;\n  *) exit 45 ;;\nesac\n",
         );
+        executable::wait_until_executable_with(&evidence, "probe");
         Self {
             _temporary: temporary,
             _listener: listener,

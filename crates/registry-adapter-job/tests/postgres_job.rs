@@ -22,7 +22,8 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use registry_adapter_core::{AdapterJob, JobIdentity};
 use registry_adapter_engine::job::compile_job;
 use registry_adapter_job::destination::{
-    DeliverableItem, DeliveryIdentity, HandOffOutcome, JobDestination, NullDestination,
+    DeliverableItem, DeliveryFamily, DeliveryIdentity, HandOffOutcome, JobDestination,
+    NullDestination,
 };
 use registry_adapter_job::pass::{run_pass, PassOptions, StopReason};
 use registry_adapter_job::store::{self, ItemStatus};
@@ -351,13 +352,23 @@ impl JobDestination for ScriptedDestination {
 
 #[derive(Clone)]
 struct IdentifiedDestination {
+    family: DeliveryFamily,
     identity: [u8; 32],
     scripted: ScriptedDestination,
 }
 
 impl IdentifiedDestination {
     fn script(identity: [u8; 32], outcomes: Vec<HandOffOutcome>) -> Self {
+        Self::script_for(DeliveryFamily::Coordinator, identity, outcomes)
+    }
+
+    fn script_for(
+        family: DeliveryFamily,
+        identity: [u8; 32],
+        outcomes: Vec<HandOffOutcome>,
+    ) -> Self {
         Self {
+            family,
             identity,
             scripted: ScriptedDestination::script(outcomes),
         }
@@ -375,6 +386,7 @@ impl JobDestination for IdentifiedDestination {
         _item: &DeliverableItem,
     ) -> Option<DeliveryIdentity> {
         Some(DeliveryIdentity {
+            family: self.family,
             receiver: self.identity,
             canonical_body: Ok([0x33; 32]),
         })
@@ -751,6 +763,49 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     assert_eq!(row.run_id.as_deref(), Some("run-recovered"));
 }
 
+/// A pending BReg delivery is fenced the same way, and its stop names BReg:
+/// a different deployment, caller or Action stops before a second BReg call.
+#[tokio::test]
+async fn a_pending_breg_delivery_stops_on_receiver_drift_under_a_breg_code() {
+    let (fixture, pool) = pass_fixture().await;
+    let program = compile(&fixture).await;
+    let original = IdentifiedDestination::script_for(
+        DeliveryFamily::Breg,
+        [0x11; 32],
+        vec![HandOffOutcome::StopPass {
+            code: "adapter.job.breg-outcome-uncertain".to_string(),
+        }],
+    );
+    let first = run_pass(&pool, &program, &original, options(20)).await;
+    assert_eq!(original.delivered().len(), 1);
+    assert!(matches!(
+        first.stopped,
+        Some(StopReason::DestinationStop { .. })
+    ));
+
+    let changed = IdentifiedDestination::script_for(DeliveryFamily::Breg, [0x22; 32], vec![]);
+    let drifted = run_pass(&pool, &program, &changed, options(20)).await;
+    assert_eq!(
+        drifted.stopped,
+        Some(StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_RECEIVER_CHANGED.to_string(),
+        })
+    );
+    assert!(
+        changed.delivered().is_empty(),
+        "receiver drift stops before a second BReg call"
+    );
+    assert!(state(&pool, "case-daily").await.position.is_none());
+
+    let restored = IdentifiedDestination::script_for(
+        DeliveryFamily::Breg,
+        [0x11; 32],
+        vec![acknowledged("run-recovered"), acknowledged("run-b")],
+    );
+    let recovered = run_pass(&pool, &program, &restored, options(20)).await;
+    assert_eq!(recovered.items_redelivered, 1);
+}
+
 /// A maybe-admitted delivery cannot be redirected under the same event id.
 /// Deployment drift stops before a second recipient call, leaves the position
 /// unchanged, and restoring the frozen identity resumes the pending attempt.
@@ -761,7 +816,7 @@ async fn a_pending_delivery_stops_on_receiver_drift_and_recovers_on_equality() {
     let original = IdentifiedDestination::script(
         [0x11; 32],
         vec![HandOffOutcome::StopPass {
-            code: "coordinator.event.outcome-uncertain".to_string(),
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string(),
         }],
     );
     let first = run_pass(&pool, &program, &original, options(20)).await;
@@ -2751,8 +2806,8 @@ async fn status_explains_aggregate_holds_without_promising_release() {
     let isolated = isolated().await;
     let client = isolated.pool.get().await.expect("a pooled client");
     for (key, code) in [
-        ("submissions/a", "idempotency.expired"),
-        ("submissions/b", "idempotency.expired"),
+        ("submissions/a", "adapter.job.breg.idempotency.expired"),
+        ("submissions/b", "adapter.job.breg.idempotency.expired"),
         ("submissions/c", "adapter.job.breg-receipt-horizon"),
         ("submissions/d", "adapter.job.rabbitmq-event-changed"),
     ] {
@@ -2780,7 +2835,7 @@ async fn status_explains_aggregate_holds_without_promising_release() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("status prints JSON");
     assert_eq!(report.pointer("/items/held"), Some(&json!(4)));
     assert_eq!(
-        report.pointer("/holdsByCode/idempotency.expired"),
+        report.pointer("/holdsByCode/adapter.job.breg.idempotency.expired"),
         Some(&json!(2))
     );
     assert_eq!(
@@ -2796,7 +2851,7 @@ async fn status_explains_aggregate_holds_without_promising_release() {
         .expect("status prints aggregate hold guidance");
     assert_eq!(guidance.len(), 3);
     for (code, count, owner) in [
-        ("idempotency.expired", 2, "breg"),
+        ("adapter.job.breg.idempotency.expired", 2, "breg"),
         ("adapter.job.breg-receipt-horizon", 1, "breg"),
         ("adapter.job.rabbitmq-event-changed", 1, "broker-operator"),
     ] {
@@ -2853,7 +2908,7 @@ async fn inspect_explains_direct_and_coordinator_holds_without_item_values() {
     for (fixture, code, run_id, prior_run_id, owner, reference, authority) in [
         (
             &direct,
-            "idempotency.expired",
+            "adapter.job.breg.idempotency.expired",
             Some("proposal-a"),
             None,
             "breg",
@@ -3226,7 +3281,7 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
             &mut client,
             "case-daily",
             "submissions/a",
-            "idempotency.expired",
+            "adapter.job.breg.idempotency.expired",
             None,
             SystemTime::now(),
             stale,
@@ -3417,7 +3472,10 @@ async fn an_answer_code_over_its_bound_stops_under_the_invalid_answer_code() {
             code: "y".repeat(300),
         },
         held(&"z".repeat(300), None),
-        held("idempotency.expired", Some(&"r".repeat(300))),
+        held(
+            "adapter.job.breg.idempotency.expired",
+            Some(&"r".repeat(300)),
+        ),
         acknowledged(&"r".repeat(300)),
     ] {
         let (fixture, pool) = pass_fixture().await;

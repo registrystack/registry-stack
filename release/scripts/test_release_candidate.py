@@ -159,6 +159,20 @@ class ReleaseCandidateTest(TestCase):
         self.assertFalse(any(name.startswith("coordinator") for name in historical))
         self.assertNotIn("coordinator", self.module._candidate_image_names("0.44.0"))
 
+    def test_v0_46_0_publishes_the_adapter_binaries_and_installer_without_an_image(self):
+        inventory = self.module._release_payload_inventory("0.46.0")
+        for binary in ("adapter", "adapterctl"):
+            for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+                suffix = ".tar.gz" if platform == "macos-arm64" else ""
+                with self.subTest(binary=binary, platform=platform):
+                    self.assertEqual("binary", inventory.get(f"{binary}-v0.46.0-{platform}{suffix}"))
+        self.assertFalse(any(name.startswith("adapter-job") for name in inventory))
+        self.assertEqual("installer", inventory.get("adapter-v0.46.0-install.sh"))
+        self.assertEqual("installer", inventory.get("adapter-install.sh"))
+        self.assertNotIn("adapter", self.module._candidate_image_names("0.46.0"))
+        historical = self.module._release_payload_inventory("0.45.0")
+        self.assertFalse(any(name.startswith("adapter") for name in historical))
+
     def setUp(self) -> None:
         self.module = load_module()
         enabled = mock.patch.object(

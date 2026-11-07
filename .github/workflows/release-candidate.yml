@@ -557,6 +557,17 @@ jobs:
             "${coordinatorctl_binary}" init --directory "${coordinator_project}"
             "${coordinatorctl_binary}" check --project "${coordinator_project}"
           fi
+          adapter_in_release="$(python3 release/scripts/release_roster.py \
+            adapter-in-release "${{ needs.validate.outputs.version }}")"
+          if [[ "${adapter_in_release}" == true ]]; then
+            for adapter_binary in adapter adapterctl; do
+              test "$("dist/bin/${adapter_binary}-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+                "${adapter_binary} ${{ needs.validate.outputs.version }}"
+            done
+            "dist/bin/adapterctl-${{ needs.validate.outputs.tag }}-linux-amd64" check products/adapter/examples/dhis2-tracker/project.yaml \
+              --profile products/adapter/profiles/breg-records/profile.yaml \
+              --pack products/adapter/packs/dhis2-tracker/pack.yaml >/dev/null
+          fi
 
           render_in_release="$(python3 release/scripts/release_roster.py \
             render-in-release "${{ needs.validate.outputs.version }}")"

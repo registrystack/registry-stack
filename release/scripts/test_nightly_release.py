@@ -64,6 +64,21 @@ class NightlyTest(unittest.TestCase):
         self.assertNotIn(f"registry-render-{tag}-macos-arm64.tar.gz", historical["payloads"])
         self.assertEqual(historical, nightly.validate_v2_roster(historical, tag))
 
+    def test_adapter_binaries_join_the_nightly_roster_with_their_first_release(self):
+        tag = f"v0.46.0-nightly.20261104.{SHA}"
+        roster = nightly.current_roster("0.46.0", tag)
+        self.assertEqual(nightly.V2_4_ROSTER_PROFILE, roster["profile"])
+        self.assertIn("adapter", roster["installers"])
+        self.assertFalse(any(image.startswith("adapter") for image in roster["images"]))
+        inventory = release_candidate._release_payload_inventory("0.46.0")
+        expected = sorted(name.replace("v0.46.0", tag) for name, kind in inventory.items() if kind in {"binary", "notice"})
+        self.assertEqual(expected, roster["payloads"])
+        for binary in ("adapter", "adapterctl"):
+            self.assertIn(f"{binary}-{tag}-macos-arm64.tar.gz", roster["payloads"])
+        self.assertEqual(roster, nightly.validate_v2_roster(roster, tag))
+        before = nightly.current_roster("0.45.0", tag.replace("0.46.0", "0.45.0"))
+        self.assertEqual(nightly.V2_2_ROSTER_PROFILE, before["profile"])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

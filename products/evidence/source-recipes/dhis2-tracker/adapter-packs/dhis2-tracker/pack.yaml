@@ -39,6 +39,7 @@ sourceRoutes:
         query:
           program: {constant: Prg00000001}
           orgUnits: {constant: Org00000001}
+          orgUnitMode: {constant: SELECTED}
           trackedEntities: {exchangeProperty: requestedRecordReference}
           fields: {constant: 'trackedEntity,attributes[attribute,value]'}
           pageSize: {constant: '2'}

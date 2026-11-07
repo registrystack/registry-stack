@@ -44,10 +44,44 @@ loaded Adapter process exposes to an external gateway.
 
 ## Status
 
-Unreleased and pre-1.0. The configuration formats are `v1alpha1` and may
-change without migration. `CONCEPT.md` section 8.10 records each ported
-concept and its evidence. Section 17
-owns the ingestion contract and its declared limits.
+Released from Registry Stack 0.46.0, pre-1.0. The configuration formats are
+`v1alpha1` and may change without migration. `CONCEPT.md` section 8.10
+records each ported concept and its evidence. Section 17 owns the ingestion
+contract and its declared limits.
+
+## Install
+
+From 0.46.0, each Registry Stack release publishes the `adapter` runtime and
+the `adapterctl` author tool for Linux amd64, Linux arm64, and macOS arm64 on the
+[release page](https://github.com/registrystack/registry-stack/releases),
+checked against the release `SHA256SUMS`. Linux assets are executables named
+`<binary>-<tag>-linux-<arch>`; macOS assets are `.tar.gz` bundles with the
+executable, its AWS-LC-FIPS libraries, and notices. There is no Adapter
+container image; build one from this repository if you need it.
+
+Authenticate the checksum bundle as
+[`release/VERIFY.md`](../../release/VERIFY.md) describes, then install the
+binaries with the release-pinned installer or as an `rstack` component:
+
+```sh
+bash adapter-vX.Y.Z-install.sh
+adapterctl --version
+
+rstack install adapter
+rstack adapter check --help
+```
+
+The installer puts the two binaries in `~/.local/bin`; set
+`ADAPTER_INSTALL_DIR` to change that. `rstack install adapter` installs the
+same two binaries into an `rstack` generation, and `rstack adapter` runs
+`adapterctl`. Neither path needs a Rust toolchain.
+
+`adapter-job`, the governed-ingestion job host, is not yet released. Build it
+from this repository with `cargo build --release --locked -p
+registry-adapter-job --bin adapter-job`, adding the features for the sources
+(`job-file`, `job-postgres`) and destinations (`direct-breg`,
+`signed-coordinator-event`) you need; a default build delivers nowhere.
+[`CONCEPT.md`](CONCEPT.md) section 17 records what the job host serves.
 
 ## Crates
 
@@ -178,6 +212,12 @@ references for the password or private key. The maintained
 [`sftp-source` example](examples/sftp-source/README.md) shows the runtime shape
 and producer lifecycle.
 
+Each page downloads the whole file, up to `maximumFileBytes`, within the
+`pollEnrich` step's `timeoutMilliseconds`. Size that timeout to at least the file
+size divided by the link bandwidth, and keep the number of pages per file low
+(a larger `maximumRowsPerPage` means fewer pages). Otherwise the pass stops with
+`adapter.job.read-timeout` and the next pass starts the same page again.
+
 ## Read a PostgreSQL view
 
 A job can page a read-only query over a PostgreSQL view and register each row in
@@ -244,12 +284,26 @@ an unchanged held item is skipped by ordinary passes and rescans. Resolve a
 BReg outcome in BReg, or a Coordinator Run and linked review in their owning
 products.
 
+A refusal the destination answered is stored as
+`adapter.job.breg.<word>` or `adapter.job.coordinator.<word>`, where `<word>`
+is the destination's own refusal word. The prefix says which product to ask;
+the word is the one its documentation uses.
+
 For `adapter.job.rabbitmq-event-changed`, first establish any possible
 destination outcome. The broker operator then resolves the old unsettled
 delivery under approved broker policy. Only after that does the source
 operator correct immutable-identity and version handling for legitimate
 later messages. Publishing a new message ID does not clear the old held row or
 acknowledge its delivery; that delivery can continue to block the queue head.
+
+A pass that stops as `adapter.job.projection-flat-dotted-name` read a row
+whose flat member is named like a dotted `projection.fields` entry, such as a
+CSV column headed `household.size`. A dotted field reads a nested object, so
+the projection would hand the destination a `null`; the pass stops before
+staging the page instead, and nothing on it is delivered. Group the columns
+into a nested object in the route (a `setBody` that builds
+`{"household": {"size": ...}}`), or read a source that delivers the nested
+object, then run the job again.
 
 A pass that stops as `adapter.job.identity-migration-required` found stored
 file or SFTP items that predate the job's item-identity binding (store
@@ -264,7 +318,24 @@ again. The host never infers identity from stored keys, rewrites rows, or
 resets the cursor automatically. To keep the old identity instead, restore the
 previous job definition. `pass --dry-run` shows the same stop before reading a
 page. The [Kobo job operations guide](examples/kobotoolbox-job/OPERATIONS.md)
-describes the receipt and the audit line.
+describes the receipt and the audit line. The job store keeps no audit row for
+the rebind; the stderr line and the stdout receipt are the record, so keep both
+in your log pipeline.
+
+A pass that stops with `adapter.job.page-bytes-bound` built a page larger than
+`profile.maximumPageBytes`. The cursor does not move, so every later pass
+stops at the same place until you change the profile. Lower
+`profile.read.maximumRowsPerPage` (or the file source's `maxMessagesPerPoll`) so
+a page fits, or raise `profile.maximumPageBytes`, which cannot exceed
+`profile.maximumResponseBytes`. Then run the job again.
+
+`profile.maximumPageBytes` is checked after a page is built, not while it is
+built: a file or PostgreSQL source reads up to `maximumRowsPerPage` rows
+before the check runs, so a page can be larger than the bound in memory before
+the pass stops. The real memory ceiling is therefore
+`maximumRowsPerPage * maximumRowBytes`; size those two members, not only
+`maximumPageBytes`, to the memory you can spare. The stop report prints the
+same fix as its `next` step.
 
 ## Check the product
 

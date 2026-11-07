@@ -58,7 +58,9 @@ Prepare the source and one destination:
    `_uuid`, sorted keyset reads, edit discovery, and form size.
 2. Bind `kobo-api` to the selected form's
    `/api/v2/assets/<asset-uid>/data` URL and give the job a source account
-   restricted to that form.
+   restricted to that form. Bind that account's API token through the
+   credential's `tokenRef` (`secret:env/KOBO_TOKEN` in the examples), not its
+   password: a Kobo password also signs in to the web UI.
 3. For the direct job, configure the reviewed Base Registry Engine (BReg)
    Action, mapping, ingestion access profile, and narrowly scoped BReg
    credential. The [`kobotoolbox-breg`](../kobotoolbox-breg/README.md) example
@@ -286,7 +288,11 @@ that would now build a different body stops as
 could start a second Run). `adapter-job status` lists the pending keys. Restore
 the previous job definition, let passes settle those items, then ship the
 change. A changed receiver stops as `adapter.job.coordinator-receiver-changed`
-instead; restoring the original receiver recovers it.
+instead; restoring the original receiver recovers it. A direct BReg job fences
+the same way under `adapter.job.breg-body-changed` (the mapped operation
+differs), `adapter.job.breg-receiver-changed` (another BReg deployment, caller,
+access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
+(staged before schema 103); the recoveries are the same.
 
 A pass that stops as `adapter.job.identity-migration-required` found stored
 items that predate the job's item-identity binding (store schema 103). Confirm
@@ -297,6 +303,9 @@ a JSON receipt on stdout and an `adapter.job.identity-rebound` audit line on
 stderr; the next pass reads the current identity's items as new, so source rows may
 be delivered again. To keep the old identity instead, restore the previous
 job definition. `pass --dry-run` shows the same stop before reading a page.
+The job store keeps no audit row for the rebind: the audit line and the
+receipt are the only record, so send both to your log pipeline and retain them
+as you would any other operator change record.
 
 A new process reloads secret material behind the same environment reference.
 Restoring trusted material behind the same reference is corrected-material

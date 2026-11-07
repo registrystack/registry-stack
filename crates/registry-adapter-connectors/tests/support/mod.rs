@@ -35,6 +35,12 @@ pub const REVISION: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 pub const ACTION_REVISION: &str =
     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/// The client's per-attempt timeout. Only a scripted `hanging` answer ever
+/// reaches it, and that is how the unknown-outcome tests lose an answer; every
+/// other exchange answers in milliseconds. It is long enough that a heavily
+/// loaded host cannot turn an ordinary exchange into `transport.timeout`, and
+/// short enough that a lost answer costs seconds, not minutes.
+pub const ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 pub const PROFILE: &str = "writer";
 pub const IMMEDIATE_ACTION: &str = "register-company";
 pub const PROPOSAL_ACTION: &str = "correct-company";
@@ -248,7 +254,7 @@ impl Mock {
                 "company",
                 "companies",
             )
-            .with_attempt_timeout(std::time::Duration::from_millis(150)),
+            .with_attempt_timeout(ATTEMPT_TIMEOUT),
         )
         .await
         .expect("connector resolves against the scripted metadata");
@@ -385,8 +391,7 @@ impl Mock {
             )
             .with_tombstone(tombstone)
             .with_import_profile(true)
-            // A short attempt timeout keeps the unknown-outcome tests fast.
-            .with_attempt_timeout(std::time::Duration::from_millis(150)),
+            .with_attempt_timeout(ATTEMPT_TIMEOUT),
         )
         .await
         .expect("connector resolves against the scripted metadata");

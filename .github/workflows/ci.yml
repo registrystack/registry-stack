@@ -2431,6 +2431,13 @@ jobs:
             -- --ignored --exact \
             | tee "${RUNNER_TEMP}/evidence-sqlite-starter-target.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-sqlite-starter-target.log" || { echo "::error::expected exactly one passing test for the_generated_sqlite_starter_target_binds_its_extract_profile"; exit 1; }
+          # A fresh starter must package against the local target made for it,
+          # once it binds its published extract.
+          cargo test --locked -p registry-evidencectl --test scaffold \
+            a_fresh_starter_packages_against_its_new_local_target \
+            -- --ignored --exact \
+            | tee "${RUNNER_TEMP}/evidence-starter-package.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-starter-package.log" || { echo "::error::expected exactly one passing test for a_fresh_starter_packages_against_its_new_local_target"; exit 1; }
           # Current authoring checks are offline. Fixture evaluation is a
           # separate compiled-target proof against the runtime built above.
           # Exact filters and one-pass guards refuse a renamed empty proof.

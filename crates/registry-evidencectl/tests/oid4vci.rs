@@ -1,5 +1,8 @@
 use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
+#[path = "support/executable.rs"]
+mod executable;
+
 /// A stand-in wallet-delivery binary that identifies itself as `reported` when
 /// asked for its version and otherwise prints the arguments it received.
 fn wallet_fixture_reporting(reported: &str) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -16,6 +19,7 @@ fn wallet_fixture_reporting(reported: &str) -> (tempfile::TempDir, std::path::Pa
     )
     .unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    executable::wait_until_executable(&binary);
     (generation, binary)
 }
 

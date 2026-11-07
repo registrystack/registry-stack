@@ -43,7 +43,10 @@ representation and binding against its ceiling. The example grant names
 `record-status` and `record-reference-v1`; replace these with your project's
 identifiers. Add the connections or extract bindings required by its Sources.
 `evidencectl package` resolves the signer's public key from the target, then
-emits `bundle/`, `runtime.yaml` and `compiled-authority.yaml` in one candidate. Build staging
+emits `bundle/`, `runtime.yaml` and `compiled-authority.yaml` in one candidate. With
+`--format json`, the report also carries `packageDigest` and a `requirements` list whose
+entries give each requirement's `id` and `configurationRevision`, the revision a relying
+party pins for that requirement. Build staging
 and production separately from the same source revision. Do not promote a
 staging candidate by editing its bytes.
 

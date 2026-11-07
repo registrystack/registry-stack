@@ -50,6 +50,24 @@ pub const DESTINATION_ANSWER_INVALID: &str = "adapter.job.destination-answer-inv
 /// bytes: the item table's own column bound.
 pub const MAXIMUM_ANSWER_BYTES: usize = 256;
 
+/// The closed item code of a BReg problem word: the word rides after the
+/// `adapter.job.breg.` prefix, so an item row never shows a bare product
+/// word and the destination stays readable from the code alone.
+#[must_use]
+pub fn breg_item_code(word: &str) -> String {
+    format!("adapter.job.breg.{word}")
+}
+
+/// The closed item code of a Coordinator problem word or event outcome:
+/// the word rides after the `adapter.job.coordinator.` prefix. A word that
+/// already names Coordinator (`coordinator.event.invalid-answer`) is not
+/// prefixed twice.
+#[must_use]
+pub fn coordinator_item_code(word: &str) -> String {
+    let word = word.strip_prefix("coordinator.").unwrap_or(word);
+    format!("adapter.job.coordinator.{word}")
+}
+
 /// How one hand-off ended. Every code is the destination's own and
 /// value-free: the pass records it and never derives a message from the
 /// item.
@@ -122,16 +140,29 @@ pub struct DeliverableItem {
     pub projected: Value,
 }
 
-/// What a signed destination commits to before an item leaves the process.
+/// Which destination a [`DeliveryIdentity`] fences, so a stopped pass names
+/// the receiver the operator configured, never another destination's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeliveryFamily {
+    /// The signed Coordinator event destination.
+    Coordinator,
+    /// The direct BReg destination.
+    Breg,
+}
+
+/// What a fenced destination commits to before an item leaves the process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeliveryIdentity {
+    /// The destination whose stop codes a refused fence reports.
+    pub family: DeliveryFamily,
     /// The digest of the selected public governed receiver authority and
     /// configuration.
     pub receiver: [u8; 32],
-    /// The SHA-256 digest of the exact canonical event envelope bytes the
-    /// destination would send. `Err(())` means the current item cannot form
-    /// canonical bytes and therefore must never recover an uncertain pending
-    /// attempt by changing or discarding its frozen body.
+    /// The SHA-256 digest of the exact canonical bytes (an event envelope, or
+    /// the mapped BReg operation) the destination would send. `Err(())` means
+    /// the current item cannot form canonical bytes and therefore must never
+    /// recover an uncertain pending attempt by changing or discarding its
+    /// frozen body.
     pub canonical_body: Result<[u8; 32], ()>,
 }
 
@@ -141,8 +172,8 @@ pub struct DeliveryIdentity {
 /// trait an object, which the pass takes as `&dyn JobDestination`, so a
 /// destination is a configuration choice and not a compile-time one.
 pub trait JobDestination: Send + Sync {
-    /// The identities a signed destination freezes before it sends, or `None`
-    /// when this destination does not use the signed-event fence. The pass
+    /// The identities a fenced destination freezes before it sends, or `None`
+    /// when this destination does not use the delivery-identity fence. The pass
     /// freezes both before calling [`Self::deliver`], so a pending retry
     /// cannot silently move the same event identity to another target or
     /// change the event bytes. The two identities travel together because a
@@ -406,6 +437,23 @@ async fn post_json(url: &str, body: &[u8], timeout: Duration) -> Result<FixtureA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_native_word_rides_after_its_destination_prefix() {
+        assert_eq!(
+            breg_item_code("idempotency.expired"),
+            "adapter.job.breg.idempotency.expired"
+        );
+        assert_eq!(
+            coordinator_item_code("idempotency.key-reused"),
+            "adapter.job.coordinator.idempotency.key-reused"
+        );
+        assert_eq!(
+            coordinator_item_code("coordinator.event.invalid-answer"),
+            "adapter.job.coordinator.event.invalid-answer",
+            "a word that names Coordinator is not prefixed twice"
+        );
+    }
 
     #[test]
     fn the_fixture_destination_refuses_any_non_loopback_receiver() {

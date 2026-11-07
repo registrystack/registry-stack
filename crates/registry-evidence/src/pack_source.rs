@@ -15,9 +15,10 @@ use registry_adapter_core::{
 };
 use registry_adapter_engine::component::http::uri::PinnedOrigin;
 use registry_adapter_engine::evidence::{
-    compile_evidence_with_protocols, EvidenceBeginError, EvidenceCompileInputs,
-    EvidenceExecutionError, EvidenceHostHooks, EvidenceLimits, EvidenceLookup, EvidenceProgram,
-    EvidenceRuntimeBindings, EvidenceTerminalError,
+    compile_evidence_with_protocols, ConnectionPolicyReason, EvidenceBeginError,
+    EvidenceCompileError, EvidenceCompileInputs, EvidenceExecutionError, EvidenceHostHooks,
+    EvidenceLimits, EvidenceLookup, EvidenceProgram, EvidenceRuntimeBindings,
+    EvidenceTerminalError,
 };
 use registry_adapter_engine::host_protocol::{HostProtocolAttachment, HostProtocolRegistry};
 use registry_adapter_engine::route::{EvidenceHttpDiagnostic, RouteFailure};
@@ -67,6 +68,128 @@ pub enum PackSourceError {
     Credential,
     #[error("the source operation timed out")]
     Timeout,
+}
+
+/// Why a pack source did not compile against its reviewed connection and
+/// runtime binding. Each reason is a fixed sentence: it names the member to
+/// change and never carries an origin, a secret reference or trust bytes.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum SourceBindingReason {
+    #[error("the `sourceAcquisition` limits are invalid")]
+    AcquisitionLimits,
+    #[error("the Evidence host protocol registry is unavailable")]
+    HostProtocols,
+    #[error("the bundle carries no pack closure for this source")]
+    PackMissing,
+    #[error("the source's `connection` has no reviewed or runtime `sourceConnections` entry")]
+    ConnectionUnbound,
+    #[error("the reviewed connection names an endpoint the pack does not declare")]
+    PackEndpointMissing,
+    #[error(
+        "the reviewed `baseUrl` is not a canonical source origin, or is not `https` outside the local assurance profile"
+    )]
+    BaseUrlRefused,
+    #[error(
+        "the pack endpoint has no authentication and the runtime binding no `mtlsIdentity`; only a loopback origin under the local assurance profile may"
+    )]
+    Unauthenticated,
+    #[error("the route's static data-operation count is above `sourceAcquisition.maximumDataOperations`")]
+    OperationBudget,
+    #[error("the pack route does not compile; run `adapterctl check` on the pack")]
+    Route,
+    #[error(
+        "a requirement Source is on the wrong acquisition channel: only `acquisition.holderPresented.source` may use the wallet presentation protocol, and it must"
+    )]
+    AcquisitionChannel,
+    #[error("{0}")]
+    Policy(ConnectionPolicyReason),
+}
+
+/// A pack source refused at compilation, naming the governed source and
+/// endpoint ids an operator corrects, with the value-free rule it broke.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceBindingError {
+    source_id: Option<String>,
+    endpoint: Option<String>,
+    reason: SourceBindingReason,
+}
+
+impl SourceBindingError {
+    fn new(reason: SourceBindingReason) -> Self {
+        Self {
+            source_id: None,
+            endpoint: None,
+            reason,
+        }
+    }
+
+    fn at_endpoint(endpoint: &str, reason: SourceBindingReason) -> Self {
+        Self {
+            endpoint: Some(endpoint.to_owned()),
+            ..Self::new(reason)
+        }
+    }
+
+    fn for_source(mut self, source_id: &str) -> Self {
+        self.source_id = Some(source_id.to_owned());
+        self
+    }
+
+    /// The bundle `sources` id, when the refusal belongs to one source.
+    #[must_use]
+    pub fn source_id(&self) -> Option<&str> {
+        self.source_id.as_deref()
+    }
+
+    /// The pack endpoint id, when the refusal belongs to one endpoint.
+    #[must_use]
+    pub fn endpoint(&self) -> Option<&str> {
+        self.endpoint.as_deref()
+    }
+
+    #[must_use]
+    pub const fn reason(&self) -> SourceBindingReason {
+        self.reason
+    }
+}
+
+impl std::fmt::Display for SourceBindingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (&self.source_id, &self.endpoint) {
+            (Some(source), Some(endpoint)) => write!(
+                formatter,
+                "source `{source}` endpoint `{endpoint}`: {}",
+                self.reason
+            ),
+            (Some(source), None) => write!(formatter, "source `{source}`: {}", self.reason),
+            (None, Some(endpoint)) => write!(formatter, "endpoint `{endpoint}`: {}", self.reason),
+            (None, None) => std::fmt::Display::fmt(&self.reason, formatter),
+        }
+    }
+}
+
+impl std::error::Error for SourceBindingError {}
+
+/// Keep the engine's endpoint and connection-policy rule; every other compile
+/// failure becomes a fixed reason, because its detail can name pack-owned
+/// strings that do not belong in a deployment diagnostic.
+fn compile_refusal(error: &EvidenceCompileError) -> SourceBindingError {
+    match error {
+        EvidenceCompileError::ConnectionPolicy { endpoint, reason } => {
+            SourceBindingError::at_endpoint(endpoint, SourceBindingReason::Policy(*reason))
+        }
+        EvidenceCompileError::EndpointUnbound => SourceBindingError::new(
+            SourceBindingReason::Policy(ConnectionPolicyReason::EndpointUnbound),
+        ),
+        EvidenceCompileError::StaticOperationBudgetExceeded { .. }
+        | EvidenceCompileError::StaticOperationBudgetUncountable => {
+            SourceBindingError::new(SourceBindingReason::OperationBudget)
+        }
+        EvidenceCompileError::HostProtocol => {
+            SourceBindingError::new(SourceBindingReason::HostProtocols)
+        }
+        _ => SourceBindingError::new(SourceBindingReason::Route),
+    }
 }
 
 /// A categorical source failure plus an operator-only governed diagnosis.
@@ -235,6 +358,38 @@ impl PackSourceExecutor {
         limits: EvidenceLimits,
         protocols: &HostProtocolRegistry,
     ) -> Result<Self, PackSourceError> {
+        Self::compile_diagnosed_with_registry(source, closure, runtime, policies, limits, protocols)
+            .map_err(|_| PackSourceError::Plan)
+    }
+
+    /// Compile while retaining the endpoint and value-free rule an operator
+    /// corrects when the binding is refused.
+    pub fn compile_diagnosed(
+        source: &SourceConfig,
+        closure: &SourcePack,
+        runtime: &EvidenceRuntimeBindings,
+        policies: &[EvidenceConnectionPolicy],
+        limits: EvidenceLimits,
+    ) -> Result<Self, SourceBindingError> {
+        Self::compile_diagnosed_with_registry(
+            source,
+            closure,
+            runtime,
+            policies,
+            limits,
+            &crate::host_protocol::registry()
+                .map_err(|_| SourceBindingError::new(SourceBindingReason::HostProtocols))?,
+        )
+    }
+
+    fn compile_diagnosed_with_registry(
+        source: &SourceConfig,
+        closure: &SourcePack,
+        runtime: &EvidenceRuntimeBindings,
+        policies: &[EvidenceConnectionPolicy],
+        limits: EvidenceLimits,
+        protocols: &HostProtocolRegistry,
+    ) -> Result<Self, SourceBindingError> {
         let pack = closure.pack();
         let artifacts = closure.artifacts();
         let program = compile_evidence_with_protocols(
@@ -249,7 +404,7 @@ impl PackSourceExecutor {
             },
             protocols,
         )
-        .map_err(|_| PackSourceError::Plan)?;
+        .map_err(|error| compile_refusal(&error))?;
         let channel = if route_reaches_protocol(
             &pack,
             source.route.as_str(),
@@ -345,14 +500,10 @@ impl PackSourceExecutor {
             if let Some(reason) = undeclared_not_found(failure.http_diagnostic()) {
                 observer.undeclared_not_found(reason);
             }
+            // A failure with an HTTP diagnostic is the source answering a
+            // status, or a host protocol refusing it; neither is shape drift.
             if failure.category() == PackSourceError::Protocol
-                && !matches!(
-                    failure.http_diagnostic(),
-                    Some(
-                        EvidenceHttpDiagnostic::Verification
-                            | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch
-                    )
-                )
+                && failure.http_diagnostic().is_none()
             {
                 observer.shape_drift(&[format!(
                     "pack {}@{}; route {}; artifact {}/pack.yaml; result contract violated",
@@ -547,7 +698,8 @@ fn dependency_outcome(failure: &PackSourceFailure) -> DependencyOutcome {
         Some(EvidenceHttpDiagnostic::Verification) => return DependencyOutcome::Verification,
         Some(
             EvidenceHttpDiagnostic::UndeclaredNotFound
-            | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch,
+            | EvidenceHttpDiagnostic::DeclaredNotFoundMismatch
+            | EvidenceHttpDiagnostic::OtherClientStatus,
         )
         | None => {}
     }
@@ -596,15 +748,17 @@ pub fn build_sources(
     bundle: &Bundle,
     document: &RuntimeDocument,
     secrets: &Arc<SecretResolver>,
-) -> Result<BTreeMap<String, PackSourceExecutor>, PackSourceError> {
+) -> Result<BTreeMap<String, PackSourceExecutor>, SourceBindingError> {
     if !channel_source_refusals(bundle).is_empty() {
-        return Err(PackSourceError::Plan);
+        return Err(SourceBindingError::new(
+            SourceBindingReason::AcquisitionChannel,
+        ));
     }
     let limits = document
         .config
         .source_acquisition
         .limits()
-        .map_err(|_| PackSourceError::Plan)?;
+        .map_err(|_| SourceBindingError::new(SourceBindingReason::AcquisitionLimits))?;
     let snapshots = document
         .source_extracts
         .iter()
@@ -613,7 +767,9 @@ pub fn build_sources(
     let mut connections = BTreeMap::new();
     for (id, binding) in document.config.source_connections.iter() {
         if binding.id.as_str() != id {
-            return Err(PackSourceError::Plan);
+            return Err(SourceBindingError::new(
+                SourceBindingReason::ConnectionUnbound,
+            ));
         }
         let ca = document
             .source_ca_bundles
@@ -632,36 +788,44 @@ pub fn build_sources(
     }
     let mut sources = BTreeMap::new();
     for (id, source) in bundle.config.sources.iter() {
-        let closure = bundle.source_pack(id).ok_or(PackSourceError::Plan)?;
-        let runtime = connections
-            .get(source.connection())
-            .ok_or(PackSourceError::Plan)?;
+        let refused = |reason| SourceBindingError::new(reason).for_source(id);
+        let refused_at = |endpoint: &str, reason| {
+            SourceBindingError::at_endpoint(endpoint, reason).for_source(id)
+        };
+        let closure = bundle
+            .source_pack(id)
+            .ok_or_else(|| refused(SourceBindingReason::PackMissing))?;
+        let unbound = || refused(SourceBindingReason::ConnectionUnbound);
+        let runtime = connections.get(source.connection()).ok_or_else(unbound)?;
         let policies = bundle
             .config
             .source_connections
             .get(source.connection())
-            .ok_or(PackSourceError::Plan)?;
+            .ok_or_else(unbound)?;
         let binding = document
             .config
             .source_connections
             .get(source.connection())
-            .ok_or(PackSourceError::Plan)?;
+            .ok_or_else(unbound)?;
         let pack = closure.pack();
         for policy in &policies.endpoints {
+            let name = policy.endpoint.as_str();
             let endpoint = pack
                 .endpoints
-                .get(policy.endpoint.as_str())
-                .ok_or(PackSourceError::Plan)?;
-            let actual = binding
-                .endpoints
-                .get(policy.endpoint.as_str())
-                .ok_or(PackSourceError::Plan)?;
+                .get(name)
+                .ok_or_else(|| refused_at(name, SourceBindingReason::PackEndpointMissing))?;
+            let actual = binding.endpoints.get(name).ok_or_else(|| {
+                refused_at(
+                    name,
+                    SourceBindingReason::Policy(ConnectionPolicyReason::EndpointUnbound),
+                )
+            })?;
             if crate::config::validate_source_url(&policy.base_url, true).is_err()
                 || PinnedOrigin::new(&policy.base_url).is_err()
                 || (!policy.base_url.is_https()
                     && bundle.config.assurance_profile != AssuranceProfile::Local)
             {
-                return Err(PackSourceError::Plan);
+                return Err(refused_at(name, SourceBindingReason::BaseUrlRefused));
             }
             if matches!(endpoint.authentication, EndpointAuthentication::None {})
                 && actual.mtls_identity.is_none()
@@ -671,12 +835,19 @@ pub fn build_sources(
                     )
                     .is_err())
             {
-                return Err(PackSourceError::Plan);
+                return Err(refused_at(name, SourceBindingReason::Unauthenticated));
             }
         }
         sources.insert(
             id.to_owned(),
-            PackSourceExecutor::compile(source, closure, runtime, &policies.endpoints, limits)?,
+            PackSourceExecutor::compile_diagnosed(
+                source,
+                closure,
+                runtime,
+                &policies.endpoints,
+                limits,
+            )
+            .map_err(|error| error.for_source(id))?,
         );
     }
     Ok(sources)
@@ -847,6 +1018,121 @@ fn route_error(error: &RouteFailure) -> PackSourceError {
 }
 
 #[cfg(test)]
+mod binding_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn every_binding_reason_is_a_fixed_sentence_naming_where_it_is_corrected() {
+        let cases = [
+            (
+                SourceBindingReason::AcquisitionLimits,
+                "`sourceAcquisition`",
+            ),
+            (SourceBindingReason::HostProtocols, "host protocol"),
+            (SourceBindingReason::PackMissing, "pack closure"),
+            (
+                SourceBindingReason::ConnectionUnbound,
+                "`sourceConnections`",
+            ),
+            (
+                SourceBindingReason::PackEndpointMissing,
+                "pack does not declare",
+            ),
+            (SourceBindingReason::BaseUrlRefused, "`baseUrl`"),
+            (SourceBindingReason::Unauthenticated, "`mtlsIdentity`"),
+            (
+                SourceBindingReason::OperationBudget,
+                "`sourceAcquisition.maximumDataOperations`",
+            ),
+            (SourceBindingReason::Route, "`adapterctl check`"),
+            (
+                SourceBindingReason::AcquisitionChannel,
+                "`acquisition.holderPresented.source`",
+            ),
+            (
+                SourceBindingReason::Policy(ConnectionPolicyReason::BaseUrlMismatch),
+                "the runtime `baseUrl` differs from the reviewed `baseUrl`",
+            ),
+        ];
+        for (reason, names) in cases {
+            let sentence = reason.to_string();
+            assert!(sentence.contains(names), "{reason:?} reads: {sentence}");
+            for withheld in ["://", "secret:", "BEGIN CERTIFICATE", ".pem"] {
+                assert!(!sentence.contains(withheld), "{reason:?} reads: {sentence}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_binding_refusal_names_each_governed_id_it_knows() {
+        let reason = SourceBindingReason::BaseUrlRefused;
+        assert_eq!(
+            SourceBindingError::at_endpoint("tracker", reason)
+                .for_source("population")
+                .to_string(),
+            format!("source `population` endpoint `tracker`: {reason}")
+        );
+        assert_eq!(
+            SourceBindingError::new(reason)
+                .for_source("population")
+                .to_string(),
+            format!("source `population`: {reason}")
+        );
+        assert_eq!(
+            SourceBindingError::at_endpoint("tracker", reason).to_string(),
+            format!("endpoint `tracker`: {reason}")
+        );
+        assert_eq!(
+            SourceBindingError::new(reason).to_string(),
+            reason.to_string()
+        );
+    }
+
+    #[test]
+    fn engine_compile_failures_keep_only_the_endpoint_and_a_fixed_rule() {
+        let policy = compile_refusal(&EvidenceCompileError::ConnectionPolicy {
+            endpoint: "tracker".to_owned(),
+            reason: ConnectionPolicyReason::TlsTrustProfileMismatch,
+        });
+        assert_eq!(policy.endpoint(), Some("tracker"));
+        assert_eq!(
+            policy.reason(),
+            SourceBindingReason::Policy(ConnectionPolicyReason::TlsTrustProfileMismatch)
+        );
+        for (error, reason) in [
+            (
+                EvidenceCompileError::EndpointUnbound,
+                SourceBindingReason::Policy(ConnectionPolicyReason::EndpointUnbound),
+            ),
+            (
+                EvidenceCompileError::StaticOperationBudgetExceeded {
+                    required: 9,
+                    maximum: 1,
+                },
+                SourceBindingReason::OperationBudget,
+            ),
+            (
+                EvidenceCompileError::StaticOperationBudgetUncountable,
+                SourceBindingReason::OperationBudget,
+            ),
+            (
+                EvidenceCompileError::HostProtocol,
+                SourceBindingReason::HostProtocols,
+            ),
+            (
+                EvidenceCompileError::RouteUnsupported("pack-owned detail".to_owned()),
+                SourceBindingReason::Route,
+            ),
+        ] {
+            let refusal = compile_refusal(&error);
+            assert_eq!(refusal.reason(), reason, "{error:?}");
+            assert_eq!(refusal.endpoint(), None, "{error:?}");
+            assert!(!refusal.to_string().contains("pack-owned detail"));
+        }
+    }
+}
+
+#[cfg(test)]
 mod outcome_tests {
     use super::*;
 
@@ -891,6 +1177,12 @@ mod outcome_tests {
                 PackSourceError::Dependency,
                 EvidenceHttpDiagnostic::ServerError,
                 "server-error",
+                None,
+            ),
+            (
+                PackSourceError::Protocol,
+                EvidenceHttpDiagnostic::OtherClientStatus,
+                "protocol",
                 None,
             ),
             (

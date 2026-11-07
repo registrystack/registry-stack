@@ -70,10 +70,13 @@ documents `curl -u username:password` against
 `https://[server-url]/token/?format=json`,
 https://support.kobotoolbox.org/api.html).
 
-An endpoint declares one kind, so this pack declares `basic`. A
-deployment that prefers the personal API token swaps the endpoint kind
-to `static-authorization` with `scheme: Token` and binds `tokenRef` in
-the runtime config; both sides of the kind match move together. The
+An endpoint declares one kind, so this pack declares
+`static-authorization` with `scheme: Token`, and the runtime config
+binds the personal API token through `tokenRef`. The token reads the
+API only. A Kobo password also signs in to the web UI, so a leaked
+password is a full account login. A deployment that must use Basic
+swaps the endpoint kind to `basic` and binds `usernameRef` and
+`passwordRef`; both sides of the kind match move together. The
 endpoint declares no request or response header allowlists: the
 documented read consumes no header the engine would copy.
 
@@ -136,6 +139,8 @@ These observations apply to that server and version:
    including a numeric answer encoded as a string. Group/repeat nesting
    and ambiguous-name refusal also have synthetic replay coverage; not
    every repeat or legacy form shape was exercised against the server.
+8. **Authentication:** the `Token` authentication the pack declares has
+   synthetic replay coverage; it was not re-run against the probe server.
 
 The direct registration drill does not establish the separate Coordinator
 workflow, automatic corrections, or approval authority for the ingestion

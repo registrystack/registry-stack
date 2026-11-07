@@ -17,6 +17,9 @@ use std::{
     process::{Command, Output},
 };
 
+#[path = "support/executable.rs"]
+mod executable;
+
 const SECRET_FILES: [&str; 2] = ["audit-hmac-key", "subject-binding-hmac-key"];
 
 /// A value planted inside the very requirement whose acquisition is rendered,
@@ -1054,6 +1057,7 @@ fn delegated_runtime_bounds_are_operational_and_never_disclose_child_output() {
             .expect("Evidence stub");
             fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
                 .expect("Evidence stub mode");
+            executable::wait_until_executable(&binary);
 
             let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
             command
@@ -1145,6 +1149,9 @@ fn delegated_runtime_version_handshake_bounds_are_operational_and_value_safe() {
             .expect("Evidence stub");
             fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
                 .expect("Evidence stub mode");
+            // The version answer of this stub is the behavior under test, so
+            // probe with another argument.
+            executable::wait_until_executable_with(&binary, "probe");
 
             let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
             command
@@ -1223,6 +1230,7 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
         .expect("Evidence stub");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
             .expect("Evidence stub mode");
+        executable::wait_until_executable(&binary);
 
         let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
             .args(["--format", format, "doctor", "--runtime-config"])

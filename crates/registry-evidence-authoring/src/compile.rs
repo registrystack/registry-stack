@@ -1077,7 +1077,9 @@ fn valid_sha256_uri(value: &str) -> bool {
     })
 }
 
-fn sha256_uri(bytes: &[u8]) -> String {
+/// The `sha256:` digest URI of `bytes`: the form every pack pin is written in.
+#[must_use]
+pub fn sha256_uri(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(64);
     for byte in digest {

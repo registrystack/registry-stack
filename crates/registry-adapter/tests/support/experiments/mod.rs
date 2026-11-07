@@ -6,12 +6,15 @@
 pub mod upstream;
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD;
@@ -184,11 +187,80 @@ impl Fixture {
 pub struct NativeExperiment {
     scenario: Scenario,
     child: Child,
+    /// The bound port, known once the adapter reports that it is listening.
     port: u16,
     key: registry_platform_crypto::PrivateJwk,
     runtime: PathBuf,
     environment: BTreeMap<String, String>,
+    stderr: StderrLog,
     _directory: tempfile::TempDir,
+}
+
+/// The adapter's stderr, drained on its own thread so a chatty adapter never
+/// blocks on a full pipe. The thread also reports the port from the
+/// adapter's `listening` line: the adapter binds port 0, so the harness
+/// never hands out a port that another process can take first.
+struct StderrLog {
+    text: Arc<Mutex<String>>,
+    reader: Option<JoinHandle<()>>,
+    listening: Receiver<u16>,
+}
+
+impl StderrLog {
+    fn drain(child: &mut Child) -> Self {
+        let pipe = child.stderr.take().expect("the adapter stderr is piped");
+        let text = Arc::new(Mutex::new(String::new()));
+        let (sender, listening) = mpsc::channel();
+        let collected = Arc::clone(&text);
+        let reader = std::thread::spawn(move || {
+            let mut pipe = BufReader::new(pipe);
+            let mut line = Vec::new();
+            let mut announced = false;
+            while pipe
+                .read_until(b'\n', &mut line)
+                .expect("read the adapter stderr")
+                > 0
+            {
+                let decoded = String::from_utf8_lossy(&line);
+                if !announced {
+                    if let Some(port) = listening_port(&decoded) {
+                        // The receiver is gone only once the test dropped the
+                        // experiment.
+                        let _ = sender.send(port);
+                        announced = true;
+                    }
+                }
+                collected
+                    .lock()
+                    .expect("the stderr log lock")
+                    .push_str(&decoded);
+                line.clear();
+            }
+        });
+        Self {
+            text,
+            reader: Some(reader),
+            listening,
+        }
+    }
+
+    /// Everything the adapter wrote, once it has exited and the pipe closed.
+    fn read_to_end(&mut self) -> String {
+        if let Some(reader) = self.reader.take() {
+            reader.join().expect("the stderr reader finishes");
+        }
+        self.text.lock().expect("the stderr log lock").clone()
+    }
+}
+
+/// The port of the adapter's `listening` log line, if `line` is that line.
+fn listening_port(line: &str) -> Option<u16> {
+    let event: Value = serde_json::from_str(line.trim()).ok()?;
+    if event["fields"]["message"] != "listening" {
+        return None;
+    }
+    let address = event["fields"]["address"].as_str()?;
+    Some(std::net::SocketAddr::from_str(address).ok()?.port())
 }
 
 impl Drop for NativeExperiment {
@@ -207,7 +279,6 @@ impl NativeExperiment {
         let database = schema_url().await;
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
-        let port = free_port();
         let directory = tempfile::tempdir().expect("experiment runtime scratch directory");
         let runtime = directory.path().join("runtime.yaml");
         let endpoint_yaml = endpoint_yaml(scenario, upstream);
@@ -227,7 +298,7 @@ kind: AdapterRuntimeConfig
 id: experiment-{slug}
 endpoints:
 {endpoint_yaml}listener:
-  bind: 127.0.0.1:{port}
+  bind: 127.0.0.1:0
 database:
   runtimeUrlRef: secret:env/EXPERIMENT_DB_URL
   migrationUrlRef: secret:env/EXPERIMENT_DB_URL
@@ -295,14 +366,16 @@ cursorKeyRef: secret:env/EXPERIMENT_CURSOR_KEY
             .envs(&environment)
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
-        let child = command.spawn().expect("start the native adapter binary");
+        let mut child = command.spawn().expect("start the native adapter binary");
+        let stderr = StderrLog::drain(&mut child);
         let mut served = Self {
             scenario,
             child,
-            port,
+            port: 0,
             key,
             runtime,
             environment,
+            stderr,
             _directory: directory,
         };
         served.wait_until_listening();
@@ -516,21 +589,24 @@ cursorKeyRef: secret:env/EXPERIMENT_CURSOR_KEY
         )
     }
 
+    /// Wait for this adapter's own `listening` line, so readiness never
+    /// rests on whichever process happens to answer on a port.
     fn wait_until_listening(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            if let Some(status) = self.child.try_wait().expect("poll the adapter") {
-                let mut stderr = String::new();
-                if let Some(mut pipe) = self.child.stderr.take() {
-                    let _ = pipe.read_to_string(&mut stderr);
-                }
-                panic!("the adapter exited early ({status}): {stderr}");
-            }
-            if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
+            if let Ok(port) = self
+                .stderr
+                .listening
+                .recv_timeout(Duration::from_millis(100))
+            {
+                self.port = port;
                 return;
             }
+            if let Some(status) = self.child.try_wait().expect("poll the adapter") {
+                let stderr = self.stderr.read_to_end();
+                panic!("the adapter exited early ({status}): {stderr}");
+            }
             assert!(Instant::now() < deadline, "the adapter never listened");
-            std::thread::sleep(Duration::from_millis(100));
         }
     }
 }
@@ -587,14 +663,6 @@ async fn schema_url() -> String {
     let url = format!("{base}{separator}options=-csearch_path%3D{schema}");
     tokio_postgres::Config::from_str(&url).expect("scoped database URL parses");
     url
-}
-
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind a free facade port")
-        .local_addr()
-        .expect("facade address")
-        .port()
 }
 
 /// Assert the recorded wire exchange matches the documented fixture and

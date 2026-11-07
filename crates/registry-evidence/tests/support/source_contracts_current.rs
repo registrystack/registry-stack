@@ -1410,7 +1410,11 @@ fn current_pack_compile_refuses_invalid_authentication_contracts() {
     );
     assert!(matches!(
         mismatch,
-        Err(EvidenceCompileError::ConnectionPolicy)
+        Err(EvidenceCompileError::ConnectionPolicy {
+            reason:
+                registry_adapter_engine::evidence::ConnectionPolicyReason::AuthenticationMismatch,
+            ..
+        })
     ));
 
     let (_root, secrets) = resolver(&[
@@ -1437,7 +1441,11 @@ fn current_pack_compile_refuses_invalid_authentication_contracts() {
     );
     assert!(matches!(
         changed_token_endpoint,
-        Err(EvidenceCompileError::ConnectionPolicy)
+        Err(EvidenceCompileError::ConnectionPolicy {
+            reason:
+                registry_adapter_engine::evidence::ConnectionPolicyReason::AuthenticationMismatch,
+            ..
+        })
     ));
 
     for resource in [

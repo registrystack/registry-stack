@@ -36,7 +36,7 @@ use registry_evidence::{
         AssertionChannel, JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference,
         SubjectBinding, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
-    pack_source::{PackSourceError, PackSourceExecutor},
+    pack_source::{PackSourceError, PackSourceExecutor, SourceBindingError},
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue},
     runtime::{
@@ -138,6 +138,10 @@ enum CommandError {
     /// diagnostic to the same value-free shape as the rest of `check`.
     AuditRoot(PersistentRootFault),
     Service(String),
+    /// A pack source did not compile against its reviewed connection and
+    /// runtime binding. It names the source and endpoint ids and the
+    /// value-free rule broken, never an origin, secret reference or trust bytes.
+    SourceBinding(SourceBindingError),
     /// The shared configuration reader refused a configuration file. Its
     /// diagnostics are printed unchanged after one sentence naming the step.
     Refused(Box<Report>),
@@ -161,6 +165,10 @@ impl fmt::Display for CommandError {
             }
             Self::AuditRoot(fault) => write!(formatter, "audit destination check failed: {fault}"),
             Self::Service(reason) => write!(formatter, "service failed: {reason}"),
+            Self::SourceBinding(error) => write!(
+                formatter,
+                "source pack or connection binding failed compilation: {error}"
+            ),
             Self::Refused(report) => write!(
                 formatter,
                 "the configuration reader refused the configuration\n{}",
@@ -1264,6 +1272,12 @@ fn push_dependency_error(check: &mut OfflineCheck, error: CommandError) {
             reason,
             "Run the check again on the target host.",
         ),
+        CommandError::SourceBinding(error) => check.push_deployment(
+            Severity::Error,
+            "evidence.deployment.refused",
+            CommandError::SourceBinding(error).to_string(),
+            "Correct the named endpoint's sourceConnections entry in the runtime file, or its reviewed policy in the bundle and rebuild with `evidencectl package`, then run the check again.",
+        ),
     }
 }
 
@@ -1338,7 +1352,7 @@ fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandErr
             CommandError::Audit("runtime audit initialization failed", fault)
         }
         RuntimeInitializationError::Signing(fault) => CommandError::Signing(fault),
-        RuntimeInitializationError::Source => CliError(SOURCES_UNAVAILABLE).into(),
+        RuntimeInitializationError::Source(error) => CommandError::SourceBinding(error),
         RuntimeInitializationError::ChannelSource { pointer, cause } => {
             tracing::error!(%pointer, cause, "an Evidence source is on the wrong acquisition channel");
             CliError(SOURCES_UNAVAILABLE).into()
@@ -1364,7 +1378,7 @@ fn compile_source_plans(
             .map_err(|_| CliError("source secret provider is invalid"))?,
     );
     registry_evidence::pack_source::build_sources(bundle, runtime, &secrets)
-        .map_err(|_| CliError("source pack or connection binding failed compilation").into())
+        .map_err(CommandError::SourceBinding)
 }
 
 fn package_digest_report(bundle: &Bundle) -> Result<Value, CliError> {
@@ -2707,6 +2721,7 @@ fn http_cause_note(
         EvidenceHttpDiagnostic::DeclaredNotFoundMismatch => {
             "answered 404 that is not the declared `unresolvedProblem`; record that exact Problem, or correct the declaration"
         }
+        EvidenceHttpDiagnostic::OtherClientStatus => "answered a 4xx client error",
     };
     format!("endpoint `{endpoint}` {answer}")
 }

@@ -23,8 +23,8 @@ file is its manifest.
 - Each member carries `profile.yaml`, `pack.yaml`, and `project.yaml`
   (plus `scripts/`, `queries/`, or `fixtures/` where the defect needs
   them, and `runtime.yaml` where the expected code is a runtime or auth
-  code). The ten `adapter.job` members with a `job.yaml` (the two
-  `profile-*` members, `route-unknown`, and the seven
+  code). The fifteen `adapter.job` members with a `job.yaml` (the three
+  `profile-*` members, `route-unknown`, the two `destination-*` members, and the nine
   `projection-*`, `trigger-*`, and `call-budget` members) carry their
   defect in the job definition, which the job compiler's `check_job`
   refuses over the pinned pack beside it, while the workspace itself
@@ -105,20 +105,25 @@ into the sweep also teaches it the `job.rs` registry.
 | `adapter.job.poll-endpoint-kind` | The source route polls `file:dropbox`, but `dropbox` is an `sftp` endpoint | `adapter.job.poll-endpoint-kind` | checks |
 | `adapter.job.poll-timeout` | The source route's `pollEnrich` declares no `timeoutMilliseconds` | `adapter.job.poll-timeout` | checks |
 | `adapter.job.decoder-unknown` | The source route's poll names `decoder: parquet`, outside the closed set | `adapter.job.decoder-unknown` | checks |
+| `adapter.job.poll-key-pointer` | The source route's poll names `decoder: jsonl` but no `keyPointer` to select each row's identity | `adapter.job.poll-key-pointer` | checks |
 | `adapter.job.postgres-key-required` | The `postgres` endpoint names no stable result key column | `adapter.job.postgres-key-required` | checks |
 | `adapter.job.postgres-query-unpinned` | The `postgres` endpoint names no `queryFile` | `adapter.job.postgres-query-unpinned` | checks |
 | `adapter.job.postgres-parameters-required` | A non-PostgreSQL endpoint carries a SQL parameter order | `adapter.job.postgres-parameters-required` | checks |
 | `adapter.job.postgres-parameters-unbounded` | The `postgres` endpoint declares 17 ordered parameter names, one past the bound of 16 | `adapter.job.postgres-parameters-unbounded` | checks |
+| `adapter.job.postgres-send-members` | A `postgres` send carries `httpMethod`, an HTTP-send member it never takes | `adapter.job.postgres-send-members` | checks |
 | `adapter.job.endpoint-response-bound` | The bound facade template's endpoint declares `maximumResponseBytes: 2097152`, above the facade ceiling | `adapter.job.endpoint-response-bound` | checks |
 | `adapter.job.route-unknown` | The job names source route `nope`; the workspace is clean, `check_job` refuses over `job.yaml` | `adapter.job.route-unknown` | checks (job) |
 | `adapter.job.profile-inconsistent` | The job profile's `maximumPageBytes` exceeds its own `maximumResponseBytes` | `adapter.job.profile-inconsistent` | checks (job) |
 | `adapter.job.profile-endpoint-bound` | The job profile is tighter than the HTTP endpoint's declared bound, which its source route reaches | `adapter.job.profile-endpoint-bound` | checks (job) |
 | `adapter.job.projection-shape` | The job declares an empty projection block, so no projected field is named | `adapter.job.projection-shape` | checks (job) |
 | `adapter.job.projection-bound` | The job's single projected path is 130 characters, over the 128-character bound | `adapter.job.projection-bound` | checks (job) |
+| `adapter.job.profile-read-required` | The job omits `profile.read` while its source route polls a file (a route that reaches a file or PostgreSQL reader needs the bounds; one that reads neither may omit them) | `adapter.job.profile-read-required` | checks (job) |
 | `adapter.job.triggers-required` | The job declares an empty trigger list, so no pass would ever start | `adapter.job.triggers-required` | checks (job) |
 | `adapter.job.trigger-kind` | The job's only trigger names `kind: timer`, outside the closed interval-and-hook set | `adapter.job.trigger-kind` | checks (job) |
 | `adapter.job.trigger-bound` | The job's interval trigger declares `delayMilliseconds: 500`, below its 1000 floor | `adapter.job.trigger-bound` | checks (job) |
-| `adapter.job.trigger-hook-unserved` | A clean `hook` trigger has no runtime authentication and rate binding | `adapter.job.trigger-hook-unserved` | checks (job) |
+| `adapter.job.trigger-hook-binding` | A clean `hook` trigger has no runtime authentication and rate binding (the same code refuses a repeated binding) | `adapter.job.trigger-hook-binding` | checks (job) |
+| `adapter.job.trigger-hook-path` | A `hook` trigger declares `path: hooks/submissions`, which does not start with a slash (the same code refuses a missing, overlong, empty-segment, dot-segment, non-unreserved or repeated path) | `adapter.job.trigger-hook-path` | checks (job) |
+| `adapter.job.trigger-member` | The job's `interval` trigger carries `path`, a member only a `hook` trigger takes (the same code refuses a `binding` on an interval trigger and interval scheduling options on a hook) | `adapter.job.trigger-member` | checks (job) |
 | `adapter.job.call-budget` | The job's `maximumUpstreamCalls` is 1, below its source route's worst case of 2 (a loop of two sends) | `adapter.job.call-budget` | checks (job) |
 
 ### Asynchronous completion and recovery

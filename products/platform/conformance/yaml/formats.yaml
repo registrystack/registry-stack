@@ -392,8 +392,7 @@ formats:
       runtime:
         from: products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml
         set:
-          /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
-          /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+          /endpoints/0/credential/tokenRef: secret:env/REGISTRY_CONFORMANCE_VALUE
   # The expectations are read beside the samples they judge, so the example
   # stages the whole job directory, whose mapping the check previews.
   adapter/preview-expectations:
@@ -413,14 +412,12 @@ formats:
       runtime:
         from: products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml
         set:
-          /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
-          /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+          /endpoints/0/credential/tokenRef: secret:env/REGISTRY_CONFORMANCE_VALUE
   adapter/job-runtime:
     copies:
       pack: {from: products/adapter/packs/kobotoolbox}
     set:
-      /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
-      /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+      /endpoints/0/credential/tokenRef: secret:env/REGISTRY_CONFORMANCE_VALUE
   adapter/runtime:
     project: products/adapter/examples/dhis2-tracker
     copies:
@@ -431,5 +428,4 @@ formats:
     copies:
       pack: {from: products/adapter/packs/kobotoolbox}
     set:
-      /endpoints/0/credential/usernameRef: secret:env/REGISTRY_CONFORMANCE_VALUE
-      /endpoints/0/credential/passwordRef: secret:env/REGISTRY_CONFORMANCE_VALUE
+      /endpoints/0/credential/tokenRef: secret:env/REGISTRY_CONFORMANCE_VALUE

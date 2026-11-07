@@ -2,7 +2,7 @@
   "schemaVersion": "registry-stack.sdk-compatibility.v1",
   "sdkPackage": {
     "name": "registry-stack-client",
-    "version": "0.45.1"
+    "version": "0.46.0"
   },
   "namespaces": {
     "discovery": {

@@ -1070,6 +1070,55 @@ async fn a_list_page_carries_the_cursor_and_filters_without_interpreting_the_cur
 }
 
 #[tokio::test]
+async fn a_list_page_by_outcome_carries_it_and_must_hold_only_runs_that_finished_with_it() {
+    let mut applied = status();
+    applied["state"] = json!("finished");
+    applied["outcome"] = json!("applied");
+    let server = Server::new(json!({"runs":[applied]})).await;
+    let client = server.client();
+    let query = RunListQuery {
+        outcome: Some("applied".into()),
+        ..RunListQuery::new(1)
+    };
+
+    assert!(client.list_page(&token(), &query).await.is_ok());
+    assert_eq!(
+        server.fixture.seen.lock().unwrap()[0].1,
+        "/deployment/v1/runs?limit=1&outcome=applied"
+    );
+
+    let mut rejected = status();
+    rejected["state"] = json!("finished");
+    rejected["outcome"] = json!("rejected");
+    for run in [rejected, status()] {
+        server.answer(200, "application/json", &json!({"runs":[run]}).to_string());
+        assert!(
+            matches!(
+                client.list_page(&token(), &query).await,
+                Err(CoordinatorClientError::Protocol { .. })
+            ),
+            "a run that did not finish with the outcome is a protocol failure"
+        );
+    }
+
+    let before = server.count();
+    for outcome in ["", "a.b", "has space", &"a".repeat(65)] {
+        let query = RunListQuery {
+            outcome: Some(outcome.into()),
+            ..RunListQuery::new(1)
+        };
+        assert!(
+            matches!(
+                client.list_page(&token(), &query).await,
+                Err(CoordinatorClientError::InvalidRequest { .. })
+            ),
+            "{outcome:?}"
+        );
+    }
+    assert_eq!(server.count(), before, "an invalid outcome is never sent");
+}
+
+#[tokio::test]
 async fn list_responses_must_satisfy_the_requested_effective_state_and_attention() {
     let server = Server::new(json!({"runs":[]})).await;
     let client = server.client();

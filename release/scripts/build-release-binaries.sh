@@ -160,6 +160,13 @@ include_coordinator_image=0
 if [[ "$(python3 "${script_dir}/release_roster.py" coordinator-in-release "${version}")" == true ]]; then
   include_coordinator_image=1
 fi
+# The Adapter ships as binaries only; the facade has no image yet.
+include_adapter=0
+adapter_in_release="$(python3 "${script_dir}/release_roster.py" \
+  adapter-in-release "${version}")"
+if [[ "${adapter_in_release}" == true ]]; then
+  include_adapter=1
+fi
 
 if [[ "${group}" == discovery ]]; then
   include_discovery=1
@@ -331,6 +338,16 @@ build_payload() {
         cp target/release/coordinator dist/image-bin/coordinator
         cp target/release/coordinatorctl dist/image-bin/coordinatorctl
       fi
+    fi
+
+    # One invocation per binary keeps each product's feature boundary.
+    if [[ "${include_adapter}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-adapter --bin adapter
+      cp target/release/adapter "dist/bin/adapter-${RELEASE_TAG}-linux-amd64"
+      cargo build --release --locked \
+        -p registry-adapterctl --bin adapterctl
+      cp target/release/adapterctl "dist/bin/adapterctl-${RELEASE_TAG}-linux-amd64"
     fi
 
   fi
@@ -566,6 +583,7 @@ docker run --rm \
   --env RELEASE_INCLUDE_RENDER="${include_render}" \
   --env RELEASE_INCLUDE_COORDINATOR="${include_coordinator}" \
   --env RELEASE_INCLUDE_COORDINATOR_IMAGE="${include_coordinator_image}" \
+  --env RELEASE_INCLUDE_ADAPTER="${include_adapter}" \
   --env RELEASE_INCLUDE_EVIDENCE_OID4VCI_IMAGE="${include_evidence_oid4vci_image}" \
   --env RELEASE_TAG="${tag}" \
   "${identity_env_args[@]}" \
@@ -683,6 +701,12 @@ if [[ "${group}" == all || "${group}" == core ]]; then
     if [[ "${include_coordinator_image}" -eq 1 ]]; then
       image_bin_binaries+=(coordinator coordinatorctl)
     fi
+  fi
+  if [[ "${include_adapter}" -eq 1 ]]; then
+    bin_assets+=(
+      "adapter-${tag}-linux-amd64"
+      "adapterctl-${tag}-linux-amd64"
+    )
   fi
 fi
 

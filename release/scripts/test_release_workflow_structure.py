@@ -2008,6 +2008,25 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
                     coordinator,
                 )
 
+    def test_adapter_smokes_follow_the_shared_release_roster(self) -> None:
+        for name, job in (
+            ("release-candidate.yml", "build-canonical"),
+            ("release-rehearsal.yml", "canonical-linux"),
+        ):
+            with self.subTest(workflow=name):
+                _, document = workflow(name)
+                smoke = step_run(document, job, "Merge and smoke the canonical Linux payload")
+                self.assertIn("adapter-in-release", smoke)
+                adapter = smoke.split("adapter-in-release", 1)[1].split("\nfi\n", 1)[0]
+                self.assertIn('if [[ "${adapter_in_release}" == true ]]; then', adapter)
+                self.assertIn("for adapter_binary in adapter adapterctl; do", adapter)
+                self.assertIn("--version", adapter)
+                self.assertIn(
+                    "check products/adapter/examples/dhis2-tracker/project.yaml",
+                    adapter,
+                )
+                self.assertNotIn("dist/image-bin/adapter", adapter)
+
     def test_release_client_jobs_select_messaging_from_the_shared_roster(self) -> None:
         for name, job, steps in (
             ("release-candidate.yml", "clients", ("Build Python client wheels", "Build Node client packages")),

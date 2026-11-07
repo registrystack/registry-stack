@@ -58,9 +58,10 @@ configuration. It is not a deployable bundle until you replace the pack.
 
 The example pack owns both fixed provider requests. The bundle binds only
 the minimized `recordReference` input from the authorized subject and selects
-one reviewed route. Programme, organisation unit, projected provider fields,
-page size, page, and total-page behavior stay digest-covered pack policy, so a
-bundle cannot widen the provider query through source parameters.
+one reviewed route. Programme, organisation unit (sent with
+`orgUnitMode=SELECTED`), projected provider fields, page size, page, and
+total-page behavior stay digest-covered pack policy, so a bundle cannot widen
+the provider query through source parameters.
 
 Each route performs one page-one lookup for exactly one tracked-entity
 reference with `pageSize=2`. A second page is never followed. That two-result

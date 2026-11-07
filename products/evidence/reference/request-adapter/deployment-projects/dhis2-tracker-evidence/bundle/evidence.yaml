@@ -66,8 +66,8 @@ sources:
     pack:
       id: dhis2-tracker
       version: "1"
-      digest: sha256:41df7eef899ee01b4af9f5b70c306ab04005e3c4dde21613118a720f8e482aa9
-      artifactPrefix: adapter-packs/dhis2-tracker/41df7eef899ee01b4af9f5b70c306ab04005e3c4dde21613118a720f8e482aa9
+      digest: sha256:bd1d30fb5b6a363fb9192073648b72e85839d272a7911139d16c9e17ba2f2427
+      artifactPrefix: adapter-packs/dhis2-tracker/bd1d30fb5b6a363fb9192073648b72e85839d272a7911139d16c9e17ba2f2427
     route: evidence-adult-status
     connection: population-tracker
     inputs:
@@ -82,8 +82,8 @@ sources:
     pack:
       id: dhis2-tracker
       version: "1"
-      digest: sha256:41df7eef899ee01b4af9f5b70c306ab04005e3c4dde21613118a720f8e482aa9
-      artifactPrefix: adapter-packs/dhis2-tracker/41df7eef899ee01b4af9f5b70c306ab04005e3c4dde21613118a720f8e482aa9
+      digest: sha256:bd1d30fb5b6a363fb9192073648b72e85839d272a7911139d16c9e17ba2f2427
+      artifactPrefix: adapter-packs/dhis2-tracker/bd1d30fb5b6a363fb9192073648b72e85839d272a7911139d16c9e17ba2f2427
     route: evidence-professional-licence
     connection: population-tracker
     inputs:

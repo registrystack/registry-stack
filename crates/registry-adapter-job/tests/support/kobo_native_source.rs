@@ -21,7 +21,7 @@ use axum::Router;
 use serde_json::{json, Value};
 
 pub const DATA_PATH: &str = "/api/v2/assets/aCoordinatorFixture0000000000001/data/";
-const BASIC_AUTHORIZATION: &str = "Basic Zml4dHVyZS1yZWFkZXI6Zml4dHVyZS1wYXNzd29yZA==";
+const TOKEN_AUTHORIZATION: &str = "Token fixture-token";
 
 #[derive(Clone, Debug)]
 pub struct SourceRequest {
@@ -40,7 +40,7 @@ async fn serve(State(state): State<SourceState>, request: Request<Body>) -> Resp
         .headers()
         .get("authorization")
         .and_then(|value| value.to_str().ok())
-        == Some(BASIC_AUTHORIZATION);
+        == Some(TOKEN_AUTHORIZATION);
     let target = request
         .uri()
         .path_and_query()
@@ -158,8 +158,7 @@ impl MaintainedKoboSource {
         });
 
         let root = tempfile::tempdir().expect("a maintained Kobo runtime directory");
-        private_file(&root.path().join("kobo-username"), b"fixture-reader");
-        private_file(&root.path().join("kobo-password"), b"fixture-password");
+        private_file(&root.path().join("kobo-token"), b"fixture-token");
         private_file(
             &root.path().join("database"),
             std::env::var("ADAPTER_TEST_DATABASE_URL")
@@ -180,9 +179,8 @@ impl MaintainedKoboSource {
                     "endpoint": "kobo-api",
                     "baseUrl": base_url,
                     "credential": {
-                        "type": "basic",
-                        "usernameRef": "secret:file/kobo-username",
-                        "passwordRef": "secret:file/kobo-password"
+                        "type": "static-authorization",
+                        "tokenRef": "secret:file/kobo-token"
                     }
                 }],
                 "destinations": {"household-workflow": {
