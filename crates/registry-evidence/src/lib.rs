@@ -28,6 +28,7 @@ pub mod observability;
 pub mod pack_source;
 pub mod presented;
 pub mod problem;
+pub mod public_check;
 pub mod rate_limit;
 pub mod rhai_runtime;
 pub mod runtime;

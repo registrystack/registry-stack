@@ -1,0 +1,138 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/public-check-audit-event-v1.json
+title: Evidence public check audit event Version 1
+description: >-
+  One audit record of POST /v1/public-check, the unauthenticated route that
+  checks one document number and check code against a live Source read. The
+  route has no requester, actor, client, or grant, so the record names none:
+  it records which activation served the check, which Source was read, and
+  how the check ended.
+type: object
+additionalProperties: false
+required:
+  - assuranceProfile
+  - eventId
+  - occurredAt
+  - operation
+  - phase
+  - requirement
+  - bundleRevision
+  - authorityRevision
+  - effectiveGrantDigest
+  - purpose
+  - subjects
+  - sourceId
+  - adapterId
+  - decision
+  - reason
+  - durationMilliseconds
+properties:
+  assuranceProfile: {enum: [local, production, evidence-grade]}
+  eventId: {type: string, format: uri, maxLength: 512}
+  occurredAt: {type: string, format: date-time}
+  operation: {type: string, minLength: 16, maxLength: 128}
+  phase: {enum: [access-attempt, disclosure-release, denial, transient-failure]}
+  requirement: {type: string, format: uri, maxLength: 512}
+  bundleRevision: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
+  authorityRevision:
+    description: Derived revision of the immutable active target authority whose publicCheck activation served this check.
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+  effectiveGrantDigest:
+    description: Canonical digest binding the package ceilings, the complete activated target grants, and the publicCheck activation.
+    type: string
+    pattern: '^sha256:[a-f0-9]{64}$'
+  purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+  subjects:
+    type: array
+    minItems: 1
+    maxItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [role, selectorProfile, selectorBundlePseudonym]
+      properties:
+        role: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+        selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+        selectorBundlePseudonym: {type: string, pattern: '^hmac-sha256:v[1-9][0-9]*:[a-f0-9]{64}$'}
+  sourceId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  adapterId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  executionBounds:
+    type: object
+    additionalProperties: false
+    required: [maximumDataOperations, acquisitionDeadlineMilliseconds, maximumResponseBytes]
+    properties:
+      maximumDataOperations: {type: integer, minimum: 1, maximum: 18446744073709551615}
+      acquisitionDeadlineMilliseconds: {type: integer, minimum: 1, maximum: 18446744073709551615}
+      maximumResponseBytes: {type: integer, minimum: 1, maximum: 18446744073709551615}
+  decision:
+    enum:
+      - authorized
+      - released
+      - no-match
+      - ambiguous
+      - unresolved
+      - fact-missing
+      - code-mismatch
+      - dependency-failure
+      - evaluation-failure
+  reason: {const: public-check.activated}
+  disclosedConcepts:
+    type: array
+    minItems: 2
+    maxItems: 2
+    uniqueItems: true
+    items: {type: string, format: uri, maxLength: 512}
+  safeErrorCategory: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+  durationMilliseconds: {type: integer, minimum: 0, maximum: 86400000}
+oneOf:
+  - title: Source access attempt
+    required: [executionBounds]
+    properties:
+      phase: {const: access-attempt}
+      decision: {const: authorized}
+    not:
+      anyOf:
+        - {required: [disclosedConcepts]}
+        - {required: [safeErrorCategory]}
+  - title: Public answer release
+    required: [disclosedConcepts]
+    properties:
+      phase: {const: disclosure-release}
+      decision: {const: released}
+    not:
+      anyOf:
+        - {required: [executionBounds]}
+        - {required: [safeErrorCategory]}
+  - title: Miss
+    required: [safeErrorCategory]
+    properties:
+      phase: {const: denial}
+      decision: {enum: [no-match, ambiguous, unresolved, fact-missing, code-mismatch]}
+    not:
+      anyOf:
+        - {required: [executionBounds]}
+        - {required: [disclosedConcepts]}
+  - title: Transient failure
+    required: [safeErrorCategory]
+    properties:
+      phase: {const: transient-failure}
+      decision: {enum: [dependency-failure, evaluation-failure]}
+    not:
+      anyOf:
+        - {required: [executionBounds]}
+        - {required: [disclosedConcepts]}
+audit_rules:
+  envelope: Each record is the record member of one platform audit entry with the members schema, eventId, time, phase, correlation, and record, written as one JSON line by the shared platform audit writer to the operator-configured file or stdout destination. The entry schema is registry.evidence.audit.public-check/v1 and the record itself carries no schema member. The entry phase is request for access-attempt and response for every other phase. The entry correlation is the record's server-minted operation.
+  no_caller: The route is unauthenticated. No record names a requester, actor, client, grant, approver, or authority kind, and none carries responseProtection, evidenceId, or signingKeyId, because the public answer is not an Evidence response format and is never signed.
+  subject_pseudonym: selectorBundlePseudonym is the existing keyed audit pseudonym of the one presented selector bundle, derived under a public-check scope that names the trust domain and the purpose and is domain-separated from the audience and holder scopes. Repeated checks of one document number share it, so an operator can see one number tried repeatedly without the log holding the number.
+  access_gate: The access-attempt record is durably accepted before the Source is read and records the effective aggregate acquisition budget as executionBounds. A check that fails before that point (a malformed body, a refused document number, or admission) writes no record.
+  release_gate: The exact public answer bytes are serialized first, then the disclosure-release record is durably accepted, then those same bytes are returned. disclosedConcepts names exactly the status and fields concepts of the activation, never another output of the definition.
+  miss: Every miss class (no-match, ambiguous, unresolved, fact-missing, code-mismatch) is recorded with its own decision and is answered to the caller with one identical not-found problem. code-mismatch, including a stored code that is absent or malformed, is visible to the operator only.
+  audit_failure: An audit append failure answers service-unavailable and releases nothing.
+  never_record:
+    - the presented or stored check code
+    - the raw document number or any selector value
+    - request headers, client addresses, or inbound trace context
+    - source values, facts, bodies, or derived values
+    - credentials, tokens, script inputs or outputs, or signing material

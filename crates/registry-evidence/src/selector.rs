@@ -232,36 +232,64 @@ impl ResolvedSubject {
             }
             ResolvedSubjectScope::HolderKeyThumbprint(_) => output.push(0x02),
         }
-        push_component(&mut output, purpose.as_bytes())?;
-        push_component(&mut output, self.role.as_bytes())?;
-        push_component(&mut output, self.selector_profile.as_bytes())?;
-        push_count(&mut output, self.fields.len())?;
+        self.push_audit_pseudonym_body(&mut output, purpose)?;
+        Ok(output)
+    }
+
+    /// Canonical protected input for the audit pseudonym of the one subject a
+    /// public check presents.
+    ///
+    /// The leading byte separates it from both relying-path modes. No scope
+    /// component follows: the route has neither a relying party nor a holder
+    /// key, so every check of one document number under one purpose derives
+    /// one pseudonym, which is what lets an operator see one number tried
+    /// repeatedly without the audit log holding the number.
+    pub fn public_check_audit_pseudonym_input(
+        &self,
+        purpose: &str,
+    ) -> Result<Vec<u8>, AuthorizationError> {
+        let mut output = vec![0x03];
+        self.push_audit_pseudonym_body(&mut output, purpose)?;
+        Ok(output)
+    }
+
+    /// The purpose, role, profile and typed selector fields every subject
+    /// audit pseudonym input carries after its mode byte and scope.
+    fn push_audit_pseudonym_body(
+        &self,
+        output: &mut Vec<u8>,
+        purpose: &str,
+    ) -> Result<(), AuthorizationError> {
+        push_component(output, purpose.as_bytes())?;
+        push_component(output, self.role.as_bytes())?;
+        push_component(output, self.selector_profile.as_bytes())?;
+        push_count(output, self.fields.len())?;
         for field in &self.fields {
-            push_component(&mut output, field.name.as_bytes())?;
+            push_component(output, field.name.as_bytes())?;
             match &field.value {
                 ResolvedSelectorValue::String(value) => {
                     output.push(0x01);
-                    push_component(&mut output, value.as_bytes())?;
+                    push_component(output, value.as_bytes())?;
                 }
                 ResolvedSelectorValue::Date(value) => {
                     output.push(0x02);
-                    push_component(&mut output, value.as_bytes())?;
+                    push_component(output, value.as_bytes())?;
                 }
                 ResolvedSelectorValue::Integer(value) => {
                     output.push(0x03);
-                    push_component(&mut output, value.to_string().as_bytes())?;
+                    push_component(output, value.to_string().as_bytes())?;
                 }
                 ResolvedSelectorValue::Boolean(value) => {
                     output.push(0x04);
-                    push_component(&mut output, &[u8::from(*value)])?;
+                    push_component(output, &[u8::from(*value)])?;
                 }
                 ResolvedSelectorValue::ControlledCode(value) => {
                     output.push(0x05);
-                    push_component(&mut output, value.as_bytes())?;
+                    push_component(output, value.as_bytes())?;
                 }
             }
         }
-        Ok(output)
+        Ok(())
     }
 }
 
@@ -1223,6 +1251,25 @@ fn selector_value_from_claim(value: &Value) -> Option<SelectorValue> {
     }
 }
 
+/// Resolve the one subject a public check presents. No grant names it: the
+/// active authority's `publicCheck` activation fixes the role and the profile,
+/// and the caller's values pass the same profile validation as a request
+/// selector on the relying path.
+pub(crate) fn resolve_public_check_subject(
+    bundle: &Bundle,
+    role: &str,
+    profile_name: &str,
+    profile: &SelectorProfile,
+    values: &std::collections::BTreeMap<String, SelectorValue>,
+) -> Result<ResolvedSubject, AuthorizationError> {
+    Ok(ResolvedSubject {
+        role: role.to_owned(),
+        selector_profile: profile_name.to_owned(),
+        value_origin: ValueOrigin::Request,
+        fields: validate_values(bundle, profile, values)?,
+    })
+}
+
 fn validate_values(
     bundle: &Bundle,
     profile: &SelectorProfile,
@@ -1428,6 +1475,43 @@ mod tests {
             )
             .expect("canonicalizes");
         assert_ne!(first, holder);
+    }
+
+    /// A public-check input is a third mode: it never equals an
+    /// audience-scoped or holder-bound input over the same subject, it binds
+    /// no scope component, and it still separates purposes and values.
+    #[test]
+    fn a_public_check_audit_input_is_its_own_mode_and_binds_no_scope() {
+        let subject = audit_input_subject();
+        let public = subject
+            .public_check_audit_pseudonym_input("purpose")
+            .expect("canonicalizes");
+        let audience = subject
+            .audit_pseudonym_input(
+                &ResolvedSubjectScope::Audience("urn:audience:a".to_owned()),
+                "purpose",
+            )
+            .expect("canonicalizes");
+        let holder = subject
+            .audit_pseudonym_input(
+                &ResolvedSubjectScope::HolderKeyThumbprint(FIRST_THUMBPRINT.to_owned()),
+                "purpose",
+            )
+            .expect("canonicalizes");
+        assert_eq!(public[0], 0x03);
+        assert_ne!(public, audience);
+        assert_ne!(public, holder);
+        assert_eq!(
+            public[1..],
+            holder[1..],
+            "past the mode byte both scope-free inputs carry the same subject body"
+        );
+        assert_ne!(
+            public,
+            subject
+                .public_check_audit_pseudonym_input("other-purpose")
+                .expect("canonicalizes")
+        );
     }
 
     /// A holder-bound audit pseudonym names one subject under one purpose, and

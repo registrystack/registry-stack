@@ -37,6 +37,11 @@ pub const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str =
 /// Envelope schema of an `evidence authority activate` request or response.
 pub const ACTIVATION_AUDIT_SCHEMA: &str = "evidence-activation-audit/v1";
 const ACTIVATION_EVENT: &str = "evidence.authority-activation";
+/// Envelope schema of one unauthenticated public certificate check.
+pub const PUBLIC_CHECK_AUDIT_SCHEMA: &str = "registry.evidence.audit.public-check/v1";
+/// The one reason every public-check record carries: the active authority's
+/// `publicCheck` activation, not a caller's grant, admitted the check.
+const PUBLIC_CHECK_AUDIT_REASON: &str = "public-check.activated";
 
 /// How one audited activation ended, written in its `response` entry.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
@@ -980,6 +985,177 @@ impl EvidenceAuditEvent {
     }
 }
 
+/// The closed decision vocabulary of one public certificate check.
+///
+/// `code-mismatch` exists only here: the caller is answered with the same
+/// not-found problem as every other miss, and only the operator can tell the
+/// classes apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicCheckAuditDecision {
+    Authorized,
+    Released,
+    NoMatch,
+    Ambiguous,
+    Unresolved,
+    FactMissing,
+    CodeMismatch,
+    DependencyFailure,
+    EvaluationFailure,
+}
+
+/// Native audit event of the unauthenticated public certificate check.
+///
+/// This is a distinct closed shape from [`EvidenceAuditEvent`]: the route has
+/// no requester, actor, client, grant, or response protection, so the record
+/// names none of them. It names the activation that admitted the check, the
+/// one presented subject by keyed pseudonym, the Source that was read, and how
+/// the check ended.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidencePublicCheckAuditEvent {
+    pub assurance_profile: AssuranceProfile,
+    pub event_id: String,
+    pub occurred_at: String,
+    pub operation: String,
+    pub phase: AuditPhase,
+    pub requirement: String,
+    pub bundle_revision: String,
+    pub authority_revision: String,
+    pub effective_grant_digest: String,
+    pub purpose: String,
+    pub subjects: Vec<AuditSubject>,
+    pub source_id: String,
+    pub adapter_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_execution_bounds"
+    )]
+    pub execution_bounds: Option<EvidenceExecutionBounds>,
+    pub decision: PublicCheckAuditDecision,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disclosed_concepts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safe_error_category: Option<String>,
+    pub duration_milliseconds: u64,
+}
+
+impl EvidencePublicCheckAuditEvent {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        assurance_profile: AssuranceProfile,
+        operation: String,
+        phase: AuditPhase,
+        requirement: String,
+        bundle_revision: String,
+        authority_revision: String,
+        effective_grant_digest: String,
+        purpose: String,
+        subject: AuditSubject,
+        source_id: String,
+        adapter_id: String,
+        decision: PublicCheckAuditDecision,
+        duration_milliseconds: u64,
+    ) -> Self {
+        Self {
+            assurance_profile,
+            event_id: format!("urn:ulid:{}", ulid::Ulid::generate()),
+            occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            operation,
+            phase,
+            requirement,
+            bundle_revision,
+            authority_revision,
+            effective_grant_digest,
+            purpose,
+            subjects: vec![subject],
+            source_id,
+            adapter_id,
+            execution_bounds: None,
+            decision,
+            reason: PUBLIC_CHECK_AUDIT_REASON.to_owned(),
+            disclosed_concepts: None,
+            safe_error_category: None,
+            duration_milliseconds,
+        }
+    }
+
+    pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
+        use PublicCheckAuditDecision as Decision;
+        // Each phase has exactly one shape: bounds on the access attempt, the
+        // two released concepts on the release, and a safe category on every
+        // miss or failure.
+        let shape_is_native = match (self.phase, self.decision) {
+            (AuditPhase::AccessAttempt, Decision::Authorized) => {
+                self.execution_bounds
+                    .is_some_and(EvidenceExecutionBounds::is_valid)
+                    && self.disclosed_concepts.is_none()
+                    && self.safe_error_category.is_none()
+            }
+            (AuditPhase::DisclosureRelease, Decision::Released) => {
+                self.execution_bounds.is_none()
+                    && self.safe_error_category.is_none()
+                    && self.disclosed_concepts.as_ref().is_some_and(|concepts| {
+                        concepts.len() == 2
+                            && concepts[0] != concepts[1]
+                            && concepts.iter().all(|concept| valid_uri(concept))
+                    })
+            }
+            (
+                AuditPhase::Denial,
+                Decision::NoMatch
+                | Decision::Ambiguous
+                | Decision::Unresolved
+                | Decision::FactMissing
+                | Decision::CodeMismatch,
+            )
+            | (
+                AuditPhase::TransientFailure,
+                Decision::DependencyFailure | Decision::EvaluationFailure,
+            ) => {
+                self.execution_bounds.is_none()
+                    && self.disclosed_concepts.is_none()
+                    && self
+                        .safe_error_category
+                        .as_ref()
+                        .is_some_and(|value| valid_local_name(value, 128))
+            }
+            _ => false,
+        };
+        let subject_is_valid = match self.subjects.as_slice() {
+            [subject] => {
+                valid_local_name(&subject.role, 64)
+                    && valid_local_name(&subject.selector_profile, 128)
+                    && subject
+                        .selector_bundle_pseudonym
+                        .as_ref()
+                        .is_some_and(|value| valid_pseudonym(value))
+            }
+            _ => false,
+        };
+        if !shape_is_native
+            || !subject_is_valid
+            || !valid_uri(&self.event_id)
+            || chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_err()
+            || !(16..=128).contains(&self.operation.len())
+            || !valid_uri(&self.requirement)
+            || !valid_revision(&self.bundle_revision)
+            || !valid_revision(&self.authority_revision)
+            || !valid_revision(&self.effective_grant_digest)
+            || !valid_purpose(&self.purpose, 128)
+            || !valid_local_name(&self.source_id, 128)
+            || !valid_local_name(&self.adapter_id, 128)
+            || self.reason != PUBLIC_CHECK_AUDIT_REASON
+            || self.duration_milliseconds > 86_400_000
+        {
+            return Err(EvidenceAuditError::InvalidEvent);
+        }
+        Ok(())
+    }
+}
+
 fn valid_uri(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && url::Url::parse(value).is_ok()
 }
@@ -1262,6 +1438,23 @@ impl EvidenceAuditLog {
             EntryPhase::Response
         };
         self.write(REQUEST_BATCH_AUDIT_SCHEMA, phase, &event.operation, &event)
+            .await
+    }
+
+    /// Append a public certificate check event. The access attempt before the
+    /// Source read is a `request` entry; every terminal phase is a `response`
+    /// entry.
+    pub async fn append_public_check(
+        &self,
+        event: EvidencePublicCheckAuditEvent,
+    ) -> Result<(), EvidenceAuditError> {
+        event.validate_phase_fields()?;
+        let phase = if event.phase == AuditPhase::AccessAttempt {
+            EntryPhase::Request
+        } else {
+            EntryPhase::Response
+        };
+        self.write(PUBLIC_CHECK_AUDIT_SCHEMA, phase, &event.operation, &event)
             .await
     }
 
@@ -5204,5 +5397,229 @@ mod tests {
         assert!(coherent_request_batch_entries(&batch[0], &batch[1]));
         batch[1].authority_revision = Some(format!("sha256:{}", "c".repeat(64)));
         assert!(!coherent_request_batch_entries(&batch[0], &batch[1]));
+    }
+
+    fn public_check_event(
+        phase: AuditPhase,
+        decision: PublicCheckAuditDecision,
+    ) -> EvidencePublicCheckAuditEvent {
+        let mut event = EvidencePublicCheckAuditEvent::new(
+            AssuranceProfile::Production,
+            "operation-public-check-audit".to_owned(),
+            phase,
+            "urn:example:requirement:certificate-status:v1".to_owned(),
+            format!("sha256:{}", "0".repeat(64)),
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha256:{}", "b".repeat(64)),
+            "certificate-check".to_owned(),
+            AuditSubject {
+                role: "certificate".to_owned(),
+                selector_profile: "certificate-number".to_owned(),
+                selector_bundle_pseudonym: Some(format!("hmac-sha256:v1:{}", "c".repeat(64))),
+            },
+            "certificate-record".to_owned(),
+            "synthetic-register".to_owned(),
+            decision,
+            7,
+        );
+        match phase {
+            AuditPhase::AccessAttempt => event.execution_bounds = Some(test_execution_bounds()),
+            AuditPhase::DisclosureRelease => {
+                event.disclosed_concepts = Some(vec![
+                    "urn:example:concept:certificate-status:v1".to_owned(),
+                    "urn:example:concept:certificate-printed:v1".to_owned(),
+                ]);
+            }
+            AuditPhase::Denial | AuditPhase::TransientFailure => {
+                event.safe_error_category = Some("evidence-unavailable".to_owned());
+            }
+        }
+        event
+    }
+
+    fn public_check_events() -> Vec<EvidencePublicCheckAuditEvent> {
+        use PublicCheckAuditDecision as Decision;
+        vec![
+            public_check_event(AuditPhase::AccessAttempt, Decision::Authorized),
+            public_check_event(AuditPhase::DisclosureRelease, Decision::Released),
+            public_check_event(AuditPhase::Denial, Decision::NoMatch),
+            public_check_event(AuditPhase::Denial, Decision::Ambiguous),
+            public_check_event(AuditPhase::Denial, Decision::Unresolved),
+            public_check_event(AuditPhase::Denial, Decision::FactMissing),
+            public_check_event(AuditPhase::Denial, Decision::CodeMismatch),
+            public_check_event(AuditPhase::TransientFailure, Decision::DependencyFailure),
+            public_check_event(AuditPhase::TransientFailure, Decision::EvaluationFailure),
+        ]
+    }
+
+    #[test]
+    fn public_check_audit_shapes_are_closed_per_phase() {
+        use PublicCheckAuditDecision as Decision;
+        for event in public_check_events() {
+            assert!(
+                event.validate_phase_fields().is_ok(),
+                "{:?} {:?} is a native shape",
+                event.phase,
+                event.decision
+            );
+            let record = serde_json::to_value(&event).expect("public-check event serializes");
+            for absent in [
+                "requesterPseudonym",
+                "actorKind",
+                "actorPseudonym",
+                "clientPseudonym",
+                "authority",
+                "responseProtection",
+                "evidenceId",
+                "signingKeyId",
+            ] {
+                assert!(record.get(absent).is_none(), "{absent} is never recorded");
+            }
+            assert_eq!(record["reason"], "public-check.activated");
+        }
+
+        let invalid = |mutate: &dyn Fn(&mut EvidencePublicCheckAuditEvent)| {
+            let mut event = public_check_event(AuditPhase::Denial, Decision::CodeMismatch);
+            mutate(&mut event);
+            event.validate_phase_fields().is_err()
+        };
+        assert!(invalid(&|event| event.decision = Decision::Released));
+        assert!(invalid(
+            &|event| event.decision = Decision::DependencyFailure
+        ));
+        assert!(invalid(&|event| event.safe_error_category = None));
+        assert!(invalid(
+            &|event| event.execution_bounds = Some(test_execution_bounds())
+        ));
+        assert!(invalid(&|event| {
+            event.disclosed_concepts =
+                Some(vec!["urn:example:a".to_owned(), "urn:example:b".to_owned()]);
+        }));
+        assert!(invalid(
+            &|event| event.reason = "authorization.allowed".to_owned()
+        ));
+        assert!(invalid(
+            &|event| event.subjects[0].selector_bundle_pseudonym = None
+        ));
+        assert!(invalid(&|event| {
+            let subject = event.subjects[0].clone();
+            event.subjects.push(subject);
+        }));
+        assert!(invalid(
+            &|event| event.authority_revision = "sha256:short".to_owned()
+        ));
+        assert!(invalid(&|event| event.operation = "short".to_owned()));
+        assert!(invalid(&|event| event.source_id = "Not A Name".to_owned()));
+
+        let mut release = public_check_event(AuditPhase::DisclosureRelease, Decision::Released);
+        release.disclosed_concepts = Some(vec!["urn:example:concept:only-one".to_owned()]);
+        assert!(
+            release.validate_phase_fields().is_err(),
+            "both concepts are named"
+        );
+        release.disclosed_concepts = Some(vec![
+            "urn:example:concept:same".to_owned(),
+            "urn:example:concept:same".to_owned(),
+        ]);
+        assert!(
+            release.validate_phase_fields().is_err(),
+            "concepts are distinct"
+        );
+
+        let mut access = public_check_event(AuditPhase::AccessAttempt, Decision::Authorized);
+        access.execution_bounds = None;
+        assert!(
+            access.validate_phase_fields().is_err(),
+            "access records its bounds"
+        );
+    }
+
+    #[test]
+    fn public_check_audit_contract_schema_accepts_each_shape_and_rejects_mixed_ones() {
+        use PublicCheckAuditDecision as Decision;
+        let schema: serde_json::Value = serde_norway::from_slice(include_bytes!(
+            "../../../products/evidence/contracts/public-check-audit-event.schema.yaml"
+        ))
+        .expect("public-check audit event schema parses");
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .expect("public-check audit event schema compiles as Draft 2020-12");
+
+        for event in public_check_events() {
+            let record = serde_json::to_value(&event).expect("public-check event serializes");
+            assert!(
+                validator.is_valid(&record),
+                "{:?} {:?} matches the published schema",
+                event.phase,
+                event.decision
+            );
+        }
+
+        let mut mixed = serde_json::to_value(public_check_event(
+            AuditPhase::Denial,
+            Decision::CodeMismatch,
+        ))
+        .expect("public-check event serializes");
+        mixed["disclosedConcepts"] = serde_json::json!([
+            "urn:example:concept:certificate-status:v1",
+            "urn:example:concept:certificate-printed:v1"
+        ]);
+        assert!(!validator.is_valid(&mixed), "a miss discloses nothing");
+
+        let mut released_miss = serde_json::to_value(public_check_event(
+            AuditPhase::DisclosureRelease,
+            Decision::Released,
+        ))
+        .expect("public-check event serializes");
+        released_miss["decision"] = serde_json::json!("code-mismatch");
+        assert!(!validator.is_valid(&released_miss));
+
+        let mut with_requester = serde_json::to_value(public_check_event(
+            AuditPhase::AccessAttempt,
+            Decision::Authorized,
+        ))
+        .expect("public-check event serializes");
+        with_requester["requesterPseudonym"] =
+            serde_json::json!(format!("hmac-sha256:v1:{}", "d".repeat(64)));
+        assert!(
+            !validator.is_valid(&with_requester),
+            "no caller is recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_check_entries_carry_their_own_schema_phase_and_correlation() {
+        use PublicCheckAuditDecision as Decision;
+        let (log, captured) = captured_log();
+        log.append_public_check(public_check_event(
+            AuditPhase::AccessAttempt,
+            Decision::Authorized,
+        ))
+        .await
+        .expect("access appends");
+        log.append_public_check(public_check_event(
+            AuditPhase::Denial,
+            Decision::CodeMismatch,
+        ))
+        .await
+        .expect("miss appends");
+        let entries = captured.entries();
+        assert_eq!(entries.len(), 2);
+        for (entry, phase) in entries.iter().zip(["request", "response"]) {
+            assert_eq!(entry["schema"], PUBLIC_CHECK_AUDIT_SCHEMA);
+            assert_eq!(entry["phase"], phase);
+            assert_eq!(entry["correlation"], "operation-public-check-audit");
+        }
+        assert_eq!(entries[1]["record"]["decision"], "code-mismatch");
+
+        let mut invalid = public_check_event(AuditPhase::Denial, Decision::NoMatch);
+        invalid.safe_error_category = None;
+        assert!(log.append_public_check(invalid).await.is_err());
+        assert_eq!(
+            captured.entries().len(),
+            2,
+            "an invalid record is never written"
+        );
     }
 }
