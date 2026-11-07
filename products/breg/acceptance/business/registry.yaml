@@ -43,9 +43,17 @@
         ]
       }
     ],
+    "authorities": [
+      {
+        "id": "business-authority",
+        "name": "Business Register Authority",
+        "iri": "https://business-register.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "business-service",
-      "title": "Business Register Catalog"
+      "title": "Business Register Catalog",
+      "competentAuthority": "business-authority"
     },
     "distributions": []
   },

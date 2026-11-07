@@ -23,9 +23,17 @@
         "iri": "https://facility-registry-actions.example.gov/authority"
       }
     },
+    "authorities": [
+      {
+        "id": "facility-registry-authority",
+        "name": "Facility Registry Authority",
+        "iri": "https://facility-registry-actions.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "facility-registry-service",
-      "title": "Facility Registry Actions Catalog"
+      "title": "Facility Registry Actions Catalog",
+      "competentAuthority": "facility-registry-authority"
     },
     "datasets": [
       {

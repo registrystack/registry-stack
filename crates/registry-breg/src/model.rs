@@ -1355,7 +1355,7 @@ pub struct CompiledManifestProjection {
     pub access_profile: String,
     pub classification_ceiling: Classification,
     pub catalog: ManifestProjectionCatalogSource,
-    pub primary_authority: CompiledManifestAuthority,
+    pub authorities: BTreeMap<String, CompiledManifestAuthority>,
     pub public_service: CompiledManifestPublicService,
     pub datasets: BTreeMap<String, CompiledManifestDataset>,
     pub data_services: BTreeMap<String, CompiledManifestDataService>,

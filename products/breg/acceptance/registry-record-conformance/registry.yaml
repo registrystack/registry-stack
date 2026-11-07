@@ -78,9 +78,17 @@
         "mediaType": "application/json"
       }
     ],
+    "authorities": [
+      {
+        "id": "cross-product-conformance-authority",
+        "name": "Synthetic Conformance Authority",
+        "iri": "https://cross-product.example.invalid/authority"
+      }
+    ],
     "publicService": {
       "id": "cross-product-conformance-service",
-      "title": "Cross-product Registry Record conformance service"
+      "title": "Cross-product Registry Record conformance service",
+      "competentAuthority": "cross-product-conformance-authority"
     }
   },
   "accessProfiles": [

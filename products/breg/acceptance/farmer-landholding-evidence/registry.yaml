@@ -23,9 +23,17 @@
         "iri": "https://farmer-landholding-evidence.example.gov/authority"
       }
     },
+    "authorities": [
+      {
+        "id": "landholding-authority",
+        "name": "Synthetic Landholding Authority",
+        "iri": "https://farmer-landholding-evidence.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "landholding-service",
-      "title": "Synthetic Landholding Service"
+      "title": "Synthetic Landholding Service",
+      "competentAuthority": "landholding-authority"
     },
     "datasets": [
       {

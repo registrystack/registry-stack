@@ -814,6 +814,7 @@ def validate_fixture(errors: list[str]) -> None:
             "accessProfile",
             "classificationCeiling",
             "catalog",
+            "authorities",
             "publicService",
             "datasets",
             "dataServices",

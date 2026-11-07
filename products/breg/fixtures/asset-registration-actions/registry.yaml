@@ -23,9 +23,17 @@
         "iri": "https://asset-registration-actions.example.gov/authority"
       }
     },
+    "authorities": [
+      {
+        "id": "asset-registration-actions-authority",
+        "name": "Asset Registration Authority",
+        "iri": "https://asset-registration-actions.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "asset-registration-actions-service",
-      "title": "Asset Registration Actions Catalog"
+      "title": "Asset Registration Actions Catalog",
+      "competentAuthority": "asset-registration-actions-authority"
     },
     "datasets": [
       {

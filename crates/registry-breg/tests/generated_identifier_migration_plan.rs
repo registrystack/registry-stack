@@ -211,9 +211,14 @@ fn source(prefix: Option<&str>) -> Source {
                     "name": "Registry Authority"
                 }
             },
+            "authorities": [{
+                "id": "registry-authority",
+                "name": "Registry Authority"
+            }],
             "publicService": {
                 "id": "generated-identifier-service",
-                "title": "Generated Identifier Registry"
+                "title": "Generated Identifier Registry",
+                "competentAuthority": "registry-authority"
             },
             "datasets": [{
                 "id": "records",

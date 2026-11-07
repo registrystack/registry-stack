@@ -16,9 +16,13 @@ manifestProjection:
     publisher:
       id: example-authority
       name: Example institution
+  authorities:
+  - id: example-authority
+    name: Example institution
   publicService:
     id: registry-service
     title: Synthetic record registry
+    competentAuthority: example-authority
   datasets:
   - id: registry
     title: Synthetic records

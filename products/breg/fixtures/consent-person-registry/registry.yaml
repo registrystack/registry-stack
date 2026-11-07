@@ -18,7 +18,11 @@ manifestProjection:
       id: consent-person-registry-authority
       name: Person Registry Authority
       iri: https://consent-person-registry.example.gov/authority
-  publicService: {id: consent-person-registry-service, title: Consent Person Registry Catalog}
+  authorities:
+    - id: consent-person-registry-authority
+      name: Person Registry Authority
+      iri: https://consent-person-registry.example.gov/authority
+  publicService: {id: consent-person-registry-service, title: Consent Person Registry Catalog, competentAuthority: consent-person-registry-authority}
   datasets:
     - id: consent-person-registry
       title: Consent Person Registry

@@ -370,7 +370,8 @@ manifestProjection:
       title: Metadata Labels
       endpointUrl: https://metadata-labels.example.test
       servesDatasets: [test-dataset]
-  publicService: {id: metadata-labels-service, title: Metadata Labels}
+  authorities: [{id: metadata-labels-authority, name: Publisher}]
+  publicService: {id: metadata-labels-service, title: Metadata Labels, competentAuthority: metadata-labels-authority}
   distributions: []
   entities:
     - id: permit

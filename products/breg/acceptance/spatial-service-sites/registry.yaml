@@ -88,9 +88,17 @@
         ]
       }
     ],
+    "authorities": [
+      {
+        "id": "spatial-service-sites-authority",
+        "name": "Service Site Registry Authority",
+        "iri": "https://spatial-service-sites.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "spatial-service-sites-service",
-      "title": "Service Site Map Catalog"
+      "title": "Service Site Map Catalog",
+      "competentAuthority": "spatial-service-sites-authority"
     },
     "distributions": []
   },

@@ -43,9 +43,17 @@
         ]
       }
     ],
+    "authorities": [
+      {
+        "id": "facility-authority",
+        "name": "Environmental Authority",
+        "iri": "https://facility-registry.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "facility-service",
-      "title": "Environmental Facility Registry Catalog"
+      "title": "Environmental Facility Registry Catalog",
+      "competentAuthority": "facility-authority"
     },
     "distributions": []
   },

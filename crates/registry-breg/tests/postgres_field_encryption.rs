@@ -86,7 +86,8 @@ manifestProjection:
     baseUrl: https://field-encryption.invalid
     title: Field Encryption Fixture Registry
     publisher: {id: field-encryption-authority, name: Fixture Publisher}
-  publicService: {id: field-encryption-service, title: Field Encryption Fixture Registry}
+  authorities: [{id: field-encryption-authority, name: Fixture Publisher}]
+  publicService: {id: field-encryption-service, title: Field Encryption Fixture Registry, competentAuthority: field-encryption-authority}
   datasets:
     - id: fixture-registry
       title: Fixture Dataset

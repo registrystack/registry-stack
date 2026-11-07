@@ -43,9 +43,17 @@
         ]
       }
     ],
+    "authorities": [
+      {
+        "id": "asset-site-placement-authority",
+        "name": "Asset Site Placement Authority",
+        "iri": "https://asset-site-placement.example.gov/authority"
+      }
+    ],
     "publicService": {
       "id": "asset-site-placement-service",
-      "title": "Asset Site Placement Catalog"
+      "title": "Asset Site Placement Catalog",
+      "competentAuthority": "asset-site-placement-authority"
     },
     "distributions": []
   },

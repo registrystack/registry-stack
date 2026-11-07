@@ -664,6 +664,14 @@ pub(crate) fn project_diagnostics(
                 ),
             ),
             (
+                "breg.manifest.authority-id-collision",
+                indexed_ids(
+                    &format!("{base}/authorities"),
+                    &projection.authorities,
+                    |item| &item.id,
+                ),
+            ),
+            (
                 "breg.manifest.dataset-id-collision",
                 indexed_ids(&format!("{base}/datasets"), &projection.datasets, |item| {
                     &item.id

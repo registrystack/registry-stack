@@ -37,7 +37,8 @@ const PROJECT: &[u8] = br#"{
       "title":"Manifest omission",
       "publisher":{"id":"publisher","name":"Publisher"}
     },
-    "publicService":{"id":"registry-service","title":"Registry service"},
+    "authorities":[{"id":"publisher","name":"Publisher"}],
+    "publicService":{"id":"registry-service","title":"Registry service","competentAuthority":"publisher"},
     "datasets":[
       {"id":"sources","title":"Sources"},
       {"id":"targets","title":"Targets"}

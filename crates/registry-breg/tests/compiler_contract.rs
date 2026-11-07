@@ -80,7 +80,11 @@ const MULTI_DATASET_PROJECT: &[u8] = br#"{"datasets":[{"id": "people"}, {"id": "
             "accessProfile":"reader",
             "classificationCeiling":"restricted",
             "catalog":{"baseUrl":"https://registry.example.test/multi","title":"Multi Registry","publisher":{"id":"multi-authority","name":"Registry Authority","iri":"https://registry.example.test/authority"}},
-            "publicService":{"id":"multi-service","title":"Registry service"},
+            "authorities":[
+              {"id":"multi-authority","name":"Registry Authority","iri":"https://registry.example.test/authority"},
+              {"id":"service-agency","name":"Service Agency","authorityType":"http://purl.org/adms/publishertype/NationalAuthority"}
+            ],
+            "publicService":{"id":"multi-service","title":"Registry service","competentAuthority":"service-agency"},
             "datasets":[
               {"id":"people","iri":"https://identity.example.test/datasets/people","title":"People","version":"2026.1"},
               {"id":"residences","title":"Residences","accessProfile":"reader","classificationCeiling":"internal"}
@@ -315,6 +319,7 @@ fn directly_constructed_multilingual_display_and_manifest_text_is_preserved() {
         .as_mut()
         .expect("fixture has a Manifest projection");
     projection.catalog.publisher.name = DISPLAY.to_owned();
+    projection.authorities[1].name = DISPLAY.to_owned();
     projection.datasets[0].owner = Some(DISPLAY.to_owned());
     projection.data_services[0].endpoint_description = Some(ENDPOINT_DESCRIPTION.to_owned());
 
@@ -335,7 +340,7 @@ fn directly_constructed_multilingual_display_and_manifest_text_is_preserved() {
     let projection = compiled
         .manifest_projection()
         .expect("compiled projection exists");
-    assert_eq!(projection.primary_authority.name, DISPLAY);
+    assert_eq!(projection.authorities["service-agency"].name, DISPLAY);
     assert_eq!(
         projection.datasets["people"].source.owner.as_deref(),
         Some(DISPLAY)
@@ -470,6 +475,7 @@ fn directly_constructed_manifest_display_text_is_refused_at_each_string_field() 
         .as_mut()
         .expect("fixture has a Manifest projection");
     projection.catalog.publisher.name = unsafe_text.clone();
+    projection.authorities[1].name = unsafe_text.clone();
     projection.datasets[0].owner = Some(unsafe_text.clone());
 
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
@@ -484,6 +490,7 @@ fn directly_constructed_manifest_display_text_is_refused_at_each_string_field() 
     assert_eq!(
         paths,
         [
+            "project.manifestProjection.authorities[1].name",
             "project.manifestProjection.catalog.publisher.name",
             "project.manifestProjection.datasets[0].owner",
         ]
@@ -506,14 +513,17 @@ fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
         projection.canonical_base_iri,
         "https://registry.example.test/multi"
     );
-    assert_eq!(projection.primary_authority.id, "multi-authority");
     assert_eq!(
-        projection.primary_authority.iri,
+        projection.authorities["multi-authority"].iri,
         "https://registry.example.test/authority"
     );
     assert_eq!(
+        projection.authorities["service-agency"].iri,
+        "https://registry.example.test/multi/authorities/service-agency"
+    );
+    assert_eq!(
         projection.public_service.competent_authority,
-        "multi-authority"
+        "service-agency"
     );
     assert_eq!(
         projection.public_service.produces,
@@ -565,7 +575,7 @@ fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
         .expect("Manifest artifact exists")
         .bytes;
     let manifest: MetadataManifest = serde_json::from_slice(manifest_bytes).unwrap();
-    assert_eq!(manifest.authorities.len(), 1);
+    assert_eq!(manifest.authorities.len(), 2);
     assert_eq!(manifest.public_services.len(), 1);
     assert_eq!(manifest.datasets.len(), 2);
     assert_eq!(manifest.data_services[0].serves_datasets.len(), 2);
@@ -580,6 +590,197 @@ fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
         .relationships
         .iter()
         .all(|relationship| relationship.name != "resident"));
+}
+
+fn multi_dataset_value() -> Value {
+    serde_json::from_slice(MULTI_DATASET_PROJECT).expect("multi-dataset source is JSON")
+}
+
+fn compile_multi_dataset_value(
+    value: &Value,
+) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
+    let project = parse_project_json(&serde_json::to_vec(value).expect("source serializes"))
+        .expect("multi-dataset source shape parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+}
+
+fn projected_manifest(compiled: &registry_breg::CompiledRegistry) -> MetadataManifest {
+    let bytes = &compiled
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json")
+        .expect("Manifest artifact exists")
+        .bytes;
+    serde_json::from_slice(bytes).expect("Manifest artifact is a Registry Manifest")
+}
+
+#[test]
+fn projection_names_the_competent_authority_among_declared_authorities() {
+    let compiled = compile_multi_dataset_value(&multi_dataset_value())
+        .expect("a projection with a declared competent authority compiles");
+    let manifest = projected_manifest(&compiled);
+
+    let authorities = manifest
+        .authorities
+        .iter()
+        .map(|authority| {
+            (
+                authority.id.as_str(),
+                authority.iri.as_deref(),
+                authority.name.as_str(),
+                authority.authority_type.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        authorities,
+        [
+            (
+                "multi-authority",
+                Some("https://registry.example.test/authority"),
+                "Registry Authority",
+                None,
+            ),
+            (
+                "service-agency",
+                Some("https://registry.example.test/multi/authorities/service-agency"),
+                "Service Agency",
+                Some("http://purl.org/adms/publishertype/NationalAuthority"),
+            ),
+        ]
+    );
+    assert_eq!(manifest.public_services.len(), 1);
+    assert_eq!(
+        manifest.public_services[0].competent_authority.as_deref(),
+        Some("service-agency")
+    );
+    assert_eq!(manifest.catalog.publisher.name, "Registry Authority");
+
+    let metadata = compile_manifest(&manifest).expect("the projected Manifest compiles");
+    let cpsv = registry_manifest_core::render_cpsv_ap(&metadata);
+    let service = cpsv["@graph"]
+        .as_array()
+        .expect("CPSV-AP output has a graph")
+        .iter()
+        .find(|node| node["dcterms:identifier"] == "multi-service")
+        .expect("the public service is rendered");
+    assert_eq!(
+        service["cv:hasCompetentAuthority"]["@id"],
+        "https://registry.example.test/multi/authorities/service-agency"
+    );
+}
+
+#[test]
+fn projection_refuses_an_unknown_competent_authority() {
+    let mut value = multi_dataset_value();
+    value["manifestProjection"]["publicService"]["competentAuthority"] = json!("missing-agency");
+    let failure =
+        compile_multi_dataset_value(&value).expect_err("an unknown competent authority is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "breg.manifest-projection.competent-authority-dangling"
+        })
+        .unwrap_or_else(|| panic!("dangling diagnostic expected: {:?}", failure.diagnostics()));
+    assert_eq!(
+        diagnostic.path,
+        "project.manifestProjection.publicService.competentAuthority"
+    );
+    assert_eq!(
+        diagnostic.message,
+        "publicService.competentAuthority must reference manifestProjection.authorities[]"
+    );
+}
+
+#[test]
+fn projection_refuses_duplicate_or_absent_authorities() {
+    let mut lookalike = multi_dataset_value();
+    let mut repeated = lookalike["manifestProjection"]["authorities"][1].clone();
+    repeated["id"] = json!("service_agency");
+    lookalike["manifestProjection"]["authorities"]
+        .as_array_mut()
+        .expect("authorities is an array")
+        .push(repeated);
+    let failure = parse_project_json(&serde_json::to_vec(&lookalike).unwrap())
+        .expect_err("a lookalike authority id is refused while parsing");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.manifest.authority-id-collision"
+                && diagnostic.path == "project.manifestProjection.authorities[2].id"
+        }),
+        "{:?}",
+        failure.diagnostics()
+    );
+
+    let mut duplicate = multi_dataset_project();
+    let projection = duplicate
+        .manifest_projection
+        .as_mut()
+        .expect("fixture has a Manifest projection");
+    let repeated = projection.authorities[1].clone();
+    projection.authorities.push(repeated);
+    let failure = compile_project(&duplicate, &[], CompileProfile::Authoring)
+        .expect_err("a directly constructed duplicate authority is refused");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.manifest-projection.authority-duplicate"
+                && diagnostic.path == "project.manifestProjection.authorities[2].id"
+        }),
+        "{:?}",
+        failure.diagnostics()
+    );
+
+    let mut empty = multi_dataset_value();
+    empty["manifestProjection"]["authorities"] = json!([]);
+    let failure = compile_multi_dataset_value(&empty).expect_err("no authority is refused");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.manifest-projection.authorities-empty"
+                && diagnostic.path == "project.manifestProjection.authorities"
+        }),
+        "{:?}",
+        failure.diagnostics()
+    );
+
+    for (pointer, key) in [
+        ("/manifestProjection", "authorities"),
+        ("/manifestProjection/publicService", "competentAuthority"),
+    ] {
+        let mut missing = multi_dataset_value();
+        missing
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("projection object exists")
+            .remove(key);
+        let failure = parse_project_json(&serde_json::to_vec(&missing).unwrap())
+            .expect_err("a projection without an identified competent authority is refused");
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.missing-key"
+                    && diagnostic.message.contains(key)),
+            "expected a parse diagnostic naming {key}: {:?}",
+            failure.diagnostics()
+        );
+    }
+}
+
+#[test]
+fn projection_refuses_malformed_authority_identity_and_name_at_parse() {
+    for (field, value) in [("id", "Not An Id"), ("name", "reordered\u{202e}")] {
+        let mut source = multi_dataset_value();
+        source["manifestProjection"]["authorities"][1][field] = json!(value);
+        let failure = parse_project_json(&serde_json::to_vec(&source).unwrap())
+            .expect_err("a malformed authority is refused while parsing");
+        assert!(
+            failure.diagnostics().iter().any(|diagnostic| {
+                diagnostic.path.contains("authorities") && !diagnostic.message.contains(value)
+            }),
+            "expected a parse diagnostic at the authority {field}: {:?}",
+            failure.diagnostics()
+        );
+    }
 }
 
 fn cross_dataset_reference_project() -> Value {
@@ -601,7 +802,8 @@ fn cross_dataset_reference_project() -> Value {
           "title":"Cross-dataset reference",
           "publisher":{"id":"publisher","name":"Publisher"}
         },
-        "publicService":{"id":"registry-service","title":"Registry service"},
+        "authorities":[{"id":"publisher","name":"Publisher"}],
+        "publicService":{"id":"registry-service","title":"Registry service","competentAuthority":"publisher"},
         "datasets":[
           {"id":"sources","title":"Sources"},
           {"id":"targets","title":"Targets"}
@@ -859,7 +1061,8 @@ fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
             "accessProfile":"public-reader",
             "classificationCeiling":"public",
             "catalog":{"baseUrl":"https://catalog.example.test","title":"Classified Catalog","publisher":{"id":"catalog-authority","name":"Catalog Authority"}},
-            "publicService":{"id":"catalog-service","title":"Catalog service"},
+            "authorities":[{"id":"catalog-authority","name":"Catalog Authority"}],
+            "publicService":{"id":"catalog-service","title":"Catalog service","competentAuthority":"catalog-authority"},
             "datasets":[
               {"id":"public-records","title":"Public records","accessProfile":"public-reader","classificationCeiling":"public"},
               {"id":"protected-records","title":"Protected records title","accessProfile":"protected-reader","classificationCeiling":"restricted"}
@@ -2154,7 +2357,8 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
             "accessProfile":"reader",
             "classificationCeiling":"public",
             "catalog":{"baseUrl":"https://registry.example.test","title":"Registry","publisher":{"id":"authority","name":"Authority"}},
-            "publicService":{"id":"service","title":"Service"},
+            "authorities":[{"id":"authority","name":"Authority"}],
+            "publicService":{"id":"service","title":"Service","competentAuthority":"authority"},
             "datasets":[{"id":"neutral","title":"Dataset"}],
             "dataServices":[{"id":"api","title":"API","endpointUrl":"https://registry.example.test","servesDatasets":["neutral"]}]
           },
@@ -2770,7 +2974,8 @@ fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
               "title":"Registry Catalog",
               "publisher":{"id":"publisher","name":"Publisher","privateKey":"do-not-echo"}
             },
-            "publicService":{"id":"registry-service","title":"Registry service"},
+            "authorities":[{"id":"publisher","name":"Publisher"}],
+            "publicService":{"id":"registry-service","title":"Registry service","competentAuthority":"publisher"},
             "datasets":[{"id":"neutral","title":"Registry Dataset"}],
             "dataServices":[{"id":"registry-api","title":"Registry API","endpointUrl":"https://registry.example.test","servesDatasets":["neutral"]}]
           }
@@ -3011,7 +3216,8 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
             "accessProfile":"operator",
             "classificationCeiling":"public",
             "catalog":{"baseUrl":"https://public-slice.example.test","title":"Public Slice","publisher":{"id":"publisher","name":"Publisher"}},
-            "publicService":{"id":"public-slice-service","title":"Public Slice"},
+            "authorities":[{"id":"publisher","name":"Publisher"}],
+            "publicService":{"id":"public-slice-service","title":"Public Slice","competentAuthority":"publisher"},
             "datasets":[{"id":"public-slice","title":"Public Slice Dataset","status":"active"}],
             "dataServices":[{"id":"public-slice-api","title":"Public Slice API","endpointUrl":"https://public-slice.example.test/v1","servesDatasets":["public-slice"]}]
           },
@@ -3087,7 +3293,8 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
             "accessProfile":"reader",
             "classificationCeiling":"restricted",
             "catalog":{"baseUrl":"https://public-slice.example.test","title":"Public Slice","publisher":{"id":"publisher","name":"Publisher"}},
-            "publicService":{"id":"public-slice-service","title":"Public Slice"},
+            "authorities":[{"id":"publisher","name":"Publisher"}],
+            "publicService":{"id":"public-slice-service","title":"Public Slice","competentAuthority":"publisher"},
             "datasets":[{"id":"public-slice","title":"Public Slice Dataset"}],
             "dataServices":[{"id":"public-slice-api","title":"Public Slice API","endpointUrl":"https://public-slice.example.test/v1","servesDatasets":["public-slice"]}],
             "entities":[
@@ -3198,7 +3405,8 @@ fn an_early_compile_error_says_which_later_checks_did_not_run() {
             "accessProfile":"reader",
             "classificationCeiling":"restricted",
             "catalog":{"baseUrl":"https://staged-check.example.test","title":"Staged check","publisher":{"id":"publisher","name":"Publisher"}},
-            "publicService":{"id":"staged-check-service","title":"Staged check"},
+            "authorities":[{"id":"publisher","name":"Publisher"}],
+            "publicService":{"id":"staged-check-service","title":"Staged check","competentAuthority":"publisher"},
             "datasets":[{"id":"records","title":"Records"}],
             "dataServices":[{"id":"registry-api","title":"Registry API","endpointUrl":"https://staged-check.example.test/v1","servesDatasets":["records"]}],
             "entities":[{"id":"record","fields":[{"id":"secret-note","concepts":["https://example.test/secret-note"]}]}]
@@ -3252,7 +3460,8 @@ fn narrowed_vocabulary_project(concepts: Value) -> registry_breg::contract::Regi
         "accessProfile":"reader",
         "classificationCeiling":"public",
         "catalog":{"baseUrl":"https://narrowed-codes.example.test","title":"Narrowed Codes","publisher":{"id":"publisher","name":"Publisher"}},
-        "publicService":{"id":"narrowed-codes-service","title":"Narrowed Codes"},
+        "authorities":[{"id":"publisher","name":"Publisher"}],
+        "publicService":{"id":"narrowed-codes-service","title":"Narrowed Codes","competentAuthority":"publisher"},
         "datasets":[{"id":"narrowed-codes","title":"Narrowed Codes Dataset"}],
         "dataServices":[{"id":"narrowed-codes-api","title":"Narrowed Codes API","endpointUrl":"https://narrowed-codes.example.test/v1","servesDatasets":["narrowed-codes"]}],
         "vocabularies":[{"id":"authorization-status","schemeIri":"https://narrowed-codes.example.test/vocab/authorization-status","concepts":concepts}]
@@ -3365,7 +3574,8 @@ fn manifest_projection_codelists_carry_only_codes_the_publication_admits() {
         "accessProfile":"public-reader",
         "classificationCeiling":"public",
         "catalog":{"baseUrl":"https://shared-codes.example.test","title":"Shared Codes","publisher":{"id":"publisher","name":"Publisher"}},
-        "publicService":{"id":"shared-codes-service","title":"Shared Codes"},
+        "authorities":[{"id":"publisher","name":"Publisher"}],
+        "publicService":{"id":"shared-codes-service","title":"Shared Codes","competentAuthority":"publisher"},
         "datasets":[
           {"id":"public-cases","title":"Public cases","accessProfile":"public-reader","classificationCeiling":"public"},
           {"id":"protected-cases","title":"Protected cases","accessProfile":"protected-reader","classificationCeiling":"restricted"}
@@ -7731,7 +7941,7 @@ fn verified_module_digest_changes_compiled_closure_artifact_and_revision() {
       "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
       "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://neutral.example.test"},
       "package":{"sourceRevision":"revision-1"},
-      "manifestProjection":{"accessProfile":"reader","classificationCeiling":"internal","catalog":{"baseUrl":"https://neutral.example.test","title":"Neutral Catalog","publisher":{"id":"neutral-authority","name":"Neutral Publisher"}},"publicService":{"id":"neutral-service","title":"Neutral service"},"datasets":[{"id":"neutral","title":"Neutral Dataset"}],"dataServices":[{"id":"neutral-api","title":"Neutral API","endpointUrl":"https://neutral.example.test","servesDatasets":["neutral"]}]},
+      "manifestProjection":{"accessProfile":"reader","classificationCeiling":"internal","catalog":{"baseUrl":"https://neutral.example.test","title":"Neutral Catalog","publisher":{"id":"neutral-authority","name":"Neutral Publisher"}},"authorities":[{"id":"neutral-authority","name":"Neutral Publisher"}],"publicService":{"id":"neutral-service","title":"Neutral service","competentAuthority":"neutral-authority"},"datasets":[{"id":"neutral","title":"Neutral Dataset"}],"dataServices":[{"id":"neutral-api","title":"Neutral API","endpointUrl":"https://neutral.example.test","servesDatasets":["neutral"]}]},
       "modules":[{"id":"core","version":"1","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]
     }"#;
     let module_source = br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[

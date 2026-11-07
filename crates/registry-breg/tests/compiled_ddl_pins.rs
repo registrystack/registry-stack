@@ -64,6 +64,9 @@
 //! Registry Record response spellings, batch response shapes, the bounded-write
 //! Problem, and generated SDK contract alignment likewise move artifact
 //! revisions only. SQL and Action fingerprints stay fixed.
+//! Declared Manifest projection authorities and the public service's competent
+//! authority likewise move the revisions of the fixtures that project a
+//! Manifest. SQL and Action fingerprints stay fixed.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -97,7 +100,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "43acdae956eb2f932fb22a2cccc5cee5ed19cf806f2f28bbc677eff219d00b99",
-        revision: "sha256:b4a0a980d813a2eebb3a1665e0e4db84a34df8a1a027d942c1c60d7f507484cf",
+        revision: "sha256:bf8ca54a00c9b67bf1b9f4a68883a1b64af6a1f7de68f5737ce95c04868df4f5",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -108,7 +111,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "6439a877ee6508b999a77242542695d8ccddc6d80518699d90eddc32b305780b",
-        revision: "sha256:27e54c5d8bc7b245af54c5fff9f3b6b3a5c7be489b0215e71e3d38a5c2e94d06",
+        revision: "sha256:e0ecebe4a0c256f1b949d2162d6e64e632953151d01c4485f16716e2ab180967",
     },
     Fixture {
         name: "household-contact-actions",
@@ -119,7 +122,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "f82f2f8376df97fb184c04d31c8e42c291f7a03dbd909828e1bf61612106de35",
-        revision: "sha256:1b7c844213457e7d3ae2f48809f615ee639c81a1ef378c1e40d612be7194bdb4",
+        revision: "sha256:bc90437187e3aa464660f7865904e9e568b5d334cde57e4b0e68e15069a27ac9",
     },
 ];
 

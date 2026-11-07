@@ -3177,6 +3177,29 @@
       ],
       "type": "object"
     },
+    "ManifestProjectionAuthoritySource": {
+      "additionalProperties": false,
+      "description": "An identified public authority, shaped like the catalogue publisher.\nIt projects to a Registry Manifest `authorities[]` entry. Without an\n`iri`, the authority IRI is derived from the canonical base IRI.",
+      "properties": {
+        "authorityType": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "iri": {
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/DisplayText"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "ManifestProjectionCatalogSource": {
       "additionalProperties": false,
       "properties": {
@@ -3449,6 +3472,10 @@
     "ManifestProjectionPublicServiceSource": {
       "additionalProperties": false,
       "properties": {
+        "competentAuthority": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The id of the `authorities[]` entry legally competent for this\nservice (CPSV-AP `hasCompetentAuthority`)."
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         },
@@ -3458,7 +3485,8 @@
       },
       "required": [
         "id",
-        "title"
+        "title",
+        "competentAuthority"
       ],
       "type": "object"
     },
@@ -3489,6 +3517,13 @@
       "properties": {
         "accessProfile": {
           "type": "string"
+        },
+        "authorities": {
+          "description": "The identified public authorities the Manifest names. The public\nservice names its competent authority from this list by id.",
+          "items": {
+            "$ref": "#/$defs/ManifestProjectionAuthoritySource"
+          },
+          "type": "array"
         },
         "catalog": {
           "$ref": "#/$defs/ManifestProjectionCatalogSource"
@@ -3536,6 +3571,7 @@
         "accessProfile",
         "classificationCeiling",
         "catalog",
+        "authorities",
         "publicService",
         "datasets",
         "dataServices"
