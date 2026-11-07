@@ -11,6 +11,11 @@ certificate check, `POST /v1/public-check`.
   Evidence deployment.
 - `runtime.yaml` holds the process-local paths and listener settings.
 
+The example target uses the `local` assurance profile with loopback issuer,
+source and public origins, so a test can serve this bundle on one machine. A
+deployment packages its own target with a deployable assurance profile and
+HTTPS hosts; nothing else in the check changes.
+
 The bundle is generated, so edit the example and package it again rather than
 editing files here. A test in `crates/registry-evidencectl/tests/public_check.rs`
 fails when this bundle drifts from the example, apart from the signing key file
