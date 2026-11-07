@@ -185,6 +185,44 @@ A signed source's verified `validUntil` remains an independent data-validity bou
     crates/registry-platform-audit/src/writer.rs, AuditEntry;
     products/evidence/OPERATOR-CONTRACT.md, "Audit and operational data". */}
 
+## Read a public check entry
+
+The unauthenticated public check route, `POST /v1/public-check`, writes its own entries. Each one
+is a platform audit entry with the schema `registry.evidence.audit.public-check/v1`, and the
+[`public-check-audit-event.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/public-check-audit-event.schema.yaml)
+contract defines it. The route has no requester, actor, client, or grant, so no record names one,
+and none carries a response protection, an Evidence identifier, or a signing key, because the
+public answer is never signed. A check refused before admission (a malformed body, a document
+number that fails the selector profile, or a rejected request limit) writes nothing. The entry
+phase is `request` for the access attempt and `response` for every other phase, and the entry
+`correlation` is the record's `operation`.
+
+| Record phase | Decision | What it establishes |
+|---|---|---|
+| `access-attempt` | `authorized` | The subject resolved and the record was durably accepted before the Source was read. `executionBounds` carries the effective acquisition budget. |
+| `disclosure-release` | `released` | The exact answer bytes were serialized and durably recorded before they were returned. `disclosedConcepts` names exactly the status and fields concepts. |
+| `denial` | `no-match`, `ambiguous`, `unresolved`, `fact-missing`, or `code-mismatch` | The check ended in a miss, with a `safeErrorCategory`. |
+| `transient-failure` | `dependency-failure` or `evaluation-failure` | An admitted check failed in a value-free class a retry may clear, with a `safeErrorCategory`. |
+
+All five miss decisions are answered to the caller with one identical `404 resource.not-found`
+problem. The log is where you tell them apart: `code-mismatch` also covers a stored check code that
+is absent or malformed, and it is visible to you only.
+
+Every record carries `assuranceProfile`, `eventId`, `occurredAt`, `operation`, `phase`,
+`requirement`, `bundleRevision`, `authorityRevision`, `effectiveGrantDigest`, `purpose`,
+`subjects`, `sourceId`, `adapterId`, `decision`, `reason`, and `durationMilliseconds`. `reason` is
+always `public-check.activated`. `subjects` holds the one presented selector bundle as a role, a
+selector profile, and a keyed `selectorBundlePseudonym`. Repeated checks of one document number
+share that pseudonym, so you can see one number tried repeatedly without the log holding the number.
+
+A record never carries the presented or stored check code, the document number or any selector
+value, request headers, a client address, an inbound trace context, a source value or fact, or a
+credential. An audit append failure answers `503 service.unavailable` and releases nothing.
+
+{/* Evidence: crates/registry-evidence/src/audit.rs, PUBLIC_CHECK_AUDIT_SCHEMA and the public-check
+    record builders;
+    products/evidence/contracts/public-check-audit-event.schema.yaml, audit_rules. */}
+
 ## Rotate the audit master
 
 Every pseudonym carries `audit.hashKeyVersion` in its prefix, so entries under different masters

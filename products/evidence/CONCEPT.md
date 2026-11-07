@@ -3383,12 +3383,16 @@ target authority grants it, as for any other disclosure.
 
 A package that declares `publicCheck` without an activation does not register
 the route, which then answers as an unknown route. At most one definition is
-activated per process. Packaging and startup refuse a definition whose
-`statusOutput` or `fieldsOutput` has the wrong type, whose status and fields
-are the same output, that has more than one subject role, selector profile or
-selector field, whose `checkCodeFact` is not a string property of the source's
-facts or is bound as a request input, or whose `existenceDisclosure` is not the
-default `collapse-unresolved`. Other outputs on the same definition serve only
+activated per process. Packaging refuses a definition whose `statusOutput` is
+not a `controlled-category` output with inline values drawn only from the four
+statuses, whose `fieldsOutput` is not a `reviewed-structured-value` output,
+whose status and fields are the same output, that has more than one subject
+role, selector profile or selector field, whose `checkCodeFact` is not a string
+property of the source's facts or is bound as a request input, whose
+`existenceDisclosure` is not the default `collapse-unresolved`, or that does not
+read through exactly one Source or declares `holderPresented`. Startup refuses
+an output of the wrong type, a subject of the wrong shape, and an acquisition
+that is not exactly one Source. Other outputs on the same definition serve only
 the relying-service path; the public answer is built from the two named outputs.
 
 **The request.** The body has exactly the string members `documentNumber` and
@@ -3407,8 +3411,10 @@ code is a projected fact, never a source input. It is compared in constant time
 where the match is unpacked, then removed from the facts on every route that
 reads that source, so no derive Function and no relying service sees it.
 Malformed requests return `400` (`evidence.invalid-request` or
-`request.selector-invalid`) before any audit write or source read. A source
-failure returns `503 source.unavailable`.
+`request.selector-invalid`) before any audit write or source read. A document
+number that passes the selector profile but cannot be carried by the Source path
+is refused after the access-attempt audit entry and before any source request,
+and answers `503 source.unavailable`, as does a source failure.
 
 **Timing.** Evidence adds no delay, so response time can differ between an
 existing and a missing number. That can reveal whether a number exists and
