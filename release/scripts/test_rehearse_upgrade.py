@@ -462,8 +462,10 @@ class ForwardPathFloorTest(unittest.TestCase):
             return {name: f"{name} 0.46.0-dev" for name in names}
 
         def leg(product):
-            def run(work, keys, *rest):
+            def run(work, keys, *rest, **named):
                 seen["legs"].append((product, rest[-3].bin_dir, rest[-2].bin_dir))
+                if product == "messaging":
+                    seen["messagingStart"] = named["start"]
             return run
 
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -507,6 +509,7 @@ class ForwardPathFloorTest(unittest.TestCase):
         from_bin = Path(temporary).resolve() / "work/from-bin"
         self.assertEqual(seen["legs"],
                          [("evidence", from_bin, built), ("messaging", from_bin, built)])
+        self.assertEqual(seen["messagingStart"], (0, 45, 0))
 
     def test_fetch_only_downloads_v0_45_0(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1280,6 +1283,60 @@ class MessagingAssertionsTest(unittest.TestCase):
                 (difference,) = MODULE.ledger_digest_differences(activated, self.plan())
                 self.assertIn("previous release", difference)
 
+    def test_the_acts_as_migration_runs_only_across_its_boundary(self) -> None:
+        # 0.46.0 refuses a Messaging package that writes `role`, so a 0.45.0
+        # project is re-authored and repackaged; the database state is kept.
+        self.assertEqual(MODULE.MESSAGING_ACTS_AS_BOUNDARY, (0, 46, 0))
+        self.assertTrue(MODULE.crosses_messaging_acts_as_boundary((0, 45, 0)))
+        self.assertFalse(MODULE.crosses_messaging_acts_as_boundary((0, 46, 0)))
+        self.assertFalse(MODULE.crosses_messaging_acts_as_boundary((0, 46, 1)))
+
+    def test_the_acts_as_migration_is_removed_once_the_floor_reaches_it(self) -> None:
+        # From 0.46.0 on the floor is a release that writes `actsAs`, so no
+        # rehearsal crosses the boundary and the migration is dead code.
+        self.assertLess(MODULE.FORWARD_PATH_FLOOR, MODULE.MESSAGING_ACTS_AS_BOUNDARY,
+                        "remove the Messaging actsAs migration from rehearse-upgrade.py")
+
+    def test_acts_as_replaces_role_in_place_in_every_access_profile(self) -> None:
+        project = {"kind": "MessagingProject", "role": "kept", "accessProfiles": [
+            {"id": "case-notices", "actorKind": "service", "role": "sender", "burst": 10},
+            {"id": "operations", "role": "operator"}]}
+        migrated = MODULE.acts_as_project(project)
+        self.assertEqual(migrated["role"], "kept")
+        self.assertEqual(
+            [list(profile.items()) for profile in migrated["accessProfiles"]],
+            [[("id", "case-notices"), ("actorKind", "service"), ("actsAs", "sender"),
+              ("burst", 10)],
+             [("id", "operations"), ("actsAs", "operator")]])
+
+    def test_a_project_with_no_role_to_migrate_is_refused(self) -> None:
+        for project in ({}, {"accessProfiles": []},
+                        {"accessProfiles": [{"id": "a", "actsAs": "sender"}]}):
+            with self.subTest(project=project), self.assertRaisesRegex(Error, "role"):
+                MODULE.acts_as_project(project)
+
+    def test_the_repackaged_project_must_replace_the_previous_activation(self) -> None:
+        before = {"activeDigest": self.ACTIVE, "packageDigest": self.OTHER,
+                  "change": "activate"}
+        after = {"activeDigest": self.OTHER, "packageDigest": self.OTHER, "change": "none"}
+        self.assertEqual(MODULE.repackaged_ledger_differences(self.ACTIVE, before, after), [])
+        for previous, planned, applied, named in (
+                (None, before, after, "previous release"),
+                (self.ACTIVE, {**before, "activeDigest": self.OTHER}, after,
+                 "package the previous release activated"),
+                (self.ACTIVE, {**before, "packageDigest": self.ACTIVE}, after,
+                 "re-authored package"),
+                (self.ACTIVE, {**before, "packageDigest": None}, after,
+                 "re-authored package"),
+                (self.ACTIVE, before, {**after, "activeDigest": self.ACTIVE}, "activeDigest"),
+                (self.ACTIVE, before, {**after, "packageDigest": self.ACTIVE},
+                 "packageDigest"),
+                (self.ACTIVE, before, {**after, "change": "activate"}, "change to apply")):
+            with self.subTest(planned=planned, applied=applied):
+                differences = MODULE.repackaged_ledger_differences(previous, planned, applied)
+                self.assertTrue(differences)
+                self.assertIn(named, differences[0])
+
     def test_counts_one_event_across_every_segment_of_the_stream(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             audit = Path(temporary)
@@ -1311,7 +1368,8 @@ class MessagingAssertionsTest(unittest.TestCase):
 
     def rehearse(self, *, erase_events: int = 1,
                  ledger_differences: tuple[str, ...] = (),
-                 dispatch_shape: str | None = None) -> tuple[dict, Any, Any]:
+                 dispatch_shape: str | None = None,
+                 start: tuple[int, int, int] = (0, 46, 0)) -> tuple[dict, Any, Any]:
         """Run rehearse_messaging with every process and database faked. The
         erase command writes `erase_events` requested and erased records."""
         old, new = unittest.mock.Mock(), unittest.mock.Mock()
@@ -1327,6 +1385,7 @@ class MessagingAssertionsTest(unittest.TestCase):
             return list(ledger_differences)
 
         messaging.upgrade.side_effect = upgrade
+        messaging.activate_repackaged.side_effect = upgrade
 
         def erase(*arguments, **_):
             if "erase-expired" in arguments:
@@ -1350,7 +1409,7 @@ class MessagingAssertionsTest(unittest.TestCase):
                     side_effect=lambda *_a, **_k: written["events"]) as events:
             try:
                 MODULE.rehearse_messaging(Path(directory), unittest.mock.Mock(), postgres,
-                                          old, new, report)
+                                          old, new, report, start=start)
             finally:
                 self.report = report
                 self.event_streams = {call.args[1] for call in events.call_args_list}
@@ -1376,6 +1435,22 @@ class MessagingAssertionsTest(unittest.TestCase):
     def test_the_leg_upgrades_from_the_digest_the_old_release_activated(self) -> None:
         _report, new, messaging = self.rehearse()
         messaging.upgrade.assert_called_once_with(new, self.ACTIVE)
+        messaging.migrate_acts_as.assert_not_called()
+        messaging.activate_repackaged.assert_not_called()
+
+    def test_the_leg_from_0_45_0_repackages_the_project_with_the_new_release(self) -> None:
+        report, new, messaging = self.rehearse(start=(0, 45, 0))
+        messaging.migrate_acts_as.assert_called_once_with(new)
+        messaging.activate_repackaged.assert_called_once_with(new, self.ACTIVE)
+        messaging.upgrade.assert_not_called()
+        self.assertEqual(report["messaging"]["viewDifferences"], [])
+        self.assertEqual(report["messaging"]["rowLosses"], [])
+
+    def test_the_leg_fails_on_a_difference_the_repackaged_activation_names(self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError, "not the re-authored package"):
+            self.rehearse(start=(0, 45, 0),
+                          ledger_differences=("the ledger activeDigest is not the "
+                                              "re-authored package",))
 
     def test_the_leg_fails_on_a_ledger_difference_the_upgrade_names(self) -> None:
         with self.assertRaisesRegex(MODULE.RehearsalError, "names another predecessor"):
