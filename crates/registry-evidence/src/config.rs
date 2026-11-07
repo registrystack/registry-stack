@@ -5059,6 +5059,16 @@ impl RequirementConfig {
                 "publicCheck fieldsOutput must name a reviewed-structured-value concept",
             );
         }
+        // An entity reference is scoped to a relying party; a public check has
+        // none, so the answer could never project one.
+        if self.concepts.iter().any(|concept| {
+            matches!(
+                concept.form,
+                ConceptForm::AudienceScopedEntityReference | ConceptForm::EntityReferenceList
+            )
+        }) {
+            return invalid("publicCheck must not declare an entity-reference concept");
+        }
         if self.acquisition.source_channel_source().is_none()
             || self.acquisition.holder_presented.is_some()
         {
@@ -13275,6 +13285,39 @@ outboundTls:
             let mut value = serde_json::to_value(&config).expect("serializes");
             value["requirements"][0]["publicCheck"]["extra"] = true.into();
             assert!(EvidenceConfig::parse_projection(&value).is_err());
+        }
+
+        #[test]
+        fn an_entity_reference_concept_is_refused() {
+            for (form, constraints) in [
+                (
+                    "audience-scoped-entity-reference",
+                    serde_json::json!({"maximumBytes": 160}),
+                ),
+                (
+                    "entity-reference-list",
+                    serde_json::json!({"minimumItems": 1, "maximumItems": 2, "unique": true}),
+                ),
+            ] {
+                let mut value = serde_json::to_value(config()).expect("serializes");
+                value["requirements"][0]["concepts"]
+                    .as_array_mut()
+                    .expect("concepts")
+                    .push(serde_json::json!({
+                        "handle": "owner",
+                        "uri": "urn:example:fixture:concept:owner",
+                        "type": form,
+                        "required": false,
+                        "constraints": constraints,
+                    }));
+                let error = EvidenceConfig::parse_projection(&value)
+                    .expect_err("a public check declared an entity-reference concept");
+                assert!(
+                    format!("{error}")
+                        .contains("publicCheck must not declare an entity-reference concept"),
+                    "{form}: {error}"
+                );
+            }
         }
 
         #[test]
