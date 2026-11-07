@@ -4545,7 +4545,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
-        "sha256": "c1be1e7bc8efa01de429ea5a5cd7c19da49d9766d71839602a0e81cecc447d8b",
+        "sha256": "d68323a93d34904b5bc49870512e03baf519fd86b2a88078df69e68ee417242f",
         "mediaType": "application/schema+json"
       }
     },
@@ -4563,7 +4563,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job.v1alpha1.schema.json",
-        "sha256": "843de6f3c01c8611f50c42010769f4f887b841f0deb385175f95a609eb5a5f30",
+        "sha256": "f1a66ef70359e4078ee3ae3426d378d65fbb62ab2f64545081d3d4973a8b28ad",
         "mediaType": "application/schema+json"
       }
     },
