@@ -1,6 +1,12 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://registrystack.org/schemas/evidence/audit-event-v3.json
 title: Evidence native audit record union Version 3
+description: >-
+  The native audit records of the authenticated Evidence routes. The
+  unauthenticated public check route has no requester, actor or grant and
+  writes its own closed record shape, defined in
+  public-check-audit-event.schema.yaml; that shape is not a member of this
+  union.
 type: object
 additionalProperties: false
 required:

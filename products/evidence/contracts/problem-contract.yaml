@@ -41,9 +41,10 @@ authorization_refusal_audit:
   operational_only: [evidence.invalid-request, request.selector-invalid, auth.invalid-credential]
 selector_refusal:
   code: request.selector-invalid
-  applies_to: Every selector the matched entitlement resolves, including a value that passes its profile but that a source of the requirement binds to a request path segment the value cannot occupy under the source path encoding rule.
-  order: Returned during selector resolution, after authorization and before any access-attempt audit event, credential acquisition, or source contact. It is never reported as source.unavailable.
+  applies_to: Every selector the matched entitlement resolves that fails its selector profile.
+  order: Returned during selector resolution, after authorization and before any access-attempt audit event, credential acquisition, or source contact.
   budget: Counts against the caller's selector-failure budget like every other selector refusal.
+  path_bound_value: A value that passes its profile but that a source of the requirement binds to a request path segment the value cannot occupy is not a selector refusal. It is refused after the durable access-attempt audit event and before credential acquisition or any source request, as source.unavailable (503), on the single and the batch route alike.
 existence_disclosure:
   default_public_collapse:
     internal_classes: [no_match, ambiguous, required_fact_missing, derivation_input_unresolved]
@@ -65,3 +66,46 @@ transient_failures:
   retry_after: absent
 unknown_definition_rule: Unknown and unauthorized requirement identifiers must be indistinguishable to a caller lacking authorization.
 route_resolution: An unknown path or unsupported method returns resource.not-found.
+public_check:
+  route: POST /v1/public-check
+  stability: experimental
+  codes_added: none
+  authentication: none; the route reads no principal and no request header except Content-Type
+  miss:
+    public_code: resource.not-found
+    status: 404
+    identical: Status, every response header except the server-minted traceparent, and every body byte except traceId are the same for every miss class.
+    classes: [no_match, ambiguous, unresolved, code_mismatch, missing_fact]
+    class_detail:
+      no_match: The Source returned no record for the document number.
+      ambiguous: The Source returned more than one record for the document number.
+      unresolved: An exact source-declared unresolved outcome.
+      code_mismatch: The stored check code is absent, not a string, not exactly 24 characters of A to Z and 2 to 7, or not equal to the presented code.
+      missing_fact: A required fact is missing or a derivation input is unresolved after the code matched.
+    operator_only: The audit decision tells the classes apart (no-match, ambiguous, unresolved, code-mismatch, fact-missing); the caller never can.
+  invalid_request:
+    code: evidence.invalid-request
+    status: 400
+    classes: [Content-Type that is not exactly application/json (absent, another type, or carrying a parameter), body over the listener maximumRequestBytes, body that is not one strict JSON object, an object without exactly the two string members documentNumber and checkCode, a duplicate member, a checkCode that is not 24 characters of A to Z and 2 to 7 after ASCII upper-casing]
+    order: Refused before admission to evaluation, any audit write, credential acquisition, or source contact.
+  invalid_selector:
+    code: request.selector-invalid
+    status: 400
+    classes: [documentNumber that fails the selector profile of the activated subject]
+    order: Refused before any audit write, credential acquisition, or source contact.
+  unavailable:
+    source.unavailable:
+      status: 503
+      classes: [Source transport or protocol failure, a Source result that is not a record or a declared outcome, acquisition budget exhausted, a documentNumber that passes the selector profile but that the Source path cannot carry]
+      audit: A transient-failure entry with decision dependency-failure follows the access-attempt entry.
+    service.unavailable:
+      status: 503
+      classes: [request time budget exhausted, admission to the request slots timed out, access-attempt or release audit append failed, evaluation task failed, a package fault, derivation or output validation failure after the code matched, a public answer that cannot be built from the two named outputs]
+      audit: Where an access attempt was accepted, a transient-failure entry follows with decision evaluation-failure; an audit append failure writes nothing further.
+  route_resolution: A route that the authority does not activate, and any method other than POST on the route, return resource.not-found exactly as an unknown path does; an unactivated route also answers a browser preflight as an unknown path does.
+  header_rule:
+    cache_control: Every response, success or problem, carries Cache-Control no-store.
+    access_control: Every response of the route, problems included, carries Access-Control-Allow-Origin *, never Access-Control-Allow-Credentials. A preflight answers 200 with an empty body, allows exactly POST and Content-Type, and a max age of 600 seconds. No other route carries a CORS header.
+    cross_origin_resource_policy: The route answers cross-origin.
+    traceparent: Every response carries a server-minted W3C traceparent whose trace identifier equals body.traceId for a problem response. An inbound traceparent, tracestate, cookie, authorization, forwarding or client-address header is never read and never reaches the log or the audit.
+    content_type: The 200 answer is application/json; a problem is application/problem+json.
