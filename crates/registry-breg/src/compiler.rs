@@ -522,7 +522,10 @@ pub fn compile_project_with_assets(
         &recipients,
         &ddl,
     )
-    .map_err(|error| CompileFailure::from_one(error).with_findings(&findings))?;
+    .map_err(|error| {
+        let error = authority_error_at_source_position(error, project);
+        CompileFailure::from_one(error).with_findings(&findings)
+    })?;
     let artifact_bytes = artifacts
         .canonical_inventory_bytes()
         .map_err(|error| CompileFailure::from_one(error).with_findings(&findings))?;
@@ -2517,7 +2520,10 @@ fn validate_manifest_projection(
         errors.push(Diagnostic::error(
             "breg.manifest-projection.competent-authority-dangling",
             "project.manifestProjection.publicService.competentAuthority",
-            "publicService.competentAuthority must reference manifestProjection.authorities[]",
+            &format!(
+                "publicService.competentAuthority names `{}`, which is not in manifestProjection.authorities[]",
+                projection.public_service.competent_authority
+            ),
         ));
     }
     let mut dataset_ids = BTreeSet::new();
@@ -3058,6 +3064,39 @@ fn compile_manifest_projection(
         entities: projection.entities.clone(),
         vocabularies: projection.vocabularies.clone(),
     })
+}
+
+/// Registry Manifest numbers authorities in identifier order, while the
+/// author wrote them in source order. Rewrite an authority path to the source
+/// position so the diagnostic points at the entry the author edits.
+fn authority_error_at_source_position(
+    mut error: Diagnostic,
+    project: &RegistryProject,
+) -> Diagnostic {
+    const PREFIX: &str = "project.manifestProjection.authorities[";
+    let Some(projection) = project.manifest_projection.as_ref() else {
+        return error;
+    };
+    let Some(rest) = error.path.strip_prefix(PREFIX) else {
+        return error;
+    };
+    let Some((index, tail)) = rest.split_once(']') else {
+        return error;
+    };
+    let Ok(sorted_index) = index.parse::<usize>() else {
+        return error;
+    };
+    let mut ids = projection
+        .authorities
+        .iter()
+        .enumerate()
+        .map(|(source_index, authority)| (authority.id.as_str(), source_index))
+        .collect::<Vec<_>>();
+    ids.sort_by_key(|(id, _)| *id);
+    if let Some((_, source_index)) = ids.get(sorted_index) {
+        error.path = format!("{PREFIX}{source_index}]{tail}");
+    }
+    error
 }
 
 fn compiled_resource_iri(
