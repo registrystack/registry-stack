@@ -105,7 +105,7 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # hand migration products/evidence/reference/authoring-projects/CONFIG.md
 # describes. This source reads the Evidence and Messaging database state 0.45.0
 # retained, its immediate predecessor; the Messaging package 0.45.0 wrote is
-# re-authored for `actsAs` and repackaged (MESSAGING_ACTS_AS_BOUNDARY), and the
+# re-authored for `actsAs` and repackaged (ACTS_AS_BOUNDARY), and the
 # database state is kept. Messaging keeps its version 100 baseline and migrates
 # forward through version 101.
 FORWARD_PATH_FLOOR = (0, 45, 0)
@@ -155,8 +155,10 @@ RETIRED_PRODUCTS = {
 # crosses this boundary performs the adopter migration the Messaging CHANGELOG
 # documents: re-author the retained project, repackage it with this source, and
 # activate that package over the database state the previous release wrote. It
-# is dead code, and a unit test fails, once FORWARD_PATH_FLOOR reaches it.
-MESSAGING_ACTS_AS_BOUNDARY = (0, 46, 0)
+# is dead code, and a unit test fails, once FORWARD_PATH_FLOOR reaches it. It is
+# a package format boundary, not a gate on whether a release ships Messaging, so
+# it does not live in release_roster.py.
+ACTS_AS_BOUNDARY = (0, 46, 0)
 # A product joins the rehearsal from the first release that published it, and
 # is downloaded only for the platforms that release publishes it for.
 # release_roster.MESSAGING_FIRST_RELEASE names Messaging's first release; while
@@ -531,7 +533,7 @@ def ledger_digest_differences(activated: str | None, planned: dict[str, Any]) ->
 def crosses_messaging_acts_as_boundary(start: tuple[int, int, int]) -> bool:
     """Whether a rehearsal from `start` must migrate Messaging's `role` to `actsAs`."""
 
-    return start < MESSAGING_ACTS_AS_BOUNDARY
+    return start < ACTS_AS_BOUNDARY
 
 
 def acts_as_project(project: dict[str, Any]) -> dict[str, Any]:
@@ -1318,7 +1320,7 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # The new binaries read the runtime file and the package the previous
     # release wrote. The ledger must still name that package as active: a plan
     # that reports a change once any pending schema versions are applied means
-    # the upgrade lost the activation. Across MESSAGING_ACTS_AS_BOUNDARY the
+    # the upgrade lost the activation. Across ACTS_AS_BOUNDARY the
     # project is re-authored and repackaged instead, and that package must
     # replace the previous activation over the same database state.
     if crosses_messaging_acts_as_boundary(start):

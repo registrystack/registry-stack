@@ -996,7 +996,7 @@ renames an access profile's `role` to `actsAs`, so the rehearsal re-authors the
 retained Messaging project as the Messaging changelog documents, repackages it
 with the binaries under test, activates that package, and keeps the database
 state, which must still serve every captured view. Once `FORWARD_PATH_FLOOR`
-reaches `v0.46.0`, delete `MESSAGING_ACTS_AS_BOUNDARY` and its step from
+reaches `v0.46.0`, delete `ACTS_AS_BOUNDARY` and its step from
 `rehearse-upgrade.py`; a unit test fails until then.
 The retained path started at `v0.42.0` because no product reads `v0.41.0` state:
 BReg and Casework start on a fresh database, Evidence starts at its normalized
