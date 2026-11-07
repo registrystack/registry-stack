@@ -6,9 +6,10 @@ The rehearsal downloads the previous release's published Evidence and Messaging
 binaries, authenticates them the way release/VERIFY.md describes, and uses them
 to write real state: an Evidence audit stream with a signed response and a
 Messaging package ledger with scheduled and cancelled messages. It then points
-the binaries built from this source at that exact state and those exact files,
-runs the upgrade an operator runs, and fails unless the state is still served
-unchanged and no table lost a row.
+the binaries built from this source at that exact state and those files (a
+Messaging package the new release no longer reads is re-authored first, as
+described below), runs the upgrade an operator runs, and fails unless the state
+is still served unchanged and no table lost a row.
 A product the previous release did not ship, or whose contract starts at a
 new baseline, has no supported state to carry forward. Its leg is omitted and
 the report says why. The forward state path started at 0.42.0 with Evidence's
