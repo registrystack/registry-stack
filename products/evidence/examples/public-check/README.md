@@ -15,7 +15,7 @@ that reads registry data, so read the proxy rule below before exposing it.
 | --- | --- |
 | `evidence.yaml` | The project: one assertion definition with a `publicCheck` member. |
 | `public-check-target.yaml` | A check-only target (own signer, audit and subject-binding keys, and a minimal `authentication` block). |
-| `check-authority.yaml` | The target authority that activates `publicCheck.definition`. |
+| `check-authority.yaml` | The target authority that activates `publicCheck.definition`. It also carries one relying-service profile, because offline fixture evaluation resolves each case through an access profile; a deployed check-only instance that does not run fixtures can use `accessProfiles: {}`. |
 | `functions/derive-certificate-check.rhai` | Maps registry states onto `valid`, `suspended`, `revoked`, `expired` and builds the printed fields. |
 | `schemas/certificate-printed-fields.json` | Closed schema for the printed fields (at most 16). |
 | `fixtures/certificate-status.yaml` | One record per status, plus a record issued before check codes existed. |
@@ -54,8 +54,9 @@ Content-Type: application/json
 {"documentNumber": "RN-2026-004217", "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A"}
 ```
 
-The check code is exactly 24 characters of base32 (`^[A-Z2-7]{24}$`). A match
-returns:
+The check code is exactly 24 characters of base32 (`^[A-Z2-7]{24}$`). The
+server uppercases ASCII letters before comparing, so lowercase input is
+accepted; the stored code is uppercase. A match returns:
 
 ```json
 {
@@ -77,8 +78,9 @@ registry read. A registry outage returns `503 source.unavailable`.
 Run Evidence bound privately and put a path-restricted proxy in front of it. The
 proxy must:
 
-1. Forward exactly `POST` and `OPTIONS` on `/v1/public-check`. Everything else on
-   that host answers 404 at the proxy.
+1. Forward exactly `POST` and `OPTIONS` on `/v1/public-check`. The proxy
+   refuses everything else: the fragment below answers 403 to other methods on
+   that path, and any other path matches no location and answers 404.
 2. Apply a per-client request limit and a cap on the whole path. Evidence has no
    rate limiter on this route and never reads a client address.
 3. Keep no access log with client addresses or request headers for that location.

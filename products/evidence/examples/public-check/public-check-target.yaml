@@ -1,0 +1,59 @@
+apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+kind: EvidenceTarget
+id: public-check
+project: certificate-check
+package:
+  root: .generated/package
+authority: check-authority.yaml
+service:
+  providerId: urn:example:provider:certificate-check
+  issuer: urn:example:issuer:certificate-check
+  publicOrigin: http://127.0.0.1:8090
+  trustDomain: urn:example:trust:certificate-check
+listener:
+  bind: 127.0.0.1:8090
+  trustProxyIdentityHeaders: false
+authentication:
+  oidc:
+    issuer: http://127.0.0.1:8082
+    audience: urn:example:resource:certificate-check
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - RS256
+    jwksSource:
+      type: uri
+      uri: http://127.0.0.1:8082/oauth2/jwks
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    requiredScopes:
+    - evidence:request
+    maximumTokenLifetimeSeconds: 300
+connections:
+  synthetic-register:
+    endpoints:
+      register:
+        origin: http://127.0.0.1:8081
+        authentication:
+          type: static-authorization
+          tokenRef: secret:file/synthetic-source-token
+secretProviders:
+  file:
+    root: .generated/secrets
+signer:
+  type: local-jwk
+  algorithm: ES256
+  privateKeyRef: secret:file/signing-p256-private-jwk
+  publicJwkFile: .generated/secrets/signing-p256-public.jwk.json
+subjectBinding:
+  secretRef: secret:file/subject-binding-hmac-key
+  keyVersion: 1
+audit:
+  path: .generated/audit/evidence.jsonl
+  hashKeyRef: secret:file/audit-hmac-key
+  hashKeyVersion: 1
+rateLimits:
+  requestsPerPrincipalPerMinute: 60
+  burstPerPrincipal: 16
+  failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10

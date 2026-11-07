@@ -1,0 +1,72 @@
+{
+  "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+  "kind": "AdapterPack",
+  "id": "synthetic-register",
+  "version": "1",
+  "testedVersions": [],
+  "endpoints": [
+    {
+      "id": "register",
+      "component": "http",
+      "authentication": {
+        "type": "static-authorization"
+      },
+      "attemptTimeoutMilliseconds": 2000,
+      "maximumResponseBytes": 16384
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/lookup.rhai",
+      "digest": "sha256:47627db0f4868f8f178928994a02cfb27c692b86c288c0530db513a303a63cce"
+    }
+  ],
+  "sourceRoutes": [
+    {
+      "id": "certificate",
+      "evidence": {
+        "inputsSchema": {
+          "path": "schemas/inputs.json",
+          "digest": "sha256:20ee232ee61942c8cd65e73dd0f35faf42e72a39d15215e44f1bafd7a72fe049"
+        },
+        "factsSchema": {
+          "path": "schemas/certificate.json",
+          "digest": "sha256:00b6c8309945d64202b1dd8b604b9369bf0928b32006ffe7df505535b2a7c0ae"
+        },
+        "acquisitionPosture": "record-transformed"
+      },
+      "steps": [
+        {
+          "setProperty": {
+            "name": "record-id",
+            "value": {
+              "jsonpath": "$.recordId"
+            }
+          }
+        },
+        {
+          "to": {
+            "uri": "http:register",
+            "parameters": {
+              "httpMethod": "GET",
+              "path": "/certificates/{{record-id}}",
+              "pathParameters": {
+                "record-id": {
+                  "exchangeProperty": "record-id"
+                }
+              }
+            }
+          }
+        },
+        {
+          "setBody": {
+            "rhai": {
+              "file": "scripts/lookup.rhai",
+              "entrypoint": "certificate"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

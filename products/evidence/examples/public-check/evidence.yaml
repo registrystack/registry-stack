@@ -1,0 +1,75 @@
+apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+kind: EvidenceProject
+id: certificate-check
+selectorProfiles:
+  certificate-number:
+    maximumAggregateBytes: 32
+    fields:
+      number:
+        type: string
+        minimumBytes: 4
+        maximumBytes: 32
+functions:
+- id: derive-certificate-check
+  interface: assertion-derive/v1
+  source: functions/derive-certificate-check.rhai
+sources:
+  certificate-record:
+    pack: {id: synthetic-register, version: '1'}
+    route: certificate
+    connection: synthetic-register
+    acquisitionPosture: record-transformed
+    inputs:
+      recordId:
+        selector: {role: certificate, profile: certificate-number, field: number}
+assertionDefinitions:
+  certificate-status:
+    question: What is the current status of this certificate, and what does it state?
+    semantics:
+      requirement: urn:example:requirement:certificate-status:v1
+      kind: information-requirement
+      evidenceType: urn:example:evidence-type:certificate-status:v1
+      referenceFrameworks:
+      - urn:example:framework:certificate-check:v1
+    purpose: certificate-check
+    grantCeiling:
+      authorities:
+      - organizational
+      actorKinds:
+      - service
+      valueOrigins:
+      - request
+      audiences:
+      - urn:example:audience:certificate-check
+    subjects:
+    - role: certificate
+      selectors:
+      - certificate-number
+    acquisition:
+      source: certificate-record
+    derive:
+      function: derive-certificate-check
+    outputs:
+      status:
+        concept: urn:example:concept:certificate-status:v1
+        type: controlled-category
+        values:
+        - valid
+        - suspended
+        - revoked
+        - expired
+      printed:
+        concept: urn:example:concept:certificate-printed-fields:v1
+        type: reviewed-structured-value
+        schema: schemas/certificate-printed-fields.json
+        maximumSerializedBytes: 1024
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
+    observationTimezone: UTC
+    fixtures: fixtures/certificate-status.yaml
+    publicCheck:
+      checkCodeFact: checkCode
+      statusOutput: status
+      fieldsOutput: printed
