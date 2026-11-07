@@ -9,6 +9,7 @@ import {
   messageForStatus,
   normalizeCode,
   parseFragment,
+  start,
 } from './check.js';
 
 test('parseFragment reads number and code', () => {
@@ -95,4 +96,64 @@ test('describeAnswer refuses anything that is not the answer schema', () => {
   assert.equal(describeAnswer({ ...good, schema: 'other/v1' }), null);
   assert.equal(describeAnswer({ ...good, fields: null }), null);
   assert.equal(describeAnswer({ ...good, observedAt: 5 }), null);
+});
+
+function fakeDocument(metaContent) {
+  const elements = {};
+  const element = () => ({
+    textContent: '',
+    value: '',
+    hidden: true,
+    dataset: {},
+    replaceChildren() {},
+    append() {},
+    addEventListener() {},
+  });
+  for (const id of ['origin', 'number', 'code', 'check-form', 'result', 'message', 'answer', 'observed']) {
+    elements[id] = element();
+  }
+  return {
+    elements,
+    getElementById: (id) => elements[id],
+    querySelector: () => (metaContent === undefined ? null : { content: metaContent }),
+  };
+}
+
+for (const [name, content] of [
+  ['missing', undefined],
+  ['empty', ''],
+  ['not a url', 'not a url'],
+]) {
+  test(`start shows the unavailable message when the endpoint meta is ${name}`, () => {
+    const document = fakeDocument(content);
+    start(document, { hash: '' });
+    assert.equal(document.elements.message.textContent, MESSAGES.unavailable);
+    assert.equal(document.elements.message.dataset.kind, 'problem');
+    assert.equal(document.elements.result.hidden, false);
+    assert.equal(document.elements.origin.textContent, '');
+  });
+}
+
+test('start does not send a fragment check when the endpoint is unusable', () => {
+  const document = fakeDocument(undefined);
+  let fetched = false;
+  const original = globalThis.fetch;
+  globalThis.fetch = () => {
+    fetched = true;
+    return Promise.reject(new Error('unexpected request'));
+  };
+  try {
+    start(document, { hash: '#n=RN-1&c=K7QWM4XRT5PZ3NB6VHJYDC2A' });
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(fetched, false);
+  assert.equal(document.elements.message.textContent, MESSAGES.unavailable);
+});
+
+test('start shows the check origin for a usable endpoint', () => {
+  const document = fakeDocument('https://check.example.org/v1/public-check');
+  start(document, { hash: '' });
+  assert.equal(document.elements.origin.textContent, 'Check origin: https://check.example.org');
+  assert.equal(document.elements.result.hidden, true);
 });
