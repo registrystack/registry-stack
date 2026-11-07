@@ -154,6 +154,13 @@ fn record(state: &str) -> Value {
 }
 
 async fn public_check_runtime(authority_kind: Authority) -> PublicCheckRuntime {
+    public_check_runtime_with_routes(authority_kind, pack_routes()).await
+}
+
+async fn public_check_runtime_with_routes(
+    authority_kind: Authority,
+    routes: Vec<compile::CheckedPackRoute>,
+) -> PublicCheckRuntime {
     let source = MockServer::start().await;
     let temporary = tempfile::tempdir().expect("temporary public-check deployment");
     let package_root = temporary.path().join("package");
@@ -167,7 +174,7 @@ async fn public_check_runtime(authority_kind: Authority) -> PublicCheckRuntime {
         .expect("secret root is private");
 
     let project = certificate_project();
-    let compiled = compile::compile_with_pack_routes(&project, &scripts(), &pack_routes())
+    let compiled = compile::compile_with_pack_routes(&project, &scripts(), &routes)
         .expect("certificate project compiles against its checked pack route");
     let mut bundle: Value = serde_norway::from_slice(include_bytes!(
         "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
@@ -457,6 +464,16 @@ fn scripts() -> BTreeMap<String, String> {
 }
 
 fn pack_routes() -> Vec<compile::CheckedPackRoute> {
+    pack_routes_with_steps(false)
+}
+
+/// The same route with the record number bound into the Source path rather
+/// than the request body.
+fn path_bound_pack_routes() -> Vec<compile::CheckedPackRoute> {
+    pack_routes_with_steps(true)
+}
+
+fn pack_routes_with_steps(path_bound: bool) -> Vec<compile::CheckedPackRoute> {
     const ROUTE_SCRIPT: &str = r#"fn record_request(exchange) {
     #{record_id: exchange.body.recordId}
 }
@@ -502,6 +519,32 @@ fn record_result(exchange) {
                 .unwrap_or_else(|| panic!("pack artifact {path} exists")),
         )
     };
+    let steps = if path_bound {
+        json!([
+            {"setHeader": {"name": "accept", "value": {"constant": "application/json"}}},
+            {"setProperty": {"name": "recordId", "value": {"jsonpath": "$.recordId"}}},
+            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_request"}}},
+            {"to": {"uri": "http:provider", "parameters": {
+                "httpMethod": "GET",
+                "path": "/records/{{record_id}}",
+                "pathParameters": {"record_id": {"exchangeProperty": "recordId"}},
+                "operation": "lookup"
+            }}},
+            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_result"}}}
+        ])
+    } else {
+        json!([
+            {"setHeader": {"name": "accept", "value": {"constant": "application/json"}}},
+            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_request"}}},
+            {"to": {"uri": "http:provider", "parameters": {
+                "httpMethod": "POST",
+                "path": "/records",
+                "operation": "lookup",
+                "body": {"jsonpath": "$"}
+            }}},
+            {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_result"}}}
+        ])
+    };
     let pack = json!({
         "apiVersion": "id.registrystack.org/formats/adapter/pack/v1alpha1",
         "kind": "AdapterPack",
@@ -528,17 +571,7 @@ fn record_result(exchange) {
                 "factsSchema": {"path": "schemas/facts.json", "digest": digest("schemas/facts.json")},
                 "acquisitionPosture": "record-transformed"
             },
-            "steps": [
-                {"setHeader": {"name": "accept", "value": {"constant": "application/json"}}},
-                {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_request"}}},
-                {"to": {"uri": "http:provider", "parameters": {
-                    "httpMethod": "POST",
-                    "path": "/records",
-                    "operation": "lookup",
-                    "body": {"jsonpath": "$"}
-                }}},
-                {"setBody": {"rhai": {"file": "scripts/routes.rhai", "entrypoint": "record_result"}}}
-            ]
+            "steps": steps
         }]
     });
     let pack_bytes = serde_json::to_vec(&pack).expect("certificate Adapter pack serializes");
@@ -1241,6 +1274,62 @@ async fn a_failing_source_is_a_dependency_failure_not_a_miss() {
         assert_eq!(last["decision"], "dependency-failure", "{number}");
         assert!(validator.is_valid(last), "{last} meets its contract");
     }
+}
+
+/// A document number the selector profile accepts but the Source path cannot
+/// carry is refused before any Source request: 503 source.unavailable
+/// (ProblemCode::DependencyUnavailable). The audit holds the access attempt and
+/// one terminal dependency-failure line (source-protocol), and the number and
+/// code appear in neither the answer nor the audit.
+#[tokio::test]
+async fn a_number_the_source_path_cannot_carry_is_refused_before_the_source_is_read() {
+    let fixture =
+        public_check_runtime_with_routes(Authority::RelyingAndCheck, path_bound_pack_routes())
+            .await;
+    let server = fixture.http();
+    let carryable = "RN-2026-004217";
+    Mock::given(method("GET"))
+        .and(path(format!("/records/{carryable}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(record("valid")))
+        .mount(&fixture.source)
+        .await;
+    for (index, number) in ["RN/2026/0042", "..\\..", "RN-100%25-4217"]
+        .into_iter()
+        .enumerate()
+    {
+        let response = check(&server, number, CODE).await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{number}"
+        );
+        assert_eq!(problem_code(&response), "source.unavailable", "{number}");
+        assert_eq!(header(&response, "access-control-allow-origin"), Some("*"));
+        assert_eq!(fixture.source_requests().await, 0, "{number}");
+        let records = public_check_records(&fixture.audit());
+        assert_eq!(
+            records.len(),
+            2 * (index + 1),
+            "{number}: an access line and a terminal line per refusal"
+        );
+        let [access, terminal] = &records[2 * index..] else {
+            unreachable!("the slice holds this refusal's two lines");
+        };
+        assert_eq!(access["phase"], "access-attempt", "{number}");
+        assert_eq!(access["decision"], "authorized", "{number}");
+        assert_eq!(terminal["phase"], "transient-failure", "{number}");
+        assert_eq!(terminal["decision"], "dependency-failure", "{number}");
+        assert_eq!(terminal["safeErrorCategory"], "source-protocol", "{number}");
+        assert_eq!(terminal["operation"], access["operation"], "{number}");
+        assert_absent(
+            &format!("{}{}", String::from_utf8_lossy(response.as_bytes()), fixture.audit()),
+            &[number, CODE],
+            "the refusal and its audit",
+        );
+    }
+    let response = check(&server, carryable, CODE).await;
+    assert_eq!(response.status_code(), StatusCode::OK);
+    assert_eq!(fixture.source_requests().await, 1);
 }
 
 /// Test 18: the route alone allows any origin, without credentials, and its
