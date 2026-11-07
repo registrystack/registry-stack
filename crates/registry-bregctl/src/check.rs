@@ -1695,6 +1695,11 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.manifest-projection.identifier-duplicate" => "Keep one identifier entry for this field and remove the duplicate entries.",
         "breg.manifest-projection.identifier-field-not-visible" => "Make the identifier field readable and representable under the selected access profile, or remove the identifier entry.",
         "breg.manifest-projection.identifier-kind-missing" => "Set a non-empty identifier kind, or remove the identifier entry.",
+        "breg.manifest-projection.authorities-empty" => "List at least one identified authority under manifestProjection.authorities.",
+        "breg.manifest-projection.authority-duplicate" => "Keep one entry for this authority id and remove the repeated entries.",
+        "breg.manifest-projection.authority-name-empty" => "Set a non-empty name for the authority.",
+        "breg.manifest-projection.competent-authority-dangling" => "Set publicService.competentAuthority to the id of an entry in manifestProjection.authorities, or add the authority it names.",
+        "breg.manifest.authority-id-collision" => "Rename one authority so its id differs from the others by more than case or separators.",
         "breg.manifest-projection.vocabulary-not-visible" => "Project a visible field that uses this vocabulary, or remove the vocabulary from manifestProjection.",
         _ if severity == Severity::Warning => REVIEW_FINDING,
         _ => CORRECT_SOURCE,
@@ -1864,6 +1869,24 @@ mod tests {
             ("breg.record-type.api-name-invalid", "apiName"),
         ] {
             let action = action_for(code, Severity::Error);
+            assert!(action.contains(setting), "{code}: {action}");
+        }
+    }
+
+    #[test]
+    fn manifest_authority_errors_name_the_member_to_correct() {
+        for (code, setting) in [
+            ("breg.manifest-projection.authorities-empty", "authorities"),
+            ("breg.manifest-projection.authority-duplicate", "one entry"),
+            ("breg.manifest-projection.authority-name-empty", "name"),
+            (
+                "breg.manifest-projection.competent-authority-dangling",
+                "competentAuthority",
+            ),
+            ("breg.manifest.authority-id-collision", "authority"),
+        ] {
+            let action = action_for(code, Severity::Error);
+            assert_ne!(action, CORRECT_SOURCE, "{code}");
             assert!(action.contains(setting), "{code}: {action}");
         }
     }
