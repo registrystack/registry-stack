@@ -3037,6 +3037,8 @@ impl EvidenceRuntime {
             .sources
             .get(&source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
+        // Selector resolution already refused every item whose values the
+        // inputs schema refuses, so a failure here is not the caller's.
         let inputs = executor.inputs(resolved).map_err(pack_source_failure)?;
         let attribution = source_attribution(executor, requester, &resolved.purpose)?;
         let mut access = audit_material.event(
