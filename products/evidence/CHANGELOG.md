@@ -9,7 +9,15 @@
   fields and evaluation time of one certificate from a `documentNumber` and a
   24-character `checkCode`, under the answer schema
   `registry.evidence.public-check/v1alpha1`. A wrong number and a wrong code
-  return the same `404 resource.not-found`. The answer is unsigned, the route
+  return the same `404 resource.not-found`. A `documentNumber` that the Source
+  inputs schema refuses answers `400 request.selector-invalid` before any audit
+  entry or registry read. Startup refuses a `publicCheck` definition whose
+  status Output has values outside `valid`, `suspended`, `revoked` and
+  `expired`, or whose check code fact is not a string fact of its Source or is
+  a Source input, and the answer refuses a status outside the four. The code is compared only after the
+  Source returns a record, so a pack keeps its facts schema to types, treats a
+  returned record whose number does not match as no-match, and checks record
+  content in the derivation. The answer is unsigned, the route
   writes its own audit entry, and Evidence has no rate limiter on it: expose it
   only through a path-restricted proxy that limits each client and keeps no
   client addresses. The route, the answer schema and the new keys are

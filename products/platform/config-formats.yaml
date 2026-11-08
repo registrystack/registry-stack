@@ -4548,7 +4548,7 @@ outOfScope:
     reason: Generated Document Store event data payloads, governed by the document event contract rather than a configuration format.
   - files: products/breg/generated/*/generated/**
     reason: Compiled package content; the registry/package format governs the envelope.
-  - files: products/evidence/contracts/{audit-event,authority-context,definitions,evidence,request,request-batch,request-batch-response,request-batch-audit-event}.schema.yaml
+  - files: products/evidence/contracts/{audit-event,authority-context,definitions,evidence,request,request-batch,request-batch-response,request-batch-audit-event,public-check-answer,public-check-audit-event,public-check-request}.schema.yaml
     reason: Evidence wire and audit contracts, governed by the API contract.
   - files: products/evidence/generated/*.schema.json
     reason: Generated Evidence wire schemas, governed by the API contract.

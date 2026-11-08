@@ -3363,8 +3363,8 @@ without registering as a relying service. One route,
 `POST /v1/public-check`, takes the certificate number and a check code, both
 printed in the certificate's QR code, evaluates one configured requirement
 against current registry state, and answers the status (`valid`, `suspended`,
-`revoked` or `expired`), the printed fields and the evaluation time. It is the
-first unauthenticated route that reads registry data. It is experimental: the
+`revoked` or `expired`), the printed fields and the evaluation time. It is
+unauthenticated and reads registry data. It is experimental: the
 route, the answer schema `registry.evidence.public-check/v1alpha1` and the new
 configuration members are `v1alpha1`.
 
@@ -3373,7 +3373,7 @@ target authority grants it, as for any other disclosure.
 
 - An assertion definition may carry `publicCheck` with `checkCodeFact` (the
   projected source fact holding the stored code), `statusOutput` (a
-  `controlled-category` output whose values lie within the four statuses) and
+  `controlled-category` output whose values lie within the four statuses, checked at authoring and at startup) and
   `fieldsOutput` (a `reviewed-structured-value` output whose inner `fields`
   object becomes the answer's `fields`).
 - The target authority names `publicCheck.definition`. Activation uses the
@@ -3391,8 +3391,12 @@ role, selector profile or selector field, whose `checkCodeFact` is not a string
 property of the source's facts or is bound as a request input, whose
 `existenceDisclosure` is not the default `collapse-unresolved`, or that does not
 read through exactly one Source or declares `holderPresented`. Startup refuses
-an output of the wrong type, a subject of the wrong shape, and an acquisition
-that is not exactly one Source. Other outputs on the same definition serve only
+an output of the wrong type, a status output with values outside the four
+statuses, a subject of the wrong shape, an acquisition that is not exactly one
+Source, and a `checkCodeFact` that is not a string fact of that Source or that
+a Source input binds. The answer
+itself refuses a status outside the four statuses with `503
+service.unavailable`. Other outputs on the same definition serve only
 the relying-service path; the public answer is built from the two named outputs.
 
 **The request.** The body has exactly the string members `documentNumber` and
@@ -3412,9 +3416,28 @@ where the match is unpacked, then removed from the facts on every route that
 reads that source, so no derive Function and no relying service sees it.
 Malformed requests return `400` (`evidence.invalid-request` or
 `request.selector-invalid`) before any audit write or source read. A document
-number that passes the selector profile but cannot be carried by the Source path
-is refused after the access-attempt audit entry and before any source request,
-and answers `503 source.unavailable`, as does a source failure.
+number that the Source inputs schema refuses answers the same
+`request.selector-invalid` before any audit write or registry read. A number
+that passes the selector profile and the inputs schema (or meets a Source with
+no inputs schema) but that the Source binds to a path segment it cannot occupy
+is refused after the access-attempt audit entry and before any credential or
+source request, and answers `503 source.unavailable`, audited as a dependency
+failure, as does a source failure.
+
+**Before the comparison.** The code is compared only after the Source returns a
+record, so any Source failure before that (transport, timeout, call budget, a
+protocol failure, a facts-schema refusal, an extract-script failure) answers
+`503 source.unavailable` and is audited as a dependency failure. A number with
+no record cannot fail that way. A pack that refuses one record's content before
+the comparison (a facts schema that constrains values beyond their type, or an
+extract script that throws on one record's data) therefore lets that `503`
+reveal that a record exists for the number, though neither its status nor its
+fields. A record-independent fault (the register down or malformed for every
+request) answers `503` for every number and reveals nothing. Pack authors keep
+the facts schema to types, declare a returned record whose number does not
+exactly match as no-match, and check record content in the derivation, which
+runs after the comparison, so only a caller holding the right code sees its
+failures. The runnable example follows this.
 
 **Timing.** Evidence adds no delay, so response time can differ between an
 existing and a missing number. That can reveal whether a number exists and
