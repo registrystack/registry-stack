@@ -1421,6 +1421,31 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.load_baseline(baseline)
 
+    def test_live_exceptions_on_overlaid_packages_name_the_overlay_version(self):
+        # A runtime package overlay replaces the Distroless base's copy of the
+        # package, so an exception naming any other version of it can no longer
+        # match a finding, and the candidate check refuses it as fixed or absent.
+        spec = importlib.util.spec_from_file_location(
+            "check_debian13_images",
+            Path(__file__).with_name("check-debian13-images.py"),
+        )
+        images = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(images)
+        for path in LIVE_BASELINES:
+            baseline = self.module.load_baseline(path)
+            for exception in baseline["exceptions"]:
+                overlay = images.RUNTIME_PACKAGES.get(exception["package"])
+                if overlay is None:
+                    continue
+                with self.subTest(
+                    path=path.name,
+                    vulnerability=exception["vulnerability_id"],
+                    package=exception["package"],
+                ):
+                    self.assertEqual(
+                        overlay["version"], exception["installed_version"]
+                    )
+
     def test_all_live_baselines_use_evaluable_whole_image_fingerprints(self):
         for path in LIVE_BASELINES:
             with self.subTest(path=path):
