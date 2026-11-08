@@ -221,7 +221,7 @@ fn opencrvs_reference_uses_the_same_reviewed_pack_as_the_facade() {
 #[test]
 fn reference_fixture_reader_accepts_the_complete_acquisition_transcript() {
     use registry_evidence::{config::AssuranceProfile, fixture::read_fixture};
-    let fixture = b"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsyntheticOnly: true\ncases:\n  - id: positive\n    acquisition: {intercepts: [], exchanges: []}\n    expected: {lookup: match, signed: true, derivationRuns: true}\n";
+    let fixture = b"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsyntheticOnly: true\ncommon: {}\nprivacyExpectation: {}\ncases:\n  - id: positive\n    acquisition: {intercepts: [], exchanges: []}\n    expected: {lookup: match, signed: true, derivationRuns: true}\n";
     let value = read_fixture(
         "fixtures/cases.yaml",
         fixture,

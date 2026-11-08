@@ -621,6 +621,8 @@ fn write_runtime_bundle(package: &Path, model: Value, artifacts: BTreeMap<String
         br#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
 syntheticOnly: true
+common: {}
+privacyExpectation: {}
 cases:
   - {id: positive}
   - {id: negative-output}
