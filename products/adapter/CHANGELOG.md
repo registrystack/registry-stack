@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - A host protocol's verified response can carry one opaque attachment
   (`VerifiedHostProtocolResponse::with_attachment`) that the engine hands to
   the embedding Evidence host without reading it; the engine stays free of
@@ -255,8 +257,9 @@
   text and no change in behavior.
 - Continuation cursors are sealed and opened through the shared XChaCha20-Poly1305
   primitive in `registry-platform-crypto`. The wire format is unchanged (golden
-  tokens pin it), so a cursor issued before the upgrade still opens, including
-  under the previous key after a rotation.
+  tokens pin it), including under the previous key after a rotation; cursors
+  issued before the upgrade are still refused because of the client binding
+  described above.
 - A pending direct BReg delivery is now fenced before it is retried: the job
   freezes the BReg binding, base URL, token endpoint, caller, TLS trust
   profile, access profile, Action and mode, and the mapped operation, and a retry that differs stops the pass before any

@@ -1,0 +1,93 @@
+stack:
+  release: beta-58
+  version: 0.46.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.46.0
+
+artifacts:
+  registry-manifest: 0.46.0
+  evidence: 0.46.0
+  evidencectl: 0.46.0
+  evidence-oid4vci: 0.46.0
+  evidencectl-installer: 0.46.0
+  registry-docs: 0.46.0
+  discovery: 0.46.0
+  discoveryctl: 0.46.0
+  discovery-installer: 0.46.0
+  breg: 0.46.0
+  bregctl: 0.46.0
+  breg-mcp: 0.46.0
+  breg-mcp-installer: 0.46.0
+  breg-review: 0.46.0
+  breg-review-installer: 0.46.0
+  breg-installer: 0.46.0
+  casework: 0.46.0
+  caseworkctl: 0.46.0
+  casework-installer: 0.46.0
+  scheduling: 0.46.0
+  schedulingctl: 0.46.0
+  scheduling-installer: 0.46.0
+  messaging: 0.46.0
+  messagingctl: 0.46.0
+  messaging-installer: 0.46.0
+  registry-render: 0.46.0
+  registry-render-installer: 0.46.0
+  registry-manifest-installer: 0.46.0
+  coordinator: 0.46.0
+  coordinatorctl: 0.46.0
+  coordinator-installer: 0.46.0
+  adapter: 0.46.0
+  adapterctl: 0.46.0
+  adapter-installer: 0.46.0
+  rstack: 0.46.0
+  rstack-installer: 0.46.0
+  registry-client-node: 0.46.0
+  registry-client-python: 0.46.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 998d5eb865af548d0b8890838f616af036541245f967c2142409f219addae693
+  entry_count: 328
+
+external:
+  thunderid:
+    kind: image-pin
+    repo: thunder-id/thunderid
+    ref: 12f517c4384004e360e26eb7eb1ab0501b678bb2
+    version: 1.0.1
+    images:
+      thunderid: ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+  esignet-relay-authenticator:
+    kind: image-pin
+    repo: registrystack/esignet-relay-authenticator
+    ref: 9030f38aac2c85b2e7a2980ec23e2f8e72da97ff
+    version: 0.6.1
+    images:
+      authenticator: ghcr.io/registrystack/esignet-relay-authenticator:0.6.1@sha256:826ff864a981379dbbdd9bff0f663cd4c1952a1f1fa7c84a076bccce58931dd4
+      oidc-ui: ghcr.io/registrystack/esignet-oidc-ui:0.6.1@sha256:2629150e0733ad443d1e563d48790922c88968e93bbf5989a1b9c1974bc109c7
+
+warnings:
+  - code: fresh-state-casework-scheduling
+    classification: breaking-change
+    detail: Casework does not read review state stored by v0.45.0 or earlier, and its activation refuses while any stored review holds the earlier shape; Scheduling refuses a stored policy that still holds holidaySets[*].because. Start Casework and Scheduling on new databases. Evidence and Messaging database state is read forward, and the upgrade rehearsal covers only those two products. See release/notes/v0.46.0.md.
+  - code: coordinator-redefinition-and-admission
+    classification: breaking-change
+    detail: The Coordinator Function interpreter ABI is v3, so every definition v0.45.0 froze is refused with definition.abi, and a workflow snapshot that holds title is refused with definition.snapshot. A live run whose definition does not restore is held, a pinned package that does not restore stops startup, and a cancel-review-request step must map the whole output of a submit-review-request step in the same workflow. Admission accepts only a token whose exact sub is listed in the caller policy's subjects and refuses any token with an act claim. Settle runs with the v0.45.0 binaries, check and promote every project again with v0.46.0, and add subjects to every deployment.authentication.policies entry. See release/notes/v0.46.0.md.
+  - code: deterministic-script-engine
+    classification: breaking-change
+    detail: BReg Action plans and hook programs, Messaging provider scripts, Adapter pack scripts, and Evidence Source pack scripts run on a deterministic Rhai engine without timestamp, elapsed, sleep, exit, take, tag, set_tag, parse_json, or get_fn_metadata_list; string pad with an empty padding string fails, and curry no longer compiles, including in Coordinator Functions. The BReg runtime refuses to load an earlier package that calls a removed function, and adapterctl check does not flag affected pack scripts. Remove those calls, pass any time a BReg plan needs as an action input, and rebuild packages. See release/notes/v0.46.0.md.
+  - code: config-vocabulary-renames
+    classification: breaking-change
+    detail: Casework, Messaging, and Document Store access profiles write actsAs instead of role; Coordinator projects, functions, operations, and steps write label instead of title; a Casework holiday-set file writes id instead of holidaySet and a Scheduling holiday set writes label instead of because; the Render runtime writes authentication instead of auth; and evidence-oid4vci writes offers.allowedClients instead of offers.authorizedClients. No old key has an alias, and the caseworkctl dev and messagingctl reports carry actsAs. BReg manifestProjection also requires authorities and publicService.competentAuthority. Update configuration and report readers, then check and rebuild packages with v0.46.0 tools. See release/notes/v0.46.0.md.
+  - code: evidence-assertion-channel
+    classification: breaking-change
+    detail: registry.assertion-evidence/v1 carries a required signed channel member, so assertions signed before this release are refused as malformed payloads, verification policies accept only source by default, and a BReg governed Action accepts only channel source. Evidence evaluate routes answer 400 request.selector-invalid for a selector the Source inputs schema refuses, a source 409 or 422 is recorded as source-status, evidencectl exits 1 with evidence.project.not-found for a missing project, and a fixture without common or privacyExpectation is refused. Reissue assertions, rebuild relying-party bindings and golden fixtures, and update callers, audit readers, alerts, scripts, and fixtures together. See release/notes/v0.46.0.md.
+  - code: identity-subject-rederivation
+    classification: breaking-change
+    detail: Identity generation derives every principal sub and the scope trees from the exact issuer string, so every sub changes once and changing the issuer re-keys every principal; there is no compatibility shim. registry-thunderid-tooling also refuses a machine-client JWKS with private or symmetric key members in development mode and accepts only conforming RSA, EC, and OKP public keys. Update every stored sub, token mapping, and scope reference from identity-receipt.json. See release/notes/v0.46.0.md.
+  - code: adapter-source-build-changes
+    classification: breaking-change
+    detail: For Adapter projects and jobs built from v0.45.0 source, the replay-window response header, the configured govstack-consultation profile, and the dhis2-govstack example are removed; Lookup and Search use the invalid-content problem type; dhis2-tracker paging routes require tie_breaker_attribute; local file sources must declare how a file is complete; the kobotoolbox pack authenticates with an API token; the Kobo workflow finishes an unresolved revision as unresolved-reviewed; job codes are renamed without alias; and earlier cursors and ETags are refused. Before upgrading, settle direct BReg items left pending by v0.45.0 or keep their destination and mapping unchanged; then update projects, jobs, and credentials, repin pack digests, and re-lock. See release/notes/v0.46.0.md.
+  - code: client-and-crate-api-changes
+    classification: breaking-change
+    detail: The Coordinator Rust client RunListQuery is non_exhaustive, the Render Rust client requires a v0.46.0 server and reports an uncertain exchange through is_outcome_unknown, and Render refuses a package without SHA256SUMS as render.package-checksums-missing. registry-platform-script replaces RhaiBaseEngine Standard with Deterministic, registry-platform-sdjwt no longer exports the holder-proof functions, and registry-mcp-edge renames jsonwebtoken to to_jsonwebtoken. Upgrade clients with their servers and update Rust callers and refusal matchers. See release/notes/v0.46.0.md.

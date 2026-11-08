@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - A `record_timer.worker.iteration_failed` warning carries a closed `error`
   field naming the failure class: PostgreSQL or another runtime dependency
   was unavailable, a concurrent change conflicted with this timer step, the

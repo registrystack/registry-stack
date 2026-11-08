@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - Each access profile may carry an optional `label` and `description`. Neither is matched against a caller, a profile that writes neither reads as before, and rewording them leaves a policy's behavioral binding unchanged. Casework keeps both in the review policy description, which any caller who may read that description, requesters included, can see.
 
 - BREAKING: This release does not read review state stored by 0.45.0 or earlier. A stored review policy that still names `role` on an access profile is refused with a message that says it was stored by an earlier release and names the member, and Casework history stored before the upgrade is not readable after it, and decided reviews still in their result window are not either. Start Casework on a new database when upgrading from 0.45.0 or earlier: activation refuses while any stored review, in any lifecycle, holds the earlier shape.

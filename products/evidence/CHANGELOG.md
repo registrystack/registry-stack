@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - Experimental public certificate check. An assertion definition may declare
   `publicCheck` (`checkCodeFact`, `statusOutput`, `fieldsOutput`) and a target
   authority may activate it with `publicCheck.definition`. Once activated,
