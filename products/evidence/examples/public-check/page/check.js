@@ -7,6 +7,7 @@ export const MESSAGES = {
   notFound: 'No certificate matches this number and check code',
   badFormat: 'The number or code is not in the expected format',
   unavailable: 'The check service is unavailable, try again later',
+  tooManyChecks: 'Too many checks, try again in a minute',
 };
 
 export const STATUS_LABELS = {
@@ -50,14 +51,17 @@ export function buildRequestBody(number, code) {
 }
 
 // Maps an HTTP status to one fixed message. Status 0 stands for a network
-// error. Rate limits (429), outages (503) and anything unexpected share the
-// unavailable message.
+// error. A rate limit (429) has its own message; outages (503) and anything
+// unexpected share the unavailable message.
 export function messageForStatus(status) {
   if (status === 404) {
     return MESSAGES.notFound;
   }
   if (status === 400) {
     return MESSAGES.badFormat;
+  }
+  if (status === 429) {
+    return MESSAGES.tooManyChecks;
   }
   return MESSAGES.unavailable;
 }
@@ -151,7 +155,14 @@ function endpointOrigin(endpoint) {
   }
 }
 
-export function start(document, location) {
+// Removes the fragment (number and code) from the address bar and the history
+// entry once it has been read, so it is not left in the history or shared by a
+// copied URL.
+function clearFragment(location, history) {
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
+}
+
+export function start(document, location, history = globalThis.history) {
   const meta = document.querySelector('meta[name="check-endpoint"]');
   const endpoint = meta === null ? '' : meta.content;
   const origin = endpointOrigin(endpoint);
@@ -165,8 +176,16 @@ export function start(document, location) {
   const codeInput = document.getElementById('code');
   const form = document.getElementById('check-form');
 
+  // Only the latest request may write to the page: a slow answer to an earlier
+  // request must not replace the answer to a later one.
+  let latest = 0;
   const submit = async () => {
-    show(document, await runCheck(endpoint, numberInput.value, codeInput.value));
+    latest += 1;
+    const mine = latest;
+    const outcome = await runCheck(endpoint, numberInput.value, codeInput.value);
+    if (mine === latest) {
+      show(document, outcome);
+    }
   };
   form.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -177,6 +196,7 @@ export function start(document, location) {
   if (fromFragment !== null) {
     numberInput.value = fromFragment.number;
     codeInput.value = fromFragment.code;
+    clearFragment(location, history);
     submit();
   }
 }
