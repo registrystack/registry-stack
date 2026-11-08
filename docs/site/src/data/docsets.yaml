@@ -44,6 +44,46 @@ docsets:
       registry-documents:
         version: main source (unreleased)
         ref: HEAD
+  - id: v0.46.0
+    label: v0.46.0
+    path: /v/0.46.0/
+    status: archived
+    availability: candidate
+    source: registry-stack-v0.46.0
+    repo_docs_source: monorepo
+    published_at: 2026-11-08
+    description: Registry Stack v0.46.0 beta-58 candidate documentation set.
+    products:
+      registry-stack:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-discovery:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-manifest:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-evidence:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-casework:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-scheduling:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-render:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-messaging:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-breg-services:
+        version: v0.46.0
+        ref: v0.46.0
+      registry-coordinator:
+        version: v0.46.0
+        ref: v0.46.0
   - id: v0.45.0
     label: v0.45.0
     path: /v/0.45.0/
