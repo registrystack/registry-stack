@@ -26,6 +26,13 @@ use std::{
 const DOCUMENT_NUMBER: &str = "RN-2026-004217";
 const CHECK_CODE: &str = "K7QWM4XRT5PZ3NB6VHJYDC2A";
 const LEGACY_DOCUMENT_NUMBER: &str = "RN-2019-000042";
+// Records the example pack cannot fully use. A caller with the wrong code must
+// still get the common miss, because a failure here would show the record exists.
+const LOWERCASE_CODE_NUMBER: &str = "RN-2026-100001";
+const NO_EXPIRY_NUMBER: &str = "RN-2026-100002";
+const UNKNOWN_STATUS_NUMBER: &str = "RN-2026-100003";
+const MISMATCHED_NUMBER: &str = "RN-2026-100004";
+const OTHER_NUMBER: &str = "RN-2026-100005";
 
 fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/evidence/examples/public-check")
@@ -235,7 +242,9 @@ fn the_packaged_deployment_reference_matches_the_example() {
 /// A loopback server standing in for both the certificate register and the
 /// issuer's key endpoint. Records are keyed by document number; a number with
 /// no record answers an empty result, and one issued before check codes
-/// existed answers a record without a code.
+/// existed answers a record without a code. Four more numbers answer a
+/// lowercase stored code, a record without `expiresOn`, an unknown status, and
+/// a record for a different number than the one requested.
 fn serve_synthetic_services(
     issuer: TcpListener,
     source: TcpListener,
@@ -275,6 +284,53 @@ fn serve_synthetic_services(
                             "holder_name": "Casey Sample",
                             "issued_on": "2019-03-01",
                             "expires_on": "2099-12-31",
+                        },
+                    })
+                    .to_string(),
+                    Some(LOWERCASE_CODE_NUMBER) => serde_json::json!({
+                        "total": 1,
+                        "record": {
+                            "record_id": LOWERCASE_CODE_NUMBER,
+                            "status": "active",
+                            "holder_name": "Lowercase Holder",
+                            "issued_on": "2025-03-01",
+                            "expires_on": "2099-12-31",
+                            "check_code": CHECK_CODE.to_ascii_lowercase(),
+                        },
+                    })
+                    .to_string(),
+                    Some(NO_EXPIRY_NUMBER) => serde_json::json!({
+                        "total": 1,
+                        "record": {
+                            "record_id": NO_EXPIRY_NUMBER,
+                            "status": "active",
+                            "holder_name": "Noexpiry Holder",
+                            "issued_on": "2025-03-01",
+                            "check_code": CHECK_CODE,
+                        },
+                    })
+                    .to_string(),
+                    Some(UNKNOWN_STATUS_NUMBER) => serde_json::json!({
+                        "total": 1,
+                        "record": {
+                            "record_id": UNKNOWN_STATUS_NUMBER,
+                            "status": "pending",
+                            "holder_name": "Unknownstatus Holder",
+                            "issued_on": "2025-03-01",
+                            "expires_on": "2099-12-31",
+                            "check_code": CHECK_CODE,
+                        },
+                    })
+                    .to_string(),
+                    Some(MISMATCHED_NUMBER) => serde_json::json!({
+                        "total": 1,
+                        "record": {
+                            "record_id": OTHER_NUMBER,
+                            "status": "active",
+                            "holder_name": "Mismatched Holder",
+                            "issued_on": "2025-03-01",
+                            "expires_on": "2099-12-31",
+                            "check_code": CHECK_CODE,
                         },
                     })
                     .to_string(),
@@ -442,12 +498,19 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    // Three kinds of miss share one answer: a wrong code, an unknown number,
-    // and a record issued before check codes existed.
+    // Every kind of miss shares one answer: a wrong code, an unknown number, a
+    // record issued before check codes existed, and records the pack cannot use
+    // (lowercase stored code, no expiry date, unknown status, a body for another
+    // number). The last four are asked with a wrong code, so none of them fails
+    // before the code comparison.
     let miss_bodies = [
         serde_json::json!({"documentNumber": DOCUMENT_NUMBER, "checkCode": "AAAAAAAAAAAAAAAAAAAAAAAA"}),
         serde_json::json!({"documentNumber": "RN-2026-999999", "checkCode": CHECK_CODE}),
         serde_json::json!({"documentNumber": LEGACY_DOCUMENT_NUMBER, "checkCode": CHECK_CODE}),
+        serde_json::json!({"documentNumber": LOWERCASE_CODE_NUMBER, "checkCode": "AAAAAAAAAAAAAAAAAAAAAAAA"}),
+        serde_json::json!({"documentNumber": NO_EXPIRY_NUMBER, "checkCode": "AAAAAAAAAAAAAAAAAAAAAAAA"}),
+        serde_json::json!({"documentNumber": UNKNOWN_STATUS_NUMBER, "checkCode": "AAAAAAAAAAAAAAAAAAAAAAAA"}),
+        serde_json::json!({"documentNumber": MISMATCHED_NUMBER, "checkCode": "AAAAAAAAAAAAAAAAAAAAAAAA"}),
     ];
     let mut misses = Vec::new();
     for body in &miss_bodies {
@@ -488,9 +551,10 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
     assert!(hit.get("signature").is_none());
     service.stop();
 
-    // Two entries per request, none of them naming the document number or code.
+    // Two entries per request (seven misses and one hit), none of them naming
+    // the document number or code.
     let audit = fs::read_to_string(generated.join("audit/evidence.jsonl")).expect("audit file");
-    assert_eq!(audit.lines().count(), 8, "{audit}");
+    assert_eq!(audit.lines().count(), 16, "{audit}");
     let view = Command::new(&evidence)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .arg("local-audit-last-operation")
@@ -520,7 +584,16 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
             CHECK_CODE,
             &CHECK_CODE.to_ascii_lowercase(),
             "AAAAAAAAAAAAAAAAAAAAAAAA",
+            LOWERCASE_CODE_NUMBER,
+            NO_EXPIRY_NUMBER,
+            UNKNOWN_STATUS_NUMBER,
+            MISMATCHED_NUMBER,
+            OTHER_NUMBER,
             "Jordan Sample",
+            "Lowercase Holder",
+            "Noexpiry Holder",
+            "Unknownstatus Holder",
+            "Mismatched Holder",
         ] {
             assert!(!text.contains(canary), "{name} leaks {canary}");
         }
