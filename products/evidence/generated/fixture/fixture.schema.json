@@ -163,6 +163,7 @@
         "syntheticOnly",
         "coequalAcceptanceDefinition",
         "cases",
+        "privacyExpectation",
         "apiVersion",
         "kind"
       ],
@@ -396,6 +397,8 @@
       "required": [
         "syntheticOnly",
         "cases",
+        "common",
+        "privacyExpectation",
         "apiVersion",
         "kind"
       ],

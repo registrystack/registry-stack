@@ -193,7 +193,7 @@ fn no_fixture_report() -> Report {
         "fixtures",
         "",
         "No fixture file was found in the project's fixtures directory.",
-        "Add fixtures/<definition-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `syntheticOnly: true`, and at least one case, name it in the definition's `fixtures`, then rerun evidencectl test <project>.",
+        "Add fixtures/<definition-id>.yaml with `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1`, `kind: EvidenceFixture`, `syntheticOnly: true`, a `common` and a `privacyExpectation` mapping, and at least one case, name it in the definition's `fixtures`, then rerun evidencectl test <project>.",
     )]);
     report.set_files_checked(0);
     report

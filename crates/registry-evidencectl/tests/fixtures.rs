@@ -1864,6 +1864,12 @@ fn a_project_with_no_fixture_file_says_so_and_where_one_goes() {
                 .is_some_and(|action| action.contains("fixtures/") && action.contains("kind")),
             "{report}"
         );
+        // A fixture written from the action alone must pass the reader, which
+        // refuses one without these blocks.
+        let action = diagnostic["suggestedAction"].as_str().unwrap();
+        for block in ["common", "privacyExpectation"] {
+            assert!(action.contains(&format!("`{block}`")), "{block}: {action}");
+        }
     }
 }
 

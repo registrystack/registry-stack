@@ -344,6 +344,8 @@ mod tests {
                 "apiVersion": "id.registrystack.org/formats/evidence/fixture/v1alpha1",
                 "kind": "EvidenceFixture",
                 "syntheticOnly": true,
+                "common": {},
+                "privacyExpectation": {},
                 "cases": [{"id": "positive", "expected": {"sourceRequestCount": count}}]
             });
             let bytes = serde_json::to_vec(&value).unwrap();
@@ -378,31 +380,39 @@ mod tests {
         let too_many: String = (0..257)
             .map(|n| format!("  - {{id: case-{n}}}\n"))
             .collect();
+        // The blocks the offline runner reads; each grammar refuses a fixture
+        // without its own.
+        let blocks = "common: {}\nprivacyExpectation: {}\n";
+        let privacy = "privacyExpectation: {}\n";
         let cases: Vec<(String, bool)> = vec![
-            (format!("{header}syntheticOnly: true\ncases:\n{complete}"), true),
-            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive}}\n"), true),
-            (format!("{header}syntheticOnly: true\ncommon: {{observedAt: x}}\ncases:\n{complete}"), true),
-            (format!("{header}syntheticOnly: true\ncommon: null\ncases:\n{complete}"), false),
-            (format!("{header}syntheticOnly: true\ncommon: {{observedAt: null}}\ncases:\n{complete}"), false),
-            (format!("{header}syntheticOnly: true\ncommon: {{selectors: null}}\ncases:\n{complete}"), true),
-            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, observedAt: null}}\n"), false),
-            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, source: null, expectedValue: null}}\n"), true),
-            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, expectedFacts: {{source_key: null}}}}\n"), true),
-            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: 2}}}}\n"), true),
-            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: 3}}}}\n"), true),
-            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: positive, expected: {{sourceRequestCount: three}}}}\n"), false),
-            ("{\"apiVersion\":\"id.registrystack.org/formats/evidence/fixture/v1alpha1\",\"kind\":\"EvidenceFixture\",\"syntheticOnly\":true,\"cases\":[{\"id\":\"positive\",\"expected\":{\"sourceRequestCount\":18446744073709551616}}]}".to_owned(), false),
-            (format!("{header}cases:\n{complete}"), false),
-            (format!("{header}syntheticOnly: true\n"), false),
-            (format!("{header}syntheticOnly: true\ncases: []\n"), false),
-            (format!("{header}syntheticOnly: true\ncases:\n{too_many}"), false),
-            (format!("{header}syntheticOnly: true\ncases:\n  - {{id: Positive}}\n"), false),
-            (format!("{header}syntheticOnly: true\ncases:\n  - {{note: no id}}\n"), false),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n{complete}"), true),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n  - {{id: positive}}\n"), true),
+            (format!("{header}syntheticOnly: true\n{privacy}common: {{observedAt: x}}\ncases:\n{complete}"), true),
+            (format!("{header}syntheticOnly: true\n{privacy}common: null\ncases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\n{privacy}common: {{observedAt: null}}\ncases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\n{privacy}common: {{selectors: null}}\ncases:\n{complete}"), true),
+            (format!("{header}syntheticOnly: true\n{privacy}cases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\ncommon: {{}}\ncases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\ncommon: {{}}\nprivacyExpectation: null\ncases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\n{privacy}cases:\n  - {{id: positive, observedAt: null}}\n"), false),
+            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\n{privacy}cases:\n  - {{id: positive, source: null, expectedValue: null}}\n"), true),
+            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - {{id: positive, source: null, expectedValue: null}}\n"), false),
+            (format!("{header}syntheticOnly: true\ncoequalAcceptanceDefinition: true\n{privacy}cases:\n  - {{id: positive, expectedFacts: {{source_key: null}}}}\n"), true),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n  - {{id: positive, expected: {{sourceRequestCount: 2}}}}\n"), true),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n  - {{id: positive, expected: {{sourceRequestCount: 3}}}}\n"), true),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n  - {{id: positive, expected: {{sourceRequestCount: three}}}}\n"), false),
+            ("{\"apiVersion\":\"id.registrystack.org/formats/evidence/fixture/v1alpha1\",\"kind\":\"EvidenceFixture\",\"syntheticOnly\":true,\"common\":{},\"privacyExpectation\":{},\"cases\":[{\"id\":\"positive\",\"expected\":{\"sourceRequestCount\":18446744073709551616}}]}".to_owned(), false),
+            (format!("{header}{blocks}cases:\n{complete}"), false),
+            (format!("{header}syntheticOnly: true\n{blocks}"), false),
+            (format!("{header}syntheticOnly: true\n{blocks}cases: []\n"), false),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n{too_many}"), false),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n  - {{id: Positive}}\n"), false),
+            (format!("{header}syntheticOnly: true\n{blocks}cases:\n  - {{note: no id}}\n"), false),
             (
-                format!("{header}syntheticOnly: true\ncases:\n{complete}  - {{id: extra, declaredUnresolved: false}}\n"),
+                format!("{header}syntheticOnly: true\n{blocks}cases:\n{complete}  - {{id: extra, declaredUnresolved: false}}\n"),
                 false,
             ),
-            (format!("syntheticOnly: true\ncases:\n{complete}"), false),
+            (format!("syntheticOnly: true\n{blocks}cases:\n{complete}"), false),
         ];
         for (text, expected) in cases {
             let reader = crate::fixture::read_fixture(
@@ -429,6 +439,7 @@ mod tests {
                     kind: EvidenceFixture\n\
                     syntheticOnly: true\n\
                     coequalAcceptanceDefinition: true\n\
+                    privacyExpectation: {}\n\
                     cases:\n\
                     \x20 - id: positive\n\
                     \x20   expectedFacts: {source_key: null, nested_fact: {foreign_key: [1, true]}}\n";
