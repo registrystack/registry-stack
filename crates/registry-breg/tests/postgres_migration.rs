@@ -64,6 +64,12 @@ const ENVIRONMENT: &str = "local";
 const INSTANCE: &str = "migration-instance";
 const DATABASE: &str = "migration-database";
 const SOURCE_REVISION: &str = "migration-source-revision";
+/// The per-statement bound of every apply in this suite. No test here proves
+/// an apply statement times out (reviewed migrations declare their own, much
+/// shorter, timeouts for that), so the bound only has to outlast a shared CI
+/// database stalled behind another test's forced checkpoint, which has held a
+/// small catalog query past five seconds.
+const APPLY_STATEMENT_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONCILE_OPERATOR_CANARY: &str = "operator secret must not enter reconciliation audit";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
@@ -864,8 +870,7 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
             deployment(),
             ApplyPrecondition::InitialActivation,
             ApplyRoles::new(&database.migration_role, &database.runtime_role),
-            ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-                .expect("test timeouts are bounded"),
+            timeouts(),
             database.activation_audit(),
         ))
         .await
@@ -899,8 +904,7 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
     read_activation_status(
         &database.migration_config,
         &database.migration_role,
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
     )
     .await
     .expect("the lock-free status read answers while the lock is held")
@@ -1040,8 +1044,7 @@ async fn recorded_state_with(
         config,
         &package.manifest().package_id,
         &database.migration_role,
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
     )
     .await
 }
@@ -1182,8 +1185,7 @@ async fn real_postgres_reconciliation_reports_a_held_migration_lock_as_in_progre
     let status = read_activation_status(
         &database.migration_config,
         &database.migration_role,
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
     )
     .await
     .expect("the lock-free read answers while the lock is held")
@@ -1873,8 +1875,7 @@ async fn real_postgres_a_resumed_activation_keeps_its_roles_and_records_its_oper
         deployment(),
         ApplyPrecondition::Successor { current: &active },
         ApplyRoles::new(&database.migration_role, &database.migration_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await
@@ -1955,8 +1956,7 @@ async fn real_postgres_a_refused_operator_reference_leaves_the_database_unactiva
                 deployment(),
                 ApplyPrecondition::InitialActivation,
                 ApplyRoles::new(&database.migration_role, &database.runtime_role),
-                ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-                    .expect("test timeouts are bounded"),
+                timeouts(),
                 audit,
             )
             .with_operator_reference(reference),
@@ -1999,8 +1999,7 @@ async fn real_postgres_each_activation_audits_its_request_and_its_applied_respon
         deployment(),
         ApplyPrecondition::RoleChange { current: &initial },
         ApplyRoles::new(&database.migration_role, &database.migration_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await
@@ -2173,8 +2172,7 @@ async fn real_postgres_a_refused_activation_request_entry_changes_nothing() {
         deployment(),
         ApplyPrecondition::RoleChange { current: &active },
         ApplyRoles::new(&database.migration_role, &database.migration_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await
@@ -2246,8 +2244,7 @@ async fn real_postgres_a_failed_role_change_activation_keeps_the_serving_runtime
         deployment(),
         ApplyPrecondition::RoleChange { current: &initial },
         ApplyRoles::new(&database.migration_role, &database.migration_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await
@@ -2282,8 +2279,7 @@ async fn real_postgres_a_role_change_refused_before_maintenance_grants_the_new_r
         deployment(),
         ApplyPrecondition::InitialActivation,
         ApplyRoles::new(&database.migration_role, &database.migration_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await
@@ -2353,8 +2349,7 @@ async fn real_postgres_a_role_change_activates_when_the_recorded_runtime_role_is
         deployment(),
         ApplyPrecondition::RoleChange { current: &initial },
         ApplyRoles::new(&database.migration_role, &renamed),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await;
@@ -2417,8 +2412,7 @@ async fn real_postgres_a_successor_with_other_roles_is_refused_before_maintenanc
         deployment(),
         ApplyPrecondition::Successor { current: &active },
         ApplyRoles::new(&database.migration_role, &database.migration_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await
@@ -2477,8 +2471,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
         deployment(),
         ApplyPrecondition::RoleChange { current: &initial },
         ApplyRoles::new(&database.migration_role, &database.migration_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     ))
     .await
@@ -2534,8 +2527,7 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
         &database.migration_config,
         &package.manifest().package_id,
         &database.migration_role,
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
     )
     .await
     .expect("the recorded state reads")
@@ -3622,7 +3614,7 @@ async fn plan(
 }
 
 fn timeouts() -> ApplyTimeouts {
-    ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+    ApplyTimeouts::new(Duration::from_secs(1), APPLY_STATEMENT_TIMEOUT)
         .expect("test timeouts are bounded")
 }
 
@@ -7223,8 +7215,7 @@ fn request_for_deployment<'a>(
         deployment,
         precondition,
         ApplyRoles::new(&database.migration_role, &database.runtime_role),
-        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
-            .expect("test timeouts are bounded"),
+        timeouts(),
         database.activation_audit(),
     )
 }
