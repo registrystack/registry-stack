@@ -140,7 +140,7 @@ suite('Registry Stack extension', () => {
 
     const alphaFolder = vscode.workspace.workspaceFolders?.find((folder) => folder.name === 'alpha');
     assert.ok(alphaFolder, 'alpha workspace folder is available');
-    fs.writeFileSync(
+    await writeWatchedFile(
       path.join(alphaFolder.uri.fsPath, 'registry.yaml'),
       'apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: { id: alpha-reloaded }\n',
     );
@@ -271,7 +271,7 @@ suite('Registry Stack extension', () => {
     await vscode.workspace.openTextDocument(retiredQuestionPath);
     await assertLanguageServerStartCountStable(startLog, 4);
 
-    assert.strictEqual(vscode.workspace.updateWorkspaceFolders(3, 3), true);
+    await changeWorkspaceFolders(3, 3);
     await assertWorkspaceFolderCount(3);
 
     // Deleting the installer metadata and restarting proves the PATH
@@ -335,6 +335,9 @@ async function assertWorkspaceFolderCount(expected: number): Promise<void> {
 // VS Code requires the workspace-change event to finish before another
 // updateWorkspaceFolders call, even when workspaceFolders already has its
 // next value. Rapid product add/remove cycles must await that event.
+// A workspace-scoped configuration update must also wait: it edits the same
+// .code-workspace file, and VS Code refuses it while the folder change is
+// still unsaved there.
 async function changeWorkspaceFolders(
   start: number,
   deleteCount: number,
@@ -349,6 +352,38 @@ async function changeWorkspaceFolders(
     await changed;
   } finally {
     subscription?.dispose();
+  }
+}
+
+// An edit made outside the editor reaches the language server only as a file
+// event from VS Code's watcher, which does not guarantee an event for every
+// write. Rewrite the file until the extension host reports it, so a later
+// symbol assertion fails only when a delivered change was not indexed. A
+// string glob adds no watch request of its own and sees the same events as the
+// language client's watchers.
+async function writeWatchedFile(filePath: string, content: string): Promise<void> {
+  const watcher = vscode.workspace.createFileSystemWatcher(`**/${path.basename(filePath)}`);
+  let reported = false;
+  const onEvent = (uri: vscode.Uri) => {
+    if (uri.fsPath === filePath) {
+      reported = true;
+    }
+  };
+  watcher.onDidCreate(onEvent);
+  watcher.onDidChange(onEvent);
+  try {
+    for (let write = 0; write < 3; write += 1) {
+      fs.writeFileSync(filePath, content);
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (reported) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    assert.fail(`VS Code reported no file event for ${filePath}`);
+  } finally {
+    watcher.dispose();
   }
 }
 
