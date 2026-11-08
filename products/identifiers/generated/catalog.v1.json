@@ -5495,7 +5495,7 @@
       "description": "Evidence code list JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "c598415dc0abd9f1cb985c9bda305aaf6d926ed286732ff5428bda8dc3469b79"
+        "sha256": "0bee443cca46038f06a5c0298500b6d8ba8d06b35a40fce742d1a5666521413e"
       },
       "artifact": {
         "path": "products/evidence/generated/codelist/codelist.schema.json",
@@ -5513,11 +5513,11 @@
       "description": "Evidence fixture JSON Schema.",
       "source": {
         "path": "crates/registry-evidence/src/schema.rs",
-        "sha256": "c598415dc0abd9f1cb985c9bda305aaf6d926ed286732ff5428bda8dc3469b79"
+        "sha256": "0bee443cca46038f06a5c0298500b6d8ba8d06b35a40fce742d1a5666521413e"
       },
       "artifact": {
         "path": "products/evidence/generated/fixture/fixture.schema.json",
-        "sha256": "912661673c41c1119a8bd83809c66cc2d38b16e171c963b4988175c74f627664",
+        "sha256": "0f8f2332533c8577677e7a53f62a0ac400c08233f13ced03e168331d8058c2c8",
         "mediaType": "application/schema+json"
       }
     },
