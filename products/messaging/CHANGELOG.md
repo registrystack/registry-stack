@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - Each access profile may carry an optional `label` and `description`, accepted for authoring and tooling; Messaging does not serve them until a view exists. Neither is matched against a caller, and a profile that writes neither reads as before.
 
 - BREAKING: Messaging access profiles rename `role` to `actsAs`; the values are unchanged; the schema definition `AccessRole` is now `ActsAs`. Migration: in each `accessProfiles` entry, write `actsAs: VALUE` where the file wrote `role: VALUE`. A file that still writes `role` is refused with `config.removed-key` naming `actsAs`.

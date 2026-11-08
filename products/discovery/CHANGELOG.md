@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - The serving binary installs its stop-signal handlers before it binds the
   listener, so a handler that cannot be installed refuses startup. If a signal
   stream later ends because the runtime's signal driver is gone, shutdown now

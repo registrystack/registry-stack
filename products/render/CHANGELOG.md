@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - The serving adapter installs its SIGTERM and Ctrl-C handlers together before
   it accepts requests. The startup error for a handler that cannot be installed
   now reads "cannot install the stop signal handlers", and a Ctrl-C handler that

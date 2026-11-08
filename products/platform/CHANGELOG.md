@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - `registry-platform-text`: `TextStep::StripNonspacingMarksIn` replaces
   `StripCombiningMarks`. It strips General_Category Mn characters only inside
   caller-named code point ranges (1 to 64, `MAX_MARK_RANGES`; an empty, inverted

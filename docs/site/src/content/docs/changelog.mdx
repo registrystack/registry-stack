@@ -18,6 +18,8 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.46.0 beta-58
+
 - BREAKING: Evidence records a source 409 or 422 as a status answer. The request log and audit
   `safeErrorCategory` read `source-status` instead of `source-protocol`; the caller still
   receives `source.unavailable`. Another 4xx, such as 400 or 415, stays `source-protocol` and

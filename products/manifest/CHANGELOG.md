@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-08
+
 ## [0.45.0] - 2026-11-03
 
 - BREAKING: `registry-manifest` adopts the shared report envelope. Machine-readable

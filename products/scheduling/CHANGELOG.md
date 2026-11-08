@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - A holiday set's `label` is optional, as in the Casework holiday-set file; the id names a set that writes none.
 
 - BREAKING: This release does not read state stored by 0.45.0 or earlier. A stored policy that still holds `holidaySets[*].because` is refused with a message that says it was stored by an earlier release and names the member. Put Scheduling on a new database.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.46.0 - 2026-11-08
+
 - BREAKING: This release does not read workflow snapshots sealed by 0.45.0 or earlier: a snapshot whose project presentation, function or operation holds `title` is refused with `definition.snapshot`. A step `title` in the free-form `presentation.steps` map still restores and is shown as written. Finish open runs on the earlier release before upgrading.
 
 - BREAKING: The authored `title` of a project, function, operation and step is
