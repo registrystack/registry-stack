@@ -1519,6 +1519,8 @@ impl EvidenceRuntime {
                     return Err(map_authority(error));
                 }
             };
+            self.refuse_selector_the_source_inputs_reject(&resolved, &selector_limit_key)
+                .await?;
             let audit = self.request_batch_item_audit_material(
                 &issuance_scope,
                 &resolved,
@@ -1991,6 +1993,8 @@ impl EvidenceRuntime {
                 return Err(map_authority(error));
             }
         };
+        self.refuse_selector_the_source_inputs_reject(&resolved, &selector_limit_key)
+            .await?;
 
         // A holder-bound operation is scoped to no relying party, so the audit
         // pseudonyms of what it releases cannot be derived under one. Its scope
@@ -3106,19 +3110,18 @@ impl EvidenceRuntime {
             .sources
             .get(&source_id)
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
-        let inputs = executor
-            .inputs_for_subjects(request.subjects)
-            .map_err(|error| match (error, audit) {
-                // A public check has no authorization behind the presented
-                // number, so a value the Source's inputs schema refuses is the
-                // caller's malformed request. It answers exactly as a
-                // selector-profile refusal does, before any audit line or
-                // Source request.
-                (SubjectInputsError::Schema, SourceStageAudit::PublicCheck(_)) => {
-                    failure(ProblemCode::InvalidSelector, "selector")
-                }
-                (error, _) => pack_source_failure(error.into()),
-            })?;
+        // A value the Source's inputs schema refuses is the caller's malformed
+        // selector. The relying routes refuse it during selector resolution; a
+        // public check, which has no selector resolution behind the presented
+        // number, refuses it here. It answers exactly as a selector-profile
+        // refusal does, before any audit line or Source request.
+        let inputs =
+            executor
+                .inputs_for_subjects(request.subjects)
+                .map_err(|error| match error {
+                    SubjectInputsError::Schema => failure(ProblemCode::InvalidSelector, "selector"),
+                    error => pack_source_failure(error.into()),
+                })?;
         let attribution = source_attribution(executor, request.requester, request.purpose)?;
         let access = match audit {
             SourceStageAudit::Relying(material) => {
@@ -3198,6 +3201,41 @@ impl EvidenceRuntime {
             presented: lookup.presented,
             acquisition_deadline: lookup.acquisition_deadline,
         })
+    }
+
+    /// Refuse, during selector resolution, a selector value that passes its
+    /// profile but that the inputs schema of the acquiring Source refuses.
+    /// Such a value can never be sent, so it is the caller's malformed
+    /// selector: it answers as a profile refusal does, is charged to the
+    /// selector-failure budget, and leaves no audit entry or source effect. A
+    /// batch item refused here refuses the whole batch before any item reaches
+    /// a Source. Any other failure to place the subjects (no acquisition
+    /// channel, no executor, a projection failure) is not a selector fault and
+    /// is left to the source stage, which meets it again and refuses it there.
+    async fn refuse_selector_the_source_inputs_reject(
+        &self,
+        resolved: &ResolvedAuthorization,
+        selector_limit_key: &str,
+    ) -> Result<(), RuntimeFailure> {
+        let Some(executor) = self
+            .kernel
+            .requirement(&resolved.requirement)
+            .and_then(|requirement| acquisition_source(&requirement.acquisition, resolved).ok())
+            .and_then(|source_id| self.sources.get(source_id))
+        else {
+            return Ok(());
+        };
+        if !matches!(
+            executor.inputs_for_subjects(&resolved.subjects),
+            Err(SubjectInputsError::Schema)
+        ) {
+            return Ok(());
+        }
+        self.rate_limiter
+            .record_selector_failure(selector_limit_key)
+            .await
+            .map_err(map_selector_limit)?;
+        Err(failure(ProblemCode::InvalidSelector, "selector"))
     }
 
     fn source_identity(&self, source_id: &str) -> Result<(String, String), RuntimeFailure> {

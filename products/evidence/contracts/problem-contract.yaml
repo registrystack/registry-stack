@@ -41,10 +41,10 @@ authorization_refusal_audit:
   operational_only: [evidence.invalid-request, request.selector-invalid, auth.invalid-credential]
 selector_refusal:
   code: request.selector-invalid
-  applies_to: Every selector the matched entitlement resolves that fails its selector profile.
+  applies_to: Every selector the matched entitlement resolves that fails its selector profile, or whose values the inputs schema of the acquiring Source refuses.
   order: Returned during selector resolution, after authorization and before any access-attempt audit event, credential acquisition, or source contact.
   budget: Counts against the caller's selector-failure budget like every other selector refusal.
-  path_bound_value: A value that passes its profile but that a source of the requirement binds to a request path segment the value cannot occupy is not a selector refusal. It is refused after the durable access-attempt audit event and before credential acquisition or any source request, as source.unavailable (503), on the single and the batch route alike.
+  path_bound_value: A value that passes its profile and the inputs schema of the Source, but that a source of the requirement binds to a request path segment the value cannot occupy is not a selector refusal. It is refused after the durable access-attempt audit event and before credential acquisition or any source request, as source.unavailable (503), on the single and the batch route alike.
 existence_disclosure:
   default_public_collapse:
     internal_classes: [no_match, ambiguous, required_fact_missing, derivation_input_unresolved]

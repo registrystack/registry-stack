@@ -38,6 +38,14 @@
   any source request, as `503 source.unavailable`, and it does not count
   against the caller's selector-failure budget.
 
+- On the single and batch evaluate routes, a selector value that passes its
+  profile but that the inputs schema of the requirement's Source refuses now
+  answers `400 request.selector-invalid`, as a profile refusal does, instead
+  of `503 service.unavailable` (category `source-inputs`). It is refused
+  during selector resolution, before any audit entry or source request, it
+  counts against the caller's selector-failure budget, and one such item
+  refuses the whole batch. The public check route already answered this way.
+
 - Each target-authority access profile may carry an optional `label` and `description`, accepted for authoring and tooling; compilation drops them and Evidence does not serve them. Neither is matched against a caller, and a profile that writes neither reads as before.
 
 - A definition with `holderPresented` acquisition now answers only as a signed

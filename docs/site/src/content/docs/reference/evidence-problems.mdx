@@ -36,14 +36,14 @@ identifier. All responses use `Cache-Control: no-store`.
 | Code | Status | Title | Detail | Recovery |
 | --- | --- | --- | --- | --- |
 | `evidence.invalid-request` | 400 | Evidence request is invalid | the Evidence request is invalid | Correct the request body or headers. |
-| `request.selector-invalid` | 400 | Selector is invalid | selector does not match an available request profile | Read `GET /v1/evidence-definitions` and send a selector profile it lists. A value placed in a source request path must fit one path segment: not empty, not `.` or `..`, and free of `/`, `\`, `%`, and control characters. No source was contacted. |
+| `request.selector-invalid` | 400 | Selector is invalid | selector does not match an available request profile | Read `GET /v1/evidence-definitions` and send a selector profile it lists, with values the Source's inputs schema accepts. No source was contacted. |
 | `auth.invalid-credential` | 401 | Bearer access token is invalid | bearer access token validation failed | Send one valid Bearer access token. The response carries `WWW-Authenticate: Bearer realm="registry-evidence"`. |
 | `evidence.denied` | 403 | Evidence request is not permitted | the Evidence request is not permitted | Ask the operator for a grant that covers the requirement, purpose, and selector profile. The response does not say which condition failed. |
 | `resource.not-found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. |
 | `format.unsupported` | 406 | Requested format is not supported | the requested format is not supported | Send one exact supported `Accept` value. |
 | `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not infer a cause or retry blindly. Retry only after the request inputs or the source's records may have changed. |
 | `evidence.rate-limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait the one second `Retry-After: 1` states, then retry. |
-| `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff, or contact the source operator. |
+| `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff, or contact the source operator. A selector value the Source places in a request path segment it cannot occupy (empty, `.` or `..`, or containing `/`, `\`, `%`, or a control character) also answers this problem, and a retry does not help: change the value. |
 | `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff, or contact the Evidence operator. |
 
 `evidence.denied` never appears without its audit record: when Evidence cannot append the
