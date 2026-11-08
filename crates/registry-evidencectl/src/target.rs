@@ -68,17 +68,25 @@ pub(crate) fn run(command: TargetCommand, format: OutputFormat) -> Result<ExitCo
 
 fn new(args: NewArgs) -> Result<ExitCode> {
     let mut carried = Vec::new();
+    let mut carried_extracts = Vec::new();
     if args.local {
         if args.settings.is_some() {
             bail!("target new accepts either --local or --settings, not both");
         }
         let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
-        let connections = project_declared_connections(project)?;
-        create_local_target(project, &args.directory, connections.clone())?;
-        carried = connections
+        let declared = project_declared_bindings(project)?;
+        create_local_target(
+            project,
+            &args.directory,
+            declared.connections.clone(),
+            declared.extracts.clone(),
+        )?;
+        carried = declared
+            .connections
             .as_object()
-            .map(|names| names.keys().cloned().collect())
+            .map(names)
             .unwrap_or_default();
+        carried_extracts = declared.extracts.as_object().map(names).unwrap_or_default();
     } else {
         let source = args
             .settings
@@ -93,6 +101,12 @@ fn new(args: NewArgs) -> Result<ExitCode> {
             carried.join(", ")
         );
     }
+    if !carried_extracts.is_empty() {
+        println!(
+            "Source extracts declared from {LOCAL_TARGET_FILE}: {}",
+            carried_extracts.join(", ")
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -100,16 +114,36 @@ fn new(args: NewArgs) -> Result<ExitCode> {
 /// Sources.
 const LOCAL_TARGET_FILE: &str = "local-target.yaml";
 
-/// The source connections the project's local-target.yaml declares, as the
-/// authored mapping a new target carries. A project without that file has
-/// declared none; one whose file cannot be read is refused, not skipped.
-fn project_declared_connections(project: &Path) -> Result<Value> {
+/// The source connections and extract bindings the project's local-target.yaml
+/// declares, as the authored mappings a new target carries. Extract paths are
+/// carried verbatim, so they keep the placeholder meaning they have there.
+struct DeclaredBindings {
+    connections: Value,
+    extracts: Value,
+}
+
+/// The profile names of an authored mapping.
+fn names(mapping: &serde_json::Map<String, Value>) -> Vec<String> {
+    mapping.keys().cloned().collect()
+}
+
+/// A project without that file has declared none; one whose file cannot be read
+/// is refused, not skipped.
+fn project_declared_bindings(project: &Path) -> Result<DeclaredBindings> {
     let path = project.join(LOCAL_TARGET_FILE);
     if !path.try_exists()? {
-        return Ok(json!({}));
+        return Ok(DeclaredBindings {
+            connections: json!({}),
+            extracts: json!({}),
+        });
     }
     let target = read_target(&path)?;
-    serde_json::to_value(&target.connections).context("reading the project's declared connections")
+    Ok(DeclaredBindings {
+        connections: serde_json::to_value(&target.connections)
+            .context("reading the project's declared connections")?,
+        extracts: serde_json::to_value(&target.extracts)
+            .context("reading the project's declared extracts")?,
+    })
 }
 
 pub(crate) fn target_path(path: &Path) -> PathBuf {
@@ -196,7 +230,7 @@ pub(crate) fn ensure_local_connection(
         {
             bail!("local target file is absent; run `evidencectl init` or pass --target with an existing normalized EvidenceTarget");
         }
-        return create_local_target(project, directory, json!({name: binding}));
+        return create_local_target(project, directory, json!({name: binding}), json!({}));
     }
     let path = target_path(directory);
     let mut target = read_target(&path)?;
@@ -217,6 +251,7 @@ pub(crate) fn create_local_target(
     project_root: &Path,
     directory: &Path,
     source_connections: Value,
+    source_extracts: Value,
 ) -> Result<()> {
     let connections = source_connections
         .as_object()
@@ -242,7 +277,7 @@ pub(crate) fn create_local_target(
     };
     let (public_key, public_key_bytes) =
         crate::authoring::ensure_local_signing_public_jwk(&project_root)?;
-    let target_value = json!({
+    let mut target_value = json!({
         "apiVersion": target::TARGET_API_VERSION,
         "kind": target::TARGET_KIND,
         "id": "local",
@@ -274,6 +309,12 @@ pub(crate) fn create_local_target(
         "assuranceProfile": "local",
         "outboundTls": {"systemRoots": true, "trustProfiles": {}}
     });
+    if source_extracts
+        .as_object()
+        .is_some_and(|bound| !bound.is_empty())
+    {
+        target_value["extracts"] = source_extracts;
+    }
     let target = target::read_target(
         "target.yaml",
         authored::to_indented_yaml(&target_value)?.as_bytes(),
@@ -459,8 +500,19 @@ fn safe_relative(root: &Path, relative: &str, label: &str) -> Result<PathBuf> {
     Ok(candidate)
 }
 
-fn plain_parent(path: &Path, label: &str) -> Result<PathBuf> {
+/// The directory a path sits in; a bare name has an empty parent, which is the
+/// current directory.
+fn parent_or_current(path: &Path) -> Result<&Path> {
     let parent = path.parent().context("path requires a parent directory")?;
+    Ok(if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    })
+}
+
+fn plain_parent(path: &Path, label: &str) -> Result<PathBuf> {
+    let parent = parent_or_current(path)?;
     let parent = fs::canonicalize(parent).with_context(|| format!("resolving {label}"))?;
     if !fs::symlink_metadata(&parent)?.is_dir() {
         bail!("{label} must be a plain directory");
@@ -469,7 +521,7 @@ fn plain_parent(path: &Path, label: &str) -> Result<PathBuf> {
 }
 
 fn created_plain_parent(path: &Path, label: &str) -> Result<PathBuf> {
-    let parent = path.parent().context("path requires a parent directory")?;
+    let parent = parent_or_current(path)?;
     let mut cursor = PathBuf::new();
     for component in parent.components() {
         cursor.push(component);
@@ -599,10 +651,14 @@ mod tests {
                 authored::to_indented_yaml(&value).unwrap(),
             )
             .unwrap();
-            let error =
-                create_local_target(root.path(), &root.path().join("targets/local"), json!({}))
-                    .unwrap_err()
-                    .to_string();
+            let error = create_local_target(
+                root.path(),
+                &root.path().join("targets/local"),
+                json!({}),
+                json!({}),
+            )
+            .unwrap_err()
+            .to_string();
             assert!(error.contains(origin), "{error}");
             assert!(error.contains(bindings), "{error}");
             assert!(error.contains("--settings <target.yaml>"), "{error}");

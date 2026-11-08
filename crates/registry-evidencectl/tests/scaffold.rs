@@ -271,6 +271,140 @@ fn the_generated_sqlite_starter_passes_check_and_test_without_source_import() {
     );
 }
 
+/// `target new --local` is a complete disposable target: it carries the
+/// project's extract bindings as it carries its connections, and says so.
+#[test]
+fn a_new_local_target_carries_the_projects_extract_bindings() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let project = root.join("project");
+    let output = sqlite_new(&project, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let target = root.join("target");
+    let created = evidencectl(&[
+        "target",
+        "new",
+        path(&target),
+        "--local",
+        "--project",
+        path(&project),
+    ]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    assert!(
+        stdout(&created).contains("Source extracts declared from local-target.yaml: record-status"),
+        "{}",
+        stdout(&created)
+    );
+    let bytes = fs::read(target.join("target.yaml")).expect("read the new target");
+    let declared = registry_platform_yaml::Reader::new("target")
+        .scan(&bytes)
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    assert_eq!(
+        declared["extracts"]["record-status"]["path"],
+        "extracts/record-status.sqlite"
+    );
+}
+
+/// An HTTP project declares no extracts, so its new target has no member.
+#[test]
+fn a_new_local_target_omits_extracts_the_project_does_not_declare() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let spec = write_spec(&root, OPENAPI.as_bytes());
+    let project = root.join("project");
+    let output = openapi_new(&project, path(&spec), &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let target = root.join("target");
+    let created = evidencectl(&[
+        "target",
+        "new",
+        path(&target),
+        "--local",
+        "--project",
+        path(&project),
+    ]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    assert!(!stdout(&created).contains("Source extracts"));
+    let written = fs::read_to_string(target.join("target.yaml")).expect("read the new target");
+    assert!(!written.contains("extracts"), "{written}");
+}
+
+/// Bare file and directory names have an empty parent, which means the
+/// current directory.
+#[test]
+fn target_new_accepts_bare_settings_and_destination_names() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let project = root.join("project");
+    let output = sqlite_new(&project, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let from_settings = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["target", "new", "copied", "--settings", "local-target.yaml"])
+        .current_dir(&project)
+        .output()
+        .expect("copy the project target by bare name");
+    assert!(from_settings.status.success(), "{}", stderr(&from_settings));
+    assert!(project.join("copied/target.yaml").is_file());
+
+    let local = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args([
+            "target",
+            "new",
+            "bare-target",
+            "--local",
+            "--project",
+            "project",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("create a local target at a bare destination");
+    assert!(local.status.success(), "{}", stderr(&local));
+    assert!(root.join("bare-target/target.yaml").is_file());
+}
+
+/// The OpenAPI starter's fixture must pass the check its README names, and the
+/// cases it ships must run. Fixture grammar is validated by the real Evidence
+/// binary, so this exact gate needs `EVIDENCE_BIN`.
+#[test]
+#[ignore = "exact gate: needs the real Evidence binary in EVIDENCE_BIN"]
+fn the_generated_openapi_starter_passes_check_and_test() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let spec = write_spec(&root, OPENAPI.as_bytes());
+    let project = root.join("project");
+    let output = openapi_new(&project, path(&spec), &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let evidence = std::env::var_os("EVIDENCE_BIN")
+        .expect("set EVIDENCE_BIN to the Evidence binary built from this source");
+
+    let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["check", path(&project), "--target"])
+        .arg(project.join("local-target.yaml"))
+        .env("EVIDENCE_BIN", &evidence)
+        .output()
+        .expect("check the OpenAPI starter");
+    let printed = format!("{}{}", stdout(&checked), stderr(&checked));
+    assert!(checked.status.success(), "{printed}");
+
+    let tested = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["test", path(&project)])
+        .arg("--evidence-bin")
+        .arg(&evidence)
+        .output()
+        .expect("test the OpenAPI starter");
+    let printed = format!("{}{}", stdout(&tested), stderr(&tested));
+    assert!(tested.status.success(), "{printed}");
+    assert!(
+        printed.contains("PASS: fixtures/record-status.yaml (2 cases)"),
+        "{printed}"
+    );
+}
+
 /// A starter that begins a normalized project must supply its target and
 /// authority too. Refuse the partial set before publishing any destination.
 #[test]
@@ -375,10 +509,9 @@ fn the_generated_sqlite_starter_target_binds_its_extract_profile() {
 }
 
 /// A fresh starter, a local target made for it, then a package. The target must
-/// carry the connections the starter's Source references, or the real Evidence
-/// binary refuses to render the publication. The one edit the journey keeps is
-/// the deployment's own: binding the published extract file the Source reads.
-/// The refusal lives in that binary, so this exact gate needs `EVIDENCE_BIN`.
+/// carry the connections and extract bindings the starter's Source references,
+/// or the real Evidence binary refuses to render the publication. The refusal
+/// lives in that binary, so this exact gate needs `EVIDENCE_BIN`.
 #[test]
 #[ignore = "exact gate: needs the real Evidence binary in EVIDENCE_BIN"]
 fn a_fresh_starter_packages_against_its_new_local_target() {
@@ -397,16 +530,6 @@ fn a_fresh_starter_packages_against_its_new_local_target() {
         .output()
         .expect("create the local target");
     assert!(created.status.success(), "{}", stderr(&created));
-    let mut target_file = fs::OpenOptions::new()
-        .append(true)
-        .open(target.join("target.yaml"))
-        .expect("open the new target");
-    std::io::Write::write_all(
-        &mut target_file,
-        b"extracts:\n  record-status:\n    path: extracts/record-status.sqlite\n",
-    )
-    .expect("bind the published extract");
-
     let packaged = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(["package", path(&project), "--target", path(&target)])
         .args(["--output", path(&root.join("package"))])
@@ -700,8 +823,10 @@ fn init_writes_the_normalized_project_envelope() {
         "HTTP source cases select the coequal evaluator"
     );
     assert_eq!(fixture["syntheticOnly"], true);
-    assert!(fixture["cases"][0].get("acquisition").is_some());
-    assert!(fixture["cases"][0]["expected"].get("value").is_some());
+    assert!(fixture["cases"][0].get("source").is_some());
+    assert!(fixture["cases"][0].get("acquisition").is_none());
+    assert_eq!(fixture["cases"][0]["expectedValue"], true);
+    assert!(fixture["cases"][0].get("expected").is_none());
     assert!(fixture.get("synthetic_only").is_none());
 
     assert_eq!(

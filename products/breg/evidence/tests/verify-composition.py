@@ -189,8 +189,9 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
             },
         },
     }
-    # A target binds every extract profile its Sources use; `target new` leaves
-    # the file path to the operator.
+    # A target binds every extract profile its Sources use. `target new` carries
+    # the project's own local-target extract bindings; this project's imported
+    # Source names a profile of its own, so the script binds it here.
     settings["extracts"] = {"record-status-extract": {"path": "extracts/record-status.sqlite"}}
     write(target / "target.yaml", settings)
     run(binaries["evidencectl"], "check", project, "--target", target,
