@@ -3600,21 +3600,53 @@ fn validate_reference_error(
     error: KernelError,
     derivation_ran: bool,
 ) -> Result<(), CliError> {
-    let (internal, public_problem) = match error {
-        KernelError::Preparation => ("adapter_input_error", "service.unavailable"),
-        KernelError::SourceProtocol => ("source_protocol_error", "source.unavailable"),
+    // The third member is the report when the case declares no failure
+    // expectation: it names the stage that failed, so the author reads the
+    // cause rather than only that an expectation is missing.
+    let (internal, public_problem, undeclared_failure) = match error {
+        KernelError::Preparation => (
+            "adapter_input_error",
+            "service.unavailable",
+            "the request preparation failed (adapter_input_error, service.unavailable) and the case declares no `error` or `publicProblem` expectation",
+        ),
+        KernelError::SourceProtocol => (
+            "source_protocol_error",
+            "source.unavailable",
+            "the source response broke its contract (source_protocol_error, source.unavailable) and the case declares no `error` or `publicProblem` expectation",
+        ),
         // Derivation-input inconsistency over a uniquely found record
         // collapses publicly with the unresolved classes; the internal
         // category stays a value-free operator diagnostic.
-        KernelError::DerivationInput => ("derivation_input_error", "evidence.unavailable"),
-        KernelError::Script if derivation_ran => ("derivation_input_error", "service.unavailable"),
-        KernelError::Extraction => ("evidence_not_available", "evidence.unavailable"),
-        _ => ("service_unavailable", "service.unavailable"),
+        KernelError::DerivationInput => (
+            "derivation_input_error",
+            "evidence.unavailable",
+            "the derivation inputs were inconsistent (derivation_input_error, evidence.unavailable) and the case declares no `error` or `publicProblem` expectation",
+        ),
+        KernelError::Script if derivation_ran => (
+            "derivation_input_error",
+            "service.unavailable",
+            "the derivation script failed, for example by returning an output the definition does not declare (derivation_input_error, service.unavailable), and the case declares no `error` or `publicProblem` expectation",
+        ),
+        KernelError::Extraction => (
+            "evidence_not_available",
+            "evidence.unavailable",
+            "the extraction found no usable record (evidence_not_available, evidence.unavailable) and the case declares no `error` or `publicProblem` expectation",
+        ),
+        KernelError::Output | KernelError::UndeclaredOutputProperty(_) => (
+            "service_unavailable",
+            "service.unavailable",
+            "the output gate refused the derived values (service_unavailable, service.unavailable) and the case declares no `error` or `publicProblem` expectation",
+        ),
+        _ => (
+            "service_unavailable",
+            "service.unavailable",
+            "the evaluation failed (service_unavailable, service.unavailable) and the case declares no `error` or `publicProblem` expectation",
+        ),
     };
     let expected_error = expected.get("error").and_then(Value::as_str);
     let expected_problem = expected.get("publicProblem").and_then(Value::as_str);
     if expected_error.is_none() && expected_problem.is_none() {
-        return Err(CliError("reference failing case has no exact expectation"));
+        return Err(CliError(undeclared_failure));
     }
     if expected_error.is_some_and(|expected| expected != internal) {
         return Err(CliError("reference internal error did not match"));
