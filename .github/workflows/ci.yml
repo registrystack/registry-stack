@@ -2469,6 +2469,18 @@ jobs:
             | tee "${RUNNER_TEMP}/evidence-source-recipes.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-source-recipes.log" || { echo "::error::expected exactly one passing test for curated_source_recipes_import_check_and_run_the_existing_evaluator"; exit 1; }
 
+      - name: Test the public certificate check example
+        shell: bash
+        env:
+          EVIDENCE_BIN: ${{ github.workspace }}/target/debug/evidence
+        run: |
+          set -euo pipefail
+          cargo test --locked -p registry-evidencectl --test public_check \
+            -- --ignored --exact the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_subject \
+            | tee "${RUNNER_TEMP}/evidence-public-check.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-public-check.log" || { echo "::error::expected exactly one passing test for the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_subject"; exit 1; }
+          node --test products/evidence/examples/public-check/page/check.test.mjs
+
       - name: Test the composed wallet presentation journey
         shell: bash
         env:
