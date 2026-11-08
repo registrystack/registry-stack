@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A `record_timer.worker.iteration_failed` warning carries a closed `error`
+  field naming the failure class: PostgreSQL or another runtime dependency
+  was unavailable, a concurrent change conflicted with this timer step, the
+  commit outcome is not proven, an action handler failed, field-encryption
+  key state was unavailable, or a timer step was refused. The field never
+  carries a record, SQL, or handler value.
 - BREAKING: `manifestProjection` declares the identified public authorities
   it names in a required `authorities` list (`id`, `name`, optional `iri` and
   `authorityType`, shaped like `catalog.publisher`), and `publicService` names

@@ -252,6 +252,47 @@ impl HookStateTransitionCode {
     }
 }
 
+/// Closed Record-timer iteration failure causes. A cause names only the class
+/// of the failed step and never carries record, SQL, or handler values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordTimerIterationCause {
+    /// A pool checkout, query, or other runtime dependency failed.
+    RuntimeUnavailable,
+    /// A concurrent change won first: PostgreSQL aborted the transaction for
+    /// serialization or deadlock, or a peer replica already settled the
+    /// timer step this iteration had discovered.
+    ConcurrencyConflict,
+    /// The transaction reached its commit and its outcome is not proven.
+    CommitUnresolved,
+    HandlerFailure,
+    FieldEncryptionUnavailable,
+    /// Any other refusal of a timer step.
+    Refused,
+}
+
+impl RecordTimerIterationCause {
+    /// Every allowed cause, used by exhaustive operational-log contract tests.
+    pub const ALL: [Self; 6] = [
+        Self::RuntimeUnavailable,
+        Self::ConcurrencyConflict,
+        Self::CommitUnresolved,
+        Self::HandlerFailure,
+        Self::FieldEncryptionUnavailable,
+        Self::Refused,
+    ];
+
+    const fn operational_message(self) -> &'static str {
+        match self {
+            Self::RuntimeUnavailable => "PostgreSQL or another runtime dependency was unavailable",
+            Self::ConcurrencyConflict => "a concurrent change conflicted with this timer step",
+            Self::CommitUnresolved => "the commit outcome is not proven",
+            Self::HandlerFailure => "an action handler failed",
+            Self::FieldEncryptionUnavailable => "field-encryption key state was unavailable",
+            Self::Refused => "a timer step was refused",
+        }
+    }
+}
+
 /// The closed set of background tasks `serve` runs beside the HTTP listener.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackgroundTask {
@@ -378,7 +419,7 @@ pub enum OperationalEvent {
     Stopped,
     StoppedWithError(StartupError),
     HookWorkerIterationFailed,
-    RecordTimerIterationFailed,
+    RecordTimerIterationFailed(RecordTimerIterationCause),
     AttachmentVerificationIterationFailed,
     AttachmentVerificationRetryPending,
     ReviewWorkerIterationFailed,
@@ -467,11 +508,11 @@ impl OperationalEvent {
                 error: None,
                 code: Some("hook.worker.iteration_failed"),
             },
-            Self::RecordTimerIterationFailed => OperationalLogRecord {
+            Self::RecordTimerIterationFailed(cause) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
                 target: "registry_breg::record_timer",
                 message: "record timer worker iteration failed",
-                error: None,
+                error: Some(cause.operational_message()),
                 code: Some("record_timer.worker.iteration_failed"),
             },
             Self::AttachmentVerificationIterationFailed => OperationalLogRecord {
@@ -619,11 +660,14 @@ impl OperationalEvent {
                 let code = record.code.expect("hook warning records have a code");
                 tracing::warn!(target: "registry_breg::hooks", code, message = record.message);
             }
-            Self::RecordTimerIterationFailed => {
+            Self::RecordTimerIterationFailed(_) => {
                 let code = record
                     .code
                     .expect("record timer warning records have a code");
-                tracing::warn!(target: "registry_breg::record_timer", code, message = record.message);
+                let error = record
+                    .error
+                    .expect("record timer warning records have a closed cause");
+                tracing::warn!(target: "registry_breg::record_timer", code, error, message = record.message);
             }
             Self::PostgresBaselineAdvisory(advisory) => {
                 let code = record.code.expect("baseline advisory records have a code");

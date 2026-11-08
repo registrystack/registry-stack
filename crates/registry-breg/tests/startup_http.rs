@@ -30,7 +30,7 @@ use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfig
 use registry_breg::startup::{
     operational_log_level, select_operational_log_level, with_request_timeout_and_metrics_for_test,
     with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, HookStateTransitionCode,
-    OperationalEvent, OperationalLogLevel, StartupError,
+    OperationalEvent, OperationalLogLevel, RecordTimerIterationCause, StartupError,
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_crypto::PrivateJwk;
@@ -627,11 +627,11 @@ fn expected_operational_event(
             None,
             Some("hook.worker.iteration_failed"),
         ),
-        OperationalEvent::RecordTimerIterationFailed => (
+        OperationalEvent::RecordTimerIterationFailed(cause) => (
             OperationalLogLevel::Warn,
             "registry_breg::record_timer",
             "record timer worker iteration failed",
-            None,
+            Some(expected_record_timer_iteration_cause(cause)),
             Some("record_timer.worker.iteration_failed"),
         ),
         OperationalEvent::AttachmentVerificationIterationFailed => (
@@ -835,6 +835,23 @@ fn expected_startup_error(error: StartupError) -> &'static str {
     }
 }
 
+fn expected_record_timer_iteration_cause(cause: RecordTimerIterationCause) -> &'static str {
+    match cause {
+        RecordTimerIterationCause::RuntimeUnavailable => {
+            "PostgreSQL or another runtime dependency was unavailable"
+        }
+        RecordTimerIterationCause::ConcurrencyConflict => {
+            "a concurrent change conflicted with this timer step"
+        }
+        RecordTimerIterationCause::CommitUnresolved => "the commit outcome is not proven",
+        RecordTimerIterationCause::HandlerFailure => "an action handler failed",
+        RecordTimerIterationCause::FieldEncryptionUnavailable => {
+            "field-encryption key state was unavailable"
+        }
+        RecordTimerIterationCause::Refused => "a timer step was refused",
+    }
+}
+
 fn expected_hook_state_transition_code(code: HookStateTransitionCode) -> &'static str {
     match code {
         HookStateTransitionCode::ClaimIdentityRefused => "hook.claim.identity_refused",
@@ -914,7 +931,11 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     events.push(OperationalEvent::RoleMode(RoleMode::Split));
     events.push(OperationalEvent::ClientsUnrestricted);
     events.push(OperationalEvent::HookWorkerIterationFailed);
-    events.push(OperationalEvent::RecordTimerIterationFailed);
+    events.extend(
+        RecordTimerIterationCause::ALL
+            .into_iter()
+            .map(OperationalEvent::RecordTimerIterationFailed),
+    );
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
     events.push(OperationalEvent::ReviewWorkerIterationFailed);
