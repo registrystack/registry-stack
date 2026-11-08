@@ -193,7 +193,7 @@ is a platform audit entry with the schema `registry.evidence.audit.public-check/
 contract defines it. The route has no requester, actor, client, or grant, so no record names one,
 and none carries a response protection, an Evidence identifier, or a signing key, because the
 public answer is never signed. A check refused before admission (a malformed body, a document
-number that fails the selector profile, or a rejected request limit) writes nothing. The entry
+number that fails the selector profile or the Source inputs schema, or a rejected request limit) writes nothing. The entry
 phase is `request` for the access attempt and `response` for every other phase, and the entry
 `correlation` is the record's `operation`.
 
@@ -207,7 +207,7 @@ phase is `request` for the access attempt and `response` for every other phase, 
 All five miss decisions are answered to the caller with one identical `404 resource.not-found`
 problem. The log is where you tell them apart: `code-mismatch` also covers a stored check code that
 is absent or malformed, and it is visible to you only. A document number that passes the selector
-profile but that the Source path cannot carry is admitted, so it leaves an `access-attempt` record
+profile and the inputs schema but that the Source binds to a path segment it cannot occupy is admitted, so it leaves an `access-attempt` record
 and a `transient-failure` record with `dependency-failure`, and the caller gets
 `503 source.unavailable`; the Source is never contacted.
 

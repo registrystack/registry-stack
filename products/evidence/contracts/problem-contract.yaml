@@ -91,18 +91,19 @@ public_check:
   invalid_selector:
     code: request.selector-invalid
     status: 400
-    classes: [documentNumber that fails the selector profile of the activated subject]
+    classes: [documentNumber that fails the selector profile of the activated subject, documentNumber that the inputs schema of the Source refuses]
     order: Refused before any audit write, credential acquisition, or source contact.
   unavailable:
     source.unavailable:
       status: 503
-      classes: [Source transport or protocol failure, a Source result that is not a record or a declared outcome, acquisition budget exhausted, a documentNumber that passes the selector profile but that the Source path cannot carry]
+      classes: [Source transport, timeout or protocol failure, including a facts-schema refusal and an extract-script failure, a Source result that is not a record or a declared outcome, acquisition budget exhausted, a documentNumber that passes the selector profile and the inputs schema but that the Source binds to a path segment it cannot occupy]
       audit: A transient-failure entry with decision dependency-failure follows the access-attempt entry.
+      before_comparison: The check code is compared only after the Source returns a record, so every Source failure before the comparison answers this problem. A pack that refuses one record's content before the comparison lets this answer reveal that a record exists for the number, though neither its status nor its fields; a record-independent fault answers it for every number and reveals nothing. Pack authors keep the facts schema to types, declare a returned record whose number does not exactly match as no-match, and check record content in the derivation.
     service.unavailable:
       status: 503
-      classes: [request time budget exhausted, admission to the request slots timed out, access-attempt or release audit append failed, evaluation task failed, a package fault, derivation or output validation failure after the code matched, a public answer that cannot be built from the two named outputs]
+      classes: [request time budget exhausted, admission to the request slots timed out, access-attempt or release audit append failed, evaluation task failed, a package fault, derivation or output validation failure after the code matched, a public answer that cannot be built from the two named outputs, including a status outside valid, suspended, revoked and expired (problem category public-check-answer)]
       audit: Where an access attempt was accepted, a transient-failure entry follows with decision evaluation-failure; an audit append failure writes nothing further.
-  route_resolution: A route that the authority does not activate, and any method other than POST on the route, return resource.not-found exactly as an unknown path does; an unactivated route also answers a browser preflight as an unknown path does.
+  route_resolution: A route that the authority does not activate, and any method other than POST and OPTIONS on the route, return resource.not-found with the status and body of an unknown path (an activated route adds its CORS headers); an unactivated route also answers a browser preflight as an unknown path does.
   header_rule:
     cache_control: Every response, success or problem, carries Cache-Control no-store.
     access_control: Every response of the route, problems included, carries Access-Control-Allow-Origin *, never Access-Control-Allow-Credentials. A preflight answers 200 with an empty body, allows exactly POST and Content-Type, and a max age of 600 seconds. No other route carries a CORS header.

@@ -53,7 +53,7 @@ Registry Evidence runs one reviewed OIDC bearer profile with one trusted issuer 
 token-type, and algorithm allowlists. One configured principal claim is authoritative; it does not
 fall back to `client_id`, `azp`, a proxy header, or a request field. Operational and discovery
 routes are unauthenticated, and none reveals enabled definitions or requester permissions. The
-experimental public check route is the first unauthenticated route that reads registry data; it
+experimental public check route is unauthenticated and reads registry data; it
 exists only when an operator activates it. Evidence does not enforce the path restriction:
 exposing the route only through a path-restricted proxy is the operator's duty.
 

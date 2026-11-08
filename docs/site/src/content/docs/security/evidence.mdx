@@ -98,8 +98,7 @@ and no configuration key changes that.
 
 ## The public certificate check
 
-The experimental `POST /v1/public-check` route is the first unauthenticated route that reads
-registry data. It exists only when the package declares `publicCheck` and the target authority
+The experimental `POST /v1/public-check` route is unauthenticated and reads registry data. It exists only when the package declares `publicCheck` and the target authority
 activates it. It answers one configured requirement with a status, the printed fields, and the
 evaluation time, and nothing else.
 
@@ -116,6 +115,20 @@ evaluation time, and nothing else.
   it does not. That can reveal whether a number exists. It reveals nothing about the code. The
   certificate number is printed on the paper and is not the secret, so this residual is accepted. If
   the number alone would reveal sensitive membership in your deployment, do not activate the route.
+- **Before the comparison.** Evidence compares the check code only after the Source returns a
+  record, so a Source failure before that answers `503 source.unavailable`, audited as a dependency
+  failure. A number with no record cannot fail that way. A pack that refuses one record's content
+  before the comparison (a facts schema that constrains values beyond their type, or an extract
+  script that throws on one record's data) lets that `503` reveal that a record exists for the
+  number, though neither its status nor its fields. A fault that hits every request answers `503`
+  for every number and reveals nothing. Keep the facts schema to types, treat a returned record whose
+  number does not exactly match as no-match, and check record content in the derivation, which runs
+  after the comparison, so only a caller holding the right code sees its failures.
+- **Input errors read as outages.** A number that passes the selector profile but that the Source
+  cannot carry in a request path segment answers `503 source.unavailable`, so a caller can make an
+  input error look like a registry outage. The audit tells them apart: that refusal is a
+  dependency failure recorded after the access attempt, while a number the selector profile or the
+  Source inputs schema refuses writes nothing.
 - **Checker privacy.** The number and code travel in a POST body, never in a path or query. Evidence
   mints its own trace identifier on this route, ignores inbound trace context, and reads no request
   header except `Content-Type`. The audit record holds a keyed pseudonym of the number, not the number.

@@ -226,23 +226,26 @@ binaries, not generated containers or orchestrator manifests.
 
 ### Public certificate check
 
-The public certificate check (`CONCEPT.md` section 15.11) is the first
-unauthenticated Evidence route that reads registry data. It exists only when the
+The public certificate check (`CONCEPT.md` section 15.11) is an unauthenticated
+Evidence route that reads registry data. It exists only when the
 package declares `publicCheck` and the target authority activates
 `publicCheck.definition`; otherwise `POST /v1/public-check` answers as an
 unknown route. Evidence has no rate limiter on it and never reads a client
 address, so the operator's proxy carries these duties:
 
-1. Forward exactly `POST` and `OPTIONS` on `/v1/public-check`. Every other path
-   and method on that host is answered 404 by the proxy, so no relying-service
-   route is reachable.
-2. Apply a per-client request limit and a cap on the whole path. The admission
-   limit `maximumConcurrentRequests` still bounds concurrent source reads, but
-   a flood that passes the proxy can occupy those slots.
-3. Keep no access log with client addresses or request headers for that
-   location. The check code is in the request body, never in a path or query,
-   so a log of the path holds no code; a log of addresses would let the
-   operator correlate checkers with certificates.
+1. Forward exactly `POST` and `OPTIONS` on `/v1/public-check`. Refuse every
+   other method on that path, and answer 404 on every other path, so no
+   relying-service route is reachable.
+2. Apply a per-client request limit and a cap on the whole path, and refuse
+   with `429` so a checker can tell the limit from an Evidence outage. The
+   admission limit `maximumConcurrentRequests` still bounds concurrent source
+   reads, but a flood that passes the proxy can occupy those slots.
+3. Keep no log with client addresses or request headers for that location,
+   neither the access log nor the error log (nginx writes the client address in
+   error-log lines too, including rate-limit refusals and upstream errors). The
+   check code is in the request body, never in a path or query, so a log of the
+   path holds no code; a log of addresses would let the operator correlate
+   checkers with certificates.
 4. Terminate TLS on the check origin printed on the certificate.
 
 Run the check on its own Evidence instance, with only the check requirement and

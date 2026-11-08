@@ -552,6 +552,8 @@ entries:
     tests: [{file: crates/registry-evidence/tests/support/source_contracts_current.rs, name: current_authorized_route_inputs_refuse_unfillable_selector_sets}]
   - id: sec-path-selector-refused-before-source
     tests:
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_number_the_source_path_cannot_carry_is_refused_before_the_source_is_read}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: public_check_input_schema_refusal_answers_the_malformed_request}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_selector_value_the_source_path_cannot_carry_is_refused_before_source_access}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_encodable_path_selector_value_still_reaches_the_source}
       - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: hostile_path_input_is_refused_before_api_key_resolution_or_transport}
@@ -878,6 +880,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/public_check_tests.rs, name: every_miss_is_one_identical_not_found}
       - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_wrong_code_is_a_miss_the_operator_sees_as_code_mismatch}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: public_check_facts_schema_failure_answers_unavailable_after_the_access_audit}
       - {file: crates/registry-evidence/src/public_check_tests.rs, name: relying_path_on_the_checked_definition_signs_every_output_without_the_code}
       - {file: crates/registry-evidence/src/public_check.rs, name: mismatch_absent_and_malformed_stored_codes_are_one_miss}
       - {file: crates/registry-evidence/src/public_check.rs, name: debug_output_redacts_the_code_and_number}
@@ -888,4 +891,7 @@ entries:
       - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_hit_answers_each_status_unstored_to_any_origin}
       - {file: crates/registry-evidence/src/public_check.rs, name: answer_carries_status_inner_fields_and_second_precision_time}
       - {file: crates/registry-evidence/src/public_check.rs, name: answer_refuses_missing_or_mistyped_outputs}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: public_check_status_values_outside_the_four_statuses_are_refused_at_load}
+      - {file: crates/registry-evidence/src/public_check.rs, name: public_check_answer_refuses_a_status_outside_the_four_statuses}
+      - {file: crates/registry-evidence/src/public_check_tests.rs, name: public_check_code_fact_must_be_a_string_fact_and_no_source_input_at_load}
       - {file: crates/registry-evidence/src/contracts.rs, name: public_check_schemas_refuse_what_the_route_refuses}
