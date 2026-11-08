@@ -216,12 +216,18 @@ Use [blocked Proposal recovery](../breg-changes/#recover-a-blocked-proposal) for
 
 The process writes JSON lines on standard output. A failed iteration is a warning with a `code` such
 as `hook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
-`metrics.queue_sample.failed`, and serving continues. When a worker or the metrics listener panics
-or returns, the process logs a code naming it, such as `review.worker.panicked`, drains requests,
-and exits with status 1. The same code on every restart names the worker to investigate.
+`metrics.queue_sample.failed`, and serving continues. A `record_timer.worker.iteration_failed`
+warning also names the failure class in a closed `error` field, such as PostgreSQL being
+unavailable or a concurrent change conflicting with the timer step. A lone conflict while
+replicas share a database is a retried race; a run of them is worth investigating. When a worker
+or the metrics listener panics or returns, the process logs a code naming it, such as
+`review.worker.panicked`, drains requests, and exits with status 1. The same code on every restart
+names the worker to investigate.
 
 {/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queues();
-    crates/registry-breg/src/startup.rs, OperationalEvent, background_task_stop_code(), SupervisedTask;
+    crates/registry-breg/src/startup.rs, OperationalEvent, RecordTimerIterationCause,
+    background_task_stop_code(), SupervisedTask;
+    crates/registry-breg/src/postgres/timer.rs, timer_iteration_cause(), commit_timer_refresh();
     crates/registry-breg/src/review_store.rs, ReviewWorker;
     crates/registry-breg/src/attachment_verification_worker.rs;
     crates/registry-breg/src/subject_access_log.rs, run_retention();

@@ -2039,8 +2039,11 @@ impl RecordTimerWorker {
             }
             if tokio::time::Instant::now() >= next_retention {
                 next_retention = tokio::time::Instant::now() + TIMER_RETENTION_INTERVAL;
-                if self.prune_retention_if_due().await.is_err() {
-                    crate::startup::OperationalEvent::RecordTimerIterationFailed.emit();
+                if let Err(error) = self.prune_retention_if_due().await {
+                    crate::startup::OperationalEvent::RecordTimerIterationFailed(
+                        timer_iteration_cause(&error),
+                    )
+                    .emit();
                     tokio::select! {
                         changed = shutdown.changed() => {
                             if changed.is_err() || *shutdown.borrow() { return; }
@@ -2059,8 +2062,11 @@ impl RecordTimerWorker {
                     self.last_success.record();
                     None
                 }
-                Err(_) => {
-                    crate::startup::OperationalEvent::RecordTimerIterationFailed.emit();
+                Err(error) => {
+                    crate::startup::OperationalEvent::RecordTimerIterationFailed(
+                        timer_iteration_cause(&error),
+                    )
+                    .emit();
                     Some(PRODUCTION_FAILURE_RETRY_INTERVAL)
                 }
             };
@@ -3519,6 +3525,24 @@ fn timer_technical_code(error: &crate::mutation::MutationError) -> Option<&'stat
     }
 }
 
+/// The closed, value-free cause a failed worker iteration reports.
+fn timer_iteration_cause(
+    error: &crate::mutation::MutationError,
+) -> crate::startup::RecordTimerIterationCause {
+    use crate::mutation::MutationError;
+    use crate::startup::RecordTimerIterationCause;
+    match error {
+        MutationError::Unavailable => RecordTimerIterationCause::RuntimeUnavailable,
+        MutationError::RetryableConflict => RecordTimerIterationCause::ConcurrencyConflict,
+        MutationError::CommitUnresolved => RecordTimerIterationCause::CommitUnresolved,
+        MutationError::ActionHandlerFailure(_) => RecordTimerIterationCause::HandlerFailure,
+        MutationError::FieldEncryptionUnavailable => {
+            RecordTimerIterationCause::FieldEncryptionUnavailable
+        }
+        _ => RecordTimerIterationCause::Refused,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3530,5 +3554,43 @@ mod tests {
             super::super::mutation::REQUEST_ACTION_TIMEOUT + LEASE_FINALIZATION_ALLOWANCE
         );
         assert!(production_lease_duration() > super::super::mutation::REQUEST_ACTION_TIMEOUT);
+    }
+
+    #[test]
+    fn iteration_failures_map_to_closed_value_free_causes() {
+        use crate::mutation::MutationError;
+        use crate::startup::RecordTimerIterationCause;
+
+        for (error, cause) in [
+            (
+                MutationError::Unavailable,
+                RecordTimerIterationCause::RuntimeUnavailable,
+            ),
+            (
+                MutationError::RetryableConflict,
+                RecordTimerIterationCause::ConcurrencyConflict,
+            ),
+            (
+                MutationError::CommitUnresolved,
+                RecordTimerIterationCause::CommitUnresolved,
+            ),
+            (
+                MutationError::FieldEncryptionUnavailable,
+                RecordTimerIterationCause::FieldEncryptionUnavailable,
+            ),
+            (
+                MutationError::PreconditionFailed,
+                RecordTimerIterationCause::Refused,
+            ),
+            (MutationError::Conflict, RecordTimerIterationCause::Refused),
+            (
+                MutationError::FieldGuardFailed {
+                    input: "open value".to_owned(),
+                },
+                RecordTimerIterationCause::Refused,
+            ),
+        ] {
+            assert_eq!(timer_iteration_cause(&error), cause, "{error:?}");
+        }
     }
 }
