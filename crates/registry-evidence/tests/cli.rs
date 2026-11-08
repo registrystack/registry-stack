@@ -1694,8 +1694,8 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
     assert_eq!(
         std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
         concat!(
-            "case positive: reference failing case has no exact expectation (expected class boolean-true, observed absent)\n",
-            "evidence: reference failing case has no exact expectation\n",
+            "case positive: the source response broke its contract (source_protocol_error, source.unavailable) and the case declares no `error` or `publicProblem` expectation (expected class boolean-true, observed absent)\n",
+            "evidence: the source response broke its contract (source_protocol_error, source.unavailable) and the case declares no `error` or `publicProblem` expectation\n",
         )
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
@@ -1720,6 +1720,46 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
     assert_eq!(refused["reasonCode"], json!("source-protocol-refused"));
     assert!(!stdout.contains("source-refused"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("source-refused"));
+}
+
+/// A reference case whose derivation returns an output the definition does not
+/// declare is refused with the cause named, not as a case with no expectation.
+///
+/// The case declares no failure expectation, so the report must say that the
+/// output gate refused the derived values rather than only that an exact
+/// expectation is missing.
+#[test]
+fn a_derivation_output_the_definition_does_not_declare_is_named_as_the_cause() {
+    let project = ReferenceProject::stage();
+    project.replace(
+        "bundle/derivations/adult-status.rhai",
+        "concept_id: \"urn:gov:example:concept:adult-status\"",
+        "concept_id: \"urn:gov:example:concept:undeclared\"",
+    );
+    let output = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &["evaluate", "--fixture", "fixtures/adult-status-cases.yaml"],
+        )
+    });
+
+    assert!(
+        !output.status.success(),
+        "a derivation output the definition does not declare was accepted"
+    );
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    assert!(
+        stderr.starts_with(concat!(
+            "case positive: the output gate refused the derived values ",
+            "(service_unavailable, service.unavailable) and the case declares no `error` ",
+            "or `publicProblem` expectation"
+        )),
+        "the refusal did not name the output gate: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no exact expectation"),
+        "the refusal still hides its cause: {stderr}"
+    );
 }
 
 /// A reference case whose source answers an undeclared 404 says so on the
