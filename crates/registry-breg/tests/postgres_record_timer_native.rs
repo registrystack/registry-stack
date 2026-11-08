@@ -270,6 +270,9 @@ enum LifecycleMutation {
     Tombstone,
 }
 
+/// Seconds from the fairness fixture's clock reading to its due timers.
+const FAIRNESS_DUE_SECONDS: i64 = 15;
+
 async fn bounded_two_type_two_replica_fairness(
     harness: &mut NativeTimerHarness,
 ) -> Result<(), String> {
@@ -277,12 +280,35 @@ async fn bounded_two_type_two_replica_fairness(
     let paused_epoch = harness.set_scheduler_paused(true).await?;
     harness.enable_checkpoint(NativeTimerCheckpoint::AfterClaim, None)?;
     harness.start_replicas(2).await?;
+    // Both replicas discover the same stale timer twice in this journey (the
+    // available key on resume, the busy key once its lock is released). The
+    // replica that takes the anchor row after its peer committed the refresh
+    // matches no row, reports a concurrency conflict, and its retry finds
+    // nothing stale; so each replica loses at most one step per race. Any
+    // other iteration failure cause still fails the journey.
+    for replica in 0..2 {
+        harness.expect_non_info_code_range(
+            replica,
+            "record_timer.worker.iteration_failed",
+            0,
+            2,
+        )?;
+        harness.restrict_non_info_code_errors(
+            replica,
+            "record_timer.worker.iteration_failed",
+            &["a concurrent change conflicted with this timer step"],
+        )?;
+    }
     let client = harness.client(0)?;
     let service_create = harness.create_binding_for(&client, "service").await?;
     let case_create = harness.create_binding_for(&client, "case").await?;
     let service_patch = harness.patch_binding(&client).await?;
     let now = harness.database_now().await?;
-    let due_at = now + chrono::Duration::seconds(5);
+    // Each replica parks at its first claim, so its stale lane must make two
+    // passes (skip the locked busy key, then refresh the available one)
+    // before `due_at`. The setup below takes about five seconds on a starved
+    // runner; the window leaves room for that rather than racing it.
+    let due_at = now + chrono::Duration::seconds(FAIRNESS_DUE_SECONDS);
     let future_at = now + chrono::Duration::seconds(120);
 
     let repeated = harness
@@ -381,7 +407,10 @@ async fn bounded_two_type_two_replica_fairness(
         current_case_evidence.occurrence_id,
     ]);
     let observers = harness
-        .wait_checkpoint_observed_any(&due_occurrences, Duration::from_secs(15))
+        .wait_checkpoint_observed_any(
+            &due_occurrences,
+            Duration::from_secs(FAIRNESS_DUE_SECONDS.unsigned_abs() + 15),
+        )
         .await?;
     let observed_occurrences = observers
         .iter()
