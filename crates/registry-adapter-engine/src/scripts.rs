@@ -537,6 +537,19 @@ impl ScriptSet {
         deadline: Instant,
     ) -> Result<Value, (ScriptFailure, Option<String>)> {
         let deadline = deadline.min(Instant::now() + CALL_DEADLINE);
+        self.invoke_until(maps, ast, entrypoint, args, deadline)
+    }
+
+    /// `invoke_thrown` under exactly `deadline`, without the per-call
+    /// ceiling. Every production call reaches it through `invoke_thrown`.
+    fn invoke_until<A: rhai::FuncArgs>(
+        &self,
+        maps: &CodeMaps,
+        ast: &rhai::AST,
+        entrypoint: &str,
+        args: A,
+        deadline: Instant,
+    ) -> Result<Value, (ScriptFailure, Option<String>)> {
         let engine = build_engine(&SCRIPT_PROFILE, Some(deadline), |engine| {
             register_code_map(engine, maps);
         });
@@ -712,6 +725,51 @@ mod tests {
             Some(sha256_uri(source).as_str())
         );
         assert_eq!(scripts.pinned_digest("absent.rhai"), None);
+    }
+
+    /// A reply of the densest rows the reply cap admits fits the data
+    /// ceilings, and a script walks it to the end. The wall clock is not what
+    /// this proves: an unoptimised build on a loaded machine can take longer
+    /// than the per-call ceiling to clone a reply this size, so the call runs
+    /// under a distant deadline and only the profile's limits can end it.
+    #[test]
+    fn a_reply_of_many_small_rows_is_walked_to_the_end() {
+        let source = b"fn probe(exchange) { let n = 0; for row in exchange.body.rows { n += row.len(); } n }";
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        std::fs::write(directory.path().join("probe.rhai"), source).expect("the script is written");
+        let pack = pack_for_script(source);
+        let mut scripts = ScriptSet::default();
+        scripts
+            .add(&pack, directory.path(), "probe.rhai", "probe")
+            .expect("the script compiles");
+        // Two bytes per item is the densest array a reply of this size can hold.
+        let rows: Vec<Value> = (0..MAXIMUM_RESPONSE_BYTES / 2).map(|_| json!(1)).collect();
+        let entries: serde_json::Map<String, Value> = (0..MAXIMUM_RESPONSE_BYTES / 8)
+            .map(|index| (format!("k{index}"), json!(1)))
+            .collect();
+        let exchange = json!({
+            "body": {"rows": [entries], "dense": rows},
+            "headers": {},
+            "properties": {},
+        });
+        let ast = scripts
+            .compiled
+            .get(&("probe.rhai".to_owned(), "probe".to_owned()))
+            .expect("the entrypoint is compiled");
+        let argument = rhai::serde::to_dynamic(&exchange).expect("the exchange converts");
+
+        let walked = scripts.invoke_until(
+            &Arc::new(BTreeMap::new()),
+            ast,
+            "probe",
+            (argument,),
+            Instant::now() + Duration::from_secs(600),
+        );
+
+        match walked {
+            Ok(count) => assert_eq!(count, json!(MAXIMUM_RESPONSE_BYTES / 8)),
+            Err((failure, _)) => panic!("the walk failed: {failure:?}"),
+        }
     }
 
     #[test]

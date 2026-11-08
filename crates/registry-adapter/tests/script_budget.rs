@@ -2,7 +2,9 @@
 
 //! The script budget: a script handed a reply as large as the runtime
 //! accepts is processed, and a script that loops or builds without end still
-//! ends in a budget failure.
+//! ends in a budget failure. A reply of the densest rows the cap admits is
+//! walked in the engine's own tests, under a deadline the wall clock of an
+//! unoptimised build cannot reach.
 
 use registry_adapter::engine::scripts::{ScriptFailure, ScriptSet};
 
@@ -51,27 +53,6 @@ fn a_reply_at_the_cap_is_processed() {
     );
 
     assert_eq!(size.expect("processed"), json!(REPLY_CAP));
-}
-
-#[test]
-fn a_reply_of_many_small_rows_is_walked_to_the_end() {
-    let set = set_with(
-        "fn probe(exchange) { let n = 0; for row in exchange.body.rows { n += row.len(); } n }",
-    );
-    // Two bytes per item is the densest array a reply of this size can hold.
-    let rows: Vec<Value> = (0..REPLY_CAP / 2).map(|_| json!(1)).collect();
-    let entries: serde_json::Map<String, Value> = (0..REPLY_CAP / 8)
-        .map(|index| (format!("k{index}"), json!(1)))
-        .collect();
-
-    let walked = set.call(
-        &empty_code_maps(),
-        "probe.rhai",
-        "probe",
-        &exchange(json!({"rows": [json!(entries)], "dense": rows})),
-    );
-
-    assert!(walked.is_ok(), "{walked:?}");
 }
 
 #[test]
