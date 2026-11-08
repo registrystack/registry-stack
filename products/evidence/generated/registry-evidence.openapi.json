@@ -1862,6 +1862,12 @@
           },
           "status": {
             "description": "The value of the activated status output.",
+            "enum": [
+              "valid",
+              "suspended",
+              "revoked",
+              "expired"
+            ],
             "type": "string"
           }
         },
@@ -4409,7 +4415,7 @@
         "summary": "Answer the CORS preflight of the public check"
       },
       "post": {
-        "description": "Experimental, Version 1 alpha 1. This is the first unauthenticated route that reads registry data. It is served only when the active target authority activates a public check; otherwise every method on this path answers 404 exactly like an unknown route. The request carries one printed document number and one check code, and the service reads only the Content-Type header and the body. Evidence reads the record through the activated definition with its own Source credentials, compares the stored code in constant time, and answers with the activated status and printed fields only. Every miss, including an unknown number, an ambiguous or unresolved lookup, a missing fact, and a wrong code, answers one identical 404. The answer is not an Evidence response format and is never signed. The service applies no rate admission to this route; a deployment limits its rate at the proxy. Any origin may read every response, and the route never permits credentials.",
+        "description": "Experimental, Version 1 alpha 1. The route takes no credential and reads registry data. It is served only when the active target authority activates a public check; otherwise every method on this path answers 404 exactly like an unknown route. The request carries one printed document number and one check code, and the service reads only the Content-Type header and the body. Evidence reads the record through the activated definition with its own Source credentials, compares the stored code in constant time, and answers with the activated status and printed fields only. Every miss, including an unknown number, an ambiguous or unresolved lookup, a missing fact, and a wrong code, answers one identical 404. The answer is not an Evidence response format and is never signed. The service applies no rate admission to this route; a deployment limits its rate at the proxy. Any origin may read every response, and the route never permits credentials.",
         "operationId": "checkDocument",
         "requestBody": {
           "content": {

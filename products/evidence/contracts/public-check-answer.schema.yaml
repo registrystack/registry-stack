@@ -19,6 +19,7 @@ properties:
   status:
     description: The value of the activated status output.
     type: string
+    enum: [valid, suspended, revoked, expired]
   fields:
     description: The members of the activated printed-fields output, a reviewed structured value.
     type: object

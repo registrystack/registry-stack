@@ -40,6 +40,7 @@ use crate::config::{
     EvidenceConfig, OrderedMap, RequirementConfig, RuntimeConfig, SchemaFault, SelectorField,
     SourceInputPresenceContract, SourceInputPresenceRequirement, TextLocation,
 };
+use crate::public_check::PUBLIC_CHECK_STATUSES;
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
 pub const MAX_BUNDLE_BYTES: u64 = 16 * 1024 * 1024;
@@ -297,6 +298,16 @@ impl Codelist {
     pub fn version(&self) -> &str {
         match self {
             Self::Codes { version, .. } | Self::Mapping { version, .. } => version,
+        }
+    }
+
+    /// Every value this codelist allows as an output.
+    pub fn outputs(&self) -> &[String] {
+        match self {
+            Self::Codes { codes, .. } => codes,
+            Self::Mapping {
+                allowed_outputs, ..
+            } => allowed_outputs,
         }
     }
 
@@ -696,6 +707,7 @@ impl Bundle {
         let fact_schemas = load_fact_schemas(&config, &files)?;
         let codelists = load_codelists(root, &config, &files)?;
         validate_codelist_references(&config, &codelists)?;
+        validate_public_check_closure(&config, &codelists, &fact_schemas)?;
         let fixtures = load_fixtures(root, &config, &files)?;
         let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
         let certificate_chain = load_certificate_chain(&config, &files, &active_public_jwk)?;
@@ -2990,6 +3002,61 @@ fn validate_codelist_references(
             if loaded.version() != version {
                 return Err(invalid_artifact("concept codelist version mismatch"));
             }
+        }
+    }
+    Ok(())
+}
+
+/// The closure behind each `publicCheck` declaration. Its status Output's
+/// codelist allows only the four public-check statuses, and its check code is
+/// a string fact of the acquiring Source that no Source input binds, so a
+/// presented value can never be compared against itself. The authoring
+/// compiler applies the same rules; the runtime does not rely on it.
+fn validate_public_check_closure(
+    config: &EvidenceConfig,
+    codelists: &BTreeMap<String, Codelist>,
+    fact_schemas: &BTreeMap<String, JsonValue>,
+) -> Result<(), BundleError> {
+    for requirement in &config.requirements {
+        let Some(public_check) = &requirement.public_check else {
+            continue;
+        };
+        let status = requirement
+            .concepts
+            .iter()
+            .find(|concept| concept.handle == public_check.status_output)
+            .ok_or(invalid_artifact("public check status output is missing"))?;
+        let path = concept_codelist_path(&status.constraints)?;
+        let codelist = codelists
+            .get(path)
+            .ok_or(invalid_artifact("concept codelist is missing"))?;
+        if !codelist
+            .outputs()
+            .iter()
+            .all(|value| PUBLIC_CHECK_STATUSES.contains(&value.as_str()))
+        {
+            return Err(invalid_artifact(
+                "public check status values must be drawn from valid, suspended, revoked and expired",
+            )
+            .in_artifact(path));
+        }
+        let source = requirement
+            .acquisition
+            .source_channel_source()
+            .and_then(|source| config.sources.get(source))
+            .ok_or(invalid_artifact("public check source is missing"))?;
+        let fact = public_check.check_code_fact.as_str();
+        let is_string_fact = fact_schemas
+            .get(source.fact_schema().as_str())
+            .is_some_and(|schema| schema["properties"][fact]["type"] == "string");
+        let is_input = source.inputs.iter().any(|(name, binding)| {
+            name.as_str() == fact || binding.selector.field.as_str() == fact
+        });
+        if !is_string_fact || is_input {
+            return Err(invalid_artifact(
+                "public check code fact must be a string fact of the acquiring Source and no Source input",
+            )
+            .in_artifact(CONFIG_FILE));
         }
     }
     Ok(())

@@ -19,6 +19,12 @@
     },
     "status": {
       "description": "The value of the activated status output.",
+      "enum": [
+        "valid",
+        "suspended",
+        "revoked",
+        "expired"
+      ],
       "type": "string"
     }
   },
