@@ -489,7 +489,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "registry-cli-report"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "clap",
  "registry-cli-report",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "oxiri",
  "registry-platform-canonical-json",
@@ -535,11 +535,11 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-buildinfo"
-version = "0.46.0"
+version = "0.46.1"
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "ryu-js",
  "serde",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-text"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "hex",
  "icu_casemap",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-yaml"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "registry-platform-text",
  "saphyr-parser",
