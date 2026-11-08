@@ -135,6 +135,7 @@ enum AcceptancePackVariant {
     Base,
     ExactRegistry,
     ExtraFact,
+    InputsPattern,
     MalformedLookupResult,
     PathBound,
     SearchThenFetch,
@@ -3270,6 +3271,79 @@ async fn a_selector_value_the_source_path_cannot_carry_is_refused_before_source_
         assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 2);
         assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
     }
+}
+
+/// A selector value that passes its profile but that the Source's inputs
+/// schema refuses is a malformed request on the relying routes, as on the
+/// public check route: it is refused during selector resolution, before any
+/// audit entry or source request, the whole batch is refused when one item
+/// carries it, and it is charged to the selector-failure budget.
+#[tokio::test]
+async fn a_selector_value_the_source_inputs_schema_refuses_is_an_invalid_selector() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_pack_variant(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        AcceptancePackVariant::InputsPattern,
+        |root| {
+            mutate_acceptance_configuration(&root.join("evidence.yaml"), |configuration| {
+                configuration["rateLimits"]["requestsPerPrincipalPerMinute"] = json!(120);
+                configuration["rateLimits"]["burstPerPrincipal"] = json!(20);
+                configuration["rateLimits"]
+                    ["failedSelectorAttemptsPerPrincipalAuthorityPerMinute"] = json!(2);
+            });
+        },
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime with a patterned inputs schema initializes");
+    let refused = adult_request_with_family_name("Diallo 2");
+
+    let error = runtime
+        .evaluate(
+            "operation-inputs-schema-selector",
+            &access_token(None),
+            &refused,
+        )
+        .await
+        .expect_err("a value the inputs schema refuses is a malformed selector");
+    assert_eq!(error.problem(), ProblemCode::InvalidSelector);
+
+    let mut batch = request_batch_from_request(&adult_request(), 2);
+    batch.items[1].subjects = refused.subjects.clone();
+    let batch_error = runtime
+        .evaluate_request_batch(
+            "operation-inputs-schema-selector-batch",
+            &access_token(None),
+            &batch,
+        )
+        .await
+        .expect_err("one refused item refuses the whole batch");
+    assert_eq!(batch_error.problem(), ProblemCode::InvalidSelector);
+
+    let exhausted = runtime
+        .evaluate(
+            "operation-inputs-schema-selector-exhausted",
+            &access_token(None),
+            &refused,
+        )
+        .await
+        .expect_err("both refusals were charged to the selector-failure budget");
+    assert_eq!(exhausted.problem(), ProblemCode::RateLimited);
+
+    assert!(server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    assert!(
+        fs::read_to_string(&prepared.audit_path)
+            .expect("audit is readable")
+            .is_empty(),
+        "an inputs-schema refusal is not audited"
+    );
 }
 
 /// The selector-resolution check refuses only what the path cannot carry: a
@@ -11308,6 +11382,17 @@ fn install_acceptance_source_pack(
             "required": ["givenName"],
             "properties": {"givenName": {"type": "string"}}
         })
+    } else if matches!(variant, AcceptancePackVariant::InputsPattern) {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["givenName", "familyName", "birthDate"],
+            "properties": {
+                "givenName": {"type": "string"},
+                "familyName": {"type": "string", "pattern": "^[^0-9]+$"},
+                "birthDate": {"type": "string"}
+            }
+        })
     } else {
         json!({
             "type": "object",
@@ -11380,6 +11465,7 @@ fn install_acceptance_source_pack(
     match variant {
         AcceptancePackVariant::AccessAttribution
         | AcceptancePackVariant::Base
+        | AcceptancePackVariant::InputsPattern
         | AcceptancePackVariant::PathBound => {}
         AcceptancePackVariant::SignedEvidence => scripts.extend([
             (
@@ -11601,6 +11687,7 @@ fn install_acceptance_source_pack(
     let adult_steps = match variant {
         AcceptancePackVariant::AccessAttribution
         | AcceptancePackVariant::Base
+        | AcceptancePackVariant::InputsPattern
         | AcceptancePackVariant::SignedEvidence
         | AcceptancePackVariant::ExactRegistry => json!([
             {"setHeader": {"name": "accept", "value": {"constant": "application/json"}}},
@@ -11748,6 +11835,7 @@ fn install_acceptance_source_pack(
     let mut eips = match variant {
         AcceptancePackVariant::AccessAttribution
         | AcceptancePackVariant::Base
+        | AcceptancePackVariant::InputsPattern
         | AcceptancePackVariant::ExactRegistry
         | AcceptancePackVariant::ExtraFact
         | AcceptancePackVariant::MalformedLookupResult => {

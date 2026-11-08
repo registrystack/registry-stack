@@ -160,9 +160,10 @@ The production path is fixed:
    from the profile's permitted origin: authenticated context, authenticated
    grant, or the bounded request.
 6. Validate the exact field set, scalar types, bounds, role, and fixed source
-   binding. Reject missing, unknown, or extra material as
-   `request.selector-invalid`. A value a selector-bound source path segment
-   cannot carry passes this step and is refused at path materialization.
+   binding. Reject missing, unknown, or extra material, and values the
+   acquiring Source's inputs schema refuses, as `request.selector-invalid`. A
+   value a selector-bound source path segment cannot carry passes this step
+   and is refused at path materialization.
 7. Make one authorization decision over requester, optional actor, requirement
    revision, purpose, role-bound selector profiles and value origins, subject
    authority, audience, and response format.

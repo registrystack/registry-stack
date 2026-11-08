@@ -555,6 +555,7 @@ entries:
       - {file: crates/registry-evidence/src/public_check_tests.rs, name: a_number_the_source_path_cannot_carry_is_refused_before_the_source_is_read}
       - {file: crates/registry-evidence/src/public_check_tests.rs, name: public_check_input_schema_refusal_answers_the_malformed_request}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_selector_value_the_source_path_cannot_carry_is_refused_before_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_selector_value_the_source_inputs_schema_refuses_is_an_invalid_selector}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_encodable_path_selector_value_still_reaches_the_source}
       - {file: crates/registry-evidence/tests/support/source_contracts_pack.rs, name: hostile_path_input_is_refused_before_api_key_resolution_or_transport}
       - {file: crates/registry-adapter-engine/src/route.rs, name: a_path_slot_that_is_not_one_segment_is_refused_anywhere_in_the_path}
