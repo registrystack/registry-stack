@@ -52,7 +52,24 @@ RUNTIME_PACKAGES = {
             "arm64": "d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97",
         },
     },
+    "zlib1g": {
+        "archive": "debian-security",
+        "snapshot": "20261107T075304Z",
+        "pool": "pool/updates/main/z/zlib",
+        "version": "1:1.3.dfsg+really1.3.1-1+deb13u1",
+        "sha256": {
+            "amd64": "8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb",
+            "arm64": "0e41b3d7ad8ad7fcd36dd4d61ca91a70018478fc4af652e044f4be770784ddff",
+        },
+    },
 }
+
+
+def archive_version(version: str) -> str:
+    """Return a Debian version as package file names spell it, without its epoch."""
+    return version.split(":", 1)[-1]
+
+
 RUNTIME_PACKAGE_ADDS = tuple(
     "ADD --checksum=sha256:{checksum} "
     "https://snapshot.debian.org/archive/{archive}/{snapshot}/{pool}/"
@@ -63,7 +80,7 @@ RUNTIME_PACKAGE_ADDS = tuple(
         snapshot=package["snapshot"],
         pool=package["pool"],
         name=name,
-        version=package["version"],
+        version=archive_version(package["version"]),
         architecture=architecture,
     )
     for name, package in RUNTIME_PACKAGES.items()
@@ -86,11 +103,12 @@ DEBIAN_PREPARATION = (
     "docker.io/library/debian:trixie-slim@sha256:"
     "a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f"
 )
-# This index carries libssl3t64 3.5.7-1~deb13u2 on both supported Linux
-# architectures. Earlier bytes fail the release policy on fixable OpenSSL CVEs.
-# The runtime package overlay above replaces that libssl3t64 with the fixed
-# release; once an index carries the fixed release itself, libssl3t64 can
-# leave the overlay.
+# This index carries libssl3t64 3.5.7-1~deb13u2 and zlib1g
+# 1:1.3.dfsg+really1.3.1-1+b1 on both supported Linux architectures. Earlier
+# bytes fail the release policy on fixable OpenSSL CVEs, and these fail it on
+# fixable OpenSSL and zlib CVEs. The runtime package overlay above replaces both
+# packages with the fixed releases; once an index carries a fixed release itself,
+# that package can leave the overlay.
 DISTROLESS_RUNTIME = (
     "gcr.io/distroless/cc-debian13:nonroot@sha256:"
     "e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2"
