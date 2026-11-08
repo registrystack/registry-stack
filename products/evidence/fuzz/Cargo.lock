@@ -1511,7 +1511,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-evidence-authoring"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "anyhow",
  "jsonschema",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-verifier"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "ryu-js",
  "serde",
@@ -1571,7 +1571,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1609,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-text"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "hex",
  "icu_casemap",
@@ -1620,7 +1620,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-x509"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "base64 0.23.1",
  "der 0.7.10",
@@ -1635,7 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-yaml"
-version = "0.46.0"
+version = "0.46.1"
 dependencies = [
  "registry-platform-text",
  "saphyr-parser",
