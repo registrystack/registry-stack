@@ -173,6 +173,31 @@ cases:
   expectedLookup: match
   derivationRuns: true
   signedSuccess: true
+- id: unknown-status
+  source:
+    intercepts:
+    - type: endpoint
+      endpoint: register
+    exchanges:
+    - request:
+        endpoint: register
+        method: GET
+        path: "/certificates/certificate"
+      response:
+        status: 200
+        body:
+          total: 1
+          record:
+            record_id: certificate
+            status: pending
+            holder_name: Jordan Sample
+            issued_on: '2025-03-01'
+            expires_on: '2099-12-31'
+            check_code: K7QWM4XRT5PZ3NB6VHJYDC2A
+  expectedLookup: match
+  expectedPublicProblem: service.unavailable
+  derivationRuns: true
+  signedSuccess: false
 - id: no-match
   source:
     intercepts:

@@ -133,8 +133,8 @@ sources:
           profile: certificate-number
           role: certificate
     pack:
-      artifactPrefix: adapter-packs/synthetic-register/2a4ee0077a5144f933be41905cea908c17477483b2253612370e64f179efc00f
-      digest: sha256:2a4ee0077a5144f933be41905cea908c17477483b2253612370e64f179efc00f
+      artifactPrefix: adapter-packs/synthetic-register/98091e793555d99f807049c3e3f16044afd71634353eeb4e13480914ac5e9383
+      digest: sha256:98091e793555d99f807049c3e3f16044afd71634353eeb4e13480914ac5e9383
       id: synthetic-register
       version: '1'
     posture: record-transformed

@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {"type": "string"},
+    "holderName": {"type": "string"},
+    "issuedOn": {"type": "string"},
+    "expiresOn": {"type": "string"},
+    "checkCode": {"type": "string"}
+  }
+}

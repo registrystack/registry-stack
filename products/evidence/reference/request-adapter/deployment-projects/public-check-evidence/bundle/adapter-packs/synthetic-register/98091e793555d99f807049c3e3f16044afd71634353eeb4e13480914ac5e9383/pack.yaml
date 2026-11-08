@@ -18,7 +18,7 @@
   "scripts": [
     {
       "path": "scripts/lookup.rhai",
-      "digest": "sha256:47627db0f4868f8f178928994a02cfb27c692b86c288c0530db513a303a63cce"
+      "digest": "sha256:07d136399c0ae9a475aa35031f968fa87d4b38ea6a277f2e8c4af3a3674c3332"
     }
   ],
   "sourceRoutes": [
@@ -31,7 +31,7 @@
         },
         "factsSchema": {
           "path": "schemas/certificate.json",
-          "digest": "sha256:00b6c8309945d64202b1dd8b604b9369bf0928b32006ffe7df505535b2a7c0ae"
+          "digest": "sha256:22fb92d948bf940e2c4d33db5a9805c3dbca5f9fdfb72b23e6921c8fff230973"
         },
         "acquisitionPosture": "record-transformed"
       },
