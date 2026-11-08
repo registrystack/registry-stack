@@ -154,24 +154,31 @@ rstack evidence target new ./configured-target --local --project ./evidence
 
 ```text test-expect
 Created Evidence target ./configured-target
+Source connections declared from local-target.yaml: record-status-extract
+Source extracts declared from local-target.yaml: record-status-extract
 ```
 
-Bind the `registry` connection the export named. Its credential is the source client's own,
-issued by the registry's identity provider; an Evidence caller never holds it:
+The new target already carries what the project's `local-target.yaml` declares: the offline
+starter's `record-status-extract` connection and the extract file it reads. Bind the `registry`
+connection the export named, with its `registry` endpoint. Its credential is the source client's
+own, issued by the registry's identity provider; an Evidence caller never holds it:
 
 ```diff lang="yaml" title="configured-target/target.yaml" test-edit
--connections: {}
-+connections:
+ connections:
+   record-status-extract:
+     endpoints: {}
 +  registry:
-+    origin: http://127.0.0.1:8090
-+    authentication:
-+      type: oauth2-private-key-jwt
-+      tokenEndpoint: http://127.0.0.1:8091/oauth2/token
-+      clientIdRef: secret:file/registry-client-id
-+      clientAssertionKeyRef: secret:file/registry-client-key
-+      clientAssertionAudience: http://127.0.0.1:8091
-+      scope: registry:evidence:lookup
-+      maximumCacheSeconds: 60
++    endpoints:
++      registry:
++        origin: http://127.0.0.1:8090
++        authentication:
++          type: oauth2-private-key-jwt
++          tokenEndpoint: http://127.0.0.1:8091/oauth2/token
++          clientIdRef: secret:file/registry-client-id
++          clientAssertionKeyRef: secret:file/registry-client-key
++          clientAssertionAudience: http://127.0.0.1:8091
++          scope: registry:evidence:lookup
++          maximumCacheSeconds: 60
 ```
 
 Fixtures supply recorded responses, so nothing contacts these endpoints; bind the real origin,
