@@ -308,6 +308,7 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
     "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
     "products/evidence/examples/fhir/**",
+    "products/evidence/examples/public-check/**",
     "products/evidence/examples/standalone/**",
     "products/evidence/examples/wallet-presentation/**",
     "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
