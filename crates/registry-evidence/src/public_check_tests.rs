@@ -1,5 +1,5 @@
-//! End-to-end proofs for `POST /v1/public-check`, the first unauthenticated
-//! route that reads registry data.
+//! End-to-end proofs for `POST /v1/public-check`, a route that takes no
+//! credential and reads registry data.
 //!
 //! An authored project and a target authority enter the pure compiler; the
 //! resulting package is activated and served by the real runtime against a
@@ -17,7 +17,7 @@ use std::{
     fs,
     io::Write as _,
     os::unix::fs::PermissionsExt as _,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -168,78 +168,11 @@ async fn public_check_runtime_with_routes(
     let authority_root = temporary.path().join("authority");
     let runtime_path = temporary.path().join("runtime.yaml");
     let audit_path = temporary.path().join("audit.jsonl");
-    fs::create_dir(&package_root).expect("package root is created");
     fs::create_dir(&secret_root).expect("secret root is created");
     fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
         .expect("secret root is private");
 
-    let project = certificate_project();
-    let compiled = compile::compile_with_pack_routes(&project, &scripts(), &routes)
-        .expect("certificate project compiles against its checked pack route");
-    let mut bundle: Value = serde_norway::from_slice(include_bytes!(
-        "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
-    ))
-    .expect("retained target governance parses");
-    let bundle_object = bundle.as_object_mut().expect("bundle is an object");
-    for model_member in [
-        "project",
-        "maximumHolderBoundBatchSize",
-        "selectorProfiles",
-        "sources",
-        "requirements",
-        "authorityProfiles",
-        "publication",
-    ] {
-        bundle_object.remove(model_member);
-    }
-    bundle["assuranceProfile"] = json!("local");
-    bundle["service"]["providerId"] = json!("https://provider.example.org");
-    bundle["service"]["publicOrigin"] = json!("https://provider.example.org");
-    bundle["issuer"]["uri"] = json!("urn:example:certificate-check:issuer");
-    bundle["responseFormats"] = json!(["signed-jws"]);
-    bundle["sourceConnections"] = json!({
-        "register": {
-            "endpoints": [{
-                "endpoint": "provider",
-                "baseUrl": source.uri(),
-                "authentication": {"type": "static-authorization"},
-                "clientIdentity": "forbidden"
-            }]
-        }
-    });
-    bundle["authorityProfiles"] = json!({});
-    for (name, value) in compiled
-        .model
-        .as_object()
-        .expect("compiled model is an object")
-    {
-        bundle[name] = value.clone();
-    }
-    fs::write(
-        package_root.join("evidence.yaml"),
-        serde_norway::to_string(&bundle).expect("bundle serializes"),
-    )
-    .expect("bundle configuration is written");
-    for (relative, bytes) in compiled.artifacts {
-        let path = package_root.join(relative);
-        fs::create_dir_all(path.parent().expect("artifact has a parent"))
-            .expect("artifact directory is created");
-        fs::write(path, bytes).expect("compiled artifact is written");
-    }
-    let public_key_path =
-        package_root.join("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json");
-    fs::create_dir_all(public_key_path.parent().expect("public key has a parent"))
-        .expect("public key directory is created");
-    fs::write(public_key_path, EVIDENCE_PUBLIC_JWK).expect("public key is written");
-    registry_platform_config::write_sum_file(
-        &package_root,
-        None,
-        &crate::bundle::evidence_package_limits(),
-        "evidencectl package",
-    )
-    .expect("package checksum envelope is written");
-    make_read_only(&package_root);
-
+    let project = write_certificate_package(&package_root, &source.uri(), &routes, |_, _| {});
     let bundle = Bundle::load(&package_root).expect("certificate package loads");
     let authority = certificate_authority(authority_kind);
     let compiled_authority = target::compile_authority(&authority, &project)
@@ -330,6 +263,87 @@ sourceConnections:
         source,
         audit_path,
     }
+}
+
+/// Compile the certificate project against `routes` and write it as a sealed
+/// package at `package_root`. `edit` sees the compiled model and artifacts
+/// before they are written, so a test can present the runtime with a package
+/// the authoring compiler would refuse.
+fn write_certificate_package(
+    package_root: &Path,
+    source_uri: &str,
+    routes: &[compile::CheckedPackRoute],
+    edit: impl FnOnce(&mut Value, &mut BTreeMap<String, Vec<u8>>),
+) -> EvidenceProject {
+    fs::create_dir(package_root).expect("package root is created");
+    let project = certificate_project();
+    let mut compiled = compile::compile_with_pack_routes(&project, &scripts(), routes)
+        .expect("certificate project compiles against its checked pack route");
+    edit(&mut compiled.model, &mut compiled.artifacts);
+    let mut bundle: Value = serde_norway::from_slice(include_bytes!(
+        "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+    ))
+    .expect("retained target governance parses");
+    let bundle_object = bundle.as_object_mut().expect("bundle is an object");
+    for model_member in [
+        "project",
+        "maximumHolderBoundBatchSize",
+        "selectorProfiles",
+        "sources",
+        "requirements",
+        "authorityProfiles",
+        "publication",
+    ] {
+        bundle_object.remove(model_member);
+    }
+    bundle["assuranceProfile"] = json!("local");
+    bundle["service"]["providerId"] = json!("https://provider.example.org");
+    bundle["service"]["publicOrigin"] = json!("https://provider.example.org");
+    bundle["issuer"]["uri"] = json!("urn:example:certificate-check:issuer");
+    bundle["responseFormats"] = json!(["signed-jws"]);
+    bundle["sourceConnections"] = json!({
+        "register": {
+            "endpoints": [{
+                "endpoint": "provider",
+                "baseUrl": source_uri,
+                "authentication": {"type": "static-authorization"},
+                "clientIdentity": "forbidden"
+            }]
+        }
+    });
+    bundle["authorityProfiles"] = json!({});
+    for (name, value) in compiled
+        .model
+        .as_object()
+        .expect("compiled model is an object")
+    {
+        bundle[name] = value.clone();
+    }
+    fs::write(
+        package_root.join("evidence.yaml"),
+        serde_norway::to_string(&bundle).expect("bundle serializes"),
+    )
+    .expect("bundle configuration is written");
+    for (relative, bytes) in compiled.artifacts {
+        let path = package_root.join(relative);
+        fs::create_dir_all(path.parent().expect("artifact has a parent"))
+            .expect("artifact directory is created");
+        fs::write(path, bytes).expect("compiled artifact is written");
+    }
+    let public_key_path =
+        package_root.join("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json");
+    fs::create_dir_all(public_key_path.parent().expect("public key has a parent"))
+        .expect("public key directory is created");
+    fs::write(public_key_path, EVIDENCE_PUBLIC_JWK).expect("public key is written");
+    registry_platform_config::write_sum_file(
+        package_root,
+        None,
+        &crate::bundle::evidence_package_limits(),
+        "evidencectl package",
+    )
+    .expect("package checksum envelope is written");
+    make_read_only(package_root);
+    project
 }
 
 fn certificate_project() -> EvidenceProject {
@@ -464,16 +478,50 @@ fn scripts() -> BTreeMap<String, String> {
 }
 
 fn pack_routes() -> Vec<compile::CheckedPackRoute> {
-    pack_routes_with_steps(false)
+    pack_routes_with_steps(false, record_id_schema(), fact_properties())
 }
 
 /// The same route with the record number bound into the Source path rather
 /// than the request body.
 fn path_bound_pack_routes() -> Vec<compile::CheckedPackRoute> {
-    pack_routes_with_steps(true)
+    pack_routes_with_steps(true, record_id_schema(), fact_properties())
 }
 
-fn pack_routes_with_steps(path_bound: bool) -> Vec<compile::CheckedPackRoute> {
+/// The same route behind the example pack's inputs schema, which refuses a
+/// record number carrying `/`, `%`, `\` or a control character, and the dot
+/// segments.
+fn pattern_bound_pack_routes() -> Vec<compile::CheckedPackRoute> {
+    pack_routes_with_steps(
+        false,
+        json!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "not": {"enum": [".", ".."]},
+            "pattern": "^[^/%\\\\\\x00-\\x1F]+$"
+        }),
+        fact_properties(),
+    )
+}
+
+fn record_id_schema() -> Value {
+    json!({"type": "string", "minLength": 1, "maxLength": 32})
+}
+
+fn fact_properties() -> Value {
+    json!({
+        "recordState": {"type": "string", "maxLength": 32},
+        "checkCode": {"type": "string", "maxLength": 64},
+        "holderName": {"type": "string", "maxLength": 64},
+        "expiresOn": {"type": "string", "maxLength": 16}
+    })
+}
+
+fn pack_routes_with_steps(
+    path_bound: bool,
+    record_id: Value,
+    facts: Value,
+) -> Vec<compile::CheckedPackRoute> {
     const ROUTE_SCRIPT: &str = r#"fn record_request(exchange) {
     #{record_id: exchange.body.recordId}
 }
@@ -486,17 +534,12 @@ fn record_result(exchange) {
         "type": "object",
         "additionalProperties": false,
         "required": ["recordId"],
-        "properties": {"recordId": {"type": "string", "minLength": 1, "maxLength": 32}}
+        "properties": {"recordId": record_id}
     });
     let facts_schema = json!({
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-            "recordState": {"type": "string", "maxLength": 32},
-            "checkCode": {"type": "string", "maxLength": 64},
-            "holderName": {"type": "string", "maxLength": 64},
-            "expiresOn": {"type": "string", "maxLength": 16}
-        }
+        "properties": facts
     });
     let artifacts = BTreeMap::from([
         (
@@ -1276,6 +1319,54 @@ async fn a_failing_source_is_a_dependency_failure_not_a_miss() {
     }
 }
 
+/// Facts the Source's facts schema refuses are a Source protocol failure, not a
+/// miss and not a malformed request: 503 source.unavailable, audited as the
+/// access attempt and then one dependency-failure line.
+#[tokio::test]
+async fn public_check_facts_schema_failure_answers_unavailable_after_the_access_audit() {
+    let fixture = public_check_runtime(Authority::RelyingAndCheck).await;
+    fixture
+        .mount_record(
+            NUMBER,
+            matched(json!({
+                "recordState": "valid",
+                "checkCode": CODE,
+                "holderName": "Jordan Sample",
+                "expiresOn": "2028-02-29",
+                "undeclaredFact": "outside the facts schema"
+            })),
+        )
+        .await;
+    let response = check(&fixture.http(), NUMBER, CODE).await;
+    assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(problem_code(&response), "source.unavailable");
+    assert_eq!(header(&response, "access-control-allow-origin"), Some("*"));
+    assert_eq!(fixture.source_requests().await, 1);
+    let records = public_check_records(&fixture.audit());
+    let [access, terminal] = records.as_slice() else {
+        panic!("the access attempt and one terminal line: {records:?}");
+    };
+    assert_eq!(access["phase"], "access-attempt");
+    assert_eq!(access["decision"], "authorized");
+    assert_eq!(terminal["phase"], "transient-failure");
+    assert_eq!(terminal["decision"], "dependency-failure");
+    assert_eq!(terminal["safeErrorCategory"], "source-protocol");
+    assert_eq!(terminal["operation"], access["operation"]);
+    let validator = audit_validator();
+    for line in &records {
+        assert!(validator.is_valid(line), "{line} meets its contract");
+    }
+    assert_absent(
+        &format!(
+            "{}{}",
+            String::from_utf8_lossy(response.as_bytes()),
+            fixture.audit()
+        ),
+        &["Jordan Sample", "outside the facts schema", CODE],
+        "the failure and its audit",
+    );
+}
+
 /// A document number the selector profile accepts but the Source path cannot
 /// carry is refused before any Source request: 503 source.unavailable
 /// (ProblemCode::DependencyUnavailable). The audit holds the access attempt and
@@ -1334,6 +1425,120 @@ async fn a_number_the_source_path_cannot_carry_is_refused_before_the_source_is_r
     let response = check(&server, carryable, CODE).await;
     assert_eq!(response.status_code(), StatusCode::OK);
     assert_eq!(fixture.source_requests().await, 1);
+}
+
+/// A document number the selector profile accepts but the Source's inputs
+/// schema refuses is a malformed request, answered exactly as a number the
+/// profile refuses: 400 request.selector-invalid, with no audit line and no
+/// Source request.
+#[tokio::test]
+async fn public_check_input_schema_refusal_answers_the_malformed_request() {
+    let fixture =
+        public_check_runtime_with_routes(Authority::RelyingAndCheck, pattern_bound_pack_routes())
+            .await;
+    fixture.mount_record(NUMBER, record("valid")).await;
+    let server = fixture.http();
+
+    let refused_by_schema = check(&server, "AB/12345", CODE).await;
+    let refused_by_profile = check(&server, "ab", CODE).await;
+    assert_eq!(refused_by_schema.status_code(), StatusCode::BAD_REQUEST);
+    assert_eq!(problem_code(&refused_by_schema), "request.selector-invalid");
+    assert_eq!(
+        comparable(&refused_by_schema),
+        comparable(&refused_by_profile),
+        "the schema refusal answers exactly as the profile refusal"
+    );
+    assert_eq!(fixture.source_requests().await, 0);
+    assert_eq!(fixture.audit(), "", "a refused request writes no audit");
+
+    let response = check(&server, NUMBER, CODE).await;
+    assert_eq!(response.status_code(), StatusCode::OK);
+    assert_eq!(fixture.source_requests().await, 1);
+}
+
+/// Write the certificate package with `edit` applied to its compiled model and
+/// artifacts, and load it as the runtime does at startup.
+fn load_edited_package(
+    routes: &[compile::CheckedPackRoute],
+    edit: impl FnOnce(&mut Value, &mut BTreeMap<String, Vec<u8>>),
+) -> Result<Bundle, crate::bundle::BundleError> {
+    let temporary = tempfile::tempdir().expect("temporary public-check package");
+    let package_root = temporary.path().join("package");
+    write_certificate_package(&package_root, "https://register.example.org", routes, edit);
+    Bundle::load(&package_root)
+}
+
+/// Rewrite the compiled codelist that carries the status Output's values.
+fn set_status_values(artifacts: &mut BTreeMap<String, Vec<u8>>, values: &[&str]) {
+    let scheme = format!("{STATUS_CONCEPT}:values");
+    let mut rewritten = 0;
+    for bytes in artifacts.values_mut() {
+        let Ok(mut codelist) = serde_json::from_slice::<Value>(bytes) else {
+            continue;
+        };
+        if codelist["uri"] != scheme.as_str() {
+            continue;
+        }
+        codelist["codes"] = json!(values);
+        *bytes = serde_json::to_vec(&codelist).expect("codelist serializes");
+        rewritten += 1;
+    }
+    assert_eq!(
+        rewritten, 1,
+        "exactly one compiled codelist holds the status values"
+    );
+}
+
+/// The authoring compiler refuses a status outside the four, and so does the
+/// runtime when it loads a package that carries one.
+#[test]
+fn public_check_status_values_outside_the_four_statuses_are_refused_at_load() {
+    load_edited_package(&pack_routes(), |_, artifacts| {
+        set_status_values(artifacts, &["valid", "expired"]);
+    })
+    .expect("a subset of the four statuses loads");
+    for values in [
+        &["valid", "suspended", "revoked", "expired", "pending"][..],
+        &["valid", "Expired"][..],
+        &["active"][..],
+    ] {
+        let error = load_edited_package(&pack_routes(), |_, artifacts| {
+            set_status_values(artifacts, values);
+        })
+        .expect_err("a status outside the four is refused at load");
+        assert!(
+            error
+                .to_string()
+                .contains("public check status values must be drawn from valid, suspended, revoked and expired"),
+            "{values:?}: {error}"
+        );
+    }
+}
+
+/// The check code must be a string fact of the acquiring Source and never one
+/// of its request inputs, at load as at compile time.
+#[test]
+fn public_check_code_fact_must_be_a_string_fact_and_no_source_input_at_load() {
+    let mut facts = fact_properties();
+    facts["sequence"] = json!({"type": "integer"});
+    facts["recordId"] = json!({"type": "string", "maxLength": 32});
+    facts["number"] = json!({"type": "string", "maxLength": 32});
+    let routes = pack_routes_with_steps(false, record_id_schema(), facts);
+    let with_code_fact = |fact: &'static str| {
+        load_edited_package(&routes, move |model, _| {
+            model["requirements"][0]["publicCheck"]["checkCodeFact"] = json!(fact);
+        })
+    };
+    with_code_fact("checkCode").expect("a string fact that is no input loads");
+    for fact in ["sequence", "undeclaredFact", "recordId", "number"] {
+        let error = with_code_fact(fact).expect_err("the code fact is refused at load");
+        assert!(
+            error.to_string().contains(
+                "public check code fact must be a string fact of the acquiring Source and no Source input"
+            ),
+            "{fact}: {error}"
+        );
+    }
 }
 
 /// Test 18: the route alone allows any origin, without credentials, and its

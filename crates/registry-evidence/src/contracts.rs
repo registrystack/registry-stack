@@ -951,7 +951,8 @@ pub(crate) fn public_check_answer_schema() -> Value {
             "schema": {"const": PUBLIC_CHECK_ANSWER_SCHEMA},
             "status": {
                 "description": "The value of the activated status output.",
-                "type": "string"
+                "type": "string",
+                "enum": crate::public_check::PUBLIC_CHECK_STATUSES
             },
             "fields": {
                 "description": "The members of the activated printed-fields output, a reviewed structured value.",
@@ -1586,7 +1587,7 @@ fn openapi_document(
                 "post": {
                     "operationId": "checkDocument",
                     "summary": "Check one printed document number and check code",
-                    "description": "Experimental, Version 1 alpha 1. This is the first unauthenticated route that reads registry data. It is served only when the active target authority activates a public check; otherwise every method on this path answers 404 exactly like an unknown route. The request carries one printed document number and one check code, and the service reads only the Content-Type header and the body. Evidence reads the record through the activated definition with its own Source credentials, compares the stored code in constant time, and answers with the activated status and printed fields only. Every miss, including an unknown number, an ambiguous or unresolved lookup, a missing fact, and a wrong code, answers one identical 404. The answer is not an Evidence response format and is never signed. The service applies no rate admission to this route; a deployment limits its rate at the proxy. Any origin may read every response, and the route never permits credentials.",
+                    "description": "Experimental, Version 1 alpha 1. The route takes no credential and reads registry data. It is served only when the active target authority activates a public check; otherwise every method on this path answers 404 exactly like an unknown route. The request carries one printed document number and one check code, and the service reads only the Content-Type header and the body. Evidence reads the record through the activated definition with its own Source credentials, compares the stored code in constant time, and answers with the activated status and printed fields only. Every miss, including an unknown number, an ambiguous or unresolved lookup, a missing fact, and a wrong code, answers one identical 404. The answer is not an Evidence response format and is never signed. The service applies no rate admission to this route; a deployment limits its rate at the proxy. Any origin may read every response, and the route never permits credentials.",
                     "security": [],
                     "requestBody": {
                         "required": true,
@@ -2334,9 +2335,16 @@ mod tests {
             "observedAt": "2026-11-08T09:14:03Z"
         });
         assert!(answer.is_valid(&accepted));
+        for status in crate::public_check::PUBLIC_CHECK_STATUSES {
+            let mut answered = accepted.clone();
+            answered["status"] = json!(status);
+            assert!(answer.is_valid(&answered), "{answered}");
+        }
         for (member, value) in [
             ("schema", json!("registry.evidence.public-check/v1")),
             ("status", json!(true)),
+            ("status", json!("pending")),
+            ("status", json!("Valid")),
             ("fields", json!("Jordan Sample")),
             ("observedAt", json!("2026-11-08T09:14:03.750Z")),
             ("observedAt", json!("2026-11-08T09:14:03+00:00")),

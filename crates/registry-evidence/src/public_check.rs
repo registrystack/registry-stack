@@ -2,7 +2,7 @@
 //! The public certificate check: request shape, check-code comparison and
 //! answer for `POST /v1/public-check`.
 //!
-//! This is the first unauthenticated route that reads registry data. A
+//! The route takes no credential and reads registry data. A
 //! caller presents a document number and the check code printed on the
 //! document; Evidence reads the record with its own source credentials,
 //! compares the stored code in constant time, and answers with the status
@@ -28,6 +28,9 @@ pub const PUBLIC_CHECK_ROUTE: &str = "/v1/public-check";
 
 /// The `schema` member of every successful answer.
 pub const PUBLIC_CHECK_ANSWER_SCHEMA: &str = "registry.evidence.public-check/v1alpha1";
+
+/// The only statuses a public check answer may carry.
+pub const PUBLIC_CHECK_STATUSES: [&str; 4] = ["valid", "suspended", "revoked", "expired"];
 
 /// RFC 4648 base32 characters in a check code: 15 random bytes, no padding.
 pub const CHECK_CODE_LENGTH: usize = 24;
@@ -140,6 +143,8 @@ pub fn stored_code_matches(presented: &CheckCode, stored: Option<&Value>) -> boo
 pub enum PublicCheckAnswerError {
     StatusMissing,
     StatusNotText,
+    /// The status is text but not one of [`PUBLIC_CHECK_STATUSES`].
+    StatusOutsidePublicCheckStatuses,
     FieldsMissing,
     FieldsNotStructured,
 }
@@ -174,6 +179,9 @@ impl PublicCheckAnswer {
             Some(_) => return Err(PublicCheckAnswerError::StatusNotText),
             None => return Err(PublicCheckAnswerError::StatusMissing),
         };
+        if !PUBLIC_CHECK_STATUSES.contains(&status.as_str()) {
+            return Err(PublicCheckAnswerError::StatusOutsidePublicCheckStatuses);
+        }
         let fields = match value_for(fields_concept) {
             Some(PublicValue::Structured(structured)) => structured.fields.clone(),
             Some(_) => return Err(PublicCheckAnswerError::FieldsNotStructured),
@@ -405,6 +413,36 @@ mod tests {
         assert_eq!(
             build(&[status("valid"), text_fields]),
             Err(PublicCheckAnswerError::FieldsNotStructured)
+        );
+    }
+
+    #[test]
+    fn public_check_answer_refuses_a_status_outside_the_four_statuses() {
+        let build = |value: &str| {
+            PublicCheckAnswer::from_values(
+                &[status(value), printed()],
+                "urn:example:concept:certificate-status:v1",
+                "urn:example:concept:certificate-printed:v1",
+                observed(),
+            )
+        };
+        for value in ["valid", "suspended", "revoked", "expired"] {
+            assert!(build(value).is_ok(), "{value} is one of the four statuses");
+        }
+        for value in ["pending", "Valid", "valid ", "", "unknown"] {
+            assert_eq!(
+                build(value),
+                Err(PublicCheckAnswerError::StatusOutsidePublicCheckStatuses),
+                "{value:?} is refused"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_and_authoring_agree_on_the_four_statuses() {
+        assert_eq!(
+            PUBLIC_CHECK_STATUSES,
+            registry_evidence_authoring::project::PUBLIC_CHECK_STATUSES
         );
     }
 }

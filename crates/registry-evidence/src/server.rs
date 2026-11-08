@@ -704,8 +704,8 @@ async fn create_evidence_batch_negotiated(
     }
 }
 
-/// Answer one public certificate check, the first unauthenticated route that
-/// reads registry data.
+/// Answer one public certificate check, on a route that takes no credential
+/// and reads registry data.
 ///
 /// The handler reads one request header, `Content-Type`, and the body.
 /// Credentials, cookies, forwarding headers, and trace context a caller sends

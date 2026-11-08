@@ -192,6 +192,25 @@ fn compile_refusal(error: &EvidenceCompileError) -> SourceBindingError {
     }
 }
 
+/// Why presented subjects could not become a Source's route inputs. Both are
+/// [`PackSourceError::Inputs`] on the relying path; a public check answers a
+/// schema refusal as the caller's malformed request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SubjectInputsError {
+    /// The reviewed input bindings cannot project the subjects, a package
+    /// fault.
+    Projection,
+    /// The projected inputs fail the route's inputs schema: the presented
+    /// values lie outside what the Source accepts.
+    Schema,
+}
+
+impl From<SubjectInputsError> for PackSourceError {
+    fn from(_: SubjectInputsError) -> Self {
+        Self::Inputs
+    }
+}
+
 /// A categorical source failure plus an operator-only governed diagnosis.
 /// Display and Debug intentionally retain only the request-safe category.
 #[derive(Clone, Eq, PartialEq)]
@@ -437,6 +456,7 @@ impl PackSourceExecutor {
     /// resolve credentials or perform source effects.
     pub fn inputs(&self, resolved: &ResolvedAuthorization) -> Result<Value, PackSourceError> {
         self.inputs_for_subjects(&resolved.subjects)
+            .map_err(PackSourceError::from)
     }
 
     /// Validate and minimize the presented subjects alone, before the engine
@@ -446,10 +466,11 @@ impl PackSourceExecutor {
     pub(crate) fn inputs_for_subjects(
         &self,
         subjects: &[ResolvedSubject],
-    ) -> Result<Value, PackSourceError> {
-        let inputs = route_inputs_for_subjects(&self.source, subjects)?;
+    ) -> Result<Value, SubjectInputsError> {
+        let inputs = route_inputs_for_subjects(&self.source, subjects)
+            .map_err(|_| SubjectInputsError::Projection)?;
         if !self.program.input_schema().validate(&inputs) {
-            return Err(PackSourceError::Inputs);
+            return Err(SubjectInputsError::Schema);
         }
         Ok(inputs)
     }

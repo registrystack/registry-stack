@@ -52,7 +52,7 @@ use crate::{
         EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     observability::SourceDiagnostics,
-    pack_source::{PackSourceError, PackSourceExecutor, PackSourceFailure},
+    pack_source::{PackSourceError, PackSourceExecutor, PackSourceFailure, SubjectInputsError},
     presented::{construction_channel, PresentedFacts},
     problem::ProblemCode,
     public_check::{stored_code_matches, PublicCheckAnswer, PublicCheckRequest},
@@ -2517,8 +2517,8 @@ impl EvidenceRuntime {
         })
     }
 
-    /// Answer one public certificate check, the first unauthenticated route
-    /// that reads registry data.
+    /// Answer one public certificate check, on a route that takes no
+    /// credential and reads registry data.
     ///
     /// The active authority's `publicCheck` activation is the only admission.
     /// The presented document number resolves the activated subject, the
@@ -3108,7 +3108,17 @@ impl EvidenceRuntime {
             .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "source-plan"))?;
         let inputs = executor
             .inputs_for_subjects(request.subjects)
-            .map_err(pack_source_failure)?;
+            .map_err(|error| match (error, audit) {
+                // A public check has no authorization behind the presented
+                // number, so a value the Source's inputs schema refuses is the
+                // caller's malformed request. It answers exactly as a
+                // selector-profile refusal does, before any audit line or
+                // Source request.
+                (SubjectInputsError::Schema, SourceStageAudit::PublicCheck(_)) => {
+                    failure(ProblemCode::InvalidSelector, "selector")
+                }
+                (error, _) => pack_source_failure(error.into()),
+            })?;
         let attribution = source_attribution(executor, request.requester, request.purpose)?;
         let access = match audit {
             SourceStageAudit::Relying(material) => {
