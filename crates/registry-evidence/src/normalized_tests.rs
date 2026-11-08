@@ -1142,6 +1142,8 @@ async fn normalized_runtime_with(include_optional_actor_profile: bool) -> Normal
         r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
 kind: EvidenceFixture
 syntheticOnly: true
+common: {}
+privacyExpectation: {}
 cases:
   - {id: positive}
   - {id: negative-false}

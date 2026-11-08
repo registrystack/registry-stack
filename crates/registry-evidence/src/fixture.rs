@@ -390,6 +390,26 @@ fn check_coverage(
             "Add the missing cases: positive, negative*, boundary*, missing*, no-match, ambiguous*, source-failure, and anti-reconstruction.",
         ));
     }
+    // The offline runner reads these blocks: both grammars need the privacy
+    // expectation, and only the reference grammar also needs `common`.
+    let coequal = root.get("coequalAcceptanceDefinition") == Some(&Value::Bool(true));
+    let required_blocks: &[&str] = if coequal {
+        &["privacyExpectation"]
+    } else {
+        &["common", "privacyExpectation"]
+    };
+    for block in required_blocks {
+        if !root.get(block).is_some_and(Value::is_object) {
+            return Err(refuse(
+                "evidence.fixture.missing-block",
+                &format!("/{block}"),
+                &format!("a fixture declares a `{block}` block"),
+                &format!(
+                    "Add a `{block}` mapping; `evidencectl init` writes one in a fresh project."
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -478,7 +498,10 @@ mod tests {
 
     #[test]
     fn reads_a_complete_fixture_without_its_envelope() {
-        let text = format!("{HEADER}syntheticOnly: true\ncases:\n{}", complete_cases());
+        let text = format!(
+            "{HEADER}syntheticOnly: true\ncommon: {{}}\nprivacyExpectation: {{}}\ncases:\n{}",
+            complete_cases()
+        );
         let value = read_fixture(
             "fixtures/cases.yaml",
             text.as_bytes(),
@@ -493,7 +516,7 @@ mod tests {
 
     #[test]
     fn focused_coverage_is_local_only() {
-        let text = format!("{HEADER}syntheticOnly: true\ncases:\n  - {{id: positive}}\n");
+        let text = format!("{HEADER}syntheticOnly: true\ncommon: {{}}\nprivacyExpectation: {{}}\ncases:\n  - {{id: positive}}\n");
         let value = read_fixture(
             "fixtures/cases.yaml",
             text.as_bytes(),
@@ -514,7 +537,10 @@ mod tests {
                 "evidence.fixture.incomplete-coverage"
             );
         }
-        let complete = format!("{HEADER}syntheticOnly: true\ncases:\n{}", complete_cases());
+        let complete = format!(
+            "{HEADER}syntheticOnly: true\ncommon: {{}}\nprivacyExpectation: {{}}\ncases:\n{}",
+            complete_cases()
+        );
         read_fixture(
             "fixtures/cases.yaml",
             complete.as_bytes(),
@@ -647,6 +673,30 @@ mod tests {
                 12,
             ),
             (
+                "reference fixture without a common block",
+                format!("{HEADER}syntheticOnly: true\nprivacyExpectation: {{}}\ncases:\n{cases}"),
+                false,
+                "evidence.fixture.missing-block",
+                "/common",
+                1,
+            ),
+            (
+                "reference fixture without a privacy expectation",
+                format!("{HEADER}syntheticOnly: true\ncommon: {{}}\ncases:\n{cases}"),
+                false,
+                "evidence.fixture.missing-block",
+                "/privacyExpectation",
+                1,
+            ),
+            (
+                "coequal fixture without a privacy expectation",
+                format!("{HEADER}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n{cases}"),
+                false,
+                "evidence.fixture.missing-block",
+                "/privacyExpectation",
+                1,
+            ),
+            (
                 "incomplete coverage",
                 format!("{HEADER}syntheticOnly: true\ncases:\n{without_ambiguous}"),
                 false,
@@ -671,7 +721,7 @@ mod tests {
             .replace("  - {id: ambiguous}\n", "");
         let fixture = |marker: &str| {
             format!(
-                "{HEADER}syntheticOnly: true\ncases:\n{cases}  - {{id: unresolved, declaredUnresolved: {marker}}}\n"
+                "{HEADER}syntheticOnly: true\ncommon: {{}}\nprivacyExpectation: {{}}\ncases:\n{cases}  - {{id: unresolved, declaredUnresolved: {marker}}}\n"
             )
         };
         read_fixture(
@@ -712,9 +762,10 @@ mod tests {
             ("coequalAcceptanceDefinition: true\n", "source"),
         ] {
             let text = format!("{HEADER}syntheticOnly: true\n{marker}cases:\n  - id: positive\n    {payload}: {{external_key: null, nested: {{unfamiliar: [1, true]}}}}\n");
+            let valid = text.replacen("cases:", "common: {}\nprivacyExpectation: {}\ncases:", 1);
             let value = read_fixture(
                 "fixtures/cases.yaml",
-                text.as_bytes(),
+                valid.as_bytes(),
                 false,
                 AssuranceProfile::Local,
             )
@@ -757,7 +808,7 @@ mod tests {
     #[test]
     fn coequal_expected_facts_preserve_source_owned_keys_and_nulls() {
         let text = format!(
-            "{HEADER}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - id: positive\n    expectedFacts: {{source_key: null, nested_fact: {{foreign_key: [1, true]}}}}\n"
+            "{HEADER}syntheticOnly: true\ncommon: {{}}\nprivacyExpectation: {{}}\ncoequalAcceptanceDefinition: true\ncases:\n  - id: positive\n    expectedFacts: {{source_key: null, nested_fact: {{foreign_key: [1, true]}}}}\n"
         );
         let value = read_fixture(
             "fixtures/cases.yaml",
@@ -863,9 +914,10 @@ mod tests {
     #[test]
     fn retired_fixture_controls_name_the_replacement_without_touching_payload_keys() {
         let base = format!("{HEADER}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - id: positive\n    source: {{synthetic_only: null, expected_lookup: kept}}\n");
+        let valid = base.replacen("cases:", "privacyExpectation: {}\ncases:", 1);
         read_fixture(
             "fixtures/cases.yaml",
-            base.as_bytes(),
+            valid.as_bytes(),
             false,
             AssuranceProfile::Local,
         )
