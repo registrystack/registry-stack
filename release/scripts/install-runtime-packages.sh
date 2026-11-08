@@ -36,7 +36,9 @@ install_package() {
 	arm64) checksum=$4 ;;
 	esac
 
-	archive="${package_dir}/${package}_${version}_${architecture}.deb"
+	# Debian package file names leave out the version's epoch, which the
+	# Version field checked below keeps.
+	archive="${package_dir}/${package}_${version#*:}_${architecture}.deb"
 	test -f "$archive" && test ! -L "$archive"
 	test "$(dpkg-deb --field "$archive" Package)" = "$package"
 	test "$(dpkg-deb --field "$archive" Version)" = "$version"
@@ -58,3 +60,6 @@ install_package libc6 2.41-12+deb13u4 \
 install_package libssl3t64 3.5.7-1~deb13u3 \
 	ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 \
 	d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97
+install_package zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1 \
+	8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb \
+	0e41b3d7ad8ad7fcd36dd4d61ca91a70018478fc4af652e044f4be770784ddff

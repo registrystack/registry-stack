@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -154,7 +156,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                         failures,
                     )
 
-    def test_runtime_package_overlay_fixes_libc6_and_libssl3t64(self) -> None:
+    def test_runtime_package_overlay_fixes_libc6_libssl3t64_and_zlib1g(self) -> None:
         self.assertEqual(
             Path("release/scripts/install-runtime-packages.sh"),
             POLICY.RUNTIME_PACKAGE_INSTALLER,
@@ -175,6 +177,13 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                         "arm64": "d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97",
                     },
                 ),
+                "zlib1g": (
+                    "1:1.3.dfsg+really1.3.1-1+deb13u1",
+                    {
+                        "amd64": "8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb",
+                        "arm64": "0e41b3d7ad8ad7fcd36dd4d61ca91a70018478fc4af652e044f4be770784ddff",
+                    },
+                ),
             },
             {
                 name: (package["version"], package["sha256"])
@@ -187,6 +196,15 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             "https://snapshot.debian.org/archive/debian-security/20260930T060347Z/"
             "pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb "
             "/workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_amd64.deb",
+            POLICY.RUNTIME_PACKAGE_ADDS,
+        )
+        # Debian package file names leave out the version's epoch.
+        self.assertIn(
+            "ADD --checksum=sha256:"
+            "0e41b3d7ad8ad7fcd36dd4d61ca91a70018478fc4af652e044f4be770784ddff "
+            "https://snapshot.debian.org/archive/debian-security/20261107T075304Z/"
+            "pool/updates/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_arm64.deb "
+            "/workspace/runtime-packages/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_arm64.deb",
             POLICY.RUNTIME_PACKAGE_ADDS,
         )
         self.assertEqual([], POLICY.check_repository())
@@ -202,6 +220,11 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 "install_package libssl3t64 3.5.7-1~deb13u3",
                 "install_package libssl3t64 3.5.7-1~deb13u2",
                 "exact fixed runtime libssl3t64 version",
+            ),
+            (
+                "install_package zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1",
+                "install_package zlib1g 1:1.3.dfsg+really1.3.1-1+b1",
+                "exact fixed runtime zlib1g version",
             ),
         ]
         for name, package in POLICY.RUNTIME_PACKAGES.items():
@@ -322,6 +345,89 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 failures,
             )
 
+    def test_runtime_package_installer_finds_archives_named_without_the_epoch(
+        self,
+    ) -> None:
+        # Debian package file names leave out the version's epoch, while the
+        # Version field the installer checks keeps it. The fake tools answer
+        # for an archive whose first line is its Package and second its Version.
+        archives = {
+            "libc6_2.41-12+deb13u4_amd64.deb": ("libc6", "2.41-12+deb13u4"),
+            "libssl3t64_3.5.7-1~deb13u3_amd64.deb": ("libssl3t64", "3.5.7-1~deb13u3"),
+            "zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_amd64.deb": (
+                "zlib1g",
+                "1:1.3.dfsg+really1.3.1-1+deb13u1",
+            ),
+        }
+        self.assertEqual(
+            {name for name, _version in archives.values()},
+            set(POLICY.RUNTIME_PACKAGES),
+        )
+        fake_tools = {
+            "dpkg": 'test "$1" = --print-architecture\nprintf "amd64\\n"\n',
+            "dpkg-deb": (
+                'case "$1" in\n'
+                "--field)\n"
+                '\tcase "${3-}" in\n'
+                '\tPackage) sed -n 1p "$2" ;;\n'
+                '\tVersion) sed -n 2p "$2" ;;\n'
+                '\tArchitecture) printf "amd64\\n" ;;\n'
+                '\t"") printf "Package: %s\\nVersion: %s\\n" '
+                '"$(sed -n 1p "$2")" "$(sed -n 2p "$2")" ;;\n'
+                "\t*) exit 2 ;;\n"
+                "\tesac\n"
+                "\t;;\n"
+                '--control) mkdir -p "$3" && : >"$3/md5sums" ;;\n'
+                '--extract) mkdir -p "$3" ;;\n'
+                "*) exit 2 ;;\n"
+                "esac\n"
+            ),
+            "sha256sum": (
+                'test "$*" = "--check --strict"\n'
+                "read -r checksum archive\n"
+                'test -n "$checksum" && test -f "$archive"\n'
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            fake_bin = base / "bin"
+            fake_bin.mkdir()
+            for tool, body in fake_tools.items():
+                path = fake_bin / tool
+                path.write_text(f"#!/bin/sh\nset -eu\n{body}", encoding="utf-8")
+                path.chmod(0o755)
+            package_dir = base / "runtime-packages"
+            package_dir.mkdir()
+            for filename, (name, version) in archives.items():
+                (package_dir / filename).write_text(
+                    f"{name}\n{version}\n", encoding="utf-8"
+                )
+            runtime_root = base / "runtime-root"
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+
+            result = subprocess.run(
+                [
+                    "sh",
+                    str(POLICY.ROOT / POLICY.RUNTIME_PACKAGE_INSTALLER),
+                    str(runtime_root),
+                    str(package_dir),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            status = runtime_root / "var/lib/dpkg/status.d"
+            for name, version in archives.values():
+                self.assertEqual(
+                    f"Package: {name}\nVersion: {version}\n",
+                    (status / name).read_text(encoding="utf-8"),
+                )
+                self.assertTrue((status / f"{name}.md5sums").is_file())
+
     def test_release_images_pin_dated_runtime_package_inputs(self) -> None:
         relative = Path("release/docker/Dockerfile.evidence")
         for name, package in POLICY.RUNTIME_PACKAGES.items():
@@ -357,28 +463,35 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                         failures,
                     )
 
-    def test_images_refuse_a_missing_libssl3t64_package_input(self) -> None:
-        libssl_adds = [
-            line
-            for line in (POLICY.ROOT / "release/docker/Dockerfile.discovery")
-            .read_text(encoding="utf-8")
-            .splitlines()
-            if line.startswith("ADD ") and "/libssl3t64_3.5.7-1~deb13u3_" in line
-        ]
-        self.assertEqual(2, len(libssl_adds))
+    def test_images_refuse_a_missing_security_package_input(self) -> None:
+        discovery = (POLICY.ROOT / "release/docker/Dockerfile.discovery").read_text(
+            encoding="utf-8"
+        )
+        security_adds = []
+        for marker in (
+            "/libssl3t64_3.5.7-1~deb13u3_",
+            "/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_",
+        ):
+            package_adds = [
+                line
+                for line in discovery.splitlines()
+                if line.startswith("ADD ") and marker in line
+            ]
+            self.assertEqual(2, len(package_adds), marker)
+            security_adds += package_adds
         for relative in POLICY.DOCKERFILES + POLICY.ADOPTER_DOCKERFILES:
-            for libssl_add in libssl_adds:
+            for security_add in security_adds:
                 with (
-                    self.subTest(relative=relative, libssl_add=libssl_add),
+                    self.subTest(relative=relative, security_add=security_add),
                     tempfile.TemporaryDirectory() as temporary,
                 ):
                     root = Path(temporary)
                     self.repository_copy(root)
                     dockerfile = root / relative
                     text = dockerfile.read_text(encoding="utf-8")
-                    self.assertIn(f"{libssl_add}\n", text)
+                    self.assertIn(f"{security_add}\n", text)
                     dockerfile.write_text(
-                        text.replace(f"{libssl_add}\n", "", 1),
+                        text.replace(f"{security_add}\n", "", 1),
                         encoding="utf-8",
                     )
 

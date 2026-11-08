@@ -3538,6 +3538,14 @@ class RegistryReleaseTest(TestCase):
                 + "https://snapshot.debian.org/archive/debian-security/20260930T060347Z/"
                 + "pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_arm64.deb "
                 + "/workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_arm64.deb",
+                "ADD --checksum=sha256:8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb "
+                + "https://snapshot.debian.org/archive/debian-security/20261107T075304Z/"
+                + "pool/updates/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_amd64.deb "
+                + "/workspace/runtime-packages/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_amd64.deb",
+                "ADD --checksum=sha256:0e41b3d7ad8ad7fcd36dd4d61ca91a70018478fc4af652e044f4be770784ddff "
+                + "https://snapshot.debian.org/archive/debian-security/20261107T075304Z/"
+                + "pool/updates/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_arm64.deb "
+                + "/workspace/runtime-packages/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_arm64.deb",
                 "COPY --from=runtime-root /workspace/runtime-root/ /",
             ],
             copy_instructions,
