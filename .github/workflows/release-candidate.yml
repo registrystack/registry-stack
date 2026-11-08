@@ -701,8 +701,10 @@ jobs:
     needs: validate
     runs-on: ${{ matrix.runner }}
     # Covers an uncached native compile through the pinned Zig toolchain,
-    # AWS-LC-FIPS included, plus the toolchain install.
-    timeout-minutes: 60
+    # AWS-LC-FIPS included, plus the toolchain install. The payload builds
+    # every arm64 Linux binary in sequence, Adapter included, which takes
+    # close to an hour on the hosted arm64 runner.
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
