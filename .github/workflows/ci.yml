@@ -1409,6 +1409,22 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: products/adapter/scripts/test-job-postgres.sh
 
+      # The GovStack BReg suite starts `bregctl dev`, which pulls the pinned
+      # ThunderID image on first use. Pulling it here, with retries, makes a
+      # registry hiccup fail as this step instead of as a test.
+      - name: Pull the pinned ThunderID image
+        run: |
+          image=$(jq -r .image crates/registry-thunderid-tooling/thunderid-version.json)
+          for attempt in 1 2 3; do
+            if docker pull --quiet "$image"; then
+              exit 0
+            fi
+            echo "::warning::ThunderID image pull attempt ${attempt} failed"
+            sleep $((attempt * 15))
+          done
+          echo "::error::the pinned ThunderID image could not be pulled after 3 attempts"
+          exit 1
+
       - name: Registry Adapter live PostgreSQL suites
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
