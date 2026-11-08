@@ -75,6 +75,11 @@ const ENVIRONMENT: &str = "local";
 const INSTANCE_ID: &str = "record-timer-native-deployment";
 const MAX_LOG_BYTES: u64 = 1024 * 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+/// Bounds on process log lines quoted in a failure message. Quoting happens
+/// only after the whole log passed the forbidden-value check.
+const LOG_EXCERPT_LINES: usize = 5;
+const LOG_TAIL_LINES: usize = 8;
+const LOG_EXCERPT_LINE_CHARS: usize = 240;
 const HTTP_REQUEST_MILLISECONDS: u64 = 5_000;
 const MUTATION_CHECKPOINT_HTTP_REQUEST_MILLISECONDS: u64 = 12_000;
 
@@ -111,6 +116,10 @@ pub struct NativeReplica {
     checkpoint_barrier: Option<NativeBarrierFiles>,
     mutation_checkpoint_barrier: Option<NativeOperationBarrierFiles>,
     expected_non_info_codes: std::collections::BTreeMap<String, (usize, usize)>,
+    /// Closed `error` values a warning/error code may carry. A code absent
+    /// here accepts any error; a present code refuses every other value.
+    expected_non_info_errors:
+        std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     stopped: bool,
 }
 
@@ -763,6 +772,7 @@ impl NativeTimerHarness {
                 checkpoint_barrier,
                 mutation_checkpoint_barrier,
                 expected_non_info_codes: std::collections::BTreeMap::new(),
+                expected_non_info_errors: std::collections::BTreeMap::new(),
                 stopped: false,
             });
             self.wait_ready(self.replicas.len() - 1).await?;
@@ -1193,25 +1203,31 @@ impl NativeTimerHarness {
         if held_ages.len() != self.replicas.len() {
             return Err("timer worker progress baseline did not match the replica set".to_owned());
         }
-        tokio::time::timeout(timeout, async {
+        // Each worker counts once it has succeeded after release; a starved
+        // worker need not be fresh in the same sweep as its peers.
+        let mut last_ages = vec![None; held_ages.len()];
+        let waited = tokio::time::timeout(timeout, async {
+            let mut advanced = vec![false; held_ages.len()];
             loop {
-                let mut advanced = true;
                 for (replica, held_age) in held_ages.iter().enumerate() {
-                    let age = self.timer_worker_last_success_age(replica).await?;
-                    if age >= 0.5 || age >= *held_age {
-                        advanced = false;
-                        break;
+                    if advanced[replica] {
+                        continue;
                     }
+                    let age = self.timer_worker_last_success_age(replica).await?;
+                    last_ages[replica] = Some(age);
+                    advanced[replica] = worker_succeeded_since_hold(*held_age, age);
                 }
-                if advanced {
+                if advanced.iter().all(|advanced| *advanced) {
                     return Ok(());
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
         })
-        .await
-        .map_err(|_| {
-            "timer workers did not report a new successful iteration after release".to_owned()
+        .await;
+        waited.map_err(|_| {
+            format!(
+                "timer workers did not report a new successful iteration after release: held_ages={held_ages:?}, last_ages={last_ages:?}"
+            )
         })?
     }
 
@@ -2858,6 +2874,30 @@ impl NativeTimerHarness {
         Ok(())
     }
 
+    /// Accept a warning/error code only when its closed `error` field is one
+    /// of `errors`, so an allowed transient cannot hide another failure class
+    /// under the same code.
+    #[allow(dead_code)] // Consumed by the sibling native integration target.
+    pub fn restrict_non_info_code_errors(
+        &mut self,
+        replica: usize,
+        code: &str,
+        errors: &[&str],
+    ) -> Result<(), String> {
+        if errors.is_empty() {
+            return Err("native timer allowed log errors are empty".to_owned());
+        }
+        let replica = self
+            .replicas
+            .get_mut(replica)
+            .ok_or_else(|| "native timer replica does not exist".to_owned())?;
+        replica.expected_non_info_errors.insert(
+            code.to_owned(),
+            errors.iter().map(|error| (*error).to_owned()).collect(),
+        );
+        Ok(())
+    }
+
     pub async fn wait_for_log_code(
         &self,
         replica: usize,
@@ -3792,7 +3832,7 @@ impl NativeTimerHarness {
             self.replicas[replica].base_url.clone(),
         ))
         .map_err(|error| format!("native timer readiness client failed: {error}"))?;
-        tokio::time::timeout(READY_TIMEOUT, async {
+        let outcome = tokio::time::timeout(READY_TIMEOUT, async {
             loop {
                 if let Some(status) = self.replicas[replica]
                     .child
@@ -3800,8 +3840,7 @@ impl NativeTimerHarness {
                     .map_err(|_| "native timer replica status could not be read".to_owned())?
                 {
                     return Err(format!(
-                        "native timer replica exited before readiness with {status}; inspect {}",
-                        self.replicas[replica].log_path.display()
+                        "native timer replica exited before readiness with {status}"
                     ));
                 }
                 if client.ready().await.is_ok() {
@@ -3811,12 +3850,16 @@ impl NativeTimerHarness {
             }
         })
         .await
-        .map_err(|_| {
+        .unwrap_or_else(|_| Err("native timer replica readiness timed out".to_owned()));
+        outcome.map_err(|error| {
+            let replica = &self.replicas[replica];
             format!(
-                "native timer replica readiness timed out; inspect {}",
-                self.replicas[replica].log_path.display()
+                "{error}; {} log tail {}; inspect {}",
+                replica.command.launch_id,
+                self.log_tail(replica),
+                replica.log_path.display()
             )
-        })?
+        })
     }
 
     fn write_runtime_config(
@@ -3960,23 +4003,84 @@ operationalTimeouts:
         Ok(config_path)
     }
 
-    fn assert_logs_safe(&self) -> Result<(), String> {
-        for replica in &self.replicas {
-            let metadata = fs::metadata(&replica.log_path)
-                .map_err(|_| "native timer process log metadata is unavailable".to_owned())?;
-            if metadata.len() > MAX_LOG_BYTES {
-                return Err("native timer process log exceeded its acceptance bound".to_owned());
+    /// Values no process log may contain: the synthetic bearer token, the
+    /// record-value canaries, and the synthetic database password.
+    fn forbidden_log_values(&self) -> Result<Vec<String>, String> {
+        let suffix = self
+            .database()
+            .runtime_role
+            .as_str()
+            .strip_prefix("breg_runtime_")
+            .ok_or_else(|| "native timer runtime role has an unexpected shape".to_owned())?;
+        Ok(vec![
+            self.token.clone(),
+            "native future activation canary".to_owned(),
+            "unrelated edit after native timer completion".to_owned(),
+            "unrelated write completed during timer contention".to_owned(),
+            "timer-first stale writer canary".to_owned(),
+            format!("rs{suffix}password"),
+        ])
+    }
+
+    /// Read one process log within its bound and refuse it when it contains a
+    /// forbidden value. Only a log returned here may be quoted.
+    fn read_checked_log(&self, replica: &NativeReplica) -> Result<String, String> {
+        let metadata = fs::metadata(&replica.log_path)
+            .map_err(|_| "native timer process log metadata is unavailable".to_owned())?;
+        if metadata.len() > MAX_LOG_BYTES {
+            return Err("native timer process log exceeded its acceptance bound".to_owned());
+        }
+        let mut bytes = Vec::new();
+        File::open(&replica.log_path)
+            .and_then(|file| file.take(MAX_LOG_BYTES + 1).read_to_end(&mut bytes))
+            .map_err(|_| "native timer process log could not be read".to_owned())?;
+        let rendered = String::from_utf8_lossy(&bytes).into_owned();
+        for forbidden in self.forbidden_log_values()? {
+            if rendered.contains(forbidden.as_str()) {
+                return Err("native timer process log exposed a protected value".to_owned());
             }
-            let mut bytes = Vec::new();
-            File::open(&replica.log_path)
-                .and_then(|file| file.take(MAX_LOG_BYTES + 1).read_to_end(&mut bytes))
-                .map_err(|_| "native timer process log could not be read".to_owned())?;
-            let rendered = String::from_utf8_lossy(&bytes);
+        }
+        Ok(rendered)
+    }
+
+    /// A bounded, value-checked tail of one replica's log for a failure message.
+    fn log_tail(&self, replica: &NativeReplica) -> String {
+        match self.read_checked_log(replica) {
+            Ok(rendered) => {
+                let lines = complete_log_lines(&rendered);
+                let skipped = lines.len().saturating_sub(LOG_TAIL_LINES);
+                let tail = log_excerpt(lines[skipped..].iter().copied(), LOG_TAIL_LINES);
+                if skipped > 0 {
+                    format!("last {LOG_TAIL_LINES} of {} line(s) {tail}", lines.len())
+                } else {
+                    format!("{} line(s) {tail}", lines.len())
+                }
+            }
+            Err(error) => format!("unavailable: {error}"),
+        }
+    }
+
+    fn assert_logs_safe(&self) -> Result<(), String> {
+        // Every log passes the forbidden-value check before any is quoted.
+        let logs = self
+            .replicas
+            .iter()
+            .map(|replica| self.read_checked_log(replica).map(|log| (replica, log)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut mismatches = Vec::new();
+        for (replica, rendered) in &logs {
             let mut pg_stat_unavailable = 0;
             let mut non_info_codes = std::collections::BTreeMap::new();
+            let mut non_info_lines = Vec::new();
+            let mut refused_errors = std::collections::BTreeSet::new();
             for line in rendered.lines() {
-                let record: serde_json::Value = serde_json::from_str(line)
-                    .map_err(|_| "native timer process log is not JSON Lines".to_owned())?;
+                let record: serde_json::Value = serde_json::from_str(line).map_err(|_| {
+                    format!(
+                        "native timer process log is not JSON Lines for {}: {}",
+                        replica.command.launch_id,
+                        summarize_log_line(line)
+                    )
+                })?;
                 let level = record
                     .get("level")
                     .and_then(serde_json::Value::as_str)
@@ -3988,26 +4092,47 @@ operationalTimeouts:
                     pg_stat_unavailable += 1;
                 }
                 if matches!(level, "WARN" | "ERROR") {
-                    *non_info_codes
-                        .entry(code.unwrap_or("<none>").to_owned())
-                        .or_insert(0) += 1;
+                    let code = code.unwrap_or("<none>").to_owned();
+                    let error = record
+                        .pointer("/fields/error")
+                        .and_then(serde_json::Value::as_str);
+                    if log_error_refused(replica.expected_non_info_errors.get(&code), error) {
+                        refused_errors.insert(code.clone());
+                    }
+                    *non_info_codes.entry(code.clone()).or_insert(0) += 1;
+                    non_info_lines.push((code, line));
                 }
             }
-            if non_info_codes
-                .keys()
-                .any(|code| !replica.expected_non_info_codes.contains_key(code))
-                || replica
-                    .expected_non_info_codes
-                    .iter()
-                    .any(|(code, (minimum, maximum))| {
-                        let actual = non_info_codes.get(code).copied().unwrap_or(0);
-                        actual < *minimum || actual > *maximum
-                    })
-            {
-                return Err(format!(
-                    "native timer process log warning/error codes differed: expected_ranges={:?}, actual={non_info_codes:?}",
-                    replica.expected_non_info_codes
+            let offending = non_info_codes
+                .iter()
+                .filter(|(code, actual)| {
+                    replica
+                        .expected_non_info_codes
+                        .get(code.as_str())
+                        .is_none_or(|(minimum, maximum)| *actual < minimum || *actual > maximum)
+                })
+                .map(|(code, _)| code.clone())
+                .chain(refused_errors)
+                .collect::<std::collections::BTreeSet<_>>();
+            let missing = replica
+                .expected_non_info_codes
+                .iter()
+                .any(|(code, (minimum, _))| *minimum > 0 && !non_info_codes.contains_key(code));
+            if !offending.is_empty() || missing {
+                let excerpt = log_excerpt(
+                    non_info_lines
+                        .iter()
+                        .filter(|(code, _)| offending.contains(code))
+                        .map(|(_, line)| *line),
+                    LOG_EXCERPT_LINES,
+                );
+                mismatches.push(format!(
+                    "native timer process log warning/error codes differed for {}: expected_ranges={:?}, allowed_errors={:?}, actual={non_info_codes:?}, offending_lines={excerpt}",
+                    replica.command.launch_id,
+                    replica.expected_non_info_codes,
+                    replica.expected_non_info_errors
                 ));
+                continue;
             }
             if pg_stat_unavailable > 1 {
                 return Err(
@@ -4019,27 +4144,12 @@ operationalTimeouts:
                 "record-timer-native instance_id={} diagnostic=postgres.pg_stat_statements.unavailable count={pg_stat_unavailable}",
                 replica.command.instance_id
             );
-            let suffix = self
-                .database()
-                .runtime_role
-                .as_str()
-                .strip_prefix("breg_runtime_")
-                .ok_or_else(|| "native timer runtime role has an unexpected shape".to_owned())?;
-            let database_password = format!("rs{suffix}password");
-            for forbidden in [
-                self.token.as_str(),
-                "native future activation canary",
-                "unrelated edit after native timer completion",
-                "unrelated write completed during timer contention",
-                "timer-first stale writer canary",
-                database_password.as_str(),
-            ] {
-                if rendered.contains(forbidden) {
-                    return Err("native timer process log exposed a protected value".to_owned());
-                }
-            }
         }
-        Ok(())
+        if mismatches.is_empty() {
+            Ok(())
+        } else {
+            Err(mismatches.join("; "))
+        }
     }
 }
 
@@ -4736,6 +4846,82 @@ fn available_loopback_address() -> Result<SocketAddr, String> {
     Ok(address)
 }
 
+/// The held sample was taken while the worker was parked at a barrier, so
+/// any later age below it means the worker completed an iteration since.
+fn worker_succeeded_since_hold(held_age: f64, age: f64) -> bool {
+    age < held_age
+}
+
+/// Whether a warning/error line's closed `error` falls outside the values
+/// allowed for its code. A code without a restriction accepts any error.
+fn log_error_refused(
+    allowed: Option<&std::collections::BTreeSet<String>>,
+    error: Option<&str>,
+) -> bool {
+    allowed.is_some_and(|allowed| !error.is_some_and(|error| allowed.contains(error)))
+}
+
+/// Lines of a log whose writer has finished them. A line still being written
+/// is left out so a value split across writes is never quoted.
+fn complete_log_lines(rendered: &str) -> Vec<&str> {
+    let mut lines = rendered.split('\n').collect::<Vec<_>>();
+    // The segment after the last newline is either empty or unfinished.
+    lines.pop();
+    lines
+}
+
+/// Render one process log line as its closed operational fields only, bounded
+/// in length. Callers run the forbidden-value check over the log first.
+fn summarize_log_line(line: &str) -> String {
+    let summary = match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(record) => [
+            ("level", "/level"),
+            ("target", "/target"),
+            ("message", "/fields/message"),
+            ("code", "/fields/code"),
+            ("error", "/fields/error"),
+        ]
+        .into_iter()
+        .filter_map(|(name, pointer)| {
+            record
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .map(|value| format!("{name}={value:?}"))
+        })
+        .collect::<Vec<_>>()
+        .join(" "),
+        Err(_) => format!("unparsed={line:?}"),
+    };
+    if summary.chars().count() > LOG_EXCERPT_LINE_CHARS {
+        let mut bounded = summary
+            .chars()
+            .take(LOG_EXCERPT_LINE_CHARS)
+            .collect::<String>();
+        bounded.push_str("...");
+        bounded
+    } else {
+        summary
+    }
+}
+
+/// Summarize at most `limit` lines and count the rest.
+fn log_excerpt<'a>(lines: impl Iterator<Item = &'a str>, limit: usize) -> String {
+    let mut quoted = Vec::new();
+    let mut omitted = 0_usize;
+    for line in lines {
+        if quoted.len() < limit {
+            quoted.push(summarize_log_line(line));
+        } else {
+            omitted += 1;
+        }
+    }
+    let mut excerpt = format!("[{}]", quoted.join(" | "));
+    if omitted > 0 {
+        excerpt.push_str(&format!(" (+{omitted} more)"));
+    }
+    excerpt
+}
+
 fn private_log(path: &Path) -> Result<File, String> {
     let file = OpenOptions::new()
         .create_new(true)
@@ -4773,4 +4959,69 @@ fn set_private_file_permissions(path: &Path) {
 
 fn fingerprint(byte: u8) -> String {
     format!("sha256:{}", format!("{byte:02x}").repeat(32))
+}
+
+#[test]
+fn log_line_summary_renders_only_closed_operational_fields() {
+    let line = r#"{"timestamp":"t","level":"WARN","fields":{"message":"record timer worker iteration failed","code":"record_timer.worker.iteration_failed","error":"runtime-unavailable","subject":"open value"},"target":"registry_breg::record_timer"}"#;
+    assert_eq!(
+        summarize_log_line(line),
+        "level=\"WARN\" target=\"registry_breg::record_timer\" \
+         message=\"record timer worker iteration failed\" \
+         code=\"record_timer.worker.iteration_failed\" error=\"runtime-unavailable\""
+    );
+}
+
+#[test]
+fn log_line_summary_escapes_and_bounds_unparsed_lines() {
+    let long = format!("thread 'main' panicked\t{}", "x".repeat(400));
+    let summary = summarize_log_line(&long);
+    assert!(summary.starts_with("unparsed=\"thread 'main' panicked\\t"));
+    assert!(summary.ends_with("..."));
+    assert_eq!(summary.chars().count(), LOG_EXCERPT_LINE_CHARS + 3);
+}
+
+#[test]
+fn complete_log_lines_omit_a_partially_written_last_line() {
+    assert_eq!(
+        complete_log_lines("{\"a\":1}\n{\"b\":2}\n{\"c\""),
+        vec!["{\"a\":1}", "{\"b\":2}"]
+    );
+    assert_eq!(complete_log_lines("{\"a\":1}\n"), vec!["{\"a\":1}"]);
+    assert!(complete_log_lines("").is_empty());
+}
+
+#[test]
+fn log_excerpt_is_bounded_and_counts_omitted_lines() {
+    let lines = (0..7)
+        .map(|index| format!(r#"{{"level":"ERROR","fields":{{"message":"m{index}"}}}}"#))
+        .collect::<Vec<_>>();
+    let excerpt = log_excerpt(lines.iter().map(String::as_str), LOG_EXCERPT_LINES);
+    assert_eq!(
+        excerpt,
+        "[level=\"ERROR\" message=\"m0\" | level=\"ERROR\" message=\"m1\" | \
+         level=\"ERROR\" message=\"m2\" | level=\"ERROR\" message=\"m3\" | \
+         level=\"ERROR\" message=\"m4\"] (+2 more)"
+    );
+    assert_eq!(log_excerpt(std::iter::empty(), LOG_EXCERPT_LINES), "[]");
+}
+
+#[test]
+fn log_error_restriction_refuses_other_and_missing_errors_only_when_set() {
+    let allowed = std::collections::BTreeSet::from(["conflict".to_owned()]);
+    assert!(!log_error_refused(None, None));
+    assert!(!log_error_refused(None, Some("anything")));
+    assert!(!log_error_refused(Some(&allowed), Some("conflict")));
+    assert!(log_error_refused(Some(&allowed), Some("unavailable")));
+    assert!(log_error_refused(Some(&allowed), None));
+}
+
+#[test]
+fn worker_progress_counts_any_success_after_the_held_sample() {
+    // A starved worker may take longer than half a second per iteration; an
+    // age below the held sample still proves a success after release.
+    assert!(worker_succeeded_since_hold(2.0, 0.8));
+    assert!(worker_succeeded_since_hold(0.9, 0.1));
+    assert!(!worker_succeeded_since_hold(0.9, 0.9));
+    assert!(!worker_succeeded_since_hold(0.9, 1.4));
 }
