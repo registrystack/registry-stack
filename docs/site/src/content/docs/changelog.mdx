@@ -55,16 +55,36 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidence/src/public_check.rs; crates/registry-evidencectl/tests/public_check.rs;
     products/evidence/examples/public-check/README.md. */}
 
-- Evidence's evaluate routes answer `400 request.selector-invalid`, not `503 service.unavailable`,
-  for a selector value that passes its profile but that the Source's inputs schema refuses. The
-  refusal counts against the caller's selector-failure budget, and one such item refuses a whole
-  batch. A caller that retried that 503 should correct the selector instead. See
+- BREAKING: Evidence's evaluate routes answer `400 request.selector-invalid`, not
+  `503 service.unavailable`, for a selector value that passes its profile but that the Source's
+  inputs schema refuses. The refusal counts against the caller's selector-failure budget, and one
+  such item refuses a whole batch. A caller that retried that 503 should correct the selector
+  instead. See
   [Evidence problems](../reference/evidence-problems/).
 
 {/* Evidence: products/evidence/CHANGELOG.md, Unreleased, request.selector-invalid;
     crates/registry-evidence/src/runtime.rs, refuse_selector_the_source_inputs_reject;
     crates/registry-evidence/src/runtime_tests.rs,
     a_selector_value_the_source_inputs_schema_refuses_is_an_invalid_selector. */}
+
+- BREAKING: `evidencectl` reports a directory with no `evidence.yaml` with exit status 1 and
+  `evidence.project.not-found`, naming the path given and pointing to `evidencectl init`, where it
+  reported exit status 3. Update scripts that match exit status 3 for a missing project.
+
+{/* Evidence: products/evidence/CHANGELOG.md, Unreleased, `evidence.project.not-found`;
+    crates/registry-evidencectl/tests/project_diagnostics.rs,
+    a_directory_without_evidence_yaml_is_refused_naming_the_path_given. */}
+
+- BREAKING: `evidencectl check` and Evidence bundle loading refuse a fixture file without a
+  `common` or `privacyExpectation` mapping as `evidence.fixture.missing-block`; a coequal
+  acceptance fixture needs only `privacyExpectation`. Bundles built by `evidencectl package`
+  already carry both blocks. Add `common: {}` and `privacyExpectation: {}` to a fixture that
+  lacks them.
+
+{/* Evidence: products/evidence/CHANGELOG.md, Unreleased, `evidence.fixture.missing-block`;
+    crates/registry-evidence/src/fixture.rs, refuses_each_rule_at_its_member_without_the_value;
+    crates/registry-evidence/src/schema.rs,
+    the_fixture_schema_accepts_what_the_reader_accepts_and_refuses_what_it_refuses. */}
 
 ## v0.45.0 beta-57
 

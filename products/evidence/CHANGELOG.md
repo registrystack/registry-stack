@@ -38,13 +38,15 @@
   any source request, as `503 source.unavailable`, and it does not count
   against the caller's selector-failure budget.
 
-- On the single and batch evaluate routes, a selector value that passes its
-  profile but that the inputs schema of the requirement's Source refuses now
-  answers `400 request.selector-invalid`, as a profile refusal does, instead
-  of `503 service.unavailable` (category `source-inputs`). It is refused
-  during selector resolution, before any audit entry or source request, it
-  counts against the caller's selector-failure budget, and one such item
-  refuses the whole batch. The public check route already answered this way.
+- BREAKING: On the single and batch evaluate routes, a selector value that
+  passes its profile but that the inputs schema of the requirement's Source
+  refuses now answers `400 request.selector-invalid`, as a profile refusal
+  does, instead of `503 service.unavailable` (category `source-inputs`). It is
+  refused during selector resolution, before any audit entry or source
+  request, it counts against the caller's selector-failure budget, and one
+  such item refuses the whole batch. The public check route already answered
+  this way. A caller that retried that 503 should correct the selector
+  instead.
 
 - `evidencectl target new --local` carries the source extract bindings the
   project's `local-target.yaml` declares, beside its connections, and names
@@ -59,11 +61,12 @@
   and `test` commands its README gives. It used case fields that `check`
   refused.
 
-- `evidencectl check`, `test` and the other project commands refuse a
-  directory with no `evidence.yaml` with exit 1 and
+- BREAKING: `evidencectl check`, `test` and the other project commands
+  refuse a directory with no `evidence.yaml` with exit 1 and
   `evidence.project.not-found`, naming the path given and pointing to
   `evidencectl init`. They used to fail with exit 3, "Evidence could not
   inspect the selected authoring project", and a private temporary path.
+  Update scripts that match exit status 3 for a missing project.
 
 - A malformed `adapter-packs/<id>/pack.yaml`, or one with an unknown key, is
   reported at its file, line and key. A Source `route` the pack does not
@@ -74,13 +77,15 @@
 - The refusal for an extract profile with no bound file says to bind it under
   `extracts`, the target's key, not `sourceExtracts`.
 
-- `evidencectl check` and bundle loading refuse a fixture file without a
-  `common` or `privacyExpectation` mapping as `evidence.fixture.missing-block`,
-  located in the fixture file. A coequal acceptance fixture needs only
-  `privacyExpectation`. `check` used to pass such a fixture and `test` then
-  refused it without a location. `evidencectl package` already ran every
-  fixture, so packaged bundles carry both blocks; a hand-assembled bundle
-  without them is now refused when it loads.
+- BREAKING: `evidencectl check` and bundle loading refuse a fixture file
+  without a `common` or `privacyExpectation` mapping as
+  `evidence.fixture.missing-block`, located in the fixture file. A coequal
+  acceptance fixture needs only `privacyExpectation`, and the fixture JSON
+  Schema lists the blocks as required. `check` used to pass such a fixture and
+  `test` then refused it without a location. `evidencectl package` already ran
+  every fixture, so packaged bundles carry both blocks; a hand-assembled
+  bundle without them is now refused when it loads. Add `common: {}` and
+  `privacyExpectation: {}` to a fixture that lacks them.
 
 - When a fixture case fails during evaluation and declares no `error` or
   `publicProblem`, the report names the stage that failed, its internal

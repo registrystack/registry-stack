@@ -163,7 +163,10 @@ The production path is fixed:
    binding. Reject missing, unknown, or extra material, and values the
    acquiring Source's inputs schema refuses, as `request.selector-invalid`. A
    value a selector-bound source path segment cannot carry passes this step
-   and is refused at path materialization.
+   and is refused at path materialization. The `request.selector-invalid`
+   refusals are returned during selector resolution, after the authorization
+   decision of step 7 and before the access-attempt event of step 9, and
+   count against the caller's selector-failure budget.
 7. Make one authorization decision over requester, optional actor, requirement
    revision, purpose, role-bound selector profiles and value origins, subject
    authority, audience, and response format.
