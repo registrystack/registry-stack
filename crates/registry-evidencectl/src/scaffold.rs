@@ -635,19 +635,25 @@ common:
       values: {record-reference: REC-0001}
 cases:
 - id: positive
-  acquisition:
+  source:
     intercepts: [{type: endpoint, endpoint: starter-source}]
     exchanges:
     - request: {endpoint: starter-source, method: GET, path: /records/REC-0001}
       response: {status: 200, body: {matched: true}}
-  expected: {value: true, lookup: match, derivationRuns: true, signed: true}
+  expectedValue: true
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
 - id: negative
-  acquisition:
+  source:
     intercepts: [{type: endpoint, endpoint: starter-source}]
     exchanges:
     - request: {endpoint: starter-source, method: GET, path: /records/REC-0001}
       response: {status: 200, body: {matched: false}}
-  expected: {value: false, lookup: match, derivationRuns: true, signed: true}
+  expectedValue: false
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
 privacyExpectation:
   evidenceContains: [urn:example:concept:record-status:v1]
   evidenceExcludes: [record-reference, REC-0001]
