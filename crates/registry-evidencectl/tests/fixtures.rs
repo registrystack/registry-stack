@@ -1142,7 +1142,7 @@ fn an_explained_json_run_carries_each_trace_in_its_report() {
 }
 
 #[test]
-fn missing_runtime_yaml_errors_clearly_without_invoking_evidence() {
+fn a_directory_without_a_project_errors_clearly_without_invoking_evidence() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
     fs::create_dir_all(&project).expect("create project dir");
@@ -1160,7 +1160,11 @@ fn missing_runtime_yaml_errors_clearly_without_invoking_evidence() {
 
     assert!(!output.status.success());
     let stderr = stderr_of(&output);
-    assert!(stderr.contains("runtime.yaml"), "{stderr}");
+    assert!(stderr.contains("evidence.project.not-found"), "{stderr}");
+    assert!(
+        stderr.contains(project.join("evidence.yaml").to_str().unwrap()),
+        "{stderr}"
+    );
     assert!(!argv_log.exists(), "evidence must never be invoked");
 }
 

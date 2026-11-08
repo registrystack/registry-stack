@@ -132,7 +132,7 @@ pub(crate) fn read_pack_routes(
         root
     };
     let mut routes = BTreeMap::new();
-    for source in project.sources.values() {
+    for (source_id, source) in &project.sources {
         let key = format!(
             "{}\0{}\0{}",
             source.pack.id, source.pack.version, source.route
@@ -157,10 +157,7 @@ pub(crate) fn read_pack_routes(
             .decode::<registry_adapter_core::AdapterPack>(
                 &pack_bytes,
                 &registry_platform_yaml::Expect::one(&format),
-            )
-            .map_err(|_| {
-                anyhow::anyhow!("Adapter pack must satisfy the current AdapterPack contract")
-            })?
+            )?
             .value;
         let document = serde_json::to_value(&pack).context("Adapter pack cannot be represented")?;
         let pack_root = pack_path
@@ -179,7 +176,20 @@ pub(crate) fn read_pack_routes(
             .filter(|route| route.get("id").and_then(Value::as_str) == Some(source.route.as_str()))
             .collect::<Vec<_>>();
         if selected.len() != 1 {
-            bail!("Adapter pack must declare the selected source route exactly once");
+            let declared = source_routes
+                .iter()
+                .filter_map(|route| route.get("id").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(crate::authoring::AuthoredDiagnostic {
+                code: "evidence.pack.route-missing".to_owned(),
+                path: format!("evidence.yaml:/sources/{source_id}/route"),
+                message: format!(
+                    "Source `{source_id}` names route `{}`, which adapter-packs/{}/pack.yaml does not declare exactly once; it declares: {declared}",
+                    source.route, source.pack.id
+                ),
+            }
+            .into());
         }
         let evidence = selected[0]
             .get("evidence")

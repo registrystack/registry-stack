@@ -243,10 +243,7 @@ pub(crate) fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             .join(registry_evidence_authoring::project::PROJECT_FILE)
             .is_file()
         {
-            bail!(
-                "project at {} requires one normalized evidence.yaml or a deployment runtime.yaml",
-                args.project.display()
-            );
+            return Err(crate::project_snapshot::no_project_report(&args.project).into());
         }
         // The shared reader decides what a fixture file is before the project
         // is compiled or any step is delegated, so a file it refuses is
