@@ -23,8 +23,8 @@ fn unified_sdk_metadata_names_the_tested_discovery_patch_line_and_proof() {
             },
             "namespaces": {
                 "discovery": {
-                    "testedServerBaseline": "0.45.0",
-                    "compatibleServerPatchLine": "0.45.x",
+                    "testedServerBaseline": "0.46.0",
+                    "compatibleServerPatchLine": "0.46.x",
                     "responseCompatibility": {
                         "additiveObjectMembers": "ignored-after-duplicate-key-rejection",
                         "unknownProblemCodes": "http-status-only",
