@@ -3425,14 +3425,16 @@ source request, and answers `503 source.unavailable`, audited as a dependency
 failure, as does a source failure.
 
 **Before the comparison.** The code is compared only after the Source returns a
-record, so any Source failure before that (transport, timeout, call budget, a
-protocol failure, a facts-schema refusal, an extract-script failure) answers
-`503 source.unavailable` and is audited as a dependency failure. A number with
-no record cannot fail that way. A pack that refuses one record's content before
-the comparison (a facts schema that constrains values beyond their type, or an
-extract script that throws on one record's data) therefore lets that `503`
-reveal that a record exists for the number, though neither its status nor its
-fields. A record-independent fault (the register down or malformed for every
+record, so any Source failure before that (transport, timeout, call budget, an
+error status from the Source, a protocol failure, a facts-schema refusal, an
+extract-script failure) answers `503 source.unavailable` and is audited as a
+dependency failure. A number with no record cannot fail that way. A pack that
+refuses one record's content before the comparison (a facts schema that
+constrains values beyond their type, or an extract script that throws on one
+record's data) therefore lets that `503` reveal that a record exists for the
+number, though neither its status nor its fields; so does a register that
+answers an error status for one record but not for an unknown number. A
+record-independent fault (the register down or malformed for every
 request) answers `503` for every number and reveals nothing. Pack authors keep
 the facts schema to types, declare a returned record whose number does not
 exactly match as no-match, and check record content in the derivation, which

@@ -77,10 +77,10 @@ a value that passes the selector profile but that the Source's inputs schema
 refuses, such as one with a `/`, a `%` or a dot segment.
 
 The runtime compares the check code only after the Source returns a record. Any
-Source failure before that point (transport, timeout, budget, or protocol,
-which includes a facts-schema refusal and an extract-script failure) answers
-`503 source.unavailable`. The only statuses are `valid`, `suspended`, `revoked`
-and `expired`; anything else fails closed.
+Source failure before that point (transport, timeout, budget, an error status
+from the Source, or protocol, which includes a facts-schema refusal and an
+extract-script failure) answers `503 source.unavailable`. The only statuses are
+`valid`, `suspended`, `revoked` and `expired`; anything else fails closed.
 
 ## The proxy rule
 
@@ -131,7 +131,9 @@ relying services need. A shared instance works but is not recommended.
 The runtime compares the check code only after the Source returns a record, and
 a number with no record never reaches a record-content failure. If a pack
 refused one record's content before that comparison (a facts-schema refusal, a
-script throw), the resulting 503 would show that the record exists. The example
+script throw), the resulting 503 would show that the record exists. A register
+that answers an error status for one record but not for an unknown number has
+the same effect. The example
 pack therefore keeps its facts schema to member types, declares a record whose
 number does not exactly match the requested number as no-match, and checks
 record content in the derivation, which runs after the comparison. There only a
