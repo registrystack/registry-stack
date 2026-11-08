@@ -264,6 +264,9 @@ fn compiler_action(code: &str) -> &'static str {
         "evidence.question.selector-missing" => {
             "Add the named selector profile under selectors/, or name a selector profile the project declares."
         }
+        "evidence.pack.route-missing" => {
+            "Set the Source's route to one the Adapter pack declares under sourceRoutes, or add the route to the pack."
+        }
         "evidence.source.member-unknown" => {
             "Remove the member, which the closed Evidence source shape does not define."
         }
@@ -465,6 +468,10 @@ pub(crate) fn runtime_target_refusal(
                     || diagnostic.path.starts_with("/sourceExtracts/")
                 {
                     diagnostic.path = diagnostic.path.replacen("/sourceExtracts", "/extracts", 1);
+                    diagnostic.suggested_action =
+                        diagnostic
+                            .suggested_action
+                            .replacen("sourceExtracts", "extracts", 1);
                 }
                 diagnostic.source = Some(Source {
                     file: target.display().to_string(),
@@ -540,6 +547,35 @@ mod tests {
         reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
     )]
     use super::*;
+
+    #[test]
+    fn an_unbound_extract_names_the_authored_extracts_key_in_path_and_action() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.yaml");
+        std::fs::write(&target, "extracts: {}\n").unwrap();
+        let runtime = Path::new("/staged/runtime.yaml");
+        let unbound: Diagnostic = serde_json::from_value(serde_json::json!({
+            "severity":"error","code":"evidence.runtime.source-extract-unbound",
+            "path":"/sourceExtracts","message":"unbound",
+            "suggestedAction":"Bind the extract profile the bundle names under sourceExtracts, with the path of its extract file.",
+            "source":{"file":"/staged/runtime.yaml","line":null,"column":null}
+        }))
+        .unwrap();
+        let report =
+            runtime_target_refusal(Report::new(vec![unbound]), runtime, Some(target.as_path()));
+        let refusal = &report.diagnostics()[0];
+        assert_eq!(refusal.path, "/extracts");
+        assert!(
+            refusal.suggested_action.contains("under extracts,"),
+            "{}",
+            refusal.suggested_action
+        );
+        assert!(
+            !refusal.suggested_action.contains("sourceExtracts"),
+            "{}",
+            refusal.suggested_action
+        );
+    }
 
     #[test]
     fn runtime_rebase_changes_only_explicit_captured_fixture_paths() {

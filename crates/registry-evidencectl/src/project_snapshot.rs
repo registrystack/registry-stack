@@ -88,6 +88,15 @@ pub(crate) fn capture_project(project: &Path) -> Result<ProjectSnapshot> {
         }
         .into());
     }
+    let has_marker = match fs::symlink_metadata(
+        project.join(registry_evidence_authoring::project::PROJECT_FILE),
+    ) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => error.kind() != io::ErrorKind::NotFound,
+    };
+    if !has_marker {
+        return Err(no_project_report(project).into());
+    }
     let temporary_root = std::env::temp_dir()
         .canonicalize()
         .context("resolving the private project snapshot parent")?;
@@ -98,6 +107,16 @@ pub(crate) fn capture_project(project: &Path) -> Result<ProjectSnapshot> {
             error
         }
     })
+}
+
+/// The refusal for a directory that holds no `evidence.yaml`, naming the
+/// file from the project path as the command was given it.
+pub(crate) fn no_project_report(project: &Path) -> Report {
+    Report::new(vec![InspectionDiagnostic::at(
+        Path::new(registry_evidence_authoring::project::PROJECT_FILE),
+        Inspection::NoProjectFile,
+    )
+    .diagnostic_in(project)])
 }
 
 fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSnapshot> {
@@ -544,6 +563,8 @@ struct InspectionDiagnostic {
 enum Inspection {
     /// The project root is a link or not a directory.
     NotDirectory,
+    /// The project directory holds no `evidence.yaml`.
+    NoProjectFile,
     /// An entry is a link, a hard-linked file, or a special file.
     NotPlain,
     /// A file is larger than its directory takes.
@@ -568,6 +589,11 @@ impl InspectionDiagnostic {
                 "evidence.project.not-directory",
                 "the project path is not a plain directory",
                 "Pass the path of the project directory itself, not a link to it or a file.",
+            ),
+            Inspection::NoProjectFile => (
+                "evidence.project.not-found",
+                "the directory holds no evidence.yaml, so it is not an Evidence project",
+                "An Evidence project is a directory holding evidence.yaml, with functions/, fixtures/ and adapter-packs/ beside it. Point the command at that directory, or run `evidencectl init` to create a project.",
             ),
             Inspection::NotPlain => (
                 "evidence.project.not-plain-file",
