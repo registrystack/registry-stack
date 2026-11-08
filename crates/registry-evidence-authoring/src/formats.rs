@@ -315,7 +315,7 @@ pub fn finding_action(code: &str) -> &'static str {
         "authority-value-claims" | "authority-claim-path" | "authority-request-claims" => "Match valueClaims exactly to the selected profile for authenticated values, and omit them for request values.",
         "authority-task-clients" | "authority-task-issuer" | "authority-task-only" => "Declare requester clients and the trusted issuer exactly when a subject uses authenticated-grant values.",
         "public-check-status-output" | "public-check-fields-output" | "public-check-same-output" => "Point publicCheck at two different Outputs: a controlled category limited to the four statuses and a reviewed structured value.",
-        "public-check-subject-shape" | "public-check-acquisition" => "Give the definition one subject role, one selector profile with one field, and one acquiring Source.",
+        "public-check-subject-shape" | "public-check-acquisition" => "Give the definition one subject role, one selector profile with one text field (string, uuid, date or controlled-code), and one acquiring Source.",
         "public-check-entity-reference-output" => "Remove the entity-reference Outputs from a definition that has publicCheck; a public check has no relying party to scope them to.",
         "public-check-existence-disclosure" => "Remove existenceDisclosure or set it to collapse-unresolved.",
         "public-check-code-fact" => "Name a string fact the Source's facts schema declares, and keep it out of the Source's inputs.",

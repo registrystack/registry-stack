@@ -242,6 +242,19 @@ fn refusal_4_a_role_with_two_profiles_is_refused() {
 }
 
 #[test]
+fn refusal_4_a_number_field_the_route_cannot_send_as_text_is_refused() {
+    for field in [
+        json!({"type": "integer", "minimum": 1, "maximum": 999_999}),
+        json!({"type": "boolean"}),
+    ] {
+        let mut value = project_value();
+        value["selectorProfiles"]["certificate-number"]["fields"]["number"] = field;
+        let project: EvidenceProject = serde_json::from_value(value).unwrap();
+        only_code(&project, "public-check-subject-shape");
+    }
+}
+
+#[test]
 fn refusal_5_the_code_fact_must_be_a_string_fact_the_source_does_not_take_as_input() {
     let project = project_with(|_| {});
     for (facts, inputs) in [
