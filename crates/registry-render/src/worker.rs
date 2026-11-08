@@ -621,8 +621,13 @@ mod tests {
         framing_stand_in(dir, &body, after)
     }
 
-    /// A stand-in worker that writes `body` as one frame and then runs
-    /// `after` (shell).
+    /// A stand-in worker that reads the whole request frame, writes `body` as
+    /// one frame and then runs `after` (shell). A real worker reads its request
+    /// before it answers; one that answers and exits first would make the
+    /// parent's request write fail with a broken pipe. The parent keeps stdin
+    /// open until it has the answer, so the request is read by its length
+    /// prefix (little-endian `u32`), one byte per `dd` read so that nothing
+    /// past the frame is consumed.
     fn framing_stand_in(dir: &std::path::Path, body: &[u8], after: &str) -> std::path::PathBuf {
         let mut frame = (body.len() as u32).to_le_bytes().to_vec();
         frame.extend_from_slice(body);
@@ -631,7 +636,14 @@ mod tests {
         let stand_in = dir.join("answering-worker");
         std::fs::write(
             &stand_in,
-            format!("#!/bin/sh\ncat '{}'\n{after}\n", frame_file.display()),
+            format!(
+                "#!/bin/sh\n\
+                 set -- $(dd bs=1 count=4 2>/dev/null | od -An -tu1)\n\
+                 dd bs=1 count=$(($1 + $2 * 256 + $3 * 65536 + $4 * 16777216)) \
+                 of=/dev/null 2>/dev/null\n\
+                 cat '{}'\n{after}\n",
+                frame_file.display()
+            ),
         )
         .expect("write stand-in");
         use std::os::unix::fs::PermissionsExt;
