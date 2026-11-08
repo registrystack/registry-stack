@@ -138,8 +138,12 @@ pub(crate) mod shape {
     use registry_platform_yaml::{ForeignValue, Identified, LocalId, UniqueIdList};
     use serde::Deserialize;
 
+    // `common` and `privacyExpectation` are optional here so `check_coverage`
+    // refuses a missing block at its own location; the transform states in
+    // the published schema that the blocks are required.
     #[derive(Deserialize)]
     #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schema", schemars(transform = require_reference_blocks))]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub(crate) struct ReferenceFixture {
         #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
@@ -150,8 +154,12 @@ pub(crate) mod shape {
         pub privacy_expectation: Option<ReferencePrivacy>,
     }
 
+    // `privacyExpectation` is optional here so `check_coverage` refuses a
+    // missing block at its own location; the transform states in the
+    // published schema that the block is required.
     #[derive(Deserialize)]
     #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    #[cfg_attr(feature = "schema", schemars(transform = require_coequal_blocks))]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub(crate) struct CoequalFixture {
         #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
@@ -163,6 +171,33 @@ pub(crate) mod shape {
         pub common: Option<CoequalCommon>,
         pub privacy_expectation: Option<CoequalPrivacy>,
         pub provider_contract: Option<ForeignValue>,
+    }
+
+    #[cfg(feature = "schema")]
+    fn require_reference_blocks(schema: &mut schemars::Schema) {
+        require_members(schema, &["common", "privacyExpectation"]);
+    }
+
+    #[cfg(feature = "schema")]
+    fn require_coequal_blocks(schema: &mut schemars::Schema) {
+        require_members(schema, &["privacyExpectation"]);
+    }
+
+    /// Adds `members` to the `required` list of an object schema, keeping the
+    /// `$ref` each member's property already has.
+    #[cfg(feature = "schema")]
+    fn require_members(schema: &mut schemars::Schema, members: &[&str]) {
+        let required = schema
+            .ensure_object()
+            .entry("required")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("an object schema lists its required members in an array");
+        for member in members {
+            if !required.iter().any(|name| name == member) {
+                required.push(serde_json::Value::from(*member));
+            }
+        }
     }
 
     #[derive(Deserialize)]
@@ -404,9 +439,7 @@ fn check_coverage(
                 "evidence.fixture.missing-block",
                 &format!("/{block}"),
                 &format!("a fixture declares a `{block}` block"),
-                &format!(
-                    "Add a `{block}` mapping; `evidencectl init` writes one in a fresh project."
-                ),
+                &format!("Add a `{block}` mapping to the fixture file."),
             ));
         }
     }
