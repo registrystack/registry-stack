@@ -1574,12 +1574,22 @@ fn validate_public_check(
         && project
             .selector_profiles
             .get(&definition.subjects[0].selectors[0])
-            .is_some_and(|profile| profile.fields.len() == 1);
+            .is_some_and(|profile| {
+                // The route always presents the number as text.
+                profile.fields.len() == 1
+                    && profile.fields.values().all(|field| {
+                        !matches!(
+                            field,
+                            crate::selector::Field::Integer { .. }
+                                | crate::selector::Field::Boolean { .. }
+                        )
+                    })
+            });
     if !one_number {
         findings.push(Finding::new(
             at.clone(),
             "public-check-subject-shape",
-            "a public check takes one certificate number: declare exactly one subject role with one selector profile that has exactly one field",
+            "a public check takes one certificate number as text: declare exactly one subject role with one selector profile that has exactly one field of type string, uuid, date or controlled-code",
         ));
     }
     if definition.existence_disclosure != "collapse-unresolved" {

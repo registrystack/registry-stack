@@ -26,8 +26,10 @@
   `public-check-evidence` deployment reference. `evidencectl check` and package
   loading refuse a `publicCheck` definition that declares an entity-reference
   Output (`public-check-entity-reference-output`), since a public check has no
-  relying party to scope it to. `evidencectl audit show` and the local audit
-  view list public check entries.
+  relying party to scope it to. Both, and startup, also refuse a definition
+  whose selector field is `integer` or `boolean`, since the route presents the
+  number as text. `evidencectl audit show` and the local audit view list public
+  check entries.
 
 - The problem contract and the security invariant matrix now state what the
   runtime does with a selector value that passes its profile but that a Source

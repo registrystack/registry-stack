@@ -3387,7 +3387,8 @@ activated per process. Packaging refuses a definition whose `statusOutput` is
 not a `controlled-category` output with inline values drawn only from the four
 statuses, whose `fieldsOutput` is not a `reviewed-structured-value` output,
 whose status and fields are the same output, that has more than one subject
-role, selector profile or selector field, whose `checkCodeFact` is not a string
+role, selector profile or selector field, whose selector field is `integer` or
+`boolean` (the route presents the number as text), whose `checkCodeFact` is not a string
 property of the source's facts or is bound as a request input, whose
 `existenceDisclosure` is not the default `collapse-unresolved`, or that does not
 read through exactly one Source or declares `holderPresented`. Startup refuses

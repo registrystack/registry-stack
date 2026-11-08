@@ -1852,10 +1852,19 @@ impl EvidenceConfig {
                     && self
                         .selector_profiles
                         .get(requirement.subject_roles[0].selector_profiles[0].as_str())
-                        .is_some_and(|profile| profile.fields.len() == 1);
+                        .is_some_and(|profile| {
+                            // The route always presents the number as text.
+                            profile.fields.len() == 1
+                                && profile.fields.iter().all(|(_, field)| {
+                                    !matches!(
+                                        field,
+                                        SelectorField::Integer { .. } | SelectorField::Boolean {}
+                                    )
+                                })
+                        });
                 if !one_number {
                     return invalid(
-                        "publicCheck requires one subject role with one selector profile that has one field",
+                        "publicCheck requires one subject role with one selector profile that has one text field",
                     )
                     .at(format!("{at}/subjectRoles"));
                 }
@@ -13393,7 +13402,7 @@ outboundTls:
             assert!(matches!(
                 two_fields.validate(),
                 Err(ConfigError::Invalid(
-                    "publicCheck requires one subject role with one selector profile that has one field"
+                    "publicCheck requires one subject role with one selector profile that has one text field"
                 ))
             ));
 
@@ -13403,6 +13412,26 @@ outboundTls:
             second.role = "other".to_owned();
             two_roles.requirements[0].subject_roles.push(second);
             assert!(two_roles.validate().is_err());
+        }
+
+        #[test]
+        fn subject_field_must_take_the_number_as_text() {
+            for field in [
+                SelectorField::Integer {
+                    minimum: 1,
+                    maximum: 999_999,
+                },
+                SelectorField::Boolean {},
+            ] {
+                let mut config = config();
+                config.selector_profiles.0[0].1.fields.0[0].1 = field;
+                assert!(matches!(
+                    config.validate(),
+                    Err(ConfigError::Invalid(
+                        "publicCheck requires one subject role with one selector profile that has one text field"
+                    ))
+                ));
+            }
         }
 
         #[test]
