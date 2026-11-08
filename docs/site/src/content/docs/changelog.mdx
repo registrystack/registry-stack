@@ -55,6 +55,17 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidence/src/public_check.rs; crates/registry-evidencectl/tests/public_check.rs;
     products/evidence/examples/public-check/README.md. */}
 
+- Evidence's evaluate routes answer `400 request.selector-invalid`, not `503 service.unavailable`,
+  for a selector value that passes its profile but that the Source's inputs schema refuses. The
+  refusal counts against the caller's selector-failure budget, and one such item refuses a whole
+  batch. A caller that retried that 503 should correct the selector instead. See
+  [Evidence problems](../reference/evidence-problems/).
+
+{/* Evidence: products/evidence/CHANGELOG.md, Unreleased, request.selector-invalid;
+    crates/registry-evidence/src/runtime.rs, refuse_selector_the_source_inputs_reject;
+    crates/registry-evidence/src/runtime_tests.rs,
+    a_selector_value_the_source_inputs_schema_refuses_is_an_invalid_selector. */}
+
 ## v0.45.0 beta-57
 
 - BREAKING: Evidence sources move into reviewed Adapter packs. A source declares `pack`,

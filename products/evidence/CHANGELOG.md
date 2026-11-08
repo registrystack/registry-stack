@@ -46,6 +46,48 @@
   counts against the caller's selector-failure budget, and one such item
   refuses the whole batch. The public check route already answered this way.
 
+- `evidencectl target new --local` carries the source extract bindings the
+  project's `local-target.yaml` declares, beside its connections, and names
+  both. A fresh SQLite-extract project's target used to lack them, so
+  `check --target` refused it with `evidence.runtime.source-extract-unbound`.
+
+- `evidencectl target new` accepts a bare file or directory name, such as
+  `--settings local-target.yaml` or a destination with no path separator,
+  instead of failing while it resolved the parent directory.
+
+- The starter fixture `evidencectl init --openapi` writes passes the `check`
+  and `test` commands its README gives. It used case fields that `check`
+  refused.
+
+- `evidencectl check`, `test` and the other project commands refuse a
+  directory with no `evidence.yaml` with exit 1 and
+  `evidence.project.not-found`, naming the path given and pointing to
+  `evidencectl init`. They used to fail with exit 3, "Evidence could not
+  inspect the selected authoring project", and a private temporary path.
+
+- A malformed `adapter-packs/<id>/pack.yaml`, or one with an unknown key, is
+  reported at its file, line and key. A Source `route` the pack does not
+  declare is reported at that `route` member as `evidence.pack.route-missing`,
+  naming the routes the pack declares. Both used to give the generic
+  inspection failure.
+
+- The refusal for an extract profile with no bound file says to bind it under
+  `extracts`, the target's key, not `sourceExtracts`.
+
+- `evidencectl check` and bundle loading refuse a fixture file without a
+  `common` or `privacyExpectation` mapping as `evidence.fixture.missing-block`,
+  located in the fixture file. A coequal acceptance fixture needs only
+  `privacyExpectation`. `check` used to pass such a fixture and `test` then
+  refused it without a location. `evidencectl package` already ran every
+  fixture, so packaged bundles carry both blocks; a hand-assembled bundle
+  without them is now refused when it loads.
+
+- When a fixture case fails during evaluation and declares no `error` or
+  `publicProblem`, the report names the stage that failed, its internal
+  category and its public problem, for example that the derivation script
+  failed or that the output gate refused the derived values. It used to say
+  only "reference failing case has no exact expectation".
+
 - Each target-authority access profile may carry an optional `label` and `description`, accepted for authoring and tooling; compilation drops them and Evidence does not serve them. Neither is matched against a caller, and a profile that writes neither reads as before.
 
 - A definition with `holderPresented` acquisition now answers only as a signed
