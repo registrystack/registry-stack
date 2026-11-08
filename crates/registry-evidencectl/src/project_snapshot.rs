@@ -593,7 +593,7 @@ impl InspectionDiagnostic {
             Inspection::NoProjectFile => (
                 "evidence.project.not-found",
                 "the directory holds no evidence.yaml, so it is not an Evidence project",
-                "An Evidence project is a directory holding evidence.yaml, with functions/, fixtures/ and adapter-packs/ beside it. Point the command at that directory, or run `evidencectl init` to create a project.",
+                "An Evidence project is a directory holding evidence.yaml, with functions/, fixtures/ and adapter-packs/ beside it. Point the command at that directory, or run `evidencectl init` to create a project. `evidencectl test` also runs a deployment directory, one holding runtime.yaml.",
             ),
             Inspection::NotPlain => (
                 "evidence.project.not-plain-file",

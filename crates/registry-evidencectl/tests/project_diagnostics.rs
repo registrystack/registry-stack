@@ -71,6 +71,11 @@ fn a_directory_without_evidence_yaml_is_refused_naming_the_path_given() {
         assert!(!shown.contains("snapshot"), "{shown}");
         let action = diagnostic["suggestedAction"].as_str().unwrap();
         assert!(action.contains("evidencectl init"), "{action}");
+        if command == "test" {
+            // `test` also runs a deployment directory, which it knows by its
+            // runtime.yaml, so the action names that shape too.
+            assert!(action.contains("runtime.yaml"), "{action}");
+        }
     }
 }
 
