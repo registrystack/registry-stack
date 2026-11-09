@@ -8,7 +8,7 @@ retain authority and ownership of every effect.
 The [product contract](PRODUCT-CONTRACT.md) defines the boundary; the
 [deployment runbook](DEPLOYMENT.md) covers installation, custody, activation, and recovery.
 Coordinator is pre-1.0. Use one source version's binaries, packages, configuration, and state
-layout together. The current protected state schema is version 5, with no in-place migration
+layout together. The current protected state schema is version 6, with no in-place migration
 from earlier layouts.
 
 Build the Coordinator service, operator CLI, client, and client bindings from source using
@@ -85,6 +85,24 @@ workflow:
     observed:
       operationOutput: read-application
 ```
+
+`onFailure` is optional on a `call` whose Operation effect is `read` or
+`evaluation`. It names a step taken only when the ordinary retry policy is
+exhausted by a definite, bounded availability category. Run status records
+that category while the routed successor is current, and inspection retains it
+on the completed call step. The failure edge receives no output from the call. A
+mutation cannot declare this edge. Authentication, authorization,
+configuration, preparation, binding and protocol refusals still stop the run,
+as does every uncertain outcome, including a model request whose reply was
+lost after dispatch. `coordinatorctl check` refuses an unknown target and any
+use on an operation with a mutation effect.
+
+Set `workflow.serviceDeadlineSeconds` and `workflow.onDeadline` together to
+route a run that is still waiting after that many seconds from admission.
+Keep the service deadline shorter than `workflow.deadlineSeconds`, the hard
+run cutoff. Give the deadline route its own steps, for example a notice and a
+finish. Its first step can read workflow input. `coordinatorctl explain` shows
+both clocks and the route.
 
 Mappings select the workflow input, an available earlier step output, or a literal. `path` is an
 RFC 6901 JSON Pointer. `type: fields` builds an object. `type: function` invokes a named Function
@@ -166,6 +184,42 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
 - [External directory](examples/external-directory/README.md) performs a configured HTTP GET.
 - [External job](examples/external-job/README.md) uses a bounded completion poll and pure
   interpreter for one previously selected external job.
+
+## Calendar starts
+
+To start one Run at a reviewed institutional month boundary, declare a
+`workflow.calendarTriggers` entry. The first slice accepts one minute, one
+hour, and either the first or last local day of every month:
+
+```yaml
+workflow:
+  calendarTriggers:
+    month-end:
+      cron: 5 8 L * *
+      timezone: Asia/Bangkok
+  input:
+    type: object
+    additionalProperties: false
+    required: [scheduledAt]
+    properties:
+      scheduledAt: {type: string, format: date-time}
+```
+
+The Run input is exactly `{scheduledAt}` with the resolved UTC instant. The
+named IANA timezone controls the local month, day and time. A local time inside
+a daylight-saving gap moves to the first real instant after the gap, and a
+fold takes its earlier instant, using the shared Registry Platform calendar
+rule.
+
+PostgreSQL holds one durable cursor per workflow and trigger. After downtime,
+Coordinator admits only the latest due occurrence and records the number of
+older occurrences skipped. Replicas serialize on the ordinary admission lock
+and cursor row. The same workflow and occurrence always derive the same start
+identity, so restart, replay, package replacement and a competing replica do
+not create a second Run. A new trigger starts from the first time the serving
+deployment observes it; it does not replay earlier institutional history. A
+changed Workflow revision also moves the cursor monotonically to that
+revision's first observation before evaluating its reviewed schedule.
 
 ## Waits and polling
 

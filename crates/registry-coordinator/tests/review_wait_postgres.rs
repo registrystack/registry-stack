@@ -810,6 +810,61 @@ async fn a_result_found_by_the_last_read_wins_over_the_timeout() {
 }
 
 #[tokio::test]
+async fn the_service_deadline_reads_the_result_before_taking_its_route() {
+    for (last, expected) in [
+        (
+            CompletionObservation::Settled(result("approved")),
+            "notice-sent",
+        ),
+        (
+            CompletionObservation::Pending { retry_after: None },
+            "service-expired",
+        ),
+    ] {
+        let mut h = harness(true).await;
+        let mut authored = registry_platform_yaml::Reader::new("workflow.yaml")
+            .scan(workflow_with_cancel(true, false, false).as_bytes())
+            .unwrap()
+            .unwrap()
+            .to_json_value();
+        let workflow = &mut authored["workflow"];
+        workflow["serviceDeadlineSeconds"] = json!(60);
+        workflow["onDeadline"] = json!("service-expired");
+        workflow["steps"]["service-expired"] = json!({"type":"finish","outcome":"service-expired"});
+        workflow["outcomes"]["service-expired"] = json!({"type":"null"});
+        std::fs::write(
+            h._project.path().join("workflow.yaml"),
+            authored.to_string(),
+        )
+        .unwrap();
+        h.definition = Definition::load(h._project.path()).unwrap();
+        let fake = Fake::new(vec![
+            CompletionObservation::Pending { retry_after: None },
+            last,
+        ]);
+        let worker = Worker::new(h.store.clone(), fake.clone());
+        let run = h.admit().await;
+        h.drain(&worker).await;
+        assert_eq!(fake.reads(), 1);
+        let before = h.store.inspect(run, "binding-a").await.unwrap();
+        assert_eq!(
+            before.waits[0].timeout_at,
+            before.run.admitted_at + chrono::Duration::seconds(60)
+        );
+        h.sql("WITH due AS (UPDATE {schema}.runs SET service_deadline_at=clock_timestamp()-interval '1 second' RETURNING run_id,service_deadline_at) UPDATE {schema}.completion_waits w SET timeout_at=due.service_deadline_at,started_at=due.service_deadline_at-interval '60 seconds' FROM due WHERE w.run_id=due.run_id").await;
+        h.make_due(run).await;
+        h.drain(&worker).await;
+        assert_eq!(fake.reads(), 2);
+        assert_eq!(
+            status(&h, run).await,
+            ("finished".into(), Some(expected.into()), None)
+        );
+        assert!(!fake.operations().contains(&Operation::CancelReviewRequest));
+        assert!(h.wait_row(run).await.is_none());
+    }
+}
+
+#[tokio::test]
 async fn a_read_shortly_before_the_timeout_schedules_the_last_read_at_the_timeout() {
     let h = harness(true).await;
     let fake = Fake::new(vec![]);

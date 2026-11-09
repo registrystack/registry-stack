@@ -538,7 +538,7 @@ impl Store {
                 let input_row=tx.query_one(&format!("SELECT input FROM {}.runs WHERE run_id=$1",self.namespace),&[&run]).await.map_err(unavailable)?;
                 let input:Value=self.open_value(run,"input","",&input_row.get::<_,Value>(0))?;
                 let payload=Payload{snapshot,input,outputs,command:Some(command)};
-                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,uncertain:false,recovery_hold:false,observation_pause_seconds:None,receipt_expired:false,completed_without_effect:false,recheck_seconds:None,follow:None,hold_detail:None};
+                let detail=Detail{next:Some(next.clone()),output:Some(value),outcome:None,failure_code:None,failure_path:None,routed_failure:false,service_deadline_routed:false,uncertain:false,recovery_hold:false,observation_pause_seconds:None,receipt_expired:false,completed_without_effect:false,recheck_seconds:None,follow:None,hold_detail:None};
                 let written=self.apply_success(&tx,run,&step,payload,&detail,current.get(4)).await.map_err(unavailable)?;
                 let mapping_failed=written=="failed";
                 tx.execute(&format!("UPDATE {}.jobs SET state='delivered',attempt=GREATEST(attempt,1),uncertain=false,next_attempt_at=NULL,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL,delivered_at=transaction_timestamp(),dead_lettered_at=NULL,expired_at=NULL,failure_code=NULL,failure_path=NULL,hold_detail=NULL WHERE run_id=$1 AND step=$2",self.namespace),&[&run,&step]).await.map_err(unavailable)?;
@@ -1086,7 +1086,12 @@ impl Store {
                 Some(Step::Choose { cases, .. }) => {
                     pending.extend(cases.values().map(String::as_str))
                 }
-                Some(Step::WaitUntil { next, .. }) => pending.push(next.as_str()),
+                Some(Step::WaitUntil { next, .. }) => {
+                    pending.push(next.as_str());
+                    if let Some(deadline) = &definition.workflow.service_deadline {
+                        pending.push(deadline.next.as_str());
+                    }
+                }
                 Some(Step::Finish { .. }) => {}
             }
         }

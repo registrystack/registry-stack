@@ -45,6 +45,22 @@ The compiler resolves schema references and proves data availability on every ro
 commands are validated again before preparation, saving, or dispatch. Invalid commands report a
 bounded `failurePath` without the submitted value.
 
+A call whose catalog effect is `read` or `evaluation` may declare `onFailure`.
+The edge is taken only after the normal retry limit is exhausted by one of the
+host's closed, definite availability categories: transport unavailable, rate
+limited, attempt timeout, external unavailable, external rate limited, or
+decision unavailable. The category is recorded as the run's bounded failure
+code while the routed successor is current, and inspection retains it on the
+completed call step after later progress. The call contributes no step output
+on this edge, so a mapping cannot turn an operational diagnostic into a
+business result. Authentication, authorization, credential configuration,
+preparation, binding, command or response validation, and protocol refusals
+remain operational failures. An uncertain outcome never routes, including a
+lost evaluation reply after possible model dispatch. Mutations cannot declare
+`onFailure`. The compiler checks those rules, the target, reachability and
+output dominance in the frozen graph. Omitting the edge preserves the existing
+failure behavior.
+
 A `fields` mapping builds an object member by member. Each member is a reference (`input`, `step`
 or `literal`) or itself a `fields` mapping, so a Workflow builds a structured operation input, such
 as a Proposal's Action input or a read-in-force `subject`, without a Function. Nesting reaches a
@@ -444,6 +460,17 @@ blocked source state stays held for investigation and recovery. None is evidence
 business decision. A Coordinator timeout means the workflow stopped waiting; source-owned work
 can continue. The timeout and run deadline do not reset during recovery.
 
+An optional service deadline counts elapsed time from durable run admission.
+It requires `workflow.serviceDeadlineSeconds` below `deadlineSeconds` and an
+`onDeadline` path disjoint from the ordinary graph. Coordinator caps wait
+wake-ups at the service deadline. A completion wait uses its existing read
+floor and budget for a final observation. A settled result takes its ordinary
+route. A still-pending wait at the service deadline takes `onDeadline` once,
+including after restart. The transition consumes the service deadline in the
+same transaction that enqueues its successor. A shorter wait keeps its own
+timeout route. The deadline route carries no output from the interrupted wait.
+Calls already in progress keep their dispatch and recovery rules.
+
 Definite retryable effect responses can resend the durable original command under bounded retry
 and deadline rules. An ambiguous mutation stays uncertain. Messaging submission and Scheduling
 appointment creation or hold confirmation support original-key receipt reads. Scheduling hold
@@ -461,6 +488,31 @@ is not calibrated across providers or a guarantee of correctness.
 Coordinator is not a Review provider. A project that declares `workflow.review` is refused, and
 the runtime serves no `/v1/review-requests` route. When a Workflow needs human review it submits
 its own request to Casework under its independently registered producer identity.
+
+An authored `workflow.calendarTriggers` entry names one stable trigger, a
+five-field cron restricted to `MIN HOUR 1|L * *`, and a named IANA timezone.
+It admits an ordinary Run with exactly one input member, `scheduledAt`, holding
+the resolved UTC instant. A calculated local time inside a daylight-saving gap
+moves to the first real instant after the gap; a fold chooses its earlier
+instant. The shared platform calendar evaluator owns that named-zone rule;
+Coordinator owns the reviewed cron subset and admission policy.
+
+Each workflow and trigger has one PostgreSQL cursor. The serving process seeds
+a new cursor at its first observation, so it does not manufacture historical
+Runs. A later sweep advances from the durable cursor through the transaction's
+database time. When several occurrences became due, it admits the latest only
+and adds every earlier due occurrence to the cursor's skipped count. The
+cursor update, Run, first job and start identity commit in one ordinary
+admission transaction. The admission lock, cursor row lock, active package
+digest, key custody, restore hold and admission hold fence restart and
+competing replicas. The start identity binds workflow, trigger and exact
+occurrence instant, so replay cannot create another Run for that occurrence.
+When the checked Workflow revision changes, its first check advances the
+cursor monotonically to the new revision's observation time and admits
+nothing, so an earlier instant is not reinterpreted under a changed schedule.
+Calendar lock acquisition and the full serving-process sweep are short and
+bounded, so a contended admission fence cannot starve work already admitted.
+Calendar admission adds no HTTP API and grants no downstream product authority.
 
 An authored `workflow.eventTriggers` entry accepts a logical source, exact event type and
 data-schema identity, a schema for the full event and an ordinary typed input mapping.
@@ -515,6 +567,8 @@ receiver over HTTP.
 
 | Guarantee | Owning test |
 |---|---|
+| A reviewed monthly calendar start resolves one named-zone instant, catches up with the latest occurrence only, and supplies only `scheduledAt`. | `calendar_trigger::tests::first_and_last_day_schedules_resolve_in_the_named_zone`, `catch_up_selects_only_the_latest_due_instant_and_counts_every_skipped_one`, and `calendar_trigger_authoring::a_calendar_trigger_is_checked_explained_and_restored` |
+| First observation creates no historical Run; restart, a competing replica, cursor replay, restore hold and activation replacement cannot create a second Run for one workflow and occurrence. | `calendar_trigger_authoring::calendar_admission_is_latest_only_atomic_and_fenced` |
 | A signature binds the destination, source, event contract and canonical body. | `event_trigger_tests::substituted_signature_destination_source_and_contract_are_refused` |
 | Delivery attempt time is fresh; an old event commit time alone does not prevent recovery. | `event_trigger_tests::stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused` and `exact_event_identity_survives_retry_replay_and_old_commit_time` |
 | Concurrent delivery, restart, package activation and local source alias renaming recover one original Run; changed event bytes conflict. | `event_trigger_tests::postgres::event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation` and `source_alias_rename_recovers_one_original_run_after_restart` |
@@ -659,7 +713,7 @@ Unknown product mutations do not qualify for this exception.
 
 ## Compatibility and verification
 
-Protected state schema version 5 directly replaces earlier layouts. Apply and runtime access
+Protected state schema version 6 directly replaces earlier layouts. Apply and runtime access
 refuse incompatible namespaces. Settle old work with its matching binary and preserve original
 packages, keys, and audit until retention allows erasure, then provision a fresh namespace and
 database identity. There are no legacy authoring aliases or automatic state conversions.

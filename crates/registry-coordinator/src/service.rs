@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::{
     adapters::HttpAdapters,
+    calendar_trigger::CalendarRunner,
     deployment,
     http::{self, HttpState},
     metrics,
@@ -64,6 +65,7 @@ async fn execute(cli: Cli) -> Result<()> {
     }
     let adapters: Arc<dyn AdapterSet> = Arc::new(HttpAdapters::new(&runtime)?);
     let worker = Worker::new(store.clone(), adapters.clone());
+    let calendar = CalendarRunner::default();
     let listener = tokio::net::TcpListener::bind(d.listener.bind.socket_addr())
         .await
         .map_err(|_| {
@@ -126,7 +128,7 @@ async fn execute(cli: Cli) -> Result<()> {
                 .await
                 .map(|_| ())
         },
-        || worker.tick(),
+        || service_tick(&calendar, &worker, &store, &workflows, &runtime),
     );
     tracing::info!(
         listener = %d.listener.bind.socket_addr(),
@@ -135,6 +137,27 @@ async fn execute(cli: Cli) -> Result<()> {
         "serving Registry Coordinator"
     );
     serve_until(server, worker, shutdown, stop).await
+}
+
+async fn service_tick(
+    calendar: &CalendarRunner,
+    worker: &Worker,
+    store: &crate::store::Store,
+    workflows: &deployment::Workflows,
+    runtime: &RuntimeConfig,
+) -> Result<bool> {
+    let admitted = match calendar.tick(store, workflows, runtime).await {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            tracing::warn!(
+                code = %error.code,
+                suggested_action = error.suggested_action.as_deref(),
+                "calendar admission sweep was refused; continuing existing Run work"
+            );
+            false
+        }
+    };
+    Ok(worker.tick().await? || admitted)
 }
 
 /// Recovery disables event intake, so unavailable ingress secrets must not

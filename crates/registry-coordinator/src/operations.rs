@@ -460,6 +460,10 @@ mod tests {
             let operation = Operation::parse(registered.id).unwrap();
             assert_eq!(operation.product(), registered.product);
             assert_eq!(operation.recovery(), registered.recovery);
+            assert_eq!(
+                operation.permits_failure_route(),
+                matches!(registered.effect, EffectKind::Read | EffectKind::Evaluation)
+            );
             assert_eq!(operation.supports_read_receipt(), registered.read_receipt);
             assert_eq!(
                 operation.requires_key(),

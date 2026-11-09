@@ -565,8 +565,8 @@ async fn assert_reapply_preserves_schema_and_work(
         .get(0);
     assert!(!before["runs"].as_array().unwrap().is_empty());
     assert!(!before["jobs"].as_array().unwrap().is_empty());
-    assert_eq!(before["ledger"], json!([5]));
-    assert_eq!(before["schemaVersion"], 5);
+    assert_eq!(before["ledger"], json!([6]));
+    assert_eq!(before["schemaVersion"], 6);
     for _ in 0..2 {
         deployment::apply(migration, runtime, workflows, &[])
             .await
@@ -865,7 +865,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     assert_eq!(checked["databaseId"], "router-test");
     assert_eq!(checked["workflowsDigest"], workflows_digest);
     assert_eq!(checked["workflows"], json!({"delayed-follow-up": digest}));
-    assert_eq!(checked["schemaVersion"], 5);
+    assert_eq!(checked["schemaVersion"], 6);
     assert_eq!(checked["runtimeRole"], role);
     assert_eq!(checked["active"]["roleMode"], "split");
     status_doc["deployment"]["runtimeRole"] = json!("wrong_runtime_role");
@@ -976,13 +976,13 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     status_doc["deployment"]["packages"] = doc["deployment"]["packages"].clone();
     fs::write(&status_path, serde_norway::to_string(&status_doc).unwrap()).unwrap();
-    // A prior protected-state schema is refused by the Store gate before
+    // The immediately prior protected-state schema is refused by the Store gate before
     // deployment inspection can use that layout. Plan can still report its
     // read-only observation through the migration role.
     admin
         .batch_execute(&format!(
             "ALTER TABLE {namespace}.control DROP CONSTRAINT control_schema_version_check;
-             UPDATE {namespace}.control SET schema_version=1"
+             UPDATE {namespace}.control SET schema_version=5"
         ))
         .await
         .unwrap();
@@ -993,8 +993,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     admin
         .batch_execute(&format!(
-            "UPDATE {namespace}.control SET schema_version=5;
-             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=5)"
+            "UPDATE {namespace}.control SET schema_version=6;
+             ALTER TABLE {namespace}.control ADD CONSTRAINT control_schema_version_check CHECK(schema_version=6)"
         ))
         .await
         .unwrap();
@@ -1003,8 +1003,8 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     // write authority all refuse status while plan still reports observation.
     for (damage, repair) in [
         (
-            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(6)"),
-            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=6"),
+            format!("INSERT INTO {namespace}.coordinator_migrations VALUES(7)"),
+            format!("DELETE FROM {namespace}.coordinator_migrations WHERE version=7"),
         ),
         (
             format!("REVOKE SELECT ON {namespace}.jobs FROM {role}"),

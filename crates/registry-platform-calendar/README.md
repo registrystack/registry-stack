@@ -18,6 +18,11 @@ explicit authority, names the closure it reopens, and stays inside it.
 IANA timezone. A product that answers "today" uses it so that one deployment
 has one today, which changes at local midnight.
 
+`resolve_local_instant(date, time, timezone)` applies the shared calculated-
+instant rule to a product-selected local date and time. The product still owns
+why that wall time was selected and whether it is a deadline, trigger, or other
+commitment.
+
 Daylight-saving transitions follow one rule per evaluator, with no knob. A
 working-day deadline is a single calculated instant: a due time inside a gap
 moves to the first instant after the gap, and a due time inside a fold takes

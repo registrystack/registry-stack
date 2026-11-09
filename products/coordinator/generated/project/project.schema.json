@@ -18,6 +18,32 @@
       ],
       "type": "object"
     },
+    "AuthoredCalendarTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "cron": {
+          "description": "Five-field cron restricted to `MIN HOUR 1|L * *` in Version 1.",
+          "type": "string"
+        },
+        "description": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "Optional explanation for readers; it has no execution or authorization effect."
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "Optional human label; it changes neither stable identity nor behavior revision."
+        },
+        "timezone": {
+          "description": "Named IANA timezone used to interpret the local month, day and time.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cron",
+        "timezone"
+      ],
+      "type": "object"
+    },
     "AuthoredCompletion": {
       "oneOf": [
         {
@@ -508,6 +534,10 @@
               "$ref": "#/$defs/LocalId",
               "description": "A separate Step taken only for a validated package-declared business refusal.\nOmit it to fail the run with `product-refused` on a declared refusal too."
             },
+            "onFailure": {
+              "$ref": "#/$defs/LocalId",
+              "description": "A separate Step taken only after a read or evaluation exhausts\nretries for a definite availability failure. It receives no Step\noutput; the bounded category remains run status."
+            },
             "operation": {
               "$ref": "#/$defs/LocalId",
               "description": "One local Operation alias declared under operations."
@@ -603,6 +633,18 @@
     "AuthoredWorkflow": {
       "additionalProperties": false,
       "properties": {
+        "calendarTriggers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AuthoredCalendarTrigger"
+          },
+          "description": "Optional reviewed monthly starts keyed by stable trigger ID.",
+          "maxProperties": 1,
+          "minProperties": 0,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
         "deadlineSeconds": {
           "description": "Maximum seconds from Run admission to expiry, from 1 to 31536000.",
           "format": "uint32",
@@ -626,6 +668,10 @@
           "$ref": "#/$defs/Schema",
           "description": "The typed Workflow start input, or a mapping supplying the called Operation input."
         },
+        "onDeadline": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Entry to a separate path for a Run still waiting at its service deadline."
+        },
         "outcomes": {
           "additionalProperties": {
             "$ref": "#/$defs/Schema"
@@ -637,6 +683,13 @@
             "$ref": "#/$defs/LocalId"
           },
           "type": "object"
+        },
+        "serviceDeadlineSeconds": {
+          "description": "Elapsed seconds from Run admission before a waiting Run takes onDeadline.",
+          "format": "uint32",
+          "maximum": 31535999,
+          "minimum": 1,
+          "type": "integer"
         },
         "start": {
           "$ref": "#/$defs/LocalId",

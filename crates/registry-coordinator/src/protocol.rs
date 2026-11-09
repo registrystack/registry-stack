@@ -82,6 +82,14 @@ impl Operation {
         self.descriptor().effect == crate::operations::EffectKind::Evaluation
     }
 
+    /// An authored failure edge is limited to operations whose successful
+    /// completion itself changes no product state. Evaluations remain
+    /// non-repeatable after possible dispatch, but a definite pre-dispatch
+    /// availability failure may exhaust its retries and take that edge.
+    pub fn permits_failure_route(self) -> bool {
+        self.is_read() || self.is_evaluation()
+    }
+
     /// These calls can complete remotely before a local result is committed.
     pub fn has_dispatch_risk(self) -> bool {
         self.is_mutating() || self.is_evaluation()

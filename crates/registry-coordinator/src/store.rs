@@ -2,6 +2,7 @@
 //! Coordinator-owned durable rows, driven by the shared Dispatch lease engine.
 
 use crate::{
+    calendar_trigger::CalendarTriggerError,
     definition::{Definition, DefinitionCache, Step, DEFINITION_REFUSED, HELD_RUN_ADVICE},
     metrics::{DispatchDepth, Metrics, RunOutcome},
     protected_state::StateKeys,
@@ -47,7 +48,7 @@ enum InspectionBinding<'a> {
 /// The protected state schema version. It is written once, when apply creates
 /// the namespace, to `control.schema_version` and to the activation migration
 /// ledger, and every state transaction fences on it.
-pub(crate) const SCHEMA_VERSION: i32 = 5;
+pub(crate) const SCHEMA_VERSION: i32 = 6;
 
 /// Identifies a namespace whose tables this runtime created and owns.
 const NAMESPACE_MARKER: &str = "registry-coordinator protected-state";
@@ -66,9 +67,13 @@ const POOL_SIZE: usize = 32;
 /// and an idle session takes to prove it still answers before it is replaced.
 const POOL_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Calendar sweeps must yield quickly to ordinary starts and worker progress.
+/// The whole sweep has a separate process deadline in `CalendarRunner`.
+const CALENDAR_ADMISSION_LOCK_TIMEOUT: &str = "50ms";
+
 const JOIN: &str = "JOIN {schema}.runs AS run ON run.run_id = state.run_id JOIN {schema}.control AS control ON control.id";
 const SELECT: SelectSql = SelectSql {
-    columns: "run.snapshot, run.input, run.outputs, run.deadline_at, run.binding_digest, state.command, state.uncertain, state.receipt_expired, run.deadline_at > transaction_timestamp(), state.pure, run.start_identity, run.cancel_requested, control.restore_hold, run.owner_hash, run.restore_review_required, run.authored_cancel_requested, run.authored_cancel_pending_step",
+    columns: "run.snapshot, run.input, run.outputs, run.deadline_at, run.binding_digest, state.command, state.uncertain, state.receipt_expired, run.deadline_at > transaction_timestamp(), state.pure, run.start_identity, run.cancel_requested, control.restore_hold, run.owner_hash, run.restore_review_required, run.authored_cancel_requested, run.authored_cancel_pending_step, run.service_deadline_at",
     joins: JOIN, predicate: "true",
 };
 
@@ -105,6 +110,15 @@ pub struct StoreSecurity {
     pub keys: StateKeys,
     pub audit: AuditWriter,
     pub audit_profile: AuditProfile,
+}
+
+/// One calendar occurrence admitted by a cursor transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CalendarAdmission {
+    pub run_id: Uuid,
+    pub scheduled_at: DateTime<Utc>,
+    /// Due occurrences deliberately skipped before this latest admission.
+    pub skipped: u64,
 }
 
 /// Safe progress metadata plus the workflow author's declared terminal output.
@@ -364,6 +378,7 @@ pub struct Job {
     pub restore_review_required: bool,
     pub authored_cancel_requested: bool,
     pub authored_cancel_pending_step: Option<String>,
+    pub(crate) service_deadline_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) struct Payload {
@@ -429,9 +444,16 @@ impl FrozenCommand {
 }
 
 pub(crate) enum ObservationPermit {
-    Observe { timed_out: bool },
-    Pause { seconds: u32 },
-    TimedOut,
+    Observe {
+        timed_out: bool,
+        service_deadline: bool,
+    },
+    Pause {
+        seconds: u32,
+    },
+    TimedOut {
+        service_deadline: bool,
+    },
     Exhausted,
 }
 
@@ -443,6 +465,11 @@ pub struct Detail {
     pub outcome: Option<String>,
     pub failure_code: Option<&'static str>,
     pub failure_path: Option<String>,
+    /// A definite availability failure exhausted its retries and took the
+    /// authored failure edge. The category is persisted on the run while the
+    /// successor is current, but never becomes a Step output.
+    pub routed_failure: bool,
+    pub service_deadline_routed: bool,
     pub uncertain: bool,
     /// An observation needs operator attention without implying an unknown command.
     pub recovery_hold: bool,
@@ -468,6 +495,8 @@ impl Detail {
             outcome: None,
             failure_code: Some(code),
             failure_path: None,
+            routed_failure: false,
+            service_deadline_routed: false,
             uncertain,
             recovery_hold: false,
             observation_pause_seconds: None,
@@ -503,12 +532,16 @@ pub(crate) fn schema_statements(namespace: &str) -> Result<Vec<String>> {
             workflow_id text NOT NULL, workflow_version text NOT NULL, definition_digest text NOT NULL,
             snapshot jsonb, input jsonb, outputs jsonb, event_binding text,
             binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
-            outcome text, terminal_output jsonb, failure_code text, failure_path text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
+            outcome text, terminal_output jsonb, failure_code text, failure_path text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL, service_deadline_at timestamptz,
             cancel_requested boolean NOT NULL DEFAULT false, authored_cancel_requested boolean NOT NULL DEFAULT false,
             authored_cancel_pending_step text CHECK(authored_cancel_pending_step IS NULL OR authored_cancel_requested),
             restore_review_required boolean NOT NULL DEFAULT false, completed_at timestamptz, payload_erased_at timestamptz);
             CREATE TABLE {0}.admission_lock (id boolean PRIMARY KEY CHECK(id));
-            INSERT INTO {0}.admission_lock VALUES(true)", namespace, SCHEMA_VERSION),
+            INSERT INTO {0}.admission_lock VALUES(true);
+            CREATE TABLE {0}.calendar_cursors (
+            workflow_id text NOT NULL, trigger_id text NOT NULL, workflow_revision text NOT NULL,
+            cursor_at timestamptz NOT NULL, skipped_count bigint NOT NULL DEFAULT 0 CHECK(skipped_count>=0),
+            PRIMARY KEY(workflow_id,trigger_id))", namespace, SCHEMA_VERSION),
     ];
     statements.extend(job_table(namespace)?.create_statements());
     // The core job shape is widened by exactly one product state: a
@@ -567,6 +600,16 @@ fn unavailable(_: impl std::fmt::Display) -> CoordinatorError {
 }
 fn refused(code: &'static str, message: &'static str) -> CoordinatorError {
     CoordinatorError::new(code, message)
+}
+
+fn calendar_refused(error: CalendarTriggerError) -> CoordinatorError {
+    let code = match error {
+        CalendarTriggerError::InvalidExpression | CalendarTriggerError::InvalidTimezone => {
+            "calendar-invalid"
+        }
+        CalendarTriggerError::Overflow => "calendar-overflow",
+    };
+    CoordinatorError::new(code, error.to_string())
 }
 
 impl Store {
@@ -1140,6 +1183,52 @@ impl Store {
         expected_revision: &str,
         event: Option<(&str, &crate::event_trigger::EventTrigger)>,
     ) -> Result<Uuid> {
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        self.lock_admission(&tx).await?;
+        let now: DateTime<Utc> = tx
+            .query_one("SELECT transaction_timestamp()", &[])
+            .await
+            .map_err(unavailable)?
+            .get(0);
+        let (run, inserted) = self
+            .admit_bound_locked(
+                &tx,
+                definition,
+                input,
+                producer,
+                key,
+                binding_digest,
+                runtime,
+                expected_revision,
+                event,
+                now,
+            )
+            .await?;
+        tx.commit().await.map_err(unavailable)?;
+        if inserted {
+            self.metrics.record_run_admitted();
+        }
+        Ok(run)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The common admission transaction binds caller, command, runtime, revision, trigger and database time independently"
+    )]
+    async fn admit_bound_locked(
+        &self,
+        tx: &Transaction<'_>,
+        definition: &Definition,
+        input: Value,
+        producer: &str,
+        key: &str,
+        binding_digest: &str,
+        runtime: Option<&crate::runtime::RuntimeConfig>,
+        expected_revision: &str,
+        event: Option<(&str, &crate::event_trigger::EventTrigger)>,
+        now: DateTime<Utc>,
+    ) -> Result<(Uuid, bool)> {
         let event_binding = event.map(|(binding, _)| binding);
         if binding_digest.is_empty() || binding_digest.len() > 256 {
             return Err(refused(
@@ -1155,9 +1244,6 @@ impl Store {
                 .commitment("event", &[identity.as_bytes(), binding.as_bytes()])
         });
         let snapshot = definition.snapshot()?;
-        let mut client = self.client().await.map_err(unavailable)?;
-        let tx = client.transaction().await.map_err(unavailable)?;
-        self.lock_admission(&tx).await?;
         if let Some(row) = tx
             .query_opt(
                 &format!(
@@ -1178,14 +1264,14 @@ impl Store {
                     "this producer, workflow and idempotency key already names different admitted work",
                 ));
             }
-            return Ok(row.get(0));
+            return Ok((row.get(0), false));
         }
         if expected_revision != definition.digest {
             return Err(refused("workflow-revision-mismatch", "the expected Workflow revision is not active; discover the active contract before starting new work"));
         }
         let run = Uuid::new_v4();
         if let Some(runtime) = runtime {
-            self.check_live_bindings(&tx, runtime).await?;
+            self.check_live_bindings(tx, runtime).await?;
         }
         let input = if let Some((_, trigger)) = event {
             trigger.map(definition, &input)?
@@ -1193,20 +1279,19 @@ impl Store {
             input
         };
         definition.validate_input(&input)?;
-        self.require_unheld(&tx).await?;
-        let now: DateTime<Utc> = tx
-            .query_one("SELECT transaction_timestamp()", &[])
-            .await
-            .map_err(unavailable)?
-            .get(0);
+        self.require_unheld(tx).await?;
         let deadline = definition.deadline_at(now)?;
-        let due = definition.initial_due(&input, now)?;
+        let service_deadline = definition.service_deadline_at(now)?;
+        let due = match (definition.initial_due(&input, now)?, service_deadline) {
+            (Some(due), Some(service_deadline)) => Some(due.min(service_deadline)),
+            (due, _) => due,
+        };
         let sealed_snapshot = self.seal(run, "snapshot", "", &snapshot)?;
         let sealed_input = self.seal(run, "input", "", &input)?;
         let sealed_outputs = self.seal(run, "outputs", "", &BTreeMap::<String, Value>::new())?;
-        tx.execute(&format!("INSERT INTO {}.runs (run_id,start_identity,input_digest,workflow_id,workflow_version,definition_digest,snapshot,input,binding_digest,step,admitted_at,deadline_at,outputs,owner_hash,event_binding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)", self.namespace), &[&run, &identity, &input_digest, &definition.workflow.id, &definition.workflow.version, &definition.digest, &sealed_snapshot, &sealed_input, &binding_digest, &definition.workflow.start, &now, &deadline, &sealed_outputs, &producer,&event_binding]).await.map_err(unavailable)?;
+        tx.execute(&format!("INSERT INTO {}.runs (run_id,start_identity,input_digest,workflow_id,workflow_version,definition_digest,snapshot,input,binding_digest,step,admitted_at,deadline_at,service_deadline_at,outputs,owner_hash,event_binding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)", self.namespace), &[&run, &identity, &input_digest, &definition.workflow.id, &definition.workflow.version, &definition.digest, &sealed_snapshot, &sealed_input, &binding_digest, &definition.workflow.start, &now, &deadline, &service_deadline, &sealed_outputs, &producer,&event_binding]).await.map_err(unavailable)?;
         enqueue(
-            &tx,
+            tx,
             &self.table,
             &JobKey::new(run, definition.workflow.start.clone()).map_err(unavailable)?,
             due.map(SystemTime::from),
@@ -1226,9 +1311,180 @@ impl Store {
         )
         .await
         .map_err(unavailable)?;
+        Ok((run, true))
+    }
+
+    /// Evaluate and admit at most one latest due occurrence while holding the
+    /// ordinary admission fence and one durable calendar cursor. A fresh
+    /// trigger starts at its first observed database time, never by replaying
+    /// the institution's unbounded past.
+    pub async fn admit_calendar_due(
+        &self,
+        definition: &Definition,
+        trigger_id: &str,
+        runtime: &crate::runtime::RuntimeConfig,
+    ) -> Result<Option<CalendarAdmission>> {
+        let schedule = definition
+            .workflow
+            .calendar_triggers
+            .get(trigger_id)
+            .ok_or_else(|| {
+                refused(
+                    "calendar-invalid",
+                    "calendar trigger is not in the checked Workflow definition",
+                )
+            })?
+            .schedule()
+            .map_err(calendar_refused)?;
+        let binding_digest = runtime.binding_digest_for(&definition.workflow)?;
+        let producer = self.security.keys.commitment(
+            "calendar-owner",
+            &[
+                self.security.database_id.as_bytes(),
+                definition.workflow.id.as_bytes(),
+                trigger_id.as_bytes(),
+            ],
+        );
+        let mut client = self.client().await.map_err(unavailable)?;
+        let tx = client.transaction().await.map_err(unavailable)?;
+        tx.batch_execute(&format!(
+            "SET LOCAL lock_timeout = '{CALENDAR_ADMISSION_LOCK_TIMEOUT}'"
+        ))
+        .await
+        .map_err(unavailable)?;
+        self.lock_admission(&tx).await?;
+        self.require_unheld(&tx).await?;
+        let now: DateTime<Utc> = tx
+            .query_one("SELECT transaction_timestamp()", &[])
+            .await
+            .map_err(unavailable)?
+            .get(0);
+        let inserted = tx
+            .execute(
+                &format!(
+                    "INSERT INTO {}.calendar_cursors (workflow_id,trigger_id,workflow_revision,cursor_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+                    self.namespace
+                ),
+                &[
+                    &definition.workflow.id,
+                    &trigger_id,
+                    &definition.digest,
+                    &now,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        let row = tx
+            .query_one(
+                &format!(
+                    "SELECT workflow_revision,cursor_at FROM {}.calendar_cursors WHERE workflow_id=$1 AND trigger_id=$2 FOR UPDATE",
+                    self.namespace
+                ),
+                &[&definition.workflow.id, &trigger_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        if inserted == 1 {
+            tx.commit().await.map_err(unavailable)?;
+            return Ok(None);
+        }
+        let workflow_revision: String = row.get(0);
+        let cursor: DateTime<Utc> = row.get(1);
+        if workflow_revision != definition.digest {
+            tx.execute(
+                &format!(
+                    "UPDATE {}.calendar_cursors SET workflow_revision=$3,cursor_at=GREATEST(cursor_at,$4) WHERE workflow_id=$1 AND trigger_id=$2",
+                    self.namespace
+                ),
+                &[
+                    &definition.workflow.id,
+                    &trigger_id,
+                    &definition.digest,
+                    &now,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+            tx.commit().await.map_err(unavailable)?;
+            return Ok(None);
+        }
+        let catch_up = schedule
+            .latest_since(cursor, now)
+            .map_err(calendar_refused)?;
+        let Some(occurrence) = catch_up.latest else {
+            tx.commit().await.map_err(unavailable)?;
+            return Ok(None);
+        };
+        let skipped = i64::try_from(catch_up.skipped).map_err(|_| {
+            refused(
+                "calendar-overflow",
+                "calendar catch-up exceeds the supported durable count",
+            )
+        })?;
+        let request = self
+            .security
+            .audit
+            .begin(
+                AUDIT_SCHEMA,
+                Uuid::new_v4().to_string(),
+                serde_json::json!({
+                    "action":"calendar-admit",
+                    "workflowRef":self.reference("workflow-v1",&definition.workflow.id),
+                    "triggerRef":self.reference("calendar-trigger-v1",trigger_id),
+                    "outcome":"unknown"
+                }),
+                serde_json::json!({"action":"calendar-admit","outcome":"unknown"}),
+            )
+            .await
+            .map_err(|_| refused("audit-unavailable", "durable audit is unavailable"))?;
+        let key = occurrence.scheduled_at.to_rfc3339();
+        let (run, inserted) = self
+            .admit_bound_locked(
+                &tx,
+                definition,
+                occurrence.input(),
+                &producer,
+                &key,
+                &binding_digest,
+                Some(runtime),
+                &definition.digest,
+                None,
+                now,
+            )
+            .await?;
+        tx.execute(
+            &format!(
+                "UPDATE {}.calendar_cursors SET workflow_revision=$3,cursor_at=$4,skipped_count=skipped_count+$5 WHERE workflow_id=$1 AND trigger_id=$2",
+                self.namespace
+            ),
+            &[
+                &definition.workflow.id,
+                &trigger_id,
+                &definition.digest,
+                &now,
+                &skipped,
+            ],
+        )
+        .await
+        .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
-        self.metrics.record_run_admitted();
-        Ok(run)
+        if inserted {
+            self.metrics.record_run_admitted();
+        }
+        request
+            .finish(serde_json::json!({
+                "action":"calendar-admit",
+                "outcome":"accepted",
+                "runRef":self.reference("run-v1",&run.to_string()),
+                "skipped":catch_up.skipped
+            }))
+            .await
+            .map_err(|_| refused("audit-response-unavailable", "calendar admission may have committed; inspect the durable cursor and run before retrying"))?;
+        Ok(Some(CalendarAdmission {
+            run_id: run,
+            scheduled_at: occurrence.scheduled_at,
+            skipped: catch_up.skipped,
+        }))
     }
 
     async fn require_unheld(&self, tx: &Transaction<'_>) -> Result<()> {
@@ -1869,6 +2125,7 @@ impl Store {
             return Ok("expired");
         }
         let dispatch_risk = matches!(definition.workflow.steps.get(step),Some(Step::Call{call,..}) if call.operation.has_dispatch_risk());
+        let service_deadline_routed = detail.service_deadline_routed && !cancelled;
         let mut outputs = payload.outputs;
         if let Some(value) = &detail.output {
             outputs.insert(step.to_owned(), value.clone());
@@ -1895,7 +2152,20 @@ impl Store {
                                 .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
                         });
                     match mapped {
-                        Some(value) => Some(SystemTime::from(value.with_timezone(&Utc))),
+                        Some(value) => {
+                            let due = value.with_timezone(&Utc);
+                            let due = if definition.workflow.service_deadline.is_some()
+                                && !service_deadline_routed
+                            {
+                                tx.query_one(
+                                    &format!("SELECT LEAST($2::timestamptz,service_deadline_at) FROM {}.runs WHERE run_id=$1", self.namespace),
+                                    &[&id, &due],
+                                ).await?.get(0)
+                            } else {
+                                due
+                            };
+                            Some(SystemTime::from(due))
+                        }
                         None => {
                             failure = Some("mapping-invalid");
                             None
@@ -1941,7 +2211,8 @@ impl Store {
         } else {
             "running"
         };
-        let failure_code = failure;
+        let failure_code =
+            failure.or_else(|| detail.failure_code.filter(|_| detail.routed_failure));
         let terminal = if !cancelled && detail.outcome.is_some() {
             detail
                 .output
@@ -1952,7 +2223,10 @@ impl Store {
         } else {
             None
         };
-        tx.execute(&format!("UPDATE {}.runs SET outputs=$2,step=$3,state=$4,outcome=$5,terminal_output=$6,failure_code=$7,failure_path=NULL,completed_at=CASE WHEN $4<>'running' THEN transaction_timestamp() ELSE NULL END WHERE run_id=$1",self.namespace),&[&id,&self.seal(id,"outputs","",&outputs).map_err(|_|DispatchError::Unavailable)?,&next,&state,&if cancelled{None}else{detail.outcome.as_deref()},&terminal,&failure_code]).await?;
+        let advanced = tx.execute(&format!("UPDATE {}.runs SET outputs=$2,step=$3,state=$4,outcome=$5,terminal_output=$6,failure_code=$7,failure_path=NULL,completed_at=CASE WHEN $4<>'running' THEN transaction_timestamp() ELSE NULL END,service_deadline_at=CASE WHEN $8 THEN NULL ELSE service_deadline_at END WHERE run_id=$1 AND (NOT $8 OR service_deadline_at<=clock_timestamp())",self.namespace),&[&id,&self.seal(id,"outputs","",&outputs).map_err(|_|DispatchError::Unavailable)?,&next,&state,&if cancelled{None}else{detail.outcome.as_deref()},&terminal,&failure_code,&service_deadline_routed]).await?;
+        if advanced != 1 {
+            return Err(DispatchError::Unavailable);
+        }
         if !cancelled && failure.is_none() {
             if let Some(next) = &detail.next {
                 enqueue(
@@ -1967,7 +2241,7 @@ impl Store {
                         i32::try_from(*timeout_seconds).map_err(|_| DispatchError::Unavailable)?;
                     tx.execute(
                         &format!(
-                            "INSERT INTO {0}.completion_waits(run_id,step,wait_key,timeout_at,follows_proposal) SELECT $1,$2,$3,LEAST(r.deadline_at,transaction_timestamp()+$4::integer*interval '1 second'),$5 FROM {0}.runs r WHERE r.run_id=$1",
+                            "INSERT INTO {0}.completion_waits(run_id,step,wait_key,timeout_at,follows_proposal) SELECT $1,$2,$3,LEAST(r.deadline_at,r.service_deadline_at,transaction_timestamp()+$4::integer*interval '1 second'),$5 FROM {0}.runs r WHERE r.run_id=$1",
                             self.namespace
                         ),
                         &[&id, next, key, &timeout_seconds, follows],
@@ -2153,17 +2427,19 @@ impl Store {
         if valid.is_none() {
             return Ok(None);
         }
-        let Some(row)=tx.query_opt(&format!("SELECT timeout_at,clock_timestamp(),not_before,observations,started_at,GREATEST(interval_seconds,$3) FROM {}.completion_waits WHERE run_id=$1 AND step=$2 FOR UPDATE",self.namespace),&[&fence.id,&fence.part,&interval]).await.map_err(unavailable)? else{return Ok(None)};
+        let Some(row)=tx.query_opt(&format!("SELECT w.timeout_at,clock_timestamp(),w.not_before,w.observations,w.started_at,GREATEST(w.interval_seconds,$3),COALESCE(w.timeout_at=r.service_deadline_at,false) FROM {0}.completion_waits w JOIN {0}.runs r ON r.run_id=w.run_id WHERE w.run_id=$1 AND w.step=$2 FOR UPDATE OF w",self.namespace),&[&fence.id,&fence.part,&interval]).await.map_err(unavailable)? else{return Ok(None)};
         let timeout: DateTime<Utc> = row.get(0);
         let now: DateTime<Utc> = row.get(1);
         let not_before: DateTime<Utc> = row.get(2);
         let observations: i32 = row.get(3);
         let started: DateTime<Utc> = row.get(4);
         let interval: i32 = row.get(5);
+        let timed_out = now >= timeout;
+        let service_deadline = timed_out && row.get::<_, bool>(6);
         let ceiling = observation_limit(started, timeout, interval as u32);
         if now < not_before {
-            return Ok(Some(if now >= timeout {
-                ObservationPermit::TimedOut
+            return Ok(Some(if timed_out {
+                ObservationPermit::TimedOut { service_deadline }
             } else {
                 ObservationPermit::Pause {
                     seconds: ((not_before.min(timeout) - now).num_milliseconds().max(1) as u64)
@@ -2172,8 +2448,8 @@ impl Store {
             }));
         }
         if observations as u32 >= ceiling {
-            return Ok(Some(if now >= timeout {
-                ObservationPermit::TimedOut
+            return Ok(Some(if timed_out {
+                ObservationPermit::TimedOut { service_deadline }
             } else {
                 ObservationPermit::Exhausted
             }));
@@ -2181,7 +2457,8 @@ impl Store {
         tx.execute(&format!("UPDATE {}.completion_waits SET read_at=$3,not_before=$3::timestamptz+$4::integer*interval '1 second',observations=observations+1,interval_seconds=$4 WHERE run_id=$1 AND step=$2",self.namespace),&[&fence.id,&fence.part,&now,&interval]).await.map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         Ok(Some(ObservationPermit::Observe {
-            timed_out: now >= timeout,
+            timed_out,
+            service_deadline,
         }))
     }
 
@@ -2289,6 +2566,7 @@ fn decode(row: &Row, first: usize) -> std::result::Result<Job, DispatchError> {
         restore_review_required: row.try_get(first + 14)?,
         authored_cancel_requested: row.try_get(first + 15)?,
         authored_cancel_pending_step: row.try_get(first + 16)?,
+        service_deadline_at: row.try_get(first + 17)?,
     })
 }
 /// The least time between two reads of one review wait, whatever wakes it.
@@ -2540,7 +2818,7 @@ impl DispatchStore for Store {
         // This runs after Dispatch's reset under the same job/control locks;
         // a refused schedule write cannot leave an immediately runnable job.
         let changed = tx.execute(
-            &format!("UPDATE {}.jobs SET next_attempt_at=GREATEST($3::timestamptz,transaction_timestamp()) WHERE run_id=$1 AND step=$2 AND generation=$4 AND state='pending'", self.namespace),
+            &format!("UPDATE {0}.jobs j SET next_attempt_at=GREATEST(LEAST($3::timestamptz,r.service_deadline_at),transaction_timestamp()) FROM {0}.runs r WHERE r.run_id=j.run_id AND j.run_id=$1 AND j.step=$2 AND j.generation=$4 AND j.state='pending'", self.namespace),
             &[&audit.key.id(), &audit.key.part(), &due, &audit.generation],
         ).await?;
         if changed != 1 {
@@ -2931,15 +3209,15 @@ mod tests {
     /// every statement that creates the schema, including the shared dispatch
     /// job table, its product widening, and the activation ledger.
     #[test]
-    fn schema_version_5_is_pinned() {
+    fn schema_version_6_is_pinned() {
         let mut ddl = schema_statements("coordinator_pin").expect("a valid namespace");
         ddl.push(crate::deployment::activation_ledger_statements());
         let digest = hex::encode(Sha256::digest(ddl.join("\n")));
         assert_eq!(
             (SCHEMA_VERSION, digest.as_str()),
             (
-                5,
-                "acd91ebb3a5a9ee98b0b83a5900b5dedd2648d150fbd0b22049acc1d8cb38817"
+                6,
+                "8d33ddc04df7fd5c3cac84e1e15d5a288892522c04ce22f989c306ff6e8f95d2"
             ),
             "the protected state schema DDL changed at this SCHEMA_VERSION; {MIGRATION_PIN_RULE}"
         );
@@ -2964,6 +3242,7 @@ mod tests {
             restore_review_required: false,
             authored_cancel_requested: false,
             authored_cancel_pending_step: None,
+            service_deadline_at: None,
         }
     }
 

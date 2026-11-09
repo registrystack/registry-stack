@@ -670,6 +670,22 @@ must retain each live run's original binding. New admissions repeat that check
 inside their insertion transaction; worker polls keep their per-job fences
 without rescanning history every poll.
 
+The serving process checks its one reviewed calendar trigger per Workflow at
+most once per second. PostgreSQL transaction time, not the process clock,
+decides which occurrence is due. A trigger's first check seeds its cursor at
+that database time. A changed Workflow revision also advances the cursor
+monotonically to its first observed database time and admits nothing on that
+check. Later checks hold the ordinary admission lock and cursor row, admit only
+the latest due occurrence, add older due occurrences to the skipped count,
+and advance the cursor in the Run admission transaction. An idle check
+performs no cursor update, so a backward database clock cannot rewind it. Lock
+acquisition has a 50 millisecond database timeout and the full calendar sweep
+has a 250 millisecond process deadline. A competing replica observes the same
+row; a changed activation, restore hold or admission hold refuses the calendar
+check before it advances. A refusal or bounded timeout is logged with its
+bounded code and does not stop the ordinary worker from progressing Runs
+already admitted. Recovery-only mode performs no calendar checks.
+
 A live run whose retained definition this version does not restore does not
 stop startup, readiness, admissions or apply. The service holds that run alone:
 it writes the hold, with the restore finding code, to the durable audit before
@@ -726,7 +742,7 @@ admissions while old runs keep their encrypted snapshots and command identities.
 Adding an unrelated logical connection does not change a workflow binding digest.
 Reusing an idempotency key returns the original run rather than creating new work.
 
-This source version creates protected state schema version 5. Earlier protected
+This source version creates protected state schema version 6. Earlier protected
 state layouts are refused: apply reports `coordinator.command.schema-version`, and runtime state
 access, including `deployment-status`, fails closed as `coordinator.command.store-unavailable`.
 Apply does not adopt or rewrite them. Settle retained work with its matching

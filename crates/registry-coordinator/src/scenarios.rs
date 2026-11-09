@@ -66,8 +66,8 @@ struct AuthoredScenario {
     /// The start input, which must satisfy the workflow input schema.
     input: ForeignValue,
     /// The synthetic replies each call step receives, by step, in the order
-    /// its attempts consume them: 1 to 8 per step. A reply after the first
-    /// needs a recovery for that step.
+    /// its attempts consume them, up to the runtime attempt limit. A reply
+    /// after the first needs a recovery for that step.
     #[cfg_attr(feature = "schema", schemars(schema_with = "replies_schema"))]
     replies: BTreeMap<LocalId, Vec<AuthoredReply>>,
     /// The operator recovery each call step receives after a retryable or
@@ -222,8 +222,8 @@ enum AuthoredWait {
     },
     /// No event arrives: the clock moves by the step's `timeoutSeconds`, and
     /// the run continues at its `onTimeout`, or stops as `timed-out` when the
-    /// step has none. A deadline that passes first stops the run as
-    /// `deadline-exceeded`.
+    /// step has none. An earlier service deadline takes `onDeadline`. The
+    /// hard run deadline stops the run as `deadline-exceeded`.
     Timeout {},
     /// An authorized caller cancels the run while this wait is durably
     /// parked. The run continues at `onCancel`, or stops as `cancelled` when
@@ -309,6 +309,7 @@ enum ExpectedOutcome {
 registry_platform_yaml::tagged_union!(ExpectedOutcome);
 
 const MAX_SCENARIO_BYTES: u64 = 1_048_576;
+const MAX_SCENARIO_REPLIES: usize = crate::operations::MAXIMUM_ATTEMPTS as usize;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -528,8 +529,8 @@ impl CoordinatorScenarios {
             for (step, replies) in &case.replies {
                 bound(
                     &format!("{path}/replies/{step}"),
-                    (1..=8).contains(&replies.len()),
-                    "expected from 1 to 8 synthetic replies",
+                    (1..=MAX_SCENARIO_REPLIES).contains(&replies.len()),
+                    &format!("expected from 1 to {MAX_SCENARIO_REPLIES} synthetic replies"),
                 );
             }
         }
@@ -654,7 +655,7 @@ fn replies_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema
         "propertyNames": generator.subschema_for::<LocalId>(),
         "maxProperties": 64,
         "additionalProperties": {
-            "type": "array", "minItems": 1, "maxItems": 8,
+            "type": "array", "minItems": 1, "maxItems": MAX_SCENARIO_REPLIES,
             "items": generator.subschema_for::<AuthoredReply>(),
         },
     })
@@ -850,6 +851,12 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
         }
     }
     let deadline = definition.deadline_at(scenario.admitted_at)?;
+    let mut service_deadline = definition.service_deadline_at(scenario.admitted_at)?;
+    let on_service_deadline = definition
+        .workflow
+        .service_deadline
+        .as_ref()
+        .map(|deadline| deadline.next.as_str());
     let mut now = scenario.admitted_at;
     let mut step = definition.workflow.start.clone();
     let mut outputs = BTreeMap::new();
@@ -879,14 +886,24 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             )
         })? {
             Step::WaitUntil { next, .. } => {
-                now = now
+                let due = now
                     .max(parse_timestamp(&definition.evaluate_synthetic(
                         &step,
                         &scenario.input,
                         &outputs,
                     )?)?)
                     .min(deadline);
-                step = next.clone();
+                if let (Some(at), Some(target)) = (
+                    service_deadline.filter(|at| *at <= due),
+                    on_service_deadline,
+                ) {
+                    now = now.max(at);
+                    step = target.to_owned();
+                    service_deadline = None;
+                } else {
+                    now = due;
+                    step = next.clone();
+                }
             }
             Step::WaitFor {
                 wait_for,
@@ -895,6 +912,12 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                 on_timeout,
                 on_cancel,
             } => {
+                let step_timeout = now + chrono::Duration::seconds(i64::from(*timeout_seconds));
+                let service_timeout = service_deadline.filter(|at| *at <= step_timeout);
+                let timeout_at = service_timeout.unwrap_or(step_timeout).max(now);
+                let timeout_route = on_service_deadline
+                    .filter(|_| service_timeout.is_some())
+                    .or(on_timeout.as_deref());
                 // A case without waits is refused at the case itself.
                 let at = if scenario.waits.is_empty() {
                     ""
@@ -945,11 +968,12 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             unreachable!("the completion names a call");
                         };
                         let contract = definition.operation_contract(call)?;
-                        let timeout_at =
-                            now + chrono::Duration::seconds(i64::from(*timeout_seconds));
                         let mut terminal = None;
                         for (index, response) in responses.iter().enumerate() {
-                            if now >= timeout_at || now >= deadline {
+                            if now > timeout_at
+                                || (now == timeout_at && service_timeout.is_none())
+                                || now >= deadline
+                            {
                                 break;
                             }
                             contract.check_output(response).map_err(|violation| contract_error("scenario.wait-observation", format!("/waits/{step}/responses/{index}{}", violation.path), &violation,
@@ -966,8 +990,13 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             step = next.clone();
                         } else if now >= timeout_at {
                             now = timeout_at.min(deadline);
-                            match on_timeout {
-                                Some(target) if now < deadline => step = target.clone(),
+                            match timeout_route {
+                                Some(target) if now < deadline => {
+                                    step = target.to_owned();
+                                    if service_timeout.is_some() {
+                                        service_deadline = None;
+                                    }
+                                }
                                 _ => {
                                     report.state = if now >= deadline {
                                         "deadline-exceeded"
@@ -986,11 +1015,15 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                         }
                     }
                     Wait::Timeout => {
-                        now = (now + chrono::Duration::seconds(i64::from(*timeout_seconds)))
-                            .min(deadline);
-                        match on_timeout {
-                            Some(route) => step = route.clone(),
-                            None => {
+                        now = timeout_at.min(deadline);
+                        match timeout_route {
+                            Some(target) if now < deadline => {
+                                step = target.to_owned();
+                                if service_timeout.is_some() {
+                                    service_deadline = None;
+                                }
+                            }
+                            _ => {
                                 report.state = if now >= deadline {
                                     "deadline-exceeded"
                                 } else {
@@ -1053,6 +1086,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             Step::Call {
                 call,
                 next,
+                on_failure,
                 on_declared_refusal,
                 ..
             } => {
@@ -1183,7 +1217,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                     };
                     match reply {
                         Reply::Success { success: value } => {
-                            completion = Some((next.clone(), value.clone()));
+                            completion = Some((next.clone(), Some(value.clone())));
                             break;
                         }
                         Reply::DeclaredRefusal { declared_refusal } => {
@@ -1206,7 +1240,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                                         "Report this Coordinator defect with the project.",
                                     )
                                 })?;
-                                completion = Some((target.clone(), output));
+                                completion = Some((target.clone(), Some(output)));
                             } else {
                                 report.state = "refused".into();
                             }
@@ -1252,7 +1286,15 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             .into();
                             break;
                         }
-                        Reply::Retryable { .. } => {
+                        Reply::Retryable { retryable } => {
+                            if let Some(target) = on_failure.as_ref().filter(|_| {
+                                !prior_unknown
+                                    && index + 1 == MAX_SCENARIO_REPLIES
+                                    && crate::worker::availability_failure(retryable).is_some()
+                            }) {
+                                completion = Some((target.clone(), None));
+                                break;
+                            }
                             report.state = if prior_unknown {
                                 "uncertain"
                             } else {
@@ -1264,7 +1306,9 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                     }
                 }
                 if let Some((target, value)) = completion {
-                    outputs.insert(step.clone(), value);
+                    if let Some(value) = value {
+                        outputs.insert(step.clone(), value);
+                    }
                     report.state = "running".into();
                     step = target;
                 } else {

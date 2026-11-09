@@ -584,6 +584,73 @@ finding code.
 `cancelling_a_wait_whose_definition_does_not_restore_never_routes_its_cleanup`.
 `src/deployment.rs`: `a_pinned_package_that_does_not_restore_gives_operator_context`.
 
+### COORDINATOR-INV-13: a failure route cannot hide authority or an uncertain effect
+
+**Threat.** A workflow fallback intended for an unavailable read could hide an
+authorization refusal or continue after a mutation or model evaluation may
+have completed. It could also treat a provider error body as workflow data.
+
+**Enforcement.** `Definition::check` accepts `onFailure` only on catalog
+operations classified as reads or evaluations and includes it in the frozen
+acyclic graph. The graph propagates no call output on that edge. The worker
+takes it only on the final ordinary attempt, with no prior uncertainty, for
+the closed availability categories in `availability_failure`. Preparation
+never enables the route. The accepted transition carries no output and keeps
+only the bounded category as the run failure code while its successor is
+current; inspection retains it on the completed call job. Restart uses the
+retained attempt count, definition and edge.
+
+**Refused.** Mutations; unknown targets; credential, configuration,
+authorization, preparation, binding, command, response and protocol failures;
+unknown retryable text; and every uncertain outcome. A lost or timed-out model
+reply stays `evaluation-uncertain` and cannot route.
+
+**Tests.** `crates/registry-coordinator/tests/authored_project.rs`:
+`reads_and_evaluations_accept_on_failure_but_mutations_refuse_it` and
+`a_failure_route_has_no_call_output_and_names_a_declared_step`.
+`src/worker.rs`:
+`only_exhausted_explicit_availability_can_take_a_failure_edge`.
+`tests/postgres_state.rs`:
+`an_exhausted_read_routes_after_restart_with_a_bounded_category_and_no_output`
+and `an_authorization_refusal_never_takes_a_read_failure_route` (PostgreSQL).
+
+### COORDINATOR-INV-14: a calendar occurrence admits at most one Run
+
+**Threat.** A restart, competing replica, package replacement or restored
+database could evaluate the same institutional time twice and create two Runs.
+After downtime, replaying every missed month could also release an unreviewed
+burst of downstream work. A restore hold that stopped ordinary starts but not
+calendar starts would reopen ingress through the scheduler.
+
+**Enforcement.** `CalendarSchedule` accepts only the reviewed monthly first or
+last day subset and delegates named-zone gap and fold resolution to
+`registry-platform-calendar`. `Store::admit_calendar_due` takes the ordinary
+`admission_lock`, verifies custody and the active workflow digest, checks both
+admission and restore holds, and locks the workflow and trigger cursor. It
+evaluates through PostgreSQL transaction time, selects the latest due
+occurrence, and counts every older due occurrence as skipped. The Run, first
+job and advanced cursor commit in the same transaction. The ordinary start
+identity binds the workflow, trigger and exact occurrence instant, so a
+rewound cursor recovers the existing Run instead of inserting another one. A
+new cursor starts at first observation and creates no historical Run. A
+changed Workflow revision advances the cursor monotonically to its own first
+observation before evaluation. Calendar admission uses a short lock timeout
+and the serving process bounds the whole sweep, so lock contention yields to
+the ordinary worker instead of starving admitted Runs.
+
+**Refused.** Unsupported cron fields, another day of month, a non-IANA
+timezone, a Workflow input that does not accept the scheduledAt-only object,
+changed activation or key custody, any admission or restore hold, and a
+contended admission fence that exceeds the calendar lock bound.
+
+**Tests.** `src/calendar_trigger.rs`:
+`only_the_reviewed_monthly_cron_subset_is_accepted`,
+`a_fold_produces_one_earlier_instant_and_an_exclusive_successor`, and
+`catch_up_selects_only_the_latest_due_instant_and_counts_every_skipped_one`.
+`tests/calendar_trigger_authoring.rs`:
+`a_calendar_trigger_is_checked_explained_and_restored` and
+`calendar_admission_is_latest_only_atomic_and_fenced` (PostgreSQL).
+
 ## 3. Operator obligations
 
 1. Provide idempotency for external commands: the provider must deduplicate on

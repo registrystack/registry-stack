@@ -6665,6 +6665,7 @@ dependencies = [
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
+ "registry-platform-calendar",
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",

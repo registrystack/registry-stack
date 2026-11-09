@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- BREAKING: protected state schema version 6 adds the durable calendar cursor
+  and the optional service-deadline instant on each Run. Version 5 namespaces
+  are refused; settle their Runs with the matching binary, then apply this
+  version to a fresh namespace and database identity.
+- Add reviewed monthly calendar starts using `MIN HOUR 1 * *` or
+  `MIN HOUR L * *` in a named IANA timezone. Admission supplies only
+  `scheduledAt`, catches up with the latest due occurrence, records the exact
+  skipped count, and uses the ordinary fenced Run admission transaction.
+- Add optional `onFailure` to read and evaluation call steps. It routes only
+  after the ordinary retry limit is exhausted by a definite availability
+  category, records that bounded category on the run, and provides no call
+  output on the failure edge. Mutations, authorization and configuration
+  refusals, preparation failures, invalid protocol answers and uncertain
+  outcomes remain operational failures.
+
 ## 0.46.0 - 2026-11-08
 
 - BREAKING: This release does not read workflow snapshots sealed by 0.45.0 or earlier: a snapshot whose project presentation, function or operation holds `title` is refused with `definition.snapshot`. A step `title` in the free-form `presentation.steps` map still restores and is shown as written. Finish open runs on the earlier release before upgrading.
