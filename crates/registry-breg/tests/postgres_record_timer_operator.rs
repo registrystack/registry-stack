@@ -1191,6 +1191,16 @@ async fn operator_retry_after_actual_exhaustion(
         }
     }
     harness.expect_non_info_code(owner, "record_timer.worker.iteration_failed", 5)?;
+    // Each warning follows its attempt's commit, so the fifth attempt can be
+    // visible before its warning is written; the crash must not cut it off.
+    harness
+        .wait_for_log_code_count(
+            owner,
+            "record_timer.worker.iteration_failed",
+            5,
+            Duration::from_secs(5),
+        )
+        .await?;
     harness.crash_all_replicas()?;
 
     let operator_config = harness.write_operator_runtime_config("actual-retry")?;
@@ -1243,6 +1253,15 @@ async fn operator_retry_after_actual_exhaustion(
     let blocked =
         wait_for_technical_attempt_count(harness, &record_id, 6, Duration::from_secs(8)).await?;
     harness.expect_non_info_code(retry_owner, "record_timer.worker.iteration_failed", 1)?;
+    // The warning follows the commit that made attempt six visible, and the
+    // replica stops at cleanup; wait so the stop cannot cut it off.
+    harness
+        .wait_for_log_code(
+            retry_owner,
+            "record_timer.worker.iteration_failed",
+            Duration::from_secs(5),
+        )
+        .await?;
     if blocked.occurrence_id != occurrence_id
         || blocked.state != "blocked"
         || blocked.block_kind.as_deref() != Some("technical")
