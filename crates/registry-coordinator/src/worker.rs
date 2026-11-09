@@ -697,13 +697,19 @@ impl Worker {
                         request.operation.has_dispatch_risk() || job.job.uncertain,
                     ));
                 };
-                // Dispatch gives up after the policy's last attempt, so a
-                // receiver's busy answer on that attempt is the workflow's to see.
                 let final_attempt = job.attempt >= job.policy.maximum_attempts;
+                // Preserve the retryable category on the final external GET
+                // when the workflow declares an availability edge.
+                let adapter_final_attempt = final_attempt
+                    && !(request.operation == crate::protocol::Operation::ExternalGet
+                        && on_failure.is_some());
                 let result = tokio::time::timeout(
                     budget,
-                    self.adapters
-                        .call_attempt(request, command.preparation(), final_attempt),
+                    self.adapters.call_attempt(
+                        request,
+                        command.preparation(),
+                        adapter_final_attempt,
+                    ),
                 )
                 .await;
                 let result = match result {

@@ -1015,12 +1015,22 @@ struct ExternalDirectory {
     run: Uuid,
 }
 async fn external_directory() -> ExternalDirectory {
+    external_directory_with_failure_edge(false).await
+}
+async fn external_directory_with_failure_edge(on_failure: bool) -> ExternalDirectory {
     let mut h = harness().await;
-    std::fs::write(
-        h.project.path().join("workflow.yaml"),
-        include_str!("../../../products/coordinator/examples/external-directory/workflow.yaml"),
-    )
-    .unwrap();
+    let workflow =
+        include_str!("../../../products/coordinator/examples/external-directory/workflow.yaml");
+    let workflow = if on_failure {
+        workflow.replacen(
+            "      next: result\n",
+            "      next: result\n      onFailure: unavailable\n",
+            1,
+        )
+    } else {
+        workflow.to_owned()
+    };
+    std::fs::write(h.project.path().join("workflow.yaml"), workflow).unwrap();
     std::fs::write(
         h.project.path().join("functions.rhai"),
         include_str!("../../../products/coordinator/examples/external-directory/functions.rhai"),
@@ -1181,6 +1191,38 @@ async fn a_gateway_busy_on_every_attempt_reaches_the_workflow_on_the_last_one() 
     assert_eq!(status.outcome.as_deref(), Some("directory-unavailable"));
     assert_eq!(status.failure_code, None);
     assert_eq!(e.lookups().await, 10);
+}
+
+#[tokio::test]
+async fn an_authored_failure_edge_keeps_an_exhausted_external_get_retryable() {
+    let routed = external_directory_with_failure_edge(true).await;
+    mount_directory(503, 10).mount(&routed.server).await;
+    for attempt in 1..=9 {
+        assert!(
+            routed.worker.tick().await.unwrap(),
+            "attempt {attempt} runs"
+        );
+        routed.lookup_due_now().await;
+    }
+
+    assert!(
+        routed.worker.tick().await.unwrap(),
+        "the final lookup attempt runs"
+    );
+    let status = routed.h.store.status(routed.run).await.unwrap();
+    assert_eq!(status.state, "running");
+    assert_eq!(status.step, "unavailable");
+    assert_eq!(status.failure_code.as_deref(), Some("external-unavailable"));
+    assert_eq!(routed.h.output_values(routed.run).await.get("lookup"), None);
+    assert_eq!(routed.lookups().await, 10);
+
+    assert!(
+        routed.worker.tick().await.unwrap(),
+        "the failure route finishes"
+    );
+    let finished = routed.h.store.status(routed.run).await.unwrap();
+    assert_eq!(finished.state, "finished");
+    assert_eq!(finished.outcome.as_deref(), Some("directory-unavailable"));
 }
 
 #[tokio::test]
