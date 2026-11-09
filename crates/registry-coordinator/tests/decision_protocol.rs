@@ -641,7 +641,7 @@ async fn missing_attempt_credential_is_proven_unsent_and_retryable() {
         .prepare(&input)
         .unwrap_or_else(|_| panic!("offline prepare"));
     assert!(
-        matches!(client.call_prepared(&input, &prepared).await, CallOutcome::Retryable { code, .. } if code == "decision-unavailable")
+        matches!(client.call_prepared(&input, &prepared).await, CallOutcome::Retryable { code, .. } if code == "credential-unavailable")
     );
     assert!(server.received_requests().await.unwrap().is_empty());
 }

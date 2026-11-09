@@ -76,11 +76,22 @@ pub struct Workflow {
     pub presentation: Presentation,
     pub references: BTreeMap<String, SourceReference>,
     pub deadline: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_deadline: Option<ServiceDeadline>,
     pub start: String,
     pub steps: BTreeMap<String, Step>,
     pub outcomes: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub calendar_triggers: BTreeMap<String, crate::calendar_trigger::CalendarTrigger>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub event_triggers: BTreeMap<String, crate::event_trigger::EventTrigger>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceDeadline {
+    pub seconds: u32,
+    pub next: String,
 }
 
 /// How a step computes its value: a pure function over references, an
@@ -280,6 +291,8 @@ pub struct Presentation {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steps: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub calendar_triggers: BTreeMap<String, TriggerPresentation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub event_triggers: BTreeMap<String, TriggerPresentation>,
 }
 
@@ -430,6 +443,8 @@ pub enum Step {
         call: Call,
         input: Mapping,
         next: String,
+        #[serde(rename = "onFailure", default, skip_serializing_if = "Option::is_none")]
+        on_failure: Option<String>,
         #[serde(
             rename = "onDeclaredRefusal",
             default,
@@ -456,9 +471,11 @@ impl Step {
             Self::WaitUntil { next, .. } => vec![("next", next)],
             Self::Call {
                 next,
+                on_failure,
                 on_declared_refusal,
                 ..
             } => std::iter::once(("next", next.as_str()))
+                .chain(on_failure.iter().map(|step| ("onFailure", step.as_str())))
                 .chain(
                     on_declared_refusal
                         .iter()
@@ -768,6 +785,20 @@ impl Definition {
         let input_schema = compile_schema(&frozen.workflow.input)
             .map_err(|error| findings.push(error.at("workflow.yaml", "input")))
             .ok();
+        if !frozen.workflow.calendar_triggers.is_empty()
+            && input_schema.as_ref().is_some_and(|schema| {
+                !schema.is_valid(&serde_json::json!({
+                    "scheduledAt":"2000-01-01T00:00:00Z"
+                }))
+            })
+        {
+            findings.push(authored(
+                "definition.calendar-trigger-input",
+                "input",
+                "calendar admission supplies exactly one scheduledAt date-time",
+                "Make the Workflow input accept an object containing only required scheduledAt with string format date-time.",
+            ));
+        }
         let mut outcome_schemas = BTreeMap::new();
         for (id, schema) in &frozen.workflow.outcomes {
             match compile_schema(schema) {
@@ -910,6 +941,7 @@ impl Definition {
                 match step {
                     Step::Call {
                         call,
+                        on_failure,
                         on_declared_refusal,
                         ..
                     } => {
@@ -920,6 +952,9 @@ impl Definition {
                         item["mutating"] = serde_json::json!(call.operation.is_mutating());
                         item["effect"] = serde_json::json!(call.operation.descriptor().effect);
                         item["recovery"] = serde_json::json!(call.operation.recovery());
+                        if let Some(target) = on_failure {
+                            item["onFailure"] = serde_json::json!(target);
+                        }
                         if let Some(target) = on_declared_refusal {
                             item["onDeclaredRefusal"] = serde_json::json!(target);
                         }
@@ -957,14 +992,17 @@ impl Definition {
                 item
             })
             .collect::<Vec<_>>();
-        Ok(
-            serde_json::json!({"workflow":self.workflow.id,"version":self.workflow.version,"workflowRevision":self.digest,
+        let mut report = serde_json::json!({"workflow":self.workflow.id,"version":self.workflow.version,"workflowRevision":self.digest,
             "start":self.workflow.start,"deadlineSeconds":parse_duration(&self.workflow.deadline)?.num_seconds(),
-            "contracts":contracts,"operations":self.workflow.operations,"operationContracts":operation_contracts,"eventTriggers":self.workflow.event_triggers,"functions":self.workflow.functions,"types":self.workflow.types,"references":self.workflow.references,"presentation":self.workflow.presentation,"connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
+            "contracts":contracts,"operations":self.workflow.operations,"operationContracts":operation_contracts,"calendarTriggers":self.workflow.calendar_triggers,"eventTriggers":self.workflow.event_triggers,"functions":self.workflow.functions,"types":self.workflow.types,"references":self.workflow.references,"presentation":self.workflow.presentation,"connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
             "limits":crate::functions::limits(),"valueLimits":crate::functions::value_limits(),"interpreterAbi":self.frozen.interpreter_abi,"schemaAbi":self.frozen.schema_abi,"adapterAbi":self.frozen.adapter_abi,
 
-            "recovery":"A run restores this exact snapshot. retry-same preserves a frozen command and cannot adopt edited mappings or repeat an uncertain hold-after-dispatch evaluation."}),
-        )
+            "recovery":"A run restores this exact snapshot. retry-same preserves a frozen command and cannot adopt edited mappings or repeat an uncertain hold-after-dispatch evaluation."});
+        if let Some(deadline) = &self.workflow.service_deadline {
+            report["serviceDeadlineSeconds"] = serde_json::json!(deadline.seconds);
+            report["onDeadline"] = serde_json::json!(deadline.next);
+        }
+        Ok(report)
     }
 
     pub fn snapshot(&self) -> Result<String> {
@@ -1229,6 +1267,21 @@ impl Definition {
             .ok_or_else(|| fail("definition.deadline"))
     }
 
+    pub(crate) fn service_deadline_at(
+        &self,
+        admitted_at: DateTime<Utc>,
+    ) -> Result<Option<DateTime<Utc>>> {
+        self.workflow
+            .service_deadline
+            .as_ref()
+            .map(|deadline| {
+                admitted_at
+                    .checked_add_signed(Duration::seconds(i64::from(deadline.seconds)))
+                    .ok_or_else(|| fail("definition.deadline"))
+            })
+            .transpose()
+    }
+
     pub fn initial_due(
         &self,
         input: &Value,
@@ -1430,6 +1483,14 @@ fn semantic_revision(snapshot: &Snapshot) -> Result<String> {
         semantic["eventTriggers"] =
             serde_json::to_value(&flow.event_triggers).map_err(|_| fail("definition.canonical"))?;
     }
+    if !flow.calendar_triggers.is_empty() {
+        semantic["calendarTriggers"] = serde_json::to_value(&flow.calendar_triggers)
+            .map_err(|_| fail("definition.canonical"))?;
+    }
+    if let Some(deadline) = &flow.service_deadline {
+        semantic["serviceDeadline"] =
+            serde_json::to_value(deadline).map_err(|_| fail("definition.canonical"))?;
+    }
     let bytes = registry_platform_canonical_json::canonicalize_json(&semantic)
         .map_err(|_| fail("definition.canonical"))?;
     Ok(sha256_uri(&bytes))
@@ -1561,6 +1622,24 @@ pub(crate) fn offered(product: &str) -> String {
 /// step, since reachability and cycles mean nothing across a broken edge.
 fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
     let mut findings = crate::event_trigger::workflow_findings(flow);
+    if flow.calendar_triggers.len() > 1 {
+        findings.push(authored(
+            "definition.calendar-trigger",
+            "calendarTriggers",
+            "expected at most one calendar trigger",
+            "Keep one reviewed calendar trigger in a Workflow; use separate Workflows for different schedules.",
+        ));
+    }
+    for (name, trigger) in &flow.calendar_triggers {
+        if !valid_name(name) || trigger.schedule().is_err() {
+            findings.push(authored(
+                "definition.calendar-trigger",
+                &format!("calendarTriggers.{name}"),
+                "calendar trigger must name a valid local ID, `MIN HOUR 1|L * *`, and a named IANA timezone",
+                "Use one monthly first-day or last-day cron expression and an IANA timezone such as Asia/Bangkok.",
+            ));
+        }
+    }
     for (field, size, minimum, maximum) in [
         ("steps", flow.steps.len(), 1, 64),
         ("connections", flow.connections.len(), 0, 16),
@@ -1601,8 +1680,32 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
     if flow.api_version != API_VERSION || flow.kind != "Workflow" || !valid_name(&flow.id) {
         findings.push(fail("definition.shape"));
     }
-    if let Err(error) = parse_duration(&flow.deadline) {
-        findings.push(error.at("workflow.yaml", "deadline"));
+    match parse_duration(&flow.deadline) {
+        Err(error) => findings.push(error.at("workflow.yaml", "deadline")),
+        Ok(hard)
+            if flow.service_deadline.as_ref().is_some_and(|deadline| {
+                deadline.seconds == 0 || i64::from(deadline.seconds) >= hard.num_seconds()
+            }) =>
+        {
+            findings.push(authored(
+                "definition.deadline",
+                "serviceDeadlineSeconds",
+                "The service deadline must come before the run deadline.",
+                "Use a positive serviceDeadlineSeconds shorter than deadlineSeconds.",
+            ));
+        }
+        Ok(_) => {}
+    }
+    if let Some(deadline) = &flow.service_deadline {
+        if !flow.steps.contains_key(&deadline.next) {
+            broken = true;
+            findings.push(authored(
+                "definition.deadline",
+                "onDeadline",
+                "The service deadline names an undeclared step.",
+                &format!("Set onDeadline to one of the declared steps: {steps}."),
+            ));
+        }
     }
     for (name, kind) in &flow.connections {
         if !valid_name(name)
@@ -1748,6 +1851,7 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
             } => findings.extend(wait_findings(flow, name, wait_for, *timeout_seconds)),
             Step::Call {
                 call,
+                on_failure,
                 on_declared_refusal,
                 ..
             } => {
@@ -1796,6 +1900,17 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                             call.operation.as_str()
                         ),
                         "Remove onDeclaredRefusal, or use it on an invoke-breg-action call.",
+                    ));
+                }
+                if on_failure.is_some() && !call.operation.permits_failure_route() {
+                    findings.push(authored(
+                        "definition.operation",
+                        &format!("steps.{name}.onFailure"),
+                        &format!(
+                            "operation {} may have a product effect and cannot route an operational failure",
+                            call.operation.as_str()
+                        ),
+                        "Remove onFailure, or use it only on a read or evaluation Operation.",
                     ));
                 }
                 if call.operation == Operation::ReadInForce && on_declared_refusal.is_none() {
@@ -1932,6 +2047,9 @@ fn graph_order(flow: &Workflow) -> Vec<&str> {
     }
     let mut order = Vec::with_capacity(flow.steps.len());
     let mut ready = std::collections::VecDeque::from([flow.start.as_str()]);
+    if let Some(deadline) = &flow.service_deadline {
+        ready.push_back(deadline.next.as_str());
+    }
     while let Some(name) = ready.pop_front() {
         order.push(name);
         for next in flow.steps[name].targets() {
@@ -1961,8 +2079,16 @@ pub(crate) enum OutputRoute {
 pub(crate) type AvailableOutputs = BTreeMap<String, OutputRoute>;
 
 fn reachable_steps(flow: &Workflow) -> BTreeSet<&str> {
-    let mut reachable = BTreeSet::from([flow.start.as_str()]);
-    let mut frontier = vec![flow.start.as_str()];
+    let mut reachable = reachable_from(flow, &flow.start);
+    if let Some(deadline) = &flow.service_deadline {
+        reachable.extend(reachable_from(flow, &deadline.next));
+    }
+    reachable
+}
+
+fn reachable_from<'a>(flow: &'a Workflow, start: &'a str) -> BTreeSet<&'a str> {
+    let mut reachable = BTreeSet::from([start]);
+    let mut frontier = vec![start];
     while let Some(name) = frontier.pop() {
         for next in flow.steps[name].targets() {
             if reachable.insert(next) {
@@ -1998,11 +2124,10 @@ fn propagated_outputs<'a>(
         .iter()
         .map(|name| (*name, predecessors(name).len()))
         .collect::<BTreeMap<_, _>>();
-    let mut ready = if pending[flow.start.as_str()] == 0 {
-        vec![flow.start.as_str()]
-    } else {
-        vec![]
-    };
+    let mut ready = pending
+        .iter()
+        .filter_map(|(&step, &count)| (count == 0).then_some(step))
+        .collect::<Vec<_>>();
     let mut available: BTreeMap<&str, AvailableOutputs> = BTreeMap::new();
     while let Some(name) = ready.pop() {
         let outputs = predecessors(name)
@@ -2060,6 +2185,18 @@ pub(crate) fn output_routes(flow: &Workflow) -> BTreeMap<String, AvailableOutput
 
 fn graph_findings<'a>(flow: &'a Workflow, incoming: &Incoming<'a>) -> Vec<CoordinatorError> {
     let mut findings = Vec::new();
+    if let Some(deadline) = &flow.service_deadline {
+        let ordinary = reachable_from(flow, &flow.start);
+        let late = reachable_from(flow, &deadline.next);
+        if !ordinary.is_disjoint(&late) {
+            findings.push(authored(
+                "definition.deadline",
+                "onDeadline",
+                "The service deadline path overlaps the ordinary workflow path.",
+                "Give the deadline path its own steps. It can run before any ordinary step output is available.",
+            ));
+        }
+    }
     let reachable = reachable_steps(flow);
     for name in flow.steps.keys() {
         if !reachable.contains(name.as_str()) {

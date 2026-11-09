@@ -582,10 +582,16 @@ fn layout() -> Result<Layout> {
     .map_err(|_| fail("restore the activation layout"))
 }
 fn extras(namespace: &str) -> Vec<String> {
-    ["runs", "jobs", "admission_lock", "completion_waits"]
-        .into_iter()
-        .map(|s| format!("{namespace}.{s}"))
-        .collect()
+    [
+        "runs",
+        "jobs",
+        "admission_lock",
+        "calendar_cursors",
+        "completion_waits",
+    ]
+    .into_iter()
+    .map(|s| format!("{namespace}.{s}"))
+    .collect()
 }
 async fn check_control_role(client: &impl tokio_postgres::GenericClient, role: &str) -> Result<()> {
     let row=client.query_one("SELECT has_table_privilege($1,'control','SELECT'),has_table_privilege($1,'control','INSERT,DELETE,TRUNCATE') OR has_column_privilege($1,'control','id','UPDATE') OR has_column_privilege($1,'control','database_id','UPDATE') OR has_column_privilege($1,'control','schema_version','UPDATE') OR has_column_privilege($1,'control','active_flows_digest','UPDATE') OR has_column_privilege($1,'control','active_flows','UPDATE') OR has_column_privilege($1,'control','admission_key_commitment','UPDATE') OR has_column_privilege($1,'control','state_key_commitments','UPDATE'),has_column_privilege($1,'control','restore_hold','UPDATE') AND has_column_privilege($1,'control','admissions_hold','UPDATE') AND has_column_privilege($1,'control','restore_evidence_hash','UPDATE') AND has_column_privilege($1,'control','admission_recovery_hash','UPDATE')",&[&role]).await.map_err(|_|fail("restore the narrow runtime control grants"))?;

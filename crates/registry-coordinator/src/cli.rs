@@ -1391,7 +1391,7 @@ fn render_human(cli: &Cli, value: &Value) -> String {
     }
 }
 
-/// One line per step in graph order, the event triggers, then execution bounds.
+/// One line per step in graph order, the triggers, then execution bounds.
 fn render_explain(value: &Value) -> String {
     let listed = |values: &Value| {
         values
@@ -1403,13 +1403,20 @@ fn render_explain(value: &Value) -> String {
             .join(", ")
     };
     let mut out = format!(
-        "Workflow {} version {}\nDefinition: {}\nDeadline: {} seconds; outcomes: {}\nSteps from start:\n",
+        "Workflow {} version {}\nDefinition: {}\nDeadline: {} seconds; outcomes: {}\n",
         text(&value["workflow"]),
         text(&value["version"]),
         text(&value["workflowRevision"]),
         value["deadlineSeconds"],
         listed(&value["outcomes"])
     );
+    if let Some(target) = value["onDeadline"].as_str() {
+        out.push_str(&format!(
+            "Service deadline in {} seconds routes to {target} while waiting.\n",
+            value["serviceDeadlineSeconds"]
+        ));
+    }
+    out.push_str("Steps from start:\n");
     for step in value["steps"].as_array().into_iter().flatten() {
         let next = listed(&step["next"]);
         let line = match step["kind"].as_str().unwrap_or_default() {
@@ -1456,7 +1463,24 @@ fn render_explain(value: &Value) -> String {
             ),
             _ => format!("finish {}", text(&step["outcome"])),
         };
-        out.push_str(&format!("  {}: {line}\n", text(&step["id"])));
+        out.push_str(&format!("  {}: {line}", text(&step["id"])));
+        if let Some(target) = step["onFailure"].as_str() {
+            out.push_str(&format!(", on exhausted availability failure {target}"));
+        }
+        out.push('\n');
+    }
+    for (id, trigger) in value["calendarTriggers"].as_object().into_iter().flatten() {
+        out.push_str(&format!(
+            "Calendar trigger {id}: {} in {}\n",
+            text(&trigger["cron"]),
+            text(&trigger["timezone"])
+        ));
+        let wording = &value["presentation"]["calendarTriggers"][id];
+        for member in ["label", "description"] {
+            if let Some(line) = wording[member].as_str() {
+                out.push_str(&format!("  {member}: {line}\n"));
+            }
+        }
     }
     for (id, trigger) in value["eventTriggers"].as_object().into_iter().flatten() {
         out.push_str(&format!(

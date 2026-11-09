@@ -301,6 +301,9 @@ impl NarrowedLimits {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct AuthoredWorkflow {
+    /// Optional reviewed monthly starts keyed by stable trigger ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    calendar_triggers: BTreeMap<LocalId, AuthoredCalendarTrigger>,
     /// Optional authenticated product-event starts keyed by stable trigger ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     event_triggers: BTreeMap<LocalId, AuthoredEventTrigger>,
@@ -308,12 +311,36 @@ struct AuthoredWorkflow {
     input: Schema,
     /// Maximum seconds from Run admission to expiry, from 1 to 31536000.
     deadline_seconds: BoundedU32<1, 31_536_000>,
+    /// Elapsed seconds from Run admission before a waiting Run takes onDeadline.
+    #[serde(default)]
+    service_deadline_seconds: Option<BoundedU32<1, 31_535_999>>,
+    /// Entry to a separate path for a Run still waiting at its service deadline.
+    #[serde(default)]
+    on_deadline: Option<LocalId>,
     /// The stable Step ID every Run begins at.
     start: LocalId,
     /// Steps keyed by stable ID; map ordering has no execution meaning.
     steps: BTreeMap<LocalId, AuthoredStep>,
     /// Named terminal result schemas used by finish Steps.
     outcomes: BTreeMap<LocalId, Schema>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct AuthoredCalendarTrigger {
+    /// Five-field cron restricted to `MIN HOUR 1|L * *` in Version 1.
+    cron: String,
+    /// Named IANA timezone used to interpret the local month, day and time.
+    timezone: String,
+    /// Optional human label; it changes neither stable identity nor behavior revision.
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
+    label: Option<String>,
+    /// Optional explanation for readers; it has no execution or authorization effect.
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -555,6 +582,11 @@ enum AuthoredStep {
         input: AuthoredMapping,
         /// The next Step on the successful completion route.
         next: LocalId,
+        /// A separate Step taken only after a read or evaluation exhausts
+        /// retries for a definite availability failure. It receives no Step
+        /// output; the bounded category remains run status.
+        #[serde(default)]
+        on_failure: Option<LocalId>,
         /// A separate Step taken only for a validated package-declared business refusal.
         /// Omit it to fail the run with `product-refused` on a declared refusal too.
         #[serde(default)]
@@ -939,6 +971,13 @@ fn project_integrity_diagnostics(
         (
             "coordinator.project.operation-id-collision",
             map_ids("/operations", &project.operations),
+        ),
+        (
+            "coordinator.project.calendar-trigger-id-collision",
+            map_ids(
+                "/workflow/calendarTriggers",
+                &project.workflow.calendar_triggers,
+            ),
         ),
         (
             "coordinator.project.event-trigger-id-collision",
@@ -1446,6 +1485,37 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         );
     }
     let input = resolver.resolve(&project.workflow.input.0.into_value(), "/workflow/input")?;
+    let mut calendar_trigger_presentation = BTreeMap::new();
+    let calendar_triggers = project
+        .workflow
+        .calendar_triggers
+        .into_iter()
+        .map(|(id, trigger)| {
+            let id = id.into_string();
+            let compiled = crate::calendar_trigger::CalendarTrigger {
+                cron: trigger.cron,
+                timezone: trigger.timezone,
+            };
+            compiled.schedule().map_err(|error| {
+                CoordinatorError::new("definition.calendar-trigger", error.to_string())
+                    .at(
+                        "workflow.yaml",
+                        format!("/workflow/calendarTriggers/{id}"),
+                    )
+                    .suggest("Use `MIN HOUR 1 * *` or `MIN HOUR L * *` with a named IANA timezone such as Asia/Bangkok.")
+            })?;
+            if trigger.label.is_some() || trigger.description.is_some() {
+                calendar_trigger_presentation.insert(
+                    id.clone(),
+                    crate::definition::TriggerPresentation {
+                        label: trigger.label,
+                        description: trigger.description,
+                    },
+                );
+            }
+            Ok((id, compiled))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let mut trigger_presentation = BTreeMap::new();
     let event_triggers = project
         .workflow
@@ -1502,6 +1572,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         label: project.label,
         description: project.description,
         steps: BTreeMap::new(),
+        calendar_triggers: calendar_trigger_presentation,
         event_triggers: trigger_presentation,
     };
     for (id, step) in project.workflow.steps {
@@ -1552,6 +1623,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 operation,
                 input,
                 next,
+                on_failure,
                 on_declared_refusal,
                 label,
                 description,
@@ -1570,6 +1642,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                         },
                         input: input.into(),
                         next: next.into_string(),
+                        on_failure: on_failure.map(LocalId::into_string),
                         on_declared_refusal: on_declared_refusal.map(LocalId::into_string),
                     },
                     label,
@@ -1625,6 +1698,23 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
             _ => None,
         })
         .collect();
+    let service_deadline = match (
+        project.workflow.service_deadline_seconds,
+        project.workflow.on_deadline,
+    ) {
+        (Some(seconds), Some(next)) => Some(definition::ServiceDeadline {
+            seconds: seconds.get(),
+            next: next.into_string(),
+        }),
+        (None, None) => None,
+        _ => {
+            return Err(CoordinatorError::new(
+                "definition.deadline",
+                "Set serviceDeadlineSeconds and onDeadline together.",
+            )
+            .at("workflow.yaml", "onDeadline"))
+        }
+    };
     Ok(Workflow {
         api_version: definition::API_VERSION.into(),
         kind: "Workflow".into(),
@@ -1639,9 +1729,11 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         presentation,
         references: BTreeMap::new(),
         deadline: format!("{}s", project.workflow.deadline_seconds.get()),
+        service_deadline,
         start: project.workflow.start.into_string(),
         steps,
         outcomes,
+        calendar_triggers,
         event_triggers,
     })
 }
@@ -2305,6 +2397,8 @@ pub(crate) fn positioned(document: &Document, error: CoordinatorError) -> Coordi
         "/version" => "/project/version".into(),
 
         "/deadline" => "/workflow/deadlineSeconds".into(),
+        "/serviceDeadlineSeconds" => "/workflow/serviceDeadlineSeconds".into(),
+        "/onDeadline" => "/workflow/onDeadline".into(),
         _ => {
             let mut parts = pointer.split('/').map(str::to_owned).collect::<Vec<_>>();
             if parts.len() > 3 && parts[1] == "steps" {
@@ -2379,6 +2473,7 @@ pub fn project_schema() -> std::result::Result<String, serde_json::Error> {
         ("/properties/functions", 0, 128),
         ("/properties/types", 0, 128),
         ("/$defs/AuthoredWorkflow/properties/eventTriggers", 0, 16),
+        ("/$defs/AuthoredWorkflow/properties/calendarTriggers", 0, 1),
         ("/$defs/AuthoredWorkflow/properties/steps", 1, 64),
         ("/$defs/AuthoredWorkflow/properties/outcomes", 1, 64),
     ] {

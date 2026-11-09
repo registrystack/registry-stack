@@ -164,6 +164,24 @@ fn resolved_local_instant(
     }
 }
 
+/// Convert one calculated local wall time into an exact instant in a named
+/// IANA timezone.
+///
+/// This is the shared single-instant daylight-saving rule: a local time in a
+/// gap moves to the first instant after the gap, and a local time in a fold
+/// takes the earlier of its two instants. Products retain the policy that
+/// decides which local date and time to evaluate.
+pub fn resolve_local_instant(
+    date: NaiveDate,
+    time: NaiveTime,
+    timezone: &str,
+) -> Result<DateTime<Utc>, CalendarEvaluationError> {
+    let timezone = timezone
+        .parse::<Tz>()
+        .map_err(|_| CalendarEvaluationError::InvalidTimezone)?;
+    resolved_local_instant(date, time, timezone)
+}
+
 /// The earliest whole-second instant whose wall time in `timezone` is at or
 /// after `local`. For a local time inside a gap, that is the instant the gap
 /// ends. No UTC offset reaches a day, so the instant lies within a day of
@@ -288,6 +306,34 @@ fn day_interval(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_zone_local_instant_uses_the_shared_gap_and_fold_rule() {
+        let gap = resolve_local_instant(
+            NaiveDate::from_ymd_opt(2026, 3, 8).unwrap(),
+            NaiveTime::from_hms_opt(2, 30, 0).unwrap(),
+            "America/New_York",
+        )
+        .expect("a gap moves to its first real instant");
+        assert_eq!(gap, instant("2026-03-08T07:00:00Z"));
+
+        let fold = resolve_local_instant(
+            NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(),
+            NaiveTime::from_hms_opt(1, 30, 0).unwrap(),
+            "America/New_York",
+        )
+        .expect("a fold chooses its earlier instant");
+        assert_eq!(fold, instant("2026-11-01T05:30:00Z"));
+
+        assert_eq!(
+            resolve_local_instant(
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveTime::MIN,
+                "Not/A_Zone",
+            ),
+            Err(CalendarEvaluationError::InvalidTimezone)
+        );
+    }
 
     #[test]
     fn end_of_day_boundaries_preserve_actual_dst_day_lengths() {

@@ -210,11 +210,11 @@
             "items": {
               "$ref": "#/$defs/AuthoredReply"
             },
-            "maxItems": 8,
+            "maxItems": 10,
             "minItems": 1,
             "type": "array"
           },
-          "description": "The synthetic replies each call step receives, by step, in the order\nits attempts consume them: 1 to 8 per step. A reply after the first\nneeds a recovery for that step.",
+          "description": "The synthetic replies each call step receives, by step, in the order\nits attempts consume them, up to the runtime attempt limit. A reply\nafter the first needs a recovery for that step.",
           "maxProperties": 64,
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
@@ -289,7 +289,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "No event arrives: the clock moves by the step's `timeoutSeconds`, and\nthe run continues at its `onTimeout`, or stops as `timed-out` when the\nstep has none. A deadline that passes first stops the run as\n`deadline-exceeded`.",
+          "description": "No event arrives: the clock moves by the step's `timeoutSeconds`, and\nthe run continues at its `onTimeout`, or stops as `timed-out` when the\nstep has none. An earlier service deadline takes `onDeadline`. The\nhard run deadline stops the run as `deadline-exceeded`.",
           "properties": {
             "type": {
               "const": "timeout",

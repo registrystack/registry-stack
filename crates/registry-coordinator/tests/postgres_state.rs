@@ -335,6 +335,16 @@ async fn declared_refusal_harness_with(workflow: &str) -> Harness {
     h.definition = Definition::load(h.project.path()).expect("valid declared-refusal workflow");
     h
 }
+
+async fn read_failure_harness() -> Harness {
+    let mut h = harness().await;
+    let workflow = WORKFLOW
+        .replace("      next: choose\n    choose:", "      next: choose\n      onFailure: unavailable\n    unavailable:\n      type: finish\n      outcome: unavailable\n    choose:")
+        .replace("    withdrawn:\n      type: 'null'", "    withdrawn:\n      type: 'null'\n    unavailable:\n      type: 'null'");
+    std::fs::write(h.project.path().join("workflow.yaml"), workflow).unwrap();
+    h.definition = Definition::load(h.project.path()).expect("valid read failure workflow");
+    h
+}
 fn input(at: chrono::DateTime<Utc>) -> Value {
     json!({"at":at.to_rfc3339(), "id":"synthetic-contact-canary"})
 }
@@ -478,6 +488,27 @@ struct Fake {
     allowed: bool,
     entered: Notify,
     release: Option<Semaphore>,
+}
+
+struct ReadFailureFake {
+    outcome: Mutex<Option<CallOutcome>>,
+    calls: Mutex<Vec<CallRequest>>,
+}
+
+#[async_trait]
+impl AdapterSet for ReadFailureFake {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+
+    async fn call(&self, request: &CallRequest) -> CallOutcome {
+        self.calls.lock().unwrap().push(request.clone());
+        self.outcome
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one synthetic read outcome")
+    }
 }
 impl Fake {
     fn new(outcomes: Vec<CallOutcome>) -> Arc<Self> {
@@ -838,6 +869,92 @@ async fn retryable_calls_back_off_from_the_pause_hint_and_never_past_the_run_dea
             .count();
         assert_eq!(messages, 1, "no attempt is repeated before it is due");
     }
+}
+
+#[tokio::test]
+async fn an_exhausted_read_routes_after_restart_with_a_bounded_category_and_no_output() {
+    let h = read_failure_harness().await;
+    let run = h.admit().await;
+    let setup = Worker::new(h.store.clone(), Fake::new(vec![]));
+    assert!(
+        setup.tick().await.unwrap(),
+        "the timer advances to the read"
+    );
+    h.sql("UPDATE {schema}.jobs SET attempt=9 WHERE step='read'")
+        .await;
+    drop(setup);
+
+    let reopened = Arc::new(Store::connect(&h.url, &h.namespace).await.unwrap());
+    let fake = Arc::new(ReadFailureFake {
+        outcome: Mutex::new(Some(CallOutcome::Retryable {
+            code: "transport-unavailable".into(),
+            retry_after: None,
+        })),
+        calls: Mutex::new(vec![]),
+    });
+    let restarted = Worker::new(reopened.clone(), fake.clone());
+    assert!(
+        restarted.tick().await.unwrap(),
+        "the final read attempt runs"
+    );
+    let routed = reopened.status(run).await.unwrap();
+    assert_eq!(routed.state, "running");
+    assert_eq!(routed.step, "unavailable");
+    assert_eq!(
+        routed.failure_code.as_deref(),
+        Some("transport-unavailable")
+    );
+    assert_eq!(h.output_values(run).await.get("read"), None);
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+
+    assert!(
+        restarted.tick().await.unwrap(),
+        "the failure route finishes"
+    );
+    let finished = reopened.status(run).await.unwrap();
+    assert_eq!(finished.state, "finished");
+    assert_eq!(finished.outcome.as_deref(), Some("unavailable"));
+    assert_eq!(finished.output, Some(Value::Null));
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+    let inspection = reopened.inspect(run, "binding-a").await.unwrap();
+    let read = inspection
+        .steps
+        .iter()
+        .find(|step| step.step == "read")
+        .unwrap();
+    assert_eq!(read.failure_code.as_deref(), Some("transport-unavailable"));
+}
+
+#[tokio::test]
+async fn an_authorization_refusal_never_takes_a_read_failure_route() {
+    let h = read_failure_harness().await;
+    let run = h.admit().await;
+    let setup = Worker::new(h.store.clone(), Fake::new(vec![]));
+    assert!(
+        setup.tick().await.unwrap(),
+        "the timer advances to the read"
+    );
+    h.sql("UPDATE {schema}.jobs SET attempt=9 WHERE step='read'")
+        .await;
+
+    let fake = Arc::new(ReadFailureFake {
+        outcome: Mutex::new(Some(CallOutcome::Refused {
+            code: "product-forbidden".into(),
+        })),
+        calls: Mutex::new(vec![]),
+    });
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    assert!(worker.tick().await.unwrap(), "the refused read is recorded");
+    let stopped = h.store.status(run).await.unwrap();
+    assert_eq!(stopped.state, "failed");
+    assert_eq!(stopped.step, "read");
+    assert_eq!(stopped.failure_code.as_deref(), Some("product-forbidden"));
+    assert_eq!(h.output_values(run).await.get("read"), None);
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+    assert!(
+        !worker.tick().await.unwrap(),
+        "the refusal queues no fallback"
+    );
 }
 
 #[tokio::test]

@@ -464,6 +464,137 @@ fn operations_without_a_declared_refusal_contract_reject_the_edge() {
 }
 
 #[test]
+fn reads_and_evaluations_accept_on_failure_but_mutations_refuse_it() {
+    let root = tempfile::tempdir().unwrap();
+    let mut read = declared_refusal_project();
+    read["operations"]["invoke-breg-action"] =
+        json!({"uses":"breg.read-record/v1","connection":"registry"});
+    read["workflow"]["steps"]["act"] = json!({
+        "type":"call",
+        "operation":"invoke-breg-action",
+        "input":{"type":"fields","fields":{
+            "collection":{"type":"literal","value":"people"},
+            "recordId":{"type":"literal","value":"synthetic-record"}
+        }},
+        "next":"accepted",
+        "onFailure":"refused"
+    });
+    read["workflow"]["steps"]["refused"] = json!({"type":"finish","outcome":"refused"});
+    read["workflow"]["outcomes"]["refused"] = json!({"type":"null"});
+    write_project(root.path(), &read, "");
+    let definition = Definition::load(root.path()).expect("a read may route exhausted failure");
+    let snapshot: Value = serde_json::from_str(&definition.snapshot().unwrap()).unwrap();
+    assert_eq!(snapshot["workflow"]["steps"]["act"]["onFailure"], "refused");
+    let scenarios = root.path().join("scenarios.yaml");
+    fs::write(&scenarios, json!({
+        "apiVersion": registry_coordinator::scenarios::API_VERSION,
+        "kind": registry_coordinator::scenarios::KIND,
+        "cases": [{
+            "id":"availability-exhausted",
+            "admittedAt":"2026-11-10T00:00:00Z",
+            "input":{},
+            "replies":{"act":vec![json!({"type":"retryable","code":"transport-unavailable"});10]},
+            "recovery":{"act":"retry-same"},
+            "expect":{"path":["act","refused"],"state":"completed"}
+        }]
+    }).to_string()).unwrap();
+    let cases = registry_coordinator::scenarios::load(&scenarios).unwrap();
+    let result = registry_coordinator::scenarios::run(&definition, &cases.cases[0]).unwrap();
+    assert_eq!(result.path, ["act", "refused"]);
+    assert_eq!(result.outcome.as_deref(), Some("refused"));
+
+    let evaluation = json!({
+        "apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1",
+        "kind":"CoordinatorProject",
+        "project":{"id":"evaluation-failure-route","version":"1"},
+        "functions":{"command":{
+            "runtime":"rhai","source":"functions.rhai","entrypoint":"command",
+            "inputs":{"arg0":{"type":"object"}},
+            "output":{"operationInput":"evaluate"}
+        }},
+        "operations":{"evaluate":{"uses":"evaluation.evaluate/v1","connection":"model"}},
+        "workflow":{
+            "input":{"type":"object"},"deadlineSeconds":60,"start":"act",
+            "steps":{
+                "act":{"type":"call","operation":"evaluate",
+                    "input":{"type":"function","function":"command","inputs":{"arg0":{"type":"input"}}},
+                    "next":"accepted","onFailure":"refused"},
+                "accepted":{"type":"finish","outcome":"accepted"},
+                "refused":{"type":"finish","outcome":"refused"}
+            },
+            "outcomes":{"accepted":{"type":"null"},"refused":{"type":"null"}}
+        }
+    });
+    fs::write(
+        root.path().join("workflow.yaml"),
+        serde_json::to_string(&evaluation).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("functions.rhai"),
+        "fn command(__named) { #{ state: __named.arg0, questions: #{ route: #{ type: \"predicate\", instructions: \"Check the application\" } } } }",
+    )
+    .unwrap();
+    Definition::load(root.path()).expect("an evaluation may route exhausted failure");
+
+    let mut mutation = declared_refusal_project();
+    mutation["workflow"]["steps"]["act"]["onFailure"] = json!("refused");
+    write_project(
+        root.path(),
+        &mutation,
+        "fn command(__named) { let input = __named.arg0;  input }",
+    );
+    let error = Definition::load(root.path())
+        .err()
+        .expect("a mutation must refuse onFailure");
+    assert_eq!(error.code, "coordinator.definition.operation");
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/workflow/steps/act/onFailure")
+    );
+}
+
+#[test]
+fn a_failure_route_has_no_call_output_and_names_a_declared_step() {
+    let root = tempfile::tempdir().unwrap();
+    let source = "fn command(__named) { let input = __named.arg0;  input } fn identity(__named) { let value = __named.arg0;  value }";
+    let mut project = declared_refusal_project();
+    project["operations"]["invoke-breg-action"] =
+        json!({"uses":"breg.read-record/v1","connection":"registry"});
+    project["workflow"]["steps"]["act"] = json!({
+        "type":"call",
+        "operation":"invoke-breg-action",
+        "input":{"type":"fields","fields":{
+            "collection":{"type":"literal","value":"people"},
+            "recordId":{"type":"literal","value":"synthetic-record"}
+        }},
+        "next":"accepted",
+        "onFailure":"refused"
+    });
+    project["workflow"]["steps"]["refused"] = json!({
+        "type":"finish",
+        "outcome":"refused",
+        "output":{"type":"function","function":"identity","inputs":{"arg0":{"type":"step","step":"act"}}}
+    });
+    project["workflow"]["outcomes"]["refused"] = json!({});
+    write_project(root.path(), &project, source);
+    assert_eq!(
+        Definition::load(root.path()).err().unwrap().code,
+        "coordinator.mapping.dominance"
+    );
+
+    project["workflow"]["steps"]["refused"] = json!({"type":"finish","outcome":"refused"});
+    project["workflow"]["steps"]["act"]["onFailure"] = json!("missing");
+    write_project(root.path(), &project, source);
+    let error = Definition::load(root.path()).err().unwrap();
+    assert_eq!(error.code, "coordinator.definition.target");
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/workflow/steps/act/onFailure")
+    );
+}
+
+#[test]
 fn a_snapshot_cannot_carry_the_refusal_edge_on_an_operation_without_it() {
     let root = tempfile::tempdir().unwrap();
     let mut project = declared_refusal_project();

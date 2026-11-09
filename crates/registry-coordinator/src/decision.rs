@@ -346,8 +346,8 @@ impl DecisionConnection {
                 BearerToken::new(text.to_owned()).map_err(|_| ())
             })
             .await
-            .map_err(|_| unavailable())?
-            .map_err(|_| unavailable())?;
+            .map_err(|_| credential_unavailable())?
+            .map_err(|_| credential_unavailable())?;
             request = request.header(
                 reqwest::header::AUTHORIZATION,
                 token.authorization_header_value(),
@@ -757,6 +757,12 @@ fn uncertain(code: &str) -> CallOutcome {
 fn unavailable() -> CallOutcome {
     CallOutcome::Retryable {
         code: "decision-unavailable".into(),
+        retry_after: None,
+    }
+}
+fn credential_unavailable() -> CallOutcome {
+    CallOutcome::Retryable {
+        code: "credential-unavailable".into(),
         retry_after: None,
     }
 }

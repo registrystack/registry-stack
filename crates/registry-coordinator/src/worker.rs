@@ -92,6 +92,8 @@ fn advance(next: String, output: Option<Value>) -> Detail {
         outcome: None,
         failure_code: None,
         failure_path: None,
+        routed_failure: false,
+        service_deadline_routed: false,
         uncertain: false,
         recovery_hold: false,
         observation_pause_seconds: None,
@@ -103,14 +105,41 @@ fn advance(next: String, output: Option<Value>) -> Detail {
     }
 }
 
+fn deadline_route(target: &str) -> Detail {
+    Detail {
+        service_deadline_routed: true,
+        ..advance(target.to_owned(), None)
+    }
+}
+
 fn call_result(
     result: CallOutcome,
     next: &str,
     on_declared_refusal: Option<&str>,
     uncertain: bool,
 ) -> Sent<Detail> {
+    call_result_with_failure(result, next, None, on_declared_refusal, uncertain, false)
+}
+
+fn call_result_with_failure(
+    result: CallOutcome,
+    next: &str,
+    on_failure: Option<&str>,
+    on_declared_refusal: Option<&str>,
+    uncertain: bool,
+    exhausted: bool,
+) -> Sent<Detail> {
     match result {
         CallOutcome::Success(value) => accepted(advance(next.to_owned(), Some(value))),
+        CallOutcome::Retryable { code, .. } if !uncertain && exhausted && on_failure.is_some() => {
+            let Some(category) = availability_failure(&code) else {
+                return failed(safe_code(&code, "remote-retryable"), false);
+            };
+            let mut detail = advance(on_failure.expect("checked above").to_owned(), None);
+            detail.failure_code = Some(category);
+            detail.routed_failure = true;
+            accepted(detail)
+        }
         CallOutcome::Retryable { code, retry_after } if !uncertain => Sent {
             outcome: SendOutcome::Transient { retry_after },
             detail: Detail::failure(safe_code(&code, "remote-retryable"), false),
@@ -152,6 +181,22 @@ fn call_result(
             sent.detail.receipt_expired = true;
             sent
         }
+    }
+}
+
+/// Definite, effect-free availability categories that an authored failure
+/// edge may handle after the ordinary retry policy is exhausted. Credential,
+/// configuration, authorization, preparation, binding and protocol failures
+/// are deliberately absent.
+pub(crate) fn availability_failure(code: &str) -> Option<&'static str> {
+    match code {
+        "transport-unavailable" => Some("transport-unavailable"),
+        "rate-limited" => Some("rate-limited"),
+        "attempt-timeout" => Some("attempt-timeout"),
+        "external-unavailable" => Some("external-unavailable"),
+        "external-rate-limited" => Some("external-rate-limited"),
+        "decision-unavailable" => Some("decision-unavailable"),
+        _ => None,
     }
 }
 
@@ -230,6 +275,7 @@ fn wait_result(
     read: Option<CompletionObservation>,
     next: &str,
     on_timeout: Option<&str>,
+    on_service_deadline: Option<&str>,
     timed_out: bool,
     recheck_seconds: u32,
 ) -> Sent<Detail> {
@@ -278,15 +324,17 @@ fn wait_result(
                 Some(*read),
                 next,
                 on_timeout,
+                on_service_deadline,
                 timed_out,
                 recheck_seconds,
             );
             result.detail.follow = Some(proposal);
             result
         }
-        _ if timed_out => match on_timeout {
-            Some(step) => accepted(advance(step.to_owned(), None)),
-            None => failed("wait-timed-out", false),
+        _ if timed_out => match (on_service_deadline, on_timeout) {
+            (Some(target), _) => accepted(deadline_route(target)),
+            (None, Some(step)) => accepted(advance(step.to_owned(), None)),
+            (None, None) => failed("wait-timed-out", false),
         },
         Some(CompletionObservation::Pending { retry_after }) => pending(None, retry_after),
         Some(CompletionObservation::Retryable { code, retry_after }) => pending(
@@ -335,10 +383,24 @@ impl Worker {
             return Ok(failed("step-invalid", job.job.uncertain));
         };
         let evaluate = || definition.evaluate(job.key.part(), &payload.input, &payload.outputs);
+        let deadline_target = definition
+            .workflow
+            .service_deadline
+            .as_ref()
+            .map(|deadline| deadline.next.as_str());
         match step {
             // Acceptance checkpoints the timer wake. Store checks the current
             // deadline atomically before advancing the workflow at commit.
-            Step::WaitUntil { next, .. } => Ok(accepted(advance(next.clone(), None))),
+            Step::WaitUntil { next, .. } => {
+                let service_deadline_due = job
+                    .job
+                    .service_deadline_at
+                    .is_some_and(|at| SystemTime::from(at) <= job.attempt_started_at);
+                let detail = deadline_target
+                    .filter(|_| service_deadline_due)
+                    .map_or_else(|| advance(next.clone(), None), deadline_route);
+                Ok(accepted(detail))
+            }
             Step::WaitFor {
                 wait_for,
                 next,
@@ -390,8 +452,11 @@ impl Worker {
                     .begin_observation(job, read_floor)
                     .await
                     .map_err(|_| DispatchError::Unavailable)?;
-                let timed_out = match permit {
-                    Some(crate::store::ObservationPermit::Observe { timed_out }) => timed_out,
+                let (timed_out, service_deadline) = match permit {
+                    Some(crate::store::ObservationPermit::Observe {
+                        timed_out,
+                        service_deadline,
+                    }) => (timed_out, service_deadline),
                     Some(crate::store::ObservationPermit::Pause { seconds }) => {
                         return Ok(accepted(Detail {
                             recheck_seconds: Some(seconds),
@@ -399,12 +464,13 @@ impl Worker {
                             ..Detail::failure("observation-pending", false)
                         }));
                     }
-                    Some(crate::store::ObservationPermit::TimedOut) => {
+                    Some(crate::store::ObservationPermit::TimedOut { service_deadline }) => {
                         return Ok(wait_result(
                             completion_contract,
                             None,
                             next,
                             on_timeout.as_deref(),
+                            deadline_target.filter(|_| service_deadline),
                             true,
                             recheck_seconds,
                         ));
@@ -414,12 +480,14 @@ impl Worker {
                     }
                     None => return Ok(held("protected-state-invalid")),
                 };
+                let on_service_deadline = deadline_target.filter(|_| service_deadline);
                 let Some(budget) = job.remaining_budget(std::time::SystemTime::now()) else {
                     return Ok(wait_result(
                         completion_contract,
                         None,
                         next,
                         on_timeout.as_deref(),
+                        on_service_deadline,
                         timed_out,
                         recheck_seconds,
                     ));
@@ -463,6 +531,7 @@ impl Worker {
                     read,
                     next,
                     on_timeout.as_deref(),
+                    on_service_deadline,
                     timed_out,
                     recheck_seconds,
                 ))
@@ -494,6 +563,8 @@ impl Worker {
                     outcome: Some(finish.clone()),
                     failure_code: None,
                     failure_path: None,
+                    routed_failure: false,
+                    service_deadline_routed: false,
                     uncertain: false,
                     recovery_hold: false,
                     observation_pause_seconds: None,
@@ -507,6 +578,7 @@ impl Worker {
             Step::Call {
                 call,
                 next,
+                on_failure,
                 on_declared_refusal,
                 ..
             } => {
@@ -675,11 +747,13 @@ impl Worker {
                         request.operation.has_dispatch_risk() || job.job.uncertain,
                     ));
                 }
-                Ok(call_result(
+                Ok(call_result_with_failure(
                     retry_or_hold(result, job),
                     next,
+                    on_failure.as_deref(),
                     on_declared_refusal.as_deref(),
                     job.job.uncertain,
+                    final_attempt,
                 ))
             }
         }
@@ -722,7 +796,9 @@ mod leased_wait_deadline_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{attempt_class, call_result, retry_fits, safe_code, wait_result};
+    use super::{
+        attempt_class, call_result, call_result_with_failure, retry_fits, safe_code, wait_result,
+    };
     use crate::{
         contracts::CompletionContract,
         metrics::StepAttempt,
@@ -766,7 +842,34 @@ mod tests {
         on_timeout: Option<&str>,
         timed_out: bool,
     ) -> super::Sent<super::Detail> {
-        wait_result(review(), read, "decide", on_timeout, timed_out, 900)
+        wait_result(review(), read, "decide", on_timeout, None, timed_out, 900)
+    }
+
+    #[test]
+    fn settled_result_at_the_service_deadline_wins() {
+        let settled = wait_result(
+            review(),
+            Some(CompletionObservation::Settled(result("approved"))),
+            "decide",
+            Some("retry"),
+            Some("escalate"),
+            true,
+            900,
+        );
+        assert_eq!(settled.detail.next.as_deref(), Some("decide"));
+        assert!(!settled.detail.service_deadline_routed);
+        let pending = wait_result(
+            review(),
+            Some(CompletionObservation::Pending { retry_after: None }),
+            "decide",
+            Some("retry"),
+            Some("escalate"),
+            true,
+            900,
+        );
+        assert_eq!(pending.detail.next.as_deref(), Some("escalate"));
+        assert!(pending.detail.service_deadline_routed);
+        assert!(pending.detail.output.is_none());
     }
 
     fn permanent(sent: &super::Sent<super::Detail>) -> Option<&'static str> {
@@ -943,7 +1046,7 @@ mod tests {
         assert!(matches!(sent.outcome, SendOutcome::Accepted { .. }));
         assert_eq!(sent.detail.recheck_seconds, Some(300));
         assert_eq!(sent.detail.failure_code, Some("attempt-timeout"));
-        let sent = wait_result(review(), None, "decide", None, false, 120);
+        let sent = wait_result(review(), None, "decide", None, None, false, 120);
         assert_eq!(
             sent.detail.recheck_seconds,
             Some(300),
@@ -980,6 +1083,71 @@ mod tests {
             call_result(rate_limited(hint), "next", None, true).outcome,
             SendOutcome::MaybeSent
         );
+    }
+
+    #[test]
+    fn only_exhausted_explicit_availability_can_take_a_failure_edge() {
+        let retryable = |code: &str| CallOutcome::Retryable {
+            code: code.into(),
+            retry_after: None,
+        };
+        for category in [
+            "transport-unavailable",
+            "rate-limited",
+            "attempt-timeout",
+            "external-unavailable",
+            "external-rate-limited",
+            "decision-unavailable",
+        ] {
+            let routed = call_result_with_failure(
+                retryable(category),
+                "success",
+                Some("manual"),
+                None,
+                false,
+                true,
+            );
+            assert!(matches!(routed.outcome, SendOutcome::Accepted { .. }));
+            assert_eq!(routed.detail.next.as_deref(), Some("manual"));
+            assert_eq!(routed.detail.failure_code, Some(category));
+            assert!(routed.detail.routed_failure);
+            assert_eq!(routed.detail.output, None);
+        }
+
+        for (code, uncertain, exhausted) in [
+            ("product-forbidden", false, true),
+            ("credential-configuration", false, true),
+            ("credential-unavailable", false, true),
+            ("operation-unbound", false, true),
+            ("transport-unavailable", true, true),
+            ("transport-unavailable", false, false),
+        ] {
+            let stopped = call_result_with_failure(
+                retryable(code),
+                "success",
+                Some("manual"),
+                None,
+                uncertain,
+                exhausted,
+            );
+            assert_eq!(stopped.detail.next, None, "{code}");
+            assert!(!stopped.detail.routed_failure, "{code}");
+            assert_eq!(stopped.detail.output, None, "{code}");
+        }
+
+        let authorization = call_result_with_failure(
+            CallOutcome::Refused {
+                code: "product-forbidden".into(),
+            },
+            "success",
+            Some("manual"),
+            None,
+            false,
+            true,
+        );
+        assert_eq!(authorization.detail.next, None);
+        assert_eq!(authorization.detail.failure_code, Some("product-forbidden"));
+        assert!(!authorization.detail.routed_failure);
     }
 
     #[test]

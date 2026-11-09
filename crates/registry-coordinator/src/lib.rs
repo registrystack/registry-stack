@@ -5,6 +5,7 @@ pub mod adapters;
 pub mod authoring;
 pub mod breg_action;
 mod breg_proposal;
+pub mod calendar_trigger;
 pub mod compare;
 pub mod completion;
 pub mod contracts;
