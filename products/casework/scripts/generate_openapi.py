@@ -250,7 +250,7 @@ def document(contract: dict, wire: dict) -> dict:
             prefix="Registry-Review" if endpoint.review else "Registry-Casework"
             headers[prefix+"-Validation-Path"]={"description":"Bounded value-free JSON path; present together with the validation reason.","schema":{"type":"string","maxLength":256}}
             headers[prefix+"-Validation-Reason"]={"description":"Closed value-free validation category; present together with the validation path.","schema":ref("ReviewValidationReason")}
-            if endpoint.body=="ReviewTaskDecisionRequest":headers["Registry-Casework-Validation-Allowed"]={"description":"Comma-separated outcome identifiers the review policy declares for the requested settlement; present only with the outcome-not-declared reason.","schema":{"type":"string","maxLength":1039,"pattern":"^[a-z][a-z0-9_-]{0,63}(,[a-z][a-z0-9_-]{0,63}){0,15}$"}}
+            if endpoint.body=="ReviewTaskDecisionRequest":headers["Registry-Casework-Validation-Allowed"]={"description":"Comma-separated outcome identifiers available at the current stage, or the single outcome chosen by an earlier approval in that stage. Present when outcome-not-declared or approval-outcome-differs can name an allowed choice.","schema":{"type":"string","maxLength":1039,"pattern":"^[a-z][a-z0-9_-]{0,63}(,[a-z][a-z0-9_-]{0,63}){0,15}$"}}
         if endpoint.body and "422" in responses:
             prefix="Registry-Review" if endpoint.review else "Registry-Casework"
             headers=responses["422"].setdefault("headers",{})

@@ -39,6 +39,9 @@ Policy, context, stage, outcome, routing, clock, staffing and activation shapes
 come from their owning DTO schemas. Presentation labels remain inspectable in
 `explain`; policy bindings identify behavior. Package digests cover every
 captured authored byte, including labels and provider export files.
+New explain reports list each stage's effective `outcomes` in policy catalogue
+order. When the authored stage omits its subset, the list contains every
+policy outcome. The schema also accepts earlier reports without this member.
 Each explained policy also reports `usedQueues`, `decidingProfiles`,
 `eligibleDecidingProfiles`, and `dependencyScope`. The report lists every
 project clock, calendar, and trusted producer at project level. The policy's

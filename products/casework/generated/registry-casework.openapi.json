@@ -4053,6 +4053,16 @@
             "default": "settle",
             "description": "Controls whether a rejection or change request settles the whole review.\n`settle` is the default; `advise` records and counts the decision toward\nthis non-final stage without settling the review."
           },
+          "outcomes": {
+            "description": "Outcome identifiers offered by this stage. Omission offers the whole\npolicy catalogue.",
+            "items": {
+              "$ref": "#/components/schemas/LocalId"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "queue": {
             "type": "string"
           },
@@ -18633,7 +18643,7 @@
             "description": "Problem: request.invalid, source-profile.not-applicable, source-profile.required",
             "headers": {
               "Registry-Casework-Validation-Allowed": {
-                "description": "Comma-separated outcome identifiers the review policy declares for the requested settlement; present only with the outcome-not-declared reason.",
+                "description": "Comma-separated outcome identifiers available at the current stage, or the single outcome chosen by an earlier approval in that stage. Present when outcome-not-declared or approval-outcome-differs can name an allowed choice.",
                 "schema": {
                   "maxLength": 1039,
                   "pattern": "^[a-z][a-z0-9_-]{0,63}(,[a-z][a-z0-9_-]{0,63}){0,15}$",

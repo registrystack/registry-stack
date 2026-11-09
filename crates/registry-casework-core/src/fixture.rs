@@ -267,7 +267,7 @@ impl CaseworkFixture {
                 "casework.fixture.empty-outcomes",
                 "/expect/outcomes",
                 "expected at least one outcome identifier",
-                "List the policy's configured outcomes, or omit outcomes and assert a queue.",
+                "List the first review stage's outcomes, or omit outcomes and assert a queue.",
             ));
         }
         if findings.is_empty() {
@@ -278,7 +278,7 @@ impl CaseworkFixture {
     }
 
     /// Validate the synthetic display under the exact compiled policy closure.
-    /// Queue expectations name the first stage queue; no source/runtime is read.
+    /// Expectations name the first stage's queue and outcomes. The check is offline.
     pub fn read_against(
         file: &str,
         bytes: &[u8],
@@ -328,9 +328,13 @@ impl CaseworkFixture {
                 )),
             }
             if let Some(expected) = &fixture.expect.outcomes {
+                let first_stage = policy.stages.first();
                 let actual = policy
                     .outcomes
                     .iter()
+                    .filter(|outcome| {
+                        first_stage.is_none_or(|stage| stage.offers_outcome(&outcome.id))
+                    })
                     .map(|outcome| outcome.id.as_str())
                     .collect::<Vec<_>>();
                 let mut unknown = false;
@@ -340,8 +344,8 @@ impl CaseworkFixture {
                         findings.push(crate::ConfigFinding::new(
                             "casework.fixture.unknown-outcome",
                             format!("/expect/outcomes/{index}"),
-                            "the outcome is not declared by the selected policy",
-                            "Name an outcome declared under the selected review policy.",
+                            "the first review stage does not offer this outcome",
+                            "Choose an outcome offered by the first review stage.",
                         ));
                     }
                 }
@@ -349,8 +353,8 @@ impl CaseworkFixture {
                     findings.push(crate::ConfigFinding::new(
                         "casework.fixture.outcomes-mismatch",
                         "/expect/outcomes",
-                        "the expected outcomes differ from the policy's configured outcomes",
-                        "List every configured outcome in policy order.",
+                        "the expected outcomes differ from the first stage's choices",
+                        "List every outcome offered by the first review stage in policy order.",
                     ));
                 }
             }
@@ -393,5 +397,40 @@ impl CaseworkFixture {
         } else {
             Err(crate::findings_report(&decoded.document, &findings))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_outcomes_bound_offline_fixtures_to_the_first_stage() {
+        let mut project = crate::CaseworkProject::read(
+            "casework.yaml",
+            include_bytes!("../../../products/casework/examples/stage-outcomes/casework.yaml"),
+        )
+        .unwrap()
+        .value;
+        project.review_policies[0].stages[0]
+            .outcomes
+            .as_mut()
+            .unwrap()
+            .retain(|id| id != "rejected");
+        let fixture = include_str!(
+            "../../../products/casework/examples/stage-outcomes/fixtures/grant-review.yaml"
+        );
+        let narrowed = fixture.replace(
+            "outcomes: [approved, changes-requested, rejected]",
+            "outcomes: [approved, changes-requested]",
+        );
+        CaseworkFixture::read_against("grant-review.yaml", narrowed.as_bytes(), &project).unwrap();
+        let refusal =
+            CaseworkFixture::read_against("grant-review.yaml", fixture.as_bytes(), &project)
+                .unwrap_err();
+        assert!(refusal
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "casework.fixture.unknown-outcome"));
     }
 }

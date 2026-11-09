@@ -414,6 +414,13 @@
           "default": "settle",
           "description": "Controls whether a rejection or change request settles the whole review.\n`settle` is the default; `advise` records and counts the decision toward\nthis non-final stage without settling the review."
         },
+        "outcomes": {
+          "description": "Outcome identifiers offered by this stage. Omission offers the whole\npolicy catalogue.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array"
+        },
         "queue": {
           "type": "string"
         },

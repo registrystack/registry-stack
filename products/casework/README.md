@@ -14,6 +14,8 @@ guide](RUNTIME-CONFIG.md) and [current-source development guide](DEV-SOURCES.md)
 cover deployment bindings. The [task grant guide](TASK_GRANTS.md) covers bounded
 institutional agents. The generated [OpenAPI contract](generated/registry-casework.openapi.json)
 and [CLI report contract](contracts/cli/README.md) own exact wire shapes.
+The [stage outcomes example](examples/stage-outcomes/README.md) keeps one review
+history while offering different decisions at local and final review.
 
 ## First submitted review
 
@@ -116,7 +118,7 @@ vocabulary belongs to the policy: `approve`, `reject`, `changes-requested`,
 or `answer`, each naming one of the policy's declared outcomes, with a reason
 or structured result when the selected outcome requires them. An approval
 names an outcome too; one without it is refused at `$.outcome`, and the
-`Registry-Casework-Validation-Allowed` header lists the policy's approval
+`Registry-Casework-Validation-Allowed` header lists the current stage's approval
 outcomes. Each outcome declares `publicReason: required`, `optional` or
 `none`: a public reason of at most 2000 UTF-8 bytes reaches the producer on
 the ReviewResult, while the private `reason` stays in the accountability
@@ -136,6 +138,15 @@ the approval that meets its threshold; earlier stages' outcomes and reasons,
 and other approvers' public reasons, are kept for accountability and not
 released. Decisions and task holdings are revision-fenced; an old
 response cannot authorize a later state.
+
+Each stage may set `outcomes` to the non-empty subset of policy outcome ids it
+offers. Omitting the field offers every policy outcome, preserving existing
+projects. `caseworkctl check` refuses an unknown outcome id and a stage with no
+available path to advance or settle the review. `caseworkctl explain` always
+reports the effective outcomes for each stage, including the all-policy default.
+A `changes-requested` result ends that review version. A resubmission is a new
+version that starts at the policy's first stage; it does not resume the earlier
+review in place.
 
 The same producer reads `GET /v1/review-requests/{requestId}/result` or its
 resumable result feed. A `ReviewResult` repeats the subject, policy, and

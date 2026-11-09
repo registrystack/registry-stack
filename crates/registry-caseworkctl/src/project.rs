@@ -761,7 +761,9 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
             "contextCustody": custody,
             "displaySchema": review.display_schema,
             "resultSchema": review.result_schema,
-            "stages": review.stages.iter().map(crate::report::ExplainStage::from).collect::<Vec<_>>(),
+            "stages": review.stages.iter().map(|stage| {
+                crate::report::ExplainStage::effective(stage, &review.outcomes)
+            }).collect::<Vec<_>>(),
             "outcomes": review.outcomes,
             "routing": review.routing,
             "routingFields": review.routing_fields(),

@@ -978,6 +978,12 @@
         "negativeDecisions": {
           "$ref": "#/$defs/ReviewNegativeDecisionMode"
         },
+        "outcomes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "queue": {
           "type": "string"
         },

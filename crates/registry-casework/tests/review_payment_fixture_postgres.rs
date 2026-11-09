@@ -359,6 +359,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 queue: "payment-review".to_owned(),
                 deciding_profiles: vec!["reviewer".to_owned()],
                 required_approvals: 1,
+                outcomes: None,
                 negative_decisions: ReviewNegativeDecisionMode::Settle,
                 exclude_initiator: false,
                 exclude_previous_stage_reviewers: false,

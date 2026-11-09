@@ -24,8 +24,8 @@ Deployment behavior is in the [README](README.md),
   assertion and a single selected profile; profile scopes are never unioned
   (CASEWORK-SEC-01, CASEWORK-SEC-02).
 - **Private reason versus public reason.** Every decision names an outcome
-  declared by the pinned policy. The reviewer's private reason stays in the
-  accountability record. Only the outcome and an optional `publicReason`
+  declared by the pinned policy and offered at the current stage. The reviewer's
+  private reason stays in the accountability record. Only the outcome and an optional `publicReason`
   (at most 2000 UTF-8 bytes) reach the producer result, and the audit journal
   records only that a public reason was given (CASEWORK-SEC-31).
 - **Source concealment.** Lists, counts, ordering and exact request selection
