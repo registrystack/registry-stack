@@ -237,6 +237,14 @@ pub struct ReviewStagePolicy {
         )
     )]
     pub required_approvals: u16,
+    /// Outcome identifiers offered by this stage. Omission offers the whole
+    /// policy catalogue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<Vec<registry_platform_yaml::LocalId>>")
+    )]
+    pub outcomes: Option<Vec<String>>,
     /// Controls whether a rejection or change request settles the whole review.
     /// `settle` is the default; `advise` records and counts the decision toward
     /// this non-final stage without settling the review.
@@ -267,6 +275,49 @@ impl ReviewNegativeDecisionMode {
 }
 
 impl ReviewStagePolicy {
+    /// Tests a policy outcome's membership in the stage's optional subset.
+    #[must_use]
+    pub fn offers_outcome(&self, id: &str) -> bool {
+        self.outcomes
+            .as_ref()
+            .is_none_or(|outcomes| outcomes.iter().any(|outcome| outcome == id))
+    }
+
+    fn outcome_findings(&self, at: &str, declared: &[ReviewOutcomePolicy]) -> Findings {
+        let mut findings = Findings::default();
+        let Some(outcomes) = &self.outcomes else {
+            return findings;
+        };
+        if outcomes.is_empty() {
+            findings.push(
+                "casework.review-policy.no-stage-outcomes",
+                at.to_owned(),
+                "a stage needs at least one outcome that can settle or advance the review",
+                "List at least one outcome from the review policy, or omit outcomes to offer all of them.",
+            );
+        }
+        findings.repeated(
+            outcomes
+                .iter()
+                .enumerate()
+                .map(|(index, outcome)| (format!("{at}/{index}"), outcome.as_str())),
+            "casework.review-policy.duplicate-stage-outcome",
+            "this stage already offers the outcome",
+            "List each outcome only once.",
+        );
+        for (index, id) in outcomes.iter().enumerate() {
+            if !declared.iter().any(|outcome| outcome.id == *id) {
+                findings.push(
+                    "casework.review-policy.unknown-stage-outcome",
+                    format!("{at}/{index}"),
+                    "this outcome is not declared by the review policy",
+                    "Choose an identifier from the policy's outcomes.",
+                );
+            }
+        }
+        findings
+    }
+
     /// Identity findings and threshold findings, relative to `at`. The
     /// reader refuses a file whose threshold is out of range; the threshold
     /// findings hold the same bound for a policy built in code.
@@ -735,6 +786,12 @@ impl ReviewPolicy {
             }
         }
         tag(ReviewPolicyError::Outcomes, outcomes);
+        for (index, stage) in self.stages.iter().enumerate() {
+            tag(
+                ReviewPolicyError::Outcomes,
+                stage.outcome_findings(&format!("/stages/{index}/outcomes"), &self.outcomes),
+            );
+        }
         out
     }
 
@@ -1758,9 +1815,8 @@ pub fn record_review_decision(
             ),
             _ => return Err(ReviewDecisionError::DecisionNotAllowed),
         };
-    validate_settlement_outcome(
-        policy,
-        expected,
+    validate_outcome_choice(policy, stage, expected, outcome)?;
+    policy.validate_outcome(
         outcome,
         reason,
         public_reason.as_deref(),
@@ -1878,15 +1934,16 @@ pub fn record_review_decision(
     }
 }
 
-fn validate_settlement_outcome(
+fn validate_outcome_choice(
     policy: &ReviewPolicyClosure,
+    stage: &ReviewStagePolicy,
     expected: ReviewOutcomeSettlement,
     outcome: &str,
-    reason: Option<&str>,
-    public_reason: Option<&str>,
-    result: Option<&Value>,
-    constraints: Option<&Value>,
 ) -> Result<(), ReviewDecisionError> {
+    let offered = policy
+        .outcomes
+        .iter()
+        .filter(|candidate| stage.offers_outcome(&candidate.id));
     if policy
         .outcomes
         .iter()
@@ -1895,15 +1952,19 @@ fn validate_settlement_outcome(
     {
         return Err(ReviewDecisionError::OutcomeNotAllowed {
             settlement: expected,
-            declared: policy
-                .outcomes
-                .iter()
+            declared: offered
                 .filter(|candidate| candidate.settlement == expected)
                 .map(|candidate| candidate.id.clone())
                 .collect(),
         });
     }
-    policy.validate_outcome(outcome, reason, public_reason, result, constraints)?;
+    if !stage.offers_outcome(outcome) {
+        let allowed = offered.map(|candidate| candidate.id.clone()).collect();
+        let problem =
+            ReviewValidationError::new("$.outcome", ReviewValidationReason::OutcomeNotDeclared)
+                .allowing(allowed);
+        return Err(ReviewDecisionValidationError::Structured(problem).into());
+    }
     Ok(())
 }
 
@@ -2888,6 +2949,7 @@ mod tests {
             queue: "review".to_owned(),
             deciding_profiles: vec!["reviewer".to_owned()],
             required_approvals,
+            outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: true,
             exclude_previous_stage_reviewers: true,
@@ -3028,6 +3090,105 @@ mod tests {
                 public_reason: None,
             },
         }
+    }
+
+    fn policy_with_final_outcomes(outcomes: Value) -> ReviewPolicy {
+        let mut policy =
+            serde_json::to_value(approval_policy(vec![stage("local", 1), stage("final", 1)]))
+                .unwrap();
+        policy["stages"][1]["outcomes"] = outcomes;
+        serde_json::from_value(policy).unwrap()
+    }
+
+    #[test]
+    fn stage_outcomes_reject_empty_unknown_and_duplicate_choices() {
+        for (outcomes, code) in [
+            (json!([]), "casework.review-policy.no-stage-outcomes"),
+            (
+                json!(["approved", "unknown"]),
+                "casework.review-policy.unknown-stage-outcome",
+            ),
+            (
+                json!(["approved", "approved"]),
+                "casework.review-policy.duplicate-stage-outcome",
+            ),
+        ] {
+            let policy = policy_with_final_outcomes(outcomes);
+            let findings = policy.findings();
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert_eq!(findings[0].code, code);
+            assert!(findings[0].pointer.starts_with("/stages/1/outcomes"));
+        }
+    }
+
+    #[test]
+    fn stage_outcomes_limit_decisions_on_the_frozen_policy() {
+        let snapshot = policy_with_final_outcomes(json!(["approved", "rejected"]))
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        let request_id = Uuid::from_u128(100);
+        let local = task(request_id, 0, "local", 1, "a");
+        let final_review = task(request_id, 1, "final", 2, "b");
+        let request_changes = |task: &ReviewTask, reviewer: &str| Decision {
+            decision: DecisionKind::ChangesRequested {
+                outcome: "changes-requested".to_owned(),
+                reason: Some("Supply a corrected form".to_owned()),
+                public_reason: None,
+                result: None,
+            },
+            ..approve(task, person(reviewer))
+        };
+
+        let mut returned = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        assert!(matches!(
+            record_review_decision(
+                &snapshot,
+                &mut returned,
+                &local,
+                request_changes(&local, "a")
+            )
+            .unwrap(),
+            ReviewTransition::Settled {
+                settlement: ReviewSettlement::ChangesRequested { .. }
+            }
+        ));
+
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        record_review_decision(
+            &snapshot,
+            &mut progress,
+            &local,
+            approve(&local, person("a")),
+        )
+        .unwrap();
+        let before = progress.clone();
+        let error = record_review_decision(
+            &snapshot,
+            &mut progress,
+            &final_review,
+            request_changes(&final_review, "b"),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ReviewDecisionError::Validation(ReviewDecisionValidationError::Structured(problem))
+                if problem.path == "$.outcome"
+                    && problem.reason == ReviewValidationReason::OutcomeNotDeclared
+                    && problem.allowed.as_ref() == ["approved", "rejected"]
+        ));
+        assert_eq!(progress, before);
+        assert!(matches!(
+            record_review_decision(
+                &snapshot,
+                &mut progress,
+                &final_review,
+                approve(&final_review, person("b"))
+            )
+            .unwrap(),
+            ReviewTransition::Settled {
+                settlement: ReviewSettlement::Approved { .. }
+            }
+        ));
     }
 
     #[test]
@@ -3186,6 +3347,9 @@ mod tests {
         );
         snapshot.stages[0].exclude_initiator = false;
         assert_eq!(snapshot.verify(), Err(ReviewPolicyError::DigestMismatch));
+        snapshot.stages[0].exclude_initiator = true;
+        snapshot.stages[0].outcomes = Some(vec!["approved".to_owned()]);
+        assert_eq!(snapshot.verify(), Err(ReviewPolicyError::DigestMismatch));
 
         let mut advisory_snapshot = approval_policy(vec![stage("first", 1), stage("final", 1)])
             .closure_with(crate::ReviewPolicyDependencies::default())
@@ -3250,6 +3414,7 @@ mod tests {
                         .map(|profile_index| identifier('p', profile_index))
                         .collect(),
                     required_approvals: MAXIMUM_REVIEW_APPROVALS_PER_STAGE,
+                    outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,

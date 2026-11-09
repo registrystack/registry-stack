@@ -14,6 +14,7 @@ use serde_json::Value;
 
 const STANDALONE: &str = "products/casework/examples/standalone-decision";
 const ADVANCED: &str = "products/casework/examples/multi-stage-routing-clocks";
+const STAGE_OUTCOMES: &str = "products/casework/examples/stage-outcomes";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,7 +44,7 @@ fn stage_project(root: &Path, staging: &Path, project: &str) {
 
 fn output(root: &Path, arguments: &[&str], expected_exit: i32) -> (Value, Vec<u8>) {
     let scratch = tempfile::tempdir().expect("temporary directory");
-    for project in [STANDALONE, ADVANCED] {
+    for project in [STANDALONE, ADVANCED, STAGE_OUTCOMES] {
         stage_project(root, scratch.path(), project);
     }
     let output = Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
@@ -168,4 +169,39 @@ fn explain_reports_policy_usage_and_project_level_resources() {
     assert!(unlabelled["reviewPolicies"][0]["stages"][0]
         .get("label")
         .is_none());
+    assert_eq!(
+        unlabelled["reviewPolicies"][0]["stages"][0]["outcomes"],
+        serde_json::json!(["confirmed", "rejected"]),
+        "an omitted stage subset explains every policy outcome"
+    );
+}
+
+#[test]
+fn explain_reports_each_stages_effective_outcomes() {
+    let root = repo_root();
+    let (report, _) = output(&root, &["explain", STAGE_OUTCOMES], 0);
+    let stages = report["reviewPolicies"][0]["stages"]
+        .as_array()
+        .expect("stages are reported");
+
+    assert_eq!(stages[0]["label"], "Local review");
+    assert_eq!(
+        stages[0]["outcomes"],
+        serde_json::json!(["approved", "changes-requested", "rejected"])
+    );
+    assert_eq!(stages[1]["label"], "Final review");
+    assert_eq!(
+        stages[1]["outcomes"],
+        serde_json::json!(["approved", "rejected"])
+    );
+}
+
+#[test]
+fn stage_outcomes_example_passes_offline_authoring_commands() {
+    let root = repo_root();
+    for command in ["check", "explain", "test"] {
+        let (report, _) = output(&root, &[command, STAGE_OUTCOMES], 0);
+        assert_eq!(report["command"], command);
+        assert_eq!(report["status"], "complete");
+    }
 }

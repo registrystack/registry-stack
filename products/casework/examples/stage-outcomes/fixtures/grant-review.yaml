@@ -1,0 +1,10 @@
+apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
+kind: CaseworkFixture
+id: two-level-grant-review-offline
+review:
+  policy: grant-review
+  display:
+    summary: Review the synthetic grant application
+expect:
+  queue: local-review
+  outcomes: [approved, changes-requested, rejected]

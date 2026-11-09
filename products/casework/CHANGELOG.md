@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Let a review stage choose a subset of the policy's outcomes with
+  `stages[].outcomes`. The runtime enforces the stage's choices, and
+  `caseworkctl explain` lists them. A stage that omits the list offers every
+  policy outcome.
+
 ## 0.46.0 - 2026-11-08
 
 - Each access profile may carry an optional `label` and `description`. Neither is matched against a caller, a profile that writes neither reads as before, and rewording them leaves a policy's behavioral binding unchanged. Casework keeps both in the review policy description, which any caller who may read that description, requesters included, can see.

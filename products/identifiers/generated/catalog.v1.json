@@ -5157,7 +5157,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "87a1a61127de6eb20c130f17b2d804c8b209c7343e7e4275f480f37833b83fcf",
+        "sha256": "6982999067d17c6d6b9f01d2d6b8eb11ea932ebc6ba7126fc959b2da6effb799",
         "mediaType": "application/schema+json"
       }
     },
@@ -5175,7 +5175,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "2cbf5e3d2fd943abfa3777b63f204feac0dc0f5c02241a121aa3a135f3d420c7",
+        "sha256": "442c29fe6db3bd93c2a35a5303e341d8aaa70c95d58dcd589fee9fff529fdff4",
         "mediaType": "application/schema+json"
       }
     },

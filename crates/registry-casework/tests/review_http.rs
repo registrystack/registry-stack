@@ -253,6 +253,7 @@ fn project(issuer: &str) -> CaseworkProject {
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
+                    outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
@@ -291,6 +292,7 @@ fn project(issuer: &str) -> CaseworkProject {
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
+                    outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
@@ -775,6 +777,82 @@ async fn create_task(
         .expect("created task")
         .get(0);
     (accepted, task_id)
+}
+
+async fn claim_task_over_http(
+    app: &axum::Router,
+    task_id: Uuid,
+    token: &str,
+    idempotency_key: &str,
+) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/claim"))
+                .header("authorization", format!("Bearer {token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header("if-match", "\"1\"")
+                .header("idempotency-key", idempotency_key)
+                .body(Body::empty())
+                .expect("claim review task"),
+        )
+        .await
+        .expect("claim review task response");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn decide_task_over_http(
+    app: &axum::Router,
+    task_id: Uuid,
+    token: &str,
+    idempotency_key: &str,
+    decision: &Value,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task_id}/decisions"))
+                .header("authorization", format!("Bearer {token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(CONTENT_TYPE, "application/json")
+                .header("if-match", "\"2\"")
+                .header("idempotency-key", idempotency_key)
+                .body(Body::from(
+                    serde_json::to_vec(decision).expect("serialize review decision"),
+                ))
+                .expect("decide review task"),
+        )
+        .await
+        .expect("decide review task response")
+}
+
+async fn review_result_over_http(
+    app: &axum::Router,
+    idp: &MockIdp,
+    request_id: Uuid,
+) -> ReviewResult {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{request_id}/result"))
+                .header("authorization", format!("Bearer {}", token(idp)))
+                .header(REVIEW_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("read review result"),
+        )
+        .await
+        .expect("review result response");
+    assert_eq!(response.status(), StatusCode::OK);
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), 32 * 1024)
+            .await
+            .expect("bounded review result"),
+    )
+    .expect("review result JSON")
 }
 
 fn assert_client_status(error: CaseworkClientError, expected: u16) {
@@ -2903,6 +2981,172 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         .await
         .expect("bounded unknown result body")
         .is_empty());
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn stage_outcomes_allow_local_changes_request_but_refuse_it_at_final_over_http() {
+    let idp = MockIdp::start().await;
+    let mut staged_project = project(&idp.issuer());
+    let policy = &mut staged_project.review_policies[0];
+    policy.context = ReviewContextPolicy::Submitted;
+    policy.outcomes.extend([
+        ReviewOutcomePolicy {
+            id: "needs-correction".to_owned(),
+            label: "Ask for changes".to_owned(),
+            settlement: ReviewOutcomeSettlement::ChangesRequested,
+            reason_required: true,
+            public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
+            result_required: false,
+        },
+        ReviewOutcomePolicy {
+            id: "rejected".to_owned(),
+            label: "Reject".to_owned(),
+            settlement: ReviewOutcomeSettlement::Rejected,
+            reason_required: true,
+            public_reason: registry_casework_core::ReviewPublicReasonRule::Optional,
+            result_required: false,
+        },
+    ]);
+    policy.stages[0].id = "local-review".to_owned();
+    policy.stages[0].outcomes = Some(vec![
+        "approved".to_owned(),
+        "needs-correction".to_owned(),
+        "rejected".to_owned(),
+    ]);
+    policy.stages[0].exclude_previous_stage_reviewers = false;
+    let mut final_stage = policy.stages[0].clone();
+    final_stage.id = "final-approval".to_owned();
+    final_stage.outcomes = Some(vec!["approved".to_owned(), "rejected".to_owned()]);
+    final_stage.exclude_previous_stage_reviewers = true;
+    policy.stages.push(final_stage);
+    staged_project.check().expect("stage-local outcome project");
+
+    let (app, _, _, _, _, _, database) = app_with_project(&idp, staged_project).await;
+    let reviewer_token = reviewer_token(&idp);
+    let ask_for_changes = json!({
+        "decision": {
+            "type": "changes-requested",
+            "outcome": "needs-correction",
+            "reason": "The submitted address needs correction",
+            "publicReason": "Please correct the address"
+        }
+    });
+    let approval = json!({
+        "decision": {"type": "approve", "outcome": "approved"}
+    });
+
+    let mut local_request = review_request_for_subject(
+        "stage-local-return",
+        "stage-local-return-ref",
+        &idp.issuer(),
+    );
+    local_request.context = ReviewContext::Submitted {
+        snapshot: json!({"summary": "Return the local correction"}),
+    };
+    let (local_created, local_task) = create_task(&app, &database, &idp, &local_request).await;
+    claim_task_over_http(
+        &app,
+        local_task,
+        &reviewer_token,
+        "claim-stage-local-return",
+    )
+    .await;
+    let local_decision = decide_task_over_http(
+        &app,
+        local_task,
+        &reviewer_token,
+        "decide-stage-local-return",
+        &ask_for_changes,
+    )
+    .await;
+    assert_eq!(local_decision.status(), StatusCode::NO_CONTENT);
+    let local_result = review_result_over_http(&app, &idp, local_created.request_id).await;
+    assert_eq!(local_result.status, ReviewResultStatus::ChangesRequested);
+    assert_eq!(local_result.outcome.as_deref(), Some("needs-correction"));
+
+    let mut final_request = local_request;
+    final_request.subject.version = "2".to_owned();
+    final_request.subject.digest = ContentDigest::for_bytes(b"corrected submission");
+    final_request.requester_reference = "stage-final-review-ref".to_owned();
+    final_request.context = ReviewContext::Submitted {
+        snapshot: json!({"summary": "Complete the final review"}),
+    };
+    let (final_created, first_task) = create_task(&app, &database, &idp, &final_request).await;
+    claim_task_over_http(
+        &app,
+        first_task,
+        &reviewer_token,
+        "claim-stage-before-final",
+    )
+    .await;
+    let first_approval = decide_task_over_http(
+        &app,
+        first_task,
+        &reviewer_token,
+        "approve-stage-before-final",
+        &approval,
+    )
+    .await;
+    assert_eq!(first_approval.status(), StatusCode::NO_CONTENT);
+
+    let final_task: Uuid = database
+        .query_one(
+            "SELECT task_id FROM casework_review_tasks
+             WHERE request_id=$1 AND stage_index=1 ORDER BY slot LIMIT 1",
+            &[&final_created.request_id],
+        )
+        .await
+        .expect("final approval task")
+        .get(0);
+    let colleague_token = colleague_token(&idp);
+    claim_task_over_http(
+        &app,
+        final_task,
+        &colleague_token,
+        "claim-stage-final-approval",
+    )
+    .await;
+    let refused = decide_task_over_http(
+        &app,
+        final_task,
+        &colleague_token,
+        "refuse-stage-final-changes",
+        &ask_for_changes,
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(refused.headers()[VALIDATION_PATH_HEADER], "$.outcome");
+    assert_eq!(
+        refused.headers()[VALIDATION_REASON_HEADER],
+        "outcome-not-declared"
+    );
+    assert_eq!(
+        refused.headers()[VALIDATION_ALLOWED_HEADER],
+        "approved,rejected"
+    );
+    let refused_problem = to_bytes(refused.into_body(), 16 * 1024)
+        .await
+        .expect("bounded unavailable-outcome problem");
+    assert!(
+        !String::from_utf8_lossy(&refused_problem).contains("needs-correction"),
+        "the submitted unavailable outcome is not copied into the problem"
+    );
+
+    let approved = decide_task_over_http(
+        &app,
+        final_task,
+        &colleague_token,
+        "approve-stage-final",
+        &approval,
+    )
+    .await;
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+
+    let result = review_result_over_http(&app, &idp, final_created.request_id).await;
+    assert_eq!(result.status, ReviewResultStatus::Approved);
+    assert_eq!(result.outcome.as_deref(), Some("approved"));
 
     idp.stop().await;
 }

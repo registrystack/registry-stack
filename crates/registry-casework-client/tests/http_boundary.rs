@@ -44,7 +44,8 @@ async fn ordinary_nested_response_members_are_ignored() {
             "routing": [],
             "stages": [{
                 "id": "review", "queue": "reviews", "decidingProfiles": ["staff"],
-                "requiredApprovals": 1, "futureStageMember": true
+                "requiredApprovals": 1, "outcomes": ["approved"],
+                "futureStageMember": true
             }],
             "retention": {
                 "terminalRetentionDays": 30,
@@ -56,6 +57,9 @@ async fn ordinary_nested_response_members_are_ignored() {
                 "id": "approved", "label": "Approve", "settlement": "approved",
                 "reasonRequired": false, "publicReason": "optional",
                 "futureOutcomeMember": true
+            }, {
+                "id": "rejected", "label": "Reject", "settlement": "rejected",
+                "reasonRequired": true, "publicReason": "optional"
             }],
             "futurePolicyMember": true
         }],
@@ -148,6 +152,10 @@ async fn ordinary_nested_response_members_are_ignored() {
         .await
         .expect("description with additive members");
     assert_eq!(returned.value.review_policies[0].id, "registry-correction");
+    assert_eq!(
+        returned.value.review_policies[0].stages[0].outcomes,
+        Some(vec!["approved".to_owned()])
+    );
     let returned = client
         .directory(CaseworkAuth::new(&token, "staff"))
         .await
@@ -187,6 +195,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
@@ -251,6 +260,7 @@ async fn review_policy_refuses_unverified_governed_response_members() {
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
@@ -318,6 +328,7 @@ async fn review_policy_refuses_duplicate_additive_response_members() {
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
@@ -2260,6 +2271,7 @@ fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: V
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
@@ -3439,6 +3451,7 @@ async fn task_context_response() -> impl IntoResponse {
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,

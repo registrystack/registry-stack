@@ -277,19 +277,29 @@ payload!(ExplainStage {
     deciding_profiles: Vec<String>,
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::BoundedU32<1, { registry_casework_core::MAXIMUM_REVIEW_APPROVALS_PER_STAGE as u32 }>"))]
     required_approvals: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    outcomes: Vec<String>,
     negative_decisions: registry_casework_core::ReviewNegativeDecisionMode,
     exclude_initiator: bool,
     exclude_previous_stage_reviewers: bool
 });
 
-impl From<&ReviewStagePolicy> for ExplainStage {
-    fn from(stage: &ReviewStagePolicy) -> Self {
+impl ExplainStage {
+    pub(crate) fn effective(
+        stage: &ReviewStagePolicy,
+        policy_outcomes: &[ReviewOutcomePolicy],
+    ) -> Self {
         Self {
             id: stage.id.clone(),
             label: stage.label.clone(),
             queue: stage.queue.clone(),
             deciding_profiles: stage.deciding_profiles.clone(),
             required_approvals: stage.required_approvals,
+            outcomes: policy_outcomes
+                .iter()
+                .filter(|outcome| stage.offers_outcome(&outcome.id))
+                .map(|outcome| outcome.id.clone())
+                .collect(),
             negative_decisions: stage.negative_decisions,
             exclude_initiator: stage.exclude_initiator,
             exclude_previous_stage_reviewers: stage.exclude_previous_stage_reviewers,

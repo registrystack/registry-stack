@@ -509,6 +509,7 @@ class TypingContractTests(unittest.TestCase):
             annotations["negativeDecisions"],
             "NotRequired[Literal['settle', 'advise']]",
         )
+        self.assertEqual(annotations["outcomes"], "NotRequired[list[str]]")
         self.assertEqual(annotations["label"], "NotRequired[str]")
         routing = classes["RoutingRule"]
         routing_annotations = {

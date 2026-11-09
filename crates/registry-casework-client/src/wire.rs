@@ -192,6 +192,8 @@ struct ReviewStagePolicyWire {
     queue: String,
     deciding_profiles: Vec<String>,
     required_approvals: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outcomes: Option<Vec<String>>,
     #[serde(default)]
     negative_decisions: registry_casework_core::ReviewNegativeDecisionMode,
     #[serde(default)]
