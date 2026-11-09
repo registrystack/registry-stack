@@ -7,7 +7,10 @@ use registry_platform_calendar::{local_date, resolve_local_instant, CalendarEval
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    sync::{Mutex, PoisonError},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex, PoisonError,
+    },
     time::{Duration, Instant},
 };
 
@@ -104,12 +107,40 @@ pub struct CalendarNextExplanation {
 /// avoids opening a cursor transaction on every ordinary worker poll.
 pub struct CalendarRunner {
     next_poll: Mutex<Instant>,
+    sweep_cursor: FairSweepCursor,
+}
+
+/// In-memory ordering state for bounded calendar sweeps. The durable cursor
+/// and admission transaction remain in PostgreSQL.
+#[derive(Default)]
+struct FairSweepCursor {
+    next_workflow: AtomicUsize,
+}
+
+impl FairSweepCursor {
+    fn order(&self, workflow_count: usize) -> Vec<usize> {
+        if workflow_count == 0 {
+            return Vec::new();
+        }
+        let start = self.next_workflow.load(Ordering::Relaxed) % workflow_count;
+        (0..workflow_count)
+            .map(|offset| (start + offset) % workflow_count)
+            .collect()
+    }
+
+    fn advance_after(&self, attempted: usize, workflow_count: usize) {
+        if workflow_count != 0 {
+            self.next_workflow
+                .store((attempted + 1) % workflow_count, Ordering::Relaxed);
+        }
+    }
 }
 
 impl Default for CalendarRunner {
     fn default() -> Self {
         Self {
             next_poll: Mutex::new(Instant::now()),
+            sweep_cursor: FairSweepCursor::default(),
         }
     }
 }
@@ -152,10 +183,15 @@ impl CalendarRunner {
         runtime: &RuntimeConfig,
     ) -> CoordinatorResult<bool> {
         let mut admitted = false;
-        for (_, package) in workflows.iter() {
-            if package.definition.workflow.calendar_triggers.is_empty() {
-                continue;
-            }
+        let eligible = workflows
+            .iter()
+            .filter(|(_, package)| !package.definition.workflow.calendar_triggers.is_empty())
+            .collect::<Vec<_>>();
+        for index in self.sweep_cursor.order(eligible.len()) {
+            // Advance before awaiting admission so timeout cancellation cannot
+            // leave the same sorted workflow permanently at the head.
+            self.sweep_cursor.advance_after(index, eligible.len());
+            let (_, package) = eligible[index];
             for trigger_id in package.definition.workflow.calendar_triggers.keys() {
                 admitted |= store
                     .admit_calendar_due(&package.definition, trigger_id, runtime)
@@ -477,5 +513,22 @@ mod tests {
         );
         assert_eq!(explanation.next_local_date.to_string(), "2026-01-31");
         assert_eq!(explanation.next_local_time, "08:05");
+    }
+
+    #[test]
+    fn a_cutoff_rotates_the_next_sweep_to_the_earliest_unattempted_workflow() {
+        let cursor = FairSweepCursor::default();
+
+        assert!(cursor.order(0).is_empty());
+        assert_eq!(cursor.order(3), [0, 1, 2]);
+
+        // The deadline cuts the first sweep off after alpha starts. Advancing
+        // before its await makes beta the deterministic head of the next one.
+        cursor.advance_after(0, 3);
+        assert_eq!(cursor.order(3), [1, 2, 0]);
+
+        // A second cutoff still advances rather than pinning the sorted head.
+        cursor.advance_after(1, 3);
+        assert_eq!(cursor.order(3), [2, 0, 1]);
     }
 }
