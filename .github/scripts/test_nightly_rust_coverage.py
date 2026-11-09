@@ -58,6 +58,15 @@ class NightlyCoverageTests(unittest.TestCase):
                     str(entry["name"] == "platform").lower(),
                 )
 
+    def test_target_dir_is_absolute_for_tests_that_run_in_crate_dirs(self) -> None:
+        # Cargo runs each test with its crate directory as the working
+        # directory, so a relative CARGO_TARGET_DIR points tests that create
+        # scratch space under it at a directory that does not exist.
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        target = re.search(r"^      CARGO_TARGET_DIR: (.+)$", workflow, re.M)
+        self.assertIsNotNone(target)
+        self.assertTrue(target.group(1).startswith("${{ github.workspace }}/"))
+
     def test_plan_validates_locked_metadata_and_appends_github_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"

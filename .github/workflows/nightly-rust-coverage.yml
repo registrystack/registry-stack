@@ -49,7 +49,7 @@ jobs:
       max-parallel: 4
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      CARGO_TARGET_DIR: target/nightly-rust-coverage
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/nightly-rust-coverage
       COVERAGE_ALL_FEATURES: ${{ matrix.all_features }}
       COVERAGE_FEATURES: ${{ matrix.features }}
       COVERAGE_PACKAGES: ${{ matrix.packages }}
