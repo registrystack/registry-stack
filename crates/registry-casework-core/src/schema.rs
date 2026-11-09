@@ -332,6 +332,32 @@ mod tests {
     }
 
     #[test]
+    fn project_schema_and_reader_refuse_duplicate_stage_outcomes() {
+        let documents = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
+        let schema = compiled(&document);
+        let file = "casework.yaml";
+        let authored =
+            include_str!("../../../products/casework/examples/stage-outcomes/casework.yaml");
+        let decoded = crate::CaseworkProject::read(file, authored.as_bytes()).unwrap();
+        let mut duplicate = decoded.document.to_json_value();
+        assert!(schema.is_valid(&duplicate));
+        duplicate["reviewPolicies"]["grant-review"]["stages"][1]["outcomes"] =
+            serde_json::json!(["approved", "approved"]);
+        assert!(!schema.is_valid(&duplicate));
+
+        let duplicate = authored.replace(
+            "outcomes: [approved, rejected]",
+            "outcomes: [approved, approved]",
+        );
+        let report = crate::CaseworkProject::read(file, duplicate.as_bytes()).unwrap_err();
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "config.duplicate-item"
+                && diagnostic.path == "/reviewPolicies/grant-review/stages/1/outcomes/1"
+        }));
+    }
+
+    #[test]
     fn context_contract_id_and_service_profile_keys_publish_the_reader_contract() {
         let documents = project_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
