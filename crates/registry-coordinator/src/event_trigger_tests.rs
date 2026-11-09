@@ -685,7 +685,11 @@ workflow:
 #[cfg(feature = "postgres-test")]
 mod postgres {
     use super::*;
-    use crate::{runtime::RuntimeConfig, store::Store};
+    use crate::{
+        runtime::RuntimeConfig,
+        store::{Job, Store},
+    };
+    use registry_platform_dispatch::postgres::LeasedJob;
 
     fn runtime(namespace: &str) -> RuntimeConfig {
         serde_json::from_value(json!({
@@ -1096,6 +1100,283 @@ mod postgres {
             admit(&reopened, &first, &runtime, verified).await.unwrap(),
             fresh,
             "replay cannot undo cancellation or admit new work"
+        );
+        client
+            .batch_execute(&format!("DROP SCHEMA {namespace} CASCADE"))
+            .await
+            .unwrap();
+    }
+
+    fn proposal_submitted(proposal: Uuid, version: u32, revision: u64) -> Value {
+        let id = Uuid::new_v4().to_string();
+        json!({
+            "id":id,"type":"proposal.submitted","source":BREG_SOURCE,
+            "time":"2020-01-01T00:00:00.123Z",
+            "subject":{"proposalReference":format!("/v1/proposals/{proposal}"),"proposalRevision":revision},
+            "dataschema":"https://id.registrystack.org/contracts/breg/proposal-event/v1",
+            "data":{"actionId":"held-application","actionRevision":format!("sha256:{}", "1".repeat(64)),
+                "proposalId":proposal,"submissionVersion":version,"revision":revision,
+                "fromState":"draft","state":"submitted","transition":"submitted",
+                "effectDigest":format!("sha256:{}", "2".repeat(64)),"authorityKind":"caller",
+                "systemApplyGrantRevision":null,"turn":"official"},
+            "causation":{"root":id,"hop":0}
+        })
+    }
+
+    fn proposal_hold_definition() -> Definition {
+        let mut data: Value = serde_json::from_str(include_str!(
+            "../../../products/breg/generated/event-schemas/proposal-lifecycle.schema.json"
+        ))
+        .unwrap();
+        data.as_object_mut().unwrap().remove("$id");
+        data.as_object_mut().unwrap().remove("$schema");
+        let mut project = registry_platform_yaml::Reader::new("workflow.yaml")
+            .scan(project_text().as_bytes())
+            .unwrap()
+            .unwrap()
+            .to_json_value();
+        let event = &mut project["workflow"]["eventTriggers"]["record-saved"];
+        event["eventType"] = json!("proposal.submitted");
+        event["dataSchema"] =
+            json!("https://id.registrystack.org/contracts/breg/proposal-event/v1");
+        event["event"] = json!({"type":"object","required":["data"],"properties":{"data":data}});
+        event["input"]["fields"]["recordId"]["path"] = json!("/data/proposalId");
+        definition(&project.to_string())
+    }
+
+    async fn release_held_submission(
+        store: &Store,
+        client: &mut tokio_postgres::Client,
+        namespace: &str,
+        proposal: Uuid,
+        version: i64,
+        job: &LeasedJob<Job>,
+        attempt: Uuid,
+    ) -> std::result::Result<Uuid, &'static str> {
+        if !store.before_io(job, false).await.unwrap() {
+            return Err("run-lease-not-current");
+        }
+        let tx = client.transaction().await.unwrap();
+        // Only the host's leased job supplies identity to the proof. The
+        // workflow input does not participate in admission provenance.
+        let run = job.key.id();
+        let provenance = tx
+            .query_opt(
+                &format!(
+                    "SELECT event_binding FROM {namespace}.runs
+                     WHERE run_id=$1 AND start_identity=$2"
+                ),
+                &[&run, &job.job.start_identity],
+            )
+            .await
+            .unwrap()
+            .and_then(|row| row.get::<_, Option<String>>(0))
+            .ok_or("run-not-event-admitted")?;
+        let row = tx
+            .query_opt(
+                &format!(
+                    "SELECT expected_run_id,expected_event_binding,release_attempt,review_receipt
+                     FROM {namespace}.synthetic_held_submissions
+                     WHERE proposal_id=$1 AND submission_version=$2 FOR UPDATE"
+                ),
+                &[&proposal, &version],
+            )
+            .await
+            .unwrap()
+            .ok_or("hold-absent")?;
+        if row.get::<_, Uuid>(0) != run || row.get::<_, String>(1) != provenance {
+            return Err("run-does-not-own-hold");
+        }
+        if let Some(release_attempt) = row.get::<_, Option<Uuid>>(2) {
+            return if release_attempt == attempt {
+                Ok(row.get::<_, Option<Uuid>>(3).unwrap())
+            } else {
+                Err("hold-already-released")
+            };
+        }
+        let receipt = Uuid::new_v4();
+        tx.execute(
+            &format!(
+                "INSERT INTO {namespace}.synthetic_open_reviews
+                 (receipt_id,proposal_id,submission_version) VALUES ($1,$2,$3)"
+            ),
+            &[&receipt, &proposal, &version],
+        )
+        .await
+        .unwrap();
+        let updated = tx
+            .execute(
+                &format!(
+                    "UPDATE {namespace}.synthetic_held_submissions SET release_attempt=$3,review_receipt=$4
+                     WHERE proposal_id=$1 AND submission_version=$2"
+                ),
+                &[&proposal, &version, &attempt, &receipt],
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated, 1);
+        tx.commit().await.unwrap();
+        Ok(receipt)
+    }
+
+    /// This proves live Coordinator signature verification, durable event admission and a
+    /// PostgreSQL release invariant. The BReg hold, command handoff, Casework request and UX are
+    /// deliberately simulated; this is not a production BReg release implementation or claim.
+    #[tokio::test]
+    async fn held_proposal_release_requires_the_exact_event_run_and_version_and_opens_once() {
+        let database = std::env::var("COORDINATOR_TEST_DATABASE_URL")
+            .expect("a disposable real PostgreSQL database is required");
+        let namespace = format!("coordinator_{}", Uuid::new_v4().simple());
+        let store = Store::connect(&database, &namespace).await.unwrap();
+        store.migrate().await.unwrap();
+        let runtime = runtime(&namespace);
+        let definition = proposal_hold_definition();
+        let trigger = &definition.workflow.event_triggers["record-saved"];
+        let verify = |value: &Value| {
+            let (body, headers) = signed(value, TARGET, 1, "proposal-delivery");
+            verify_delivery(
+                &source(),
+                "registry",
+                trigger,
+                "record-saved",
+                &Method::POST,
+                TARGET,
+                &headers,
+                &body,
+                KEY,
+                SystemTime::now(),
+            )
+            .unwrap()
+        };
+        let proposal = Uuid::new_v4();
+        let current = proposal_submitted(proposal, 2, 2);
+        let input = trigger.map(&definition, &current).unwrap();
+        let run = admit(&store, &definition, &runtime, verify(&current))
+            .await
+            .unwrap();
+        let (mut client, connection) = tokio_postgres::connect(&database, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            connection.await.unwrap();
+        });
+        client
+            .batch_execute(&format!(
+                "CREATE TABLE {namespace}.synthetic_held_submissions (
+                    proposal_id uuid NOT NULL, submission_version bigint NOT NULL,
+                    expected_run_id uuid NOT NULL, expected_event_binding text NOT NULL,
+                    release_attempt uuid, review_receipt uuid,
+                    PRIMARY KEY(proposal_id,submission_version)
+                 );
+                 CREATE TABLE {namespace}.synthetic_open_reviews (
+                    receipt_id uuid PRIMARY KEY, proposal_id uuid NOT NULL,
+                    submission_version bigint NOT NULL, UNIQUE(proposal_id,submission_version)
+                 );"
+            ))
+            .await
+            .unwrap();
+        let event_binding: String = client
+            .query_one(
+                &format!("SELECT event_binding FROM {namespace}.runs WHERE run_id=$1"),
+                &[&run],
+            )
+            .await
+            .unwrap()
+            .get::<_, Option<String>>(0)
+            .unwrap();
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {namespace}.synthetic_held_submissions
+                     (proposal_id,submission_version,expected_run_id,expected_event_binding)
+                     VALUES ($1,2,$2,$3)"
+                ),
+                &[&proposal, &run, &event_binding],
+            )
+            .await
+            .unwrap();
+        drop(store);
+
+        let reopened = Store::connect(&database, &namespace).await.unwrap();
+        assert_eq!(
+            admit(&reopened, &definition, &runtime, verify(&current))
+                .await
+                .unwrap(),
+            run,
+            "exact redelivery after reopening keeps the original Run"
+        );
+        let older = proposal_submitted(proposal, 1, 1);
+        assert_eq!(
+            trigger.map(&definition, &older).unwrap(),
+            input,
+            "the signed versions intentionally have identical authored Workflow input"
+        );
+        let older_run = admit(&reopened, &definition, &runtime, verify(&older))
+            .await
+            .unwrap();
+        let binding = runtime.binding_digest_for(&definition.workflow).unwrap();
+        let manual_run = reopened
+            .admit(
+                &definition,
+                input,
+                "same-service-connection",
+                "manual-run",
+                &binding,
+            )
+            .await
+            .unwrap();
+        let dispatcher = reopened.dispatcher().unwrap();
+        let mut jobs = BTreeMap::new();
+        for _ in 0..3 {
+            let job = dispatcher.claim().await.unwrap().leased().unwrap();
+            assert!(jobs.insert(job.key.id(), job).is_none());
+        }
+        let owner = &jobs[&run];
+        let attempt = Uuid::new_v4();
+        let release =
+            async |client: &mut tokio_postgres::Client, version, job: &LeasedJob<Job>, attempt| {
+                release_held_submission(
+                    &reopened, client, &namespace, proposal, version, job, attempt,
+                )
+                .await
+            };
+        assert_eq!(
+            release(&mut client, 2, &jobs[&manual_run], attempt).await,
+            Err("run-not-event-admitted")
+        );
+        assert_eq!(
+            release(&mut client, 2, &jobs[&older_run], attempt).await,
+            Err("run-does-not-own-hold")
+        );
+        assert_eq!(
+            release(&mut client, 1, owner, attempt).await,
+            Err("hold-absent")
+        );
+        let mut replaced_lease = owner.clone();
+        replaced_lease.lease_token = Uuid::new_v4();
+        assert_eq!(
+            release(&mut client, 2, &replaced_lease, attempt).await,
+            Err("run-lease-not-current")
+        );
+        let receipt = release(&mut client, 2, owner, attempt).await.unwrap();
+        assert_eq!(
+            release(&mut client, 2, owner, attempt).await.unwrap(),
+            receipt
+        );
+        assert_eq!(
+            release(&mut client, 2, owner, Uuid::new_v4()).await,
+            Err("hold-already-released")
+        );
+        assert_eq!(
+            client
+                .query_one(
+                    &format!("SELECT count(*) FROM {namespace}.synthetic_open_reviews"),
+                    &[]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            1
         );
         client
             .batch_execute(&format!("DROP SCHEMA {namespace} CASCADE"))
