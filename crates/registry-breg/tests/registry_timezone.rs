@@ -190,6 +190,37 @@ fn a_plan_that_calls_today_requires_a_timezone() {
 
     source["project"]["timezone"] = json!("UTC");
     compile_with_assets(&source, assets()).expect("a fixed registry time zone supplies today()");
+
+    source["project"]
+        .as_object_mut()
+        .unwrap()
+        .remove("timezone");
+    let pointer_assets = || {
+        vec![ModuleAssetSource {
+            module: None,
+            path: "plans/dated.rhai".into(),
+            bytes: br#"
+fn plan(ctx) {
+    let current_date = Fn("today");
+    #{effects:[#{id:"child",set:#{parent:ctx.inputs.parent,label:current_date.call()}}]}
+}
+"#
+            .to_vec(),
+        }]
+    };
+    let Err(failure) = compile_with_assets(&source, pointer_assets()) else {
+        panic!("Fn(\"today\") without a registry time zone was accepted");
+    };
+    assert_eq!(
+        timezone_errors(&failure).len(),
+        1,
+        "{:?}",
+        failure.diagnostics()
+    );
+
+    source["project"]["timezone"] = json!("UTC");
+    compile_with_assets(&source, pointer_assets())
+        .expect("a fixed registry time zone supplies Fn(\"today\")");
 }
 
 #[test]
@@ -209,7 +240,8 @@ fn a_user_defined_zero_argument_today_does_not_require_a_timezone() {
         bytes: br#"
 fn today() { "authored-date" }
 fn plan(ctx) {
-    #{effects:[#{id:"child",set:#{parent:ctx.inputs.parent,label:today()}}]}
+    let authored_today = Fn("today");
+    #{effects:[#{id:"child",set:#{parent:ctx.inputs.parent,label:authored_today.call()}}]}
 }
 "#
         .to_vec(),

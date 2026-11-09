@@ -167,7 +167,10 @@ fn date_helpers_use_one_trusted_date_and_return_date_strings() {
     date_project["project"]["timezone"] = json!("UTC");
     let action = compile(
         date_project,
-        &result(r#"#{effects:[#{id:"person",set:#{name:today() + ":" + add_days(today(), 2) + ":" + add_months("2024-01-31", 1)}}]}"#),
+        r#"fn handle(ctx) {
+            let current_date = Fn("today");
+            #{effects:[#{id:"person",set:#{name:today() + ":" + current_date.call() + ":" + add_days(today(), 2) + ":" + add_months("2024-01-31", 1)}}]}
+        }"#,
     )
     .expect("the date helper plan compiles");
     let ActionHandlerOutcome::Effects(effects) = evaluate_action_at_date(
@@ -182,7 +185,7 @@ fn date_helpers_use_one_trusted_date_and_return_date_strings() {
     assert!(effects[0].mutations.contains(&CompiledPlanMutation::Set {
         field: "name".into(),
         value: CompiledPlanValue::Literal {
-            value: json!("2026-10-14:2026-10-16:2024-02-29")
+            value: json!("2026-10-14:2026-10-14:2026-10-16:2024-02-29")
         }
     }));
 }
