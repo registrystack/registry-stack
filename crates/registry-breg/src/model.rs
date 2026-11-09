@@ -20,6 +20,10 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
 use crate::physical_names::PhysicalNameInventory;
 
+pub(crate) fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
+}
+
 #[cfg(feature = "runtime")]
 pub(crate) const MAX_TARGET_CONTEXT_FIELDS: usize = 128;
 
@@ -578,6 +582,8 @@ pub struct CompiledCommitGuard {
     pub at_least: Option<i64>,
     pub at_most: Option<i64>,
     pub current_date: Option<CompiledCurrentDateRelation>,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub current_date_offset_days: i32,
     /// Keeps the stored field at or above the named action input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_least_input: Option<String>,
@@ -623,6 +629,9 @@ pub struct CompiledPlanFunction {
     pub script_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module_sha256: Option<String>,
+    /// The reviewed Rhai source calls the host-provided `today()` helper.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uses_today: bool,
     #[serde(skip)]
     pub script_bytes: Vec<u8>,
     #[serde(skip)]

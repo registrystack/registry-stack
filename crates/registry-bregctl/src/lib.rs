@@ -606,6 +606,10 @@ struct ProjectActionTestArgs {
     /// With --action and --input, assert exact effects or refusal and optional ordered evidenceCalls mocks without printing values.
     #[arg(long, value_name = "JSON_FILE", requires = "action")]
     expect: Option<PathBuf>,
+
+    /// Fixed trusted date exposed to today(), in YYYY-MM-DD form.
+    #[arg(long, value_name = "YYYY-MM-DD", requires = "action")]
+    evaluation_date: Option<String>,
 }
 
 #[derive(Debug, Args)]

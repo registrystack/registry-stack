@@ -9,7 +9,9 @@ use registry_platform_hooks::{
 use crate::action_evidence::FrozenEvidenceEvaluation;
 use crate::action_evidence_client::EvidenceSubjects;
 use crate::action_evidence_contracts::CompiledEvidenceCapability;
-use crate::action_handler::{evaluate_admitted_action_detailed, ActionHandlerOutcome};
+use crate::action_handler::{
+    evaluate_admitted_action_detailed_with_date, trusted_evaluation_date, ActionHandlerOutcome,
+};
 use crate::action_outcome::{
     bound_document, decode_document, json_document, validate_proposed_outcome,
 };
@@ -241,6 +243,7 @@ impl MutationTransaction {
                 }
             };
         let mut candidate = None;
+        let trusted_now = time::OffsetDateTime::now_utc();
         let result = self
             .execute_immediate_action_after_attempt(
                 client,
@@ -257,6 +260,7 @@ impl MutationTransaction {
                 execution.correlation,
                 fault,
                 deadline,
+                trusted_now,
                 &mut candidate,
                 None,
                 None,
@@ -589,6 +593,7 @@ impl MutationTransaction {
         )?;
         let reserved_creates = reserve_action_create_ids(action)?;
         let mut candidate = None;
+        let trusted_now = time::OffsetDateTime::now_utc();
         let application_id = Uuid::new_v4();
         let mut retryable_attempts = 0;
         let result = loop {
@@ -608,6 +613,7 @@ impl MutationTransaction {
                     input.correlation,
                     fault,
                     deadline,
+                    trusted_now,
                     &mut candidate,
                     None,
                     None,
@@ -1172,6 +1178,7 @@ impl MutationTransaction {
         let deadline = tokio::time::Instant::now() + HOOK_PROPOSAL_APPLY_BUDGET;
         let fault = FaultControl::Disabled;
         let mut candidate = Some(outcome_effects);
+        let trusted_now = time::OffsetDateTime::now_utc();
         let mut retryable_attempts = 0;
         let result = loop {
             let attempt = self
@@ -1190,6 +1197,7 @@ impl MutationTransaction {
                     &correlation,
                     fault,
                     deadline,
+                    trusted_now,
                     &mut candidate,
                     None,
                     None,
@@ -1387,6 +1395,7 @@ impl MutationTransaction {
         correlation: &RequestCorrelation,
         fault: FaultControl,
         deadline: tokio::time::Instant,
+        trusted_now: time::OffsetDateTime,
         candidate: &mut Option<Vec<CompiledPlanEffect>>,
         frozen: Option<&FrozenEvidenceEvaluation>,
         commit_requests: Option<&[(CompiledEvidenceCapability, EvidenceSubjects)]>,
@@ -1485,6 +1494,7 @@ impl MutationTransaction {
                     application_id,
                     preconditions,
                     timer_authority,
+                    trusted_now,
                 )
                 .await?;
             let entity = registry
@@ -1562,10 +1572,13 @@ impl MutationTransaction {
                 // holding database authority or committing late effects.
                 let compiled_action = action.clone();
                 let handler_inputs = input_values.clone();
+                let evaluation_date = trusted_evaluation_date(action, registry, trusted_now)
+                    .map_err(MutationError::ActionHandlerFailure)?;
                 let outcome = tokio::task::spawn_blocking(move || {
-                    evaluate_admitted_action_detailed(
+                    evaluate_admitted_action_detailed_with_date(
                         &compiled_action,
                         &handler_inputs,
+                        evaluation_date,
                         deadline.into_std(),
                     )
                 })
@@ -1618,6 +1631,7 @@ impl MutationTransaction {
                     application_id,
                     preconditions,
                     timer_authority,
+                    trusted_now,
                 )
                 .await?
                 .guard_failure
@@ -1892,7 +1906,7 @@ impl MutationTransaction {
         let entry = action_terminal_entry(
             self.audit.profile(),
             TerminalAudit {
-                grant: claims.grant_audit().cloned(),
+                context: claims.audit_context().cloned(),
                 outcome: TerminalAuditOutcome::Committed,
                 method: HttpMethod::Post,
                 operation_id: route_id.to_owned(),
@@ -2025,7 +2039,7 @@ impl MutationTransaction {
             let entry = action_terminal_entry(
                 self.audit.profile(),
                 TerminalAudit {
-                    grant: claims.grant_audit().cloned(),
+                    context: claims.audit_context().cloned(),
                     outcome: TerminalAuditOutcome::Replayed,
                     method: HttpMethod::Post,
                     operation_id: route_id.to_owned(),
@@ -2194,6 +2208,7 @@ impl MutationTransaction {
         application_id: Uuid,
         preconditions: &BTreeMap<String, String>,
         timer_authority: Option<&TimerActionAuthority>,
+        trusted_now: time::OffsetDateTime,
     ) -> Result<LockedActionTargets, MutationError> {
         #[derive(Clone, Copy)]
         enum Role<'a> {
@@ -2381,7 +2396,7 @@ impl MutationTransaction {
                 &current,
                 self.audit.profile(),
                 registry,
-                time::OffsetDateTime::now_utc(),
+                trusted_now,
                 preconditions,
                 &mut guard_failure,
             )?;
@@ -2626,7 +2641,7 @@ impl MutationTransaction {
         let entry = terminal_entry(
             self.audit.profile(),
             TerminalAudit {
-                grant: claims.grant_audit().cloned(),
+                context: claims.audit_context().cloned(),
                 outcome: TerminalAuditOutcome::Returned,
                 method: HttpMethod::Post,
                 operation_id: route_id.to_owned(),
@@ -3657,6 +3672,7 @@ pub(crate) struct PreparedEvidenceAction {
     binding: crate::idempotency::ResolvedIdempotencyBinding,
     reserved_creates: BTreeMap<String, Uuid>,
     application_id: Uuid,
+    pub(crate) trusted_now: time::OffsetDateTime,
     /// The action's attempt, held across Evidence evaluation until the
     /// finalize terminal or refusal answers it. Dropping the admission
     /// before that answers the attempt as unfinished.
@@ -3873,6 +3889,7 @@ impl MutationTransaction {
             check_current_action_grant(claims)?;
             return Ok(Err(outcome));
         }
+        let trusted_now = time::OffsetDateTime::now_utc();
         // This transaction proves current admission only. Its locks and entire
         // pooled connection are released before any Evidence request.
         let guard_failure = self
@@ -3886,6 +3903,7 @@ impl MutationTransaction {
                 application_id,
                 &input.preconditions,
                 None,
+                trusted_now,
             )
             .await?
             .guard_failure;
@@ -3939,6 +3957,7 @@ impl MutationTransaction {
             binding,
             reserved_creates: reserve_action_create_ids(action)?,
             application_id,
+            trusted_now,
             attempt: None,
         }))
     }
@@ -3959,6 +3978,7 @@ impl MutationTransaction {
     ) -> Result<MutationOutcome, MutationError> {
         validate_action_claims(&prepared.action, claims, Operation::Invoke)?;
         let mut candidate = None;
+        let trusted_now = prepared.trusted_now;
         let mut retries = 0;
         let result = loop {
             let result = self
@@ -3977,6 +3997,7 @@ impl MutationTransaction {
                     correlation,
                     fault,
                     deadline,
+                    trusted_now,
                     &mut candidate,
                     Some(frozen),
                     Some(&prepared.commit_requests),

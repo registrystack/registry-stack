@@ -255,6 +255,29 @@ async fn get_parent(mut app: axum::Router, id: &str) -> (StatusCode, Value) {
     (status, body)
 }
 
+async fn set_parent_eligible_on(
+    database: &TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
+    date: chrono::NaiveDate,
+) {
+    let parent = &registry.entities()["parent"];
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{} SET {} = $2::text::date WHERE record_id = $1",
+                q(&parent.physical_table),
+                q(&parent.fields["eligible-on"].physical_name)
+            ),
+            &[
+                &Uuid::parse_str(ID).unwrap(),
+                &date.format("%Y-%m-%d").to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receipt() {
     let mut source = support::project();
@@ -298,6 +321,45 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
     .await;
     assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
     assert_eq!(after, counts(&database, &registry).await);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn current_date_offset_is_enforced_at_immediate_commit() {
+    let mut source = support::project();
+    source["project"]["timezone"] = json!("UTC");
+    source["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"eligible-on", "type":"date", "classification":"restricted"
+        }));
+    source["actions"][0]["commitGuards"]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "input":"parent", "field":"eligible-on", "currentDate":"on-or-after",
+            "currentDateOffsetDays":30
+        }));
+    let (database, registry, identity) = setup_with_project(source).await;
+    let today = registry
+        .local_date_at(time::OffsetDateTime::now_utc())
+        .unwrap();
+    let threshold = today.checked_add_days(chrono::Days::new(30)).unwrap();
+    set_parent_eligible_on(&database, &registry, threshold).await;
+    let app = app(&database, registry.clone(), identity, None);
+    let accepted = invoke(app.clone(), "date-offset-accepted", ID).await;
+    assert_eq!(accepted.0, StatusCode::OK, "{}", accepted.1);
+    let committed = counts(&database, &registry).await;
+
+    set_parent_eligible_on(&database, &registry, today).await;
+    let refused = invoke(app, "date-offset-refused", ID).await;
+    assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
+    assert_eq!(
+        refused.1["code"], "precondition.failed",
+        "the profile cannot read eligible-on, so the failed guard stays concealed"
+    );
+    assert_eq!(counts(&database, &registry).await, committed);
     database.cleanup().await;
 }
 

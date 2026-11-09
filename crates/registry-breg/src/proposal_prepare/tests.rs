@@ -82,6 +82,7 @@ fn candidate(
     match evaluate_plan_detailed(
         action(registry),
         input,
+        None,
         Instant::now() + Duration::from_secs(1),
     )
     .map_err(|_| MutationError::InvalidRequest)?
@@ -304,6 +305,69 @@ fn fixed_and_rhai_plans_produce_byte_equivalent_canonical_effects() {
     assert_eq!(a.expected_revision, b.expected_revision);
     assert_eq!(a.before, b.before);
     assert_eq!(a.after, b.after);
+}
+
+#[test]
+fn proposal_preparation_freezes_the_date_computed_at_submission() {
+    let mut source = function_source();
+    source["project"]["timezone"] = json!("UTC");
+    let script = r#"fn plan(ctx) { #{effects:[#{id:"patch-first",set:#{first:today()}}]} }"#;
+    let registry = compile(source, Some(script));
+    let input = map(json!({"one":TARGET,"value":"ignored"}));
+    let effects = match evaluate_plan_detailed(
+        action(&registry),
+        &input,
+        Some(time::macros::date!(2026 - 01 - 31)),
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap()
+    {
+        ActionHandlerOutcome::Effects(effects) => effects,
+        ActionHandlerOutcome::Refusal(_) => panic!("effects expected"),
+    };
+    let resolved = resolve_targets(
+        &registry,
+        action(&registry),
+        &input,
+        effects,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let prepared = prepare(
+        &registry,
+        action(&registry),
+        &input,
+        1,
+        ACTIVATION_ID,
+        &resolved,
+        BTreeMap::from([(
+            ("target".into(), Uuid::parse_str(TARGET).unwrap()),
+            (7, map(json!({"first":"old"}))),
+        )]),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(prepared.targets[0].after["first"], json!("2026-01-31"));
+
+    let later = evaluate_plan_detailed(
+        action(&registry),
+        &input,
+        Some(time::macros::date!(2026 - 02 - 01)),
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap();
+    let ActionHandlerOutcome::Effects(later) = later else {
+        panic!("effects expected")
+    };
+    assert_ne!(
+        serde_json::to_value(prepared.proposal.effects()).unwrap(),
+        serde_json::to_value(later).unwrap()
+    );
+    assert_eq!(
+        prepared.targets[0].after["first"],
+        json!("2026-01-31"),
+        "the retained proposal plan is not recomputed for replay or Apply"
+    );
 }
 
 #[test]

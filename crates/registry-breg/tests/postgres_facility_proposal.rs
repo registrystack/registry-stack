@@ -72,6 +72,16 @@ fn patterned_registry() -> registry_breg::CompiledRegistry {
 }
 
 fn registry_from(yaml: &str) -> registry_breg::CompiledRegistry {
+    registry_from_with_correction(
+        yaml,
+        include_bytes!("../../../products/breg/examples/facility/plans/correct-address.rhai"),
+    )
+}
+
+fn registry_from_with_correction(
+    yaml: &str,
+    correction_plan: &[u8],
+) -> registry_breg::CompiledRegistry {
     let correction = yaml
         .split("  - id: correct-address\n")
         .nth(1)
@@ -92,10 +102,7 @@ fn registry_from(yaml: &str) -> registry_breg::CompiledRegistry {
         &[ModuleAssetSource {
             module: None,
             path: "plans/correct-address.rhai".into(),
-            bytes: include_bytes!(
-                "../../../products/breg/examples/facility/plans/correct-address.rhai"
-            )
-            .to_vec(),
+            bytes: correction_plan.to_vec(),
         }],
         CompileProfile::Authoring,
     )
@@ -775,6 +782,96 @@ async fn canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(
     );
     drop(author);
     drop(reviewer);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_date_plan_is_frozen_at_submit_across_apply_date_boundary() {
+    let yaml = include_str!("../../../products/breg/examples/facility/registry.yaml").replacen(
+        "  defaultLanguage: en\n",
+        "  defaultLanguage: en\n  timezone: UTC\n",
+        1,
+    );
+    let plan = br#"
+fn plan(ctx) {
+    #{
+        effects: [#{
+            id: "facility-address",
+            set: #{
+                "address-line": today(),
+                "city": ctx.inputs["city"],
+                "postal-code": ctx.inputs["postal-code"]
+            }
+        }]
+    }
+}
+"#;
+    let registry = registry_from_with_correction(&yaml, plan);
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-address")
+        .unwrap();
+    registry_breg::action_handler::set_test_action_evaluation_dates(
+        action,
+        vec![
+            time::Date::from_calendar_date(2026, time::Month::January, 31).unwrap(),
+            time::Date::from_calendar_date(2026, time::Month::February, 1).unwrap(),
+        ],
+    );
+    let (fixture, review) = fixture_for(registry).await;
+    let (author, facility, draft) = start(&fixture, "50000").await;
+    let submit = author
+        .client
+        .prepare_proposal(&draft, "submit", json!({}), &key("facility-date-submit"))
+        .unwrap();
+    let submitted = author.client.execute_proposal(&submit).await.unwrap().value;
+    let action = fixture
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-address")
+        .unwrap();
+    assert_eq!(
+        registry_breg::action_handler::remaining_test_action_evaluation_dates(action),
+        1,
+        "Submit captures exactly one trusted date"
+    );
+    assert_eq!(
+        address(&fixture, &facility).await.0,
+        "1 Main Road",
+        "submission freezes the plan without writing its target"
+    );
+
+    approve(&fixture, &submitted, &review).await;
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    assert_eq!(
+        address(&fixture, &facility).await,
+        ("2026-01-31".into(), "Chiang Mai".into(), "50000".into(), 2),
+        "Apply commits the date frozen at Submit"
+    );
+    assert_eq!(
+        registry_breg::action_handler::remaining_test_action_evaluation_dates(action),
+        1,
+        "Apply must not evaluate the handler again on the next date"
+    );
+    assert_eq!(
+        author
+            .client
+            .read_proposal(&submitted)
+            .await
+            .unwrap()
+            .value
+            .state(),
+        BRegProposalState::Applied
+    );
+    drop(author);
     fixture.finish().await;
 }
 

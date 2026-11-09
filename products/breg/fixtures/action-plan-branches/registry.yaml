@@ -5,6 +5,7 @@ project:
   version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://action-plans.example.test
+  timezone: UTC
 datasets: [{id: entries}]
 recordTypes:
   - id: entry
@@ -13,9 +14,13 @@ recordTypes:
     mutationMode: create-only
     fields:
       - {id: label, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: effective-on, type: date, classification: internal}
+      - {id: expires-on, type: date, classification: internal}
+      - {id: renewal-on, type: date, classification: internal}
 functions:
   - {id: create-entry-plan, runtime: rhai, source: plans/create.rhai, entrypoint: plan, abi: registry.action-plan/v1}
   - {id: invalid-copy-plan, runtime: rhai, source: plans/invalid-copy.rhai, entrypoint: plan, abi: registry.action-plan/v1}
+  - {id: create-dated-entry-plan, runtime: rhai, source: plans/create-dated-entry.rhai, entrypoint: plan, abi: registry.action-plan/v1}
 actions:
   - id: create-entry
     execution: {mode: immediate}
@@ -39,6 +44,16 @@ actions:
       inputs: [note]
       writes:
         - {id: entry, target: {recordType: entry}, operation: create, fields: [label]}
+  - id: create-dated-entry
+    execution: {mode: immediate}
+    inputs:
+      - {id: label, type: string, required: true, maximumLength: 64, classification: internal}
+    plan:
+      type: function
+      function: create-dated-entry-plan
+      inputs: [label]
+      writes:
+        - {id: entry, target: {recordType: entry}, operation: create, fields: [label, effective-on, expires-on, renewal-on]}
 accessProfiles:
   - id: author
     default: true
@@ -48,3 +63,4 @@ accessProfiles:
       actions:
         - {action: create-entry, operations: [invoke], targets: [{recordType: entry, rowBoundaries: unrestricted}], results: [entry]}
         - {action: invalid-copy, operations: [invoke], targets: [{recordType: entry, rowBoundaries: unrestricted}], results: [entry]}
+        - {action: create-dated-entry, operations: [invoke], targets: [{recordType: entry, rowBoundaries: unrestricted}], results: [entry]}

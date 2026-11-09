@@ -355,7 +355,7 @@ pub(crate) fn authorize(
     .ok()?;
     authority.common = authority
         .common
-        .with_grant_audit(crate::audit::GrantAuditContext::from_claims(claims));
+        .with_audit_context(crate::audit::RequestAuditContext::from_claims(claims));
     match (task_source, claims.grant()) {
         (None, None) => {}
         (Some(source), Some(grant)) => {
@@ -503,7 +503,7 @@ pub(super) async fn known_action_refusal(
             &action.id,
             crate::audit::HttpRefusalAudit {
                 refusal_reason: None,
-                grant: crate::audit::GrantAuditContext::from_claims(claims),
+                context: crate::audit::RequestAuditContext::from_claims(claims),
                 method: method.into(),
                 operation_id: &operation_id,
                 target_record: None,
@@ -543,7 +543,7 @@ async fn audited_list_concealment(
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             refusal_reason: None,
-            grant: crate::audit::GrantAuditContext::from_claims(claims),
+            context: crate::audit::RequestAuditContext::from_claims(claims),
             method: HttpMethod::Get.into(),
             operation_id: "proposals.list",
             target_record: None,

@@ -357,6 +357,68 @@ async fn history(app: &Router, token: &str, record: &str, query: &str) -> (Statu
 }
 
 #[tokio::test]
+async fn direct_client_is_distinguished_in_allowed_and_refused_request_audit() {
+    let (db, app, idp) = setup().await;
+    let portal = token(&idp, "portal", SUBJECT);
+    let agency = token(&idp, "agency", SUBJECT);
+    let uri = format!("/v1/records/entries/{RECORD_A}");
+    for bearer in [&portal, &agency] {
+        assert_eq!(
+            send(&app, bearer, Method::GET, &uri, None, None).await.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        send(
+            &app,
+            &portal,
+            Method::GET,
+            &format!("{uri}?$select=subject"),
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let records = db.audit_records();
+    assert_eq!(records.len(), 5);
+    let profile = AuditProfile::production_from_secret_bytes(vec![0x52; 32].into()).unwrap();
+    for (record, phase, client) in [
+        (&records[0], "attempt", "portal"),
+        (&records[1], "terminal", "portal"),
+        (&records[2], "attempt", "agency"),
+        (&records[3], "terminal", "agency"),
+        (&records[4], "refusal", "portal"),
+    ] {
+        let activation = record["activationId"].as_str().unwrap();
+        let client_reference = profile
+            .key_hasher()
+            .audit_reference_hash("breg-client-v1", activation, client)
+            .unwrap();
+        assert_eq!(record["phase"], phase);
+        assert_eq!(record["clientReference"], client_reference);
+        assert_eq!(
+            record["principalReference"],
+            records[0]["principalReference"]
+        );
+        assert!(record.get("authorization").is_none());
+    }
+    let rendered = json!(records).to_string();
+    for raw in [
+        SUBJECT,
+        PURPOSE,
+        "\"portal\"",
+        "\"agency\"",
+        &portal,
+        &agency,
+    ] {
+        assert!(!rendered.contains(raw));
+    }
+}
+
+#[tokio::test]
 async fn subject_access_log_requires_current_record_ownership_and_records_each_read_hit() {
     let (db, app, idp) = setup().await;
     let agency = token(&idp, "agency", "officer");

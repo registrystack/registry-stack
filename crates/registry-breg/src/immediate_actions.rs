@@ -453,6 +453,7 @@ fn compile_handler(
         ));
         return None;
     }
+    let mut uses_today = false;
     // The authored source reference follows the declared backend exactly.
     let source_path: &str = if is_wasm {
         #[cfg(feature = "wasm")]
@@ -833,6 +834,7 @@ fn compile_handler(
             ));
             return None;
         };
+        uses_today = crate::action_handler::source_uses_today(script, &function.entrypoint);
         if let Err(error) =
             crate::rhai_planner::compile_entrypoint_detailed(script, &function.entrypoint)
         {
@@ -973,6 +975,7 @@ fn compile_handler(
                 .then(|| format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes)))),
             module_sha256: is_wasm
                 .then(|| format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes)))),
+            uses_today,
             script_bytes: if is_wasm {
                 Vec::new()
             } else {
@@ -1116,6 +1119,7 @@ fn compile_requirements(
                 || requirement.at_least.is_some()
                 || requirement.at_most.is_some()
                 || requirement.current_date.is_some()
+                || requirement.current_date_offset_days != 0
                 || requirement.at_least_from_input.is_some()
                 || requirement.at_most_from_input.is_some()
             {
@@ -1136,6 +1140,7 @@ fn compile_requirements(
                     at_least: None,
                     at_most: None,
                     current_date: None,
+                    current_date_offset_days: 0,
                     at_least_input: None,
                     at_most_input: None,
                 });
@@ -1169,6 +1174,17 @@ fn compile_requirements(
             + usize::from(requirement.current_date.is_some())
             + usize::from(requirement.at_least_from_input.is_some())
             + usize::from(requirement.at_most_from_input.is_some());
+        if requirement.current_date_offset_days != 0
+            && (requirement.current_date.is_none()
+                || !(-365_000..=365_000).contains(&requirement.current_date_offset_days))
+        {
+            errors.push(Diagnostic::error(
+                "breg.action.commit_guards.current-date-offset-invalid",
+                "actions[].commitGuards.targets[].currentDateOffsetDays",
+                "currentDateOffsetDays requires currentDate and must be from -365000 through 365000 whole days",
+            ));
+            continue;
+        }
         let literal = requirement.literal();
         let literal_invalid = literal.as_ref().is_some_and(|equals| {
             equals.is_array()
@@ -1241,6 +1257,7 @@ fn compile_requirements(
                     crate::model::CompiledCurrentDateRelation::OnOrBefore
                 }
             }),
+            current_date_offset_days: requirement.current_date_offset_days,
             at_least_input: requirement.at_least_from_input.clone(),
             at_most_input: requirement.at_most_from_input.clone(),
         });

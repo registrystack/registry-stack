@@ -97,6 +97,50 @@ fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
     );
 }
 
+#[test]
+fn current_date_offsets_are_bounded_and_bound_to_current_date() {
+    let mut source = ordered_guard_project();
+    source["project"]["timezone"] = json!("UTC");
+    source["actions"][0]["commitGuards"]["targets"] = json!([{
+        "input": "parent", "field": "opened-on", "currentDate": "on-or-after",
+        "currentDateOffsetDays": -30
+    }]);
+    let registry = compile(source.clone()).expect("a signed whole-day offset compiles");
+    let guard = &registry.actions().actions[0].requires[0];
+    assert_eq!(guard.current_date_offset_days, -30);
+
+    source["actions"][0]["commitGuards"]["targets"][0]["currentDateOffsetDays"] = json!(0);
+    let explicit_zero = compile(source.clone()).expect("zero keeps the existing comparison");
+    source["actions"][0]["commitGuards"]["targets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("currentDateOffsetDays");
+    let absent = compile(source.clone()).expect("an absent offset keeps the existing comparison");
+    assert_eq!(
+        explicit_zero.actions().actions[0].requires[0],
+        absent.actions().actions[0].requires[0]
+    );
+
+    source["actions"][0]["commitGuards"]["targets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("currentDate");
+    source["actions"][0]["commitGuards"]["targets"][0]["currentDateOffsetDays"] = json!(1);
+    assert!(format!("{:?}", compile(source).unwrap_err())
+        .contains("breg.action.commit_guards.current-date-offset-invalid"));
+
+    for offset in [-365_001, 365_001] {
+        let mut source = ordered_guard_project();
+        source["project"]["timezone"] = json!("UTC");
+        source["actions"][0]["commitGuards"]["targets"] = json!([{
+            "input": "parent", "field": "opened-on", "currentDate": "on-or-after",
+            "currentDateOffsetDays": offset
+        }]);
+        assert!(format!("{:?}", compile(source).unwrap_err())
+            .contains("breg.action.commit_guards.current-date-offset-invalid"));
+    }
+}
+
 /// A project whose parent stores one ordered field of each kind and whose
 /// action takes a required input of each kind.
 fn ordered_guard_project() -> Value {

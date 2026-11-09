@@ -2310,6 +2310,11 @@ pub struct ActionRequirementSource {
     pub at_most: Option<i64>,
     #[serde(default)]
     pub current_date: Option<CurrentDatePredicateSource>,
+    /// Whole calendar days added to the registry-local date before applying
+    /// `currentDate`. Zero preserves the unshifted comparison.
+    #[serde(default, skip_serializing_if = "crate::model::is_zero_i32")]
+    #[cfg_attr(feature = "schema", schemars(range(min = -365000, max = 365000)))]
+    pub current_date_offset_days: i32,
     /// Requires the stored value to be at or above the named required action
     /// input of the same date, instant, or integer type.
     #[serde(default, skip_serializing_if = "Option::is_none")]

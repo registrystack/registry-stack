@@ -44,13 +44,16 @@ pub(crate) fn guard_matches(
             actual.as_i64().is_some_and(|actual| actual <= maximum)
         }
         (None, None, None, None, Some(relation), None, None) => {
-            let Some(today) = registry_today(registry, now) else {
+            let Some(today) = registry_today(registry, now, guard.current_date_offset_days) else {
                 return false;
             };
-            actual.as_str().is_some_and(|date| match relation {
-                CompiledCurrentDateRelation::OnOrAfter => date >= today.as_str(),
-                CompiledCurrentDateRelation::OnOrBefore => date <= today.as_str(),
-            })
+            actual
+                .as_str()
+                .and_then(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+                .is_some_and(|date| match relation {
+                    CompiledCurrentDateRelation::OnOrAfter => date >= today,
+                    CompiledCurrentDateRelation::OnOrBefore => date <= today,
+                })
         }
         (None, None, None, None, None, Some(input), None) => inputs
             .get(input)
@@ -66,14 +69,28 @@ pub(crate) fn guard_matches(
 
 /// The registry's calendar date at `now`, the "today" a `currentDate` guard
 /// compares against. A date that cannot be resolved fails the guard closed.
-fn registry_today(registry: &CompiledRegistry, now: time::OffsetDateTime) -> Option<String> {
-    match registry.local_date_at(now) {
-        Ok(date) => Some(date.format("%Y-%m-%d").to_string()),
-        Err(_error) => {
+fn registry_today(
+    registry: &CompiledRegistry,
+    now: time::OffsetDateTime,
+    offset_days: i32,
+) -> Option<chrono::NaiveDate> {
+    let shifted = registry.local_date_at(now).ok().and_then(|date| {
+        if offset_days >= 0 {
+            date.checked_add_days(chrono::Days::new(offset_days as u64))
+        } else {
+            date.checked_sub_days(chrono::Days::new(u64::from(offset_days.unsigned_abs())))
+        }
+    });
+    match shifted {
+        Some(date) => Some(date),
+        None => {
             // Only the runtime feature links `tracing`; test builds without it
             // still fail the guard closed.
             #[cfg(feature = "runtime")]
-            tracing::error!(error = %_error, "a currentDate guard could not resolve the registry's date and fails closed");
+            tracing::error!(
+                offset_days,
+                "a currentDate guard could not resolve the registry's offset date and fails closed"
+            );
             None
         }
     }
@@ -180,6 +197,7 @@ mod tests {
             at_least: None,
             at_most: None,
             current_date: None,
+            current_date_offset_days: 0,
             at_least_input: None,
             at_most_input: None,
         }
@@ -313,6 +331,58 @@ mod tests {
             json!({"value":"2026-10-15"}).as_object().unwrap(),
             &registry(Some("UTC")),
             noon(),
+            false
+        ));
+    }
+
+    #[test]
+    fn a_current_date_guard_applies_its_signed_day_offset() {
+        let inputs = Map::new();
+        let mut guard = guard();
+        guard.current_date = Some(CompiledCurrentDateRelation::OnOrAfter);
+        guard.current_date_offset_days = 2;
+        assert!(guard_matches(
+            &guard,
+            &inputs,
+            json!({"value":"2026-10-16"}).as_object().unwrap(),
+            &registry(Some("UTC")),
+            noon(),
+            false
+        ));
+        assert!(!guard_matches(
+            &guard,
+            &inputs,
+            json!({"value":"2026-10-15"}).as_object().unwrap(),
+            &registry(Some("UTC")),
+            noon(),
+            false
+        ));
+
+        guard.current_date = Some(CompiledCurrentDateRelation::OnOrBefore);
+        guard.current_date_offset_days = -2;
+        assert!(guard_matches(
+            &guard,
+            &inputs,
+            json!({"value":"2026-10-12"}).as_object().unwrap(),
+            &registry(Some("UTC")),
+            noon(),
+            false
+        ));
+        assert!(!guard_matches(
+            &guard,
+            &inputs,
+            json!({"value":"2026-10-13"}).as_object().unwrap(),
+            &registry(Some("UTC")),
+            noon(),
+            false
+        ));
+        guard.current_date_offset_days = 1;
+        assert!(guard_matches(
+            &guard,
+            &inputs,
+            json!({"value":"9999-12-31"}).as_object().unwrap(),
+            &registry(Some("UTC")),
+            datetime!(9999-12-31 12:00 UTC),
             false
         ));
     }

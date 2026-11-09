@@ -303,6 +303,7 @@ fn cache_handler_fixture(document: &str) -> CompiledPlanFunction {
         rhai_version: None,
         script_sha256: None,
         module_sha256: Some(format!("sha256:{hex}")),
+        uses_today: false,
         script_bytes: Vec::new(),
         module_bytes: bytes,
         limits: None,

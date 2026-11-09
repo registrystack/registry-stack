@@ -71,6 +71,16 @@ fn today_sites(
         }
     }
     for action in &actions.actions {
+        if action
+            .handler
+            .as_ref()
+            .is_some_and(|handler| handler.uses_today)
+        {
+            sites.push(format!(
+                "the Action `{}` plan function (`today()`)",
+                action.id
+            ));
+        }
         for requirement in action
             .requires
             .iter()

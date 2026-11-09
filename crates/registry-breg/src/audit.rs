@@ -127,12 +127,11 @@ impl RegistryAudit {
     }
 }
 
-/// Verified task grant or delegated actor retained only for minimized, keyed
-/// audit projection.
+/// Verified client and any contextual authority retained for keyed audit projection.
 #[derive(Clone, Eq, PartialEq)]
-pub(crate) struct GrantAuditContext {
-    actor_kind: registry_platform_oidc::ActorKind,
-    authority: AuditedAuthority,
+pub(crate) struct RequestAuditContext {
+    client: String,
+    authorization: Option<(registry_platform_oidc::ActorKind, AuditedAuthority)>,
 }
 #[derive(Clone, Eq, PartialEq)]
 enum AuditedAuthority {
@@ -142,75 +141,79 @@ enum AuditedAuthority {
     },
     Delegated {
         principal: String,
-        client: String,
         actor: String,
     },
 }
-impl std::fmt::Debug for GrantAuditContext {
+impl std::fmt::Debug for RequestAuditContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("GrantAuditContext(<redacted>)")
+        f.write_str("RequestAuditContext(<redacted>)")
     }
 }
-impl GrantAuditContext {
-    /// Retains a task grant, a verified trusted actor, or both. A direct token
-    /// carrying neither yields nothing, so its audit is unchanged.
+impl RequestAuditContext {
     pub(crate) fn from_claims(claims: &crate::api::VerifiedRequestClaims) -> Option<Self> {
+        let client = claims.requester_client()?.to_owned();
         let actor = claims.actor_subject().map(str::to_owned);
         let authority = match (claims.grant(), actor) {
-            (Some(grant), actor) => AuditedAuthority::Grant {
+            (Some(grant), actor) => Some(AuditedAuthority::Grant {
                 grant: grant.clone(),
                 actor,
-            },
-            (None, Some(actor)) => AuditedAuthority::Delegated {
+            }),
+            (None, Some(actor)) => Some(AuditedAuthority::Delegated {
                 principal: claims.principal()?.to_owned(),
-                client: claims.requester_client()?.to_owned(),
                 actor,
-            },
-            (None, None) => return None,
+            }),
+            (None, None) => None,
         };
         Some(Self {
-            actor_kind: claims.actor_kind()?,
-            authority,
+            client,
+            authorization: claims.actor_kind().zip(authority),
         })
     }
 
-    fn record(
-        &self,
+    pub(crate) fn client_only(client: &str) -> Self {
+        Self {
+            client: client.to_owned(),
+            authorization: None,
+        }
+    }
+
+    fn fields(
+        context: Option<&Self>,
         profile: &AuditProfile,
         scope: &str,
         operation: &str,
-        allowed: bool,
-    ) -> Result<Value, RegistryAuditError> {
+        allowed: Option<bool>,
+    ) -> Result<serde_json::Map<String, Value>, RegistryAuditError> {
         use registry_platform_audit::{AuthorizationAuditEvent, AuthorizationOutcome};
+        let Some(context) = context else {
+            return Ok(serde_json::Map::new());
+        };
         let hasher = profile.key_hasher();
         let pseudonym = |domain, value| {
             hasher
                 .audit_reference_hash(domain, scope, value)
                 .map_err(|_| RegistryAuditError::InvalidContext)
         };
-        let (principal, client, grant, actor) = match &self.authority {
-            AuditedAuthority::Grant { grant, actor } => (
-                grant.principal(),
-                grant.client(),
-                Some(grant),
-                actor.as_deref(),
-            ),
-            AuditedAuthority::Delegated {
-                principal,
-                client,
-                actor,
-            } => (
-                principal.as_str(),
-                client.as_str(),
-                None,
-                Some(actor.as_str()),
-            ),
+        let client_reference = pseudonym("breg-client-v1", &context.client)?;
+        let mut fields =
+            serde_json::Map::from_iter([("clientReference".to_owned(), json!(client_reference))]);
+        let (Some((actor_kind, authority)), Some(allowed)) = (&context.authorization, allowed)
+        else {
+            return Ok(fields);
+        };
+        let (principal, grant, actor) = match authority {
+            AuditedAuthority::Grant { grant, actor } => {
+                (grant.principal(), Some(grant), actor.as_deref())
+            }
+            AuditedAuthority::Delegated { principal, actor } => {
+                (principal.as_str(), None, Some(actor.as_str()))
+            }
         };
         // BREG records purpose presence, never the purpose value.
         let event = AuthorizationAuditEvent::without_purpose(
-            self.actor_kind.as_str(),
+            actor_kind.as_str(),
             pseudonym("breg-principal-v1", principal)?,
-            pseudonym("breg-client-v1", client)?,
+            client_reference,
             grant
                 .map(|grant| pseudonym("breg-grant-v1", grant.id()))
                 .transpose()?,
@@ -240,7 +243,8 @@ impl GrantAuditContext {
         if let Some(actor) = actor {
             value["actorPseudonym"] = json!(pseudonym("breg-actor-v1", actor)?);
         }
-        Ok(value)
+        fields.insert("authorization".to_owned(), value);
+        Ok(fields)
     }
 }
 
@@ -330,7 +334,7 @@ impl ReadRefusalReason {
 
 pub(crate) struct HttpRefusalAudit<'a> {
     pub refusal_reason: Option<ReadRefusalReason>,
-    pub grant: Option<GrantAuditContext>,
+    pub context: Option<RequestAuditContext>,
     pub method: RefusalHttpMethod,
     pub operation_id: &'a str,
     pub target_record: Option<&'a str>,
@@ -350,7 +354,7 @@ pub enum RegistryAuditError {
 }
 
 pub(crate) struct TerminalAudit {
-    pub grant: Option<GrantAuditContext>,
+    pub context: Option<RequestAuditContext>,
     pub outcome: TerminalAuditOutcome,
     pub method: HttpMethod,
     pub operation_id: String,
@@ -447,22 +451,26 @@ pub(crate) async fn begin_statistics_pre_io_audit(
         })
         .transpose()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
-    begin_attempt(
-        audit,
-        event.correlation,
-        json!({
-            "phase":"attempt", "method":method_name(event.method),
-            "operationId":event.operation_id,
-            "requestId":event.correlation.request_id().to_string(),
-            "traceId":event.correlation.trace_id().as_str(),
-            "activationId":expected.activation_id,
-            "selectedAccessProfile":context.selected_profile(),
-            "purposePresent":context.purpose().is_some(),
-            "principalReference":principal_reference,
-            "recordReference":null,
-        }),
-    )
-    .await
+    let mut record = json!({
+        "phase":"attempt", "method":method_name(event.method),
+        "operationId":event.operation_id,
+        "requestId":event.correlation.request_id().to_string(),
+        "traceId":event.correlation.trace_id().as_str(),
+        "activationId":expected.activation_id,
+        "selectedAccessProfile":context.selected_profile(),
+        "purposePresent":context.purpose().is_some(),
+        "principalReference":principal_reference,
+        "recordReference":null,
+    });
+    extend_pre_io_context(
+        &mut record,
+        context.audit_context(),
+        audit.profile(),
+        expected,
+        &event,
+        None,
+    )?;
+    begin_attempt(audit, event.correlation, record).await
 }
 
 pub(crate) struct StatisticsTerminalAudit<'a> {
@@ -561,12 +569,14 @@ fn pre_io_record(
         "principalReference": principal_reference,
         "recordReference": record_reference,
     });
-    if event.kind == PreIoAuditKind::Refusal {
-        if let Some(grant) = claims.grant_audit() {
-            record["authorization"] =
-                grant.record(profile, &expected.activation_id, event.operation_id, false)?;
-        }
-    }
+    extend_pre_io_context(
+        &mut record,
+        claims.audit_context(),
+        profile,
+        expected,
+        event,
+        (event.kind == PreIoAuditKind::Refusal).then_some(false),
+    )?;
     insert_refusal_reason(&mut record, event.refusal_reason);
     Ok(record)
 }
@@ -711,8 +721,37 @@ fn action_resource_pre_io_record(
         "principalReference": principal_reference,
         "actionId": claims.action_id(),
     });
+    extend_pre_io_context(
+        &mut record,
+        claims.audit_context(),
+        profile,
+        expected,
+        event,
+        None,
+    )?;
     insert_refusal_reason(&mut record, event.refusal_reason);
     Ok(record)
+}
+
+fn extend_pre_io_context(
+    record: &mut Value,
+    context: Option<&RequestAuditContext>,
+    profile: &AuditProfile,
+    expected: &ExpectedRegistryIdentity,
+    event: &PreIoAudit<'_>,
+    allowed: Option<bool>,
+) -> Result<(), RegistryAuditError> {
+    record
+        .as_object_mut()
+        .ok_or(RegistryAuditError::InvalidContext)?
+        .extend(RequestAuditContext::fields(
+            context,
+            profile,
+            &expected.activation_id,
+            event.operation_id,
+            allowed,
+        )?);
+    Ok(())
 }
 
 /// Append `record` as the attempt `request` entry of `correlation`.
@@ -735,8 +774,8 @@ async fn begin_attempt(
 }
 
 /// The `response` an attempt writes when its request ends without a
-/// terminal or refusal entry: the operation and request it answers, and
-/// nothing the request read or was about to write.
+/// terminal or refusal entry: the operation, request and client reference,
+/// and nothing the request read or was about to write.
 fn unfinished_record(attempt: &Value) -> Value {
     let mut record = serde_json::Map::new();
     record.insert("phase".to_owned(), json!("unfinished"));
@@ -747,6 +786,7 @@ fn unfinished_record(attempt: &Value) -> Value {
         "traceId",
         "activationId",
         "actionId",
+        "clientReference",
     ] {
         if let Some(value) = attempt.get(field) {
             record.insert(field.to_owned(), value.clone());
@@ -843,12 +883,13 @@ async fn record_http_refusal_audit_inner(
             Value::Bool(event.purpose_present),
         ),
     ]);
-    if let Some(grant) = &event.grant {
-        record.insert(
-            "authorization".to_owned(),
-            grant.record(profile, &expected.activation_id, event.operation_id, false)?,
-        );
-    }
+    record.extend(RequestAuditContext::fields(
+        event.context.as_ref(),
+        profile,
+        &expected.activation_id,
+        event.operation_id,
+        Some(false),
+    )?);
     if let Some(reason) = event.refusal_reason {
         record.insert(
             "refusalReason".to_owned(),
@@ -1015,18 +1056,13 @@ fn terminal_record(
     terminal: TerminalAudit,
     profile: &AuditProfile,
 ) -> Result<serde_json::Map<String, Value>, RegistryAuditError> {
-    let authorization = terminal
-        .grant
-        .as_ref()
-        .map(|grant| {
-            grant.record(
-                profile,
-                &terminal.package_revision,
-                &terminal.operation_id,
-                terminal.outcome != TerminalAuditOutcome::Refused,
-            )
-        })
-        .transpose()?;
+    let context = RequestAuditContext::fields(
+        terminal.context.as_ref(),
+        profile,
+        &terminal.package_revision,
+        &terminal.operation_id,
+        Some(terminal.outcome != TerminalAuditOutcome::Refused),
+    )?;
     let mut record = serde_json::Map::from_iter([
         ("phase".to_owned(), Value::String("terminal".to_owned())),
         (
@@ -1072,9 +1108,7 @@ fn terminal_record(
             Value::Bool(terminal.purpose_present),
         ),
     ]);
-    if let Some(authorization) = authorization {
-        record.insert("authorization".to_owned(), authorization);
-    }
+    record.extend(context);
     if let Some(entity_id) = terminal.entity_id {
         record.insert("entityId".to_owned(), Value::String(entity_id));
     }
@@ -1304,7 +1338,7 @@ mod action_terminal_tests {
 
     fn terminal(outcome: TerminalAuditOutcome) -> TerminalAudit {
         TerminalAudit {
-            grant: None,
+            context: None,
             outcome,
             method: HttpMethod::Post,
             operation_id: "actions.register.invoke".to_owned(),
@@ -1556,9 +1590,12 @@ mod delegated_actor_audit_tests {
         .unwrap()
     }
 
-    fn terminal(grant: Option<GrantAuditContext>, outcome: TerminalAuditOutcome) -> TerminalAudit {
+    fn terminal(
+        context: Option<RequestAuditContext>,
+        outcome: TerminalAuditOutcome,
+    ) -> TerminalAudit {
         TerminalAudit {
-            grant,
+            context,
             outcome,
             method: HttpMethod::Post,
             operation_id: "records.correction-request.create".to_owned(),
@@ -1580,7 +1617,7 @@ mod delegated_actor_audit_tests {
     fn delegated_actor_is_recorded_as_a_keyed_pseudonym_with_its_kind() {
         let profile = profile();
         let hasher = profile.key_hasher();
-        let context = GrantAuditContext::from_claims(&claims(Some(ACTOR)))
+        let context = RequestAuditContext::from_claims(&claims(Some(ACTOR)))
             .expect("a verified trusted actor is retained for audit");
         for (outcome, expected) in [
             (TerminalAuditOutcome::Committed, "allowed"),
@@ -1632,9 +1669,42 @@ mod delegated_actor_audit_tests {
 
     #[test]
     fn direct_token_without_grant_or_actor_records_no_authorization() {
-        assert!(GrantAuditContext::from_claims(&claims(None)).is_none());
-        let record = terminal_record(terminal(None, TerminalAuditOutcome::Committed), &profile())
-            .expect("direct terminal record");
+        let record = terminal_record(
+            terminal(
+                RequestAuditContext::from_claims(&claims(None)),
+                TerminalAuditOutcome::Committed,
+            ),
+            &profile(),
+        )
+        .expect("direct terminal record");
+        assert_eq!(
+            record["clientReference"],
+            profile()
+                .key_hasher()
+                .audit_reference_hash("breg-client-v1", REVISION, "agent-client")
+                .unwrap()
+        );
         assert!(!record.contains_key("authorization"));
+    }
+
+    #[test]
+    fn no_client_reference_when_the_verifier_did_not_match_a_client() {
+        let claims = claims(None)
+            .with_contextual_authority(
+                Some(registry_platform_oidc::ActorKind::Agent),
+                None,
+                None,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap();
+        let context = RequestAuditContext::from_claims(&claims);
+        assert!(context.is_none());
+        let record = terminal_record(
+            terminal(context, TerminalAuditOutcome::Committed),
+            &profile(),
+        )
+        .expect("terminal record");
+        assert!(!record.contains_key("clientReference"));
     }
 }

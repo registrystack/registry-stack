@@ -2,8 +2,8 @@
 
 use registry_breg::{
     action_handler::{
-        compile_source, evaluate_action, evaluate_action_detailed, ActionHandlerError,
-        ActionHandlerOutcome,
+        compile_source, evaluate_action, evaluate_action_at_date, evaluate_action_detailed,
+        ActionHandlerError, ActionHandlerOutcome,
     },
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_json, ActionPlanSource, ModuleAssetSource},
@@ -11,6 +11,7 @@ use registry_breg::{
 };
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
+use time::macros::date;
 
 fn project() -> Value {
     json!({"datasets":[{"id": "test-dataset"}],"functions":[{"id":"register-person-plan","runtime":"rhai","source":"handlers/register.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}],
@@ -158,6 +159,64 @@ fn handler_computes_from_authored_input_ids_and_omits_slots() {
         .target_uses
         .iter()
         .any(|target| target.condition_required));
+}
+
+#[test]
+fn date_helpers_use_one_trusted_date_and_return_date_strings() {
+    let mut date_project = project();
+    date_project["project"]["timezone"] = json!("UTC");
+    let action = compile(
+        date_project,
+        &result(r#"#{effects:[#{id:"person",set:#{name:today() + ":" + add_days(today(), 2) + ":" + add_months("2024-01-31", 1)}}]}"#),
+    )
+    .expect("the date helper plan compiles");
+    let ActionHandlerOutcome::Effects(effects) = evaluate_action_at_date(
+        &action,
+        inputs().as_object().unwrap(),
+        date!(2026 - 10 - 14),
+        Instant::now() + Duration::from_secs(5),
+    )
+    .expect("date helpers evaluate") else {
+        panic!("effects expected")
+    };
+    assert!(effects[0].mutations.contains(&CompiledPlanMutation::Set {
+        field: "name".into(),
+        value: CompiledPlanValue::Literal {
+            value: json!("2026-10-14:2026-10-16:2024-02-29")
+        }
+    }));
+}
+
+#[test]
+fn date_helpers_refuse_invalid_dates_results_and_unbounded_offsets() {
+    for expression in [
+        r#"add_days("2026-02-29", 1)"#,
+        r#"add_days("9999-12-31", 1)"#,
+        r#"add_days("2026-01-01", 365001)"#,
+        r#"add_months("2026-01-01", 12001)"#,
+        r#"add_months("0001-01-01", -1)"#,
+    ] {
+        let mut date_project = project();
+        date_project["project"]["timezone"] = json!("UTC");
+        let action = compile(
+            date_project,
+            &result(&format!(
+                "#{{effects:[#{{id:\"person\",set:#{{name:{expression}}}}}]}}"
+            )),
+        )
+        .expect("the helper call compiles");
+        assert_eq!(
+            evaluate_action_at_date(
+                &action,
+                inputs().as_object().unwrap(),
+                date!(2026 - 10 - 14),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .unwrap_err(),
+            ActionHandlerError::Execution,
+            "{expression}"
+        );
+    }
 }
 
 #[test]

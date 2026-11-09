@@ -57,7 +57,7 @@ pub(crate) struct ActionClaimContext {
     access_profile: String,
     purpose: Option<String>,
     result_effects: BTreeSet<String>,
-    grant_audit: Option<crate::audit::GrantAuditContext>,
+    audit_context: Option<crate::audit::RequestAuditContext>,
     task_grant: Option<crate::task_grant::TaskGrantBinding>,
 }
 
@@ -75,22 +75,22 @@ impl ActionClaimContext {
             access_profile,
             purpose,
             result_effects,
-            grant_audit: None,
+            audit_context: None,
             task_grant: None,
         };
         context.validate()?;
         Ok(context)
     }
 
-    pub(crate) fn with_grant_audit(
+    pub(crate) fn with_audit_context(
         mut self,
-        grant: Option<crate::audit::GrantAuditContext>,
+        grant: Option<crate::audit::RequestAuditContext>,
     ) -> Self {
-        self.grant_audit = grant;
+        self.audit_context = grant;
         self
     }
-    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
-        self.grant_audit.as_ref()
+    pub(crate) fn audit_context(&self) -> Option<&crate::audit::RequestAuditContext> {
+        self.audit_context.as_ref()
     }
 
     pub(crate) fn with_task_grant(
@@ -289,7 +289,7 @@ pub struct ClaimContext {
     row_boundaries: Vec<RowBoundaryContext>,
     canonical_row_boundaries: String,
     task_grant: Option<crate::task_grant::TaskGrantBinding>,
-    grant_audit: Option<crate::audit::GrantAuditContext>,
+    audit_context: Option<crate::audit::RequestAuditContext>,
     human_identity: Option<registry_review_client::HumanIdentity>,
     recipients: BTreeSet<String>,
 }
@@ -317,15 +317,15 @@ impl SpatialBboxContext {
 }
 
 impl ClaimContext {
-    pub(crate) fn with_grant_audit(
+    pub(crate) fn with_audit_context(
         mut self,
-        grant: Option<crate::audit::GrantAuditContext>,
+        grant: Option<crate::audit::RequestAuditContext>,
     ) -> Self {
-        self.grant_audit = grant;
+        self.audit_context = grant;
         self
     }
-    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
-        self.grant_audit.as_ref()
+    pub(crate) fn audit_context(&self) -> Option<&crate::audit::RequestAuditContext> {
+        self.audit_context.as_ref()
     }
 
     pub(crate) fn with_human_identity(
@@ -438,7 +438,7 @@ impl ClaimContext {
             row_boundaries,
             canonical_row_boundaries,
             task_grant: None,
-            grant_audit: None,
+            audit_context: None,
             human_identity: None,
             recipients: BTreeSet::new(),
         })
@@ -472,7 +472,7 @@ impl ClaimContext {
             row_boundaries,
             canonical_row_boundaries,
             task_grant: None,
-            grant_audit: None,
+            audit_context: None,
             human_identity: None,
             recipients: BTreeSet::new(),
         })

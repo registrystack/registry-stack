@@ -490,10 +490,17 @@ impl PostgresRecordMutationService {
         }; // Drop the entire pooled connection before evaluation or acquisition.
         let mut frozen = match self.evidence_evaluator.as_ref() {
             Some(evaluator) if prepared.action.handler.is_some() => {
+                let evaluation_date = crate::action_handler::trusted_evaluation_date(
+                    &prepared.action,
+                    &self.registry,
+                    prepared.trusted_now,
+                )
+                .map_err(MutationError::ActionHandlerFailure)?;
                 evaluator
                     .evaluate(
                         prepared.action.clone(),
                         prepared.inputs.clone(),
+                        evaluation_date,
                         deadline.into_std(),
                     )
                     .await
@@ -2373,7 +2380,7 @@ fn strict_claim_context(
         context.purpose().map(str::to_owned),
         row_boundaries,
     )
-    .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
+    .map(|claims| claims.with_audit_context(context.audit_context().cloned()))
     .and_then(|claims| claims.with_human_identity(context.human_identity().cloned()))
     .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .and_then(|claims| match context.task_grant() {
@@ -2397,7 +2404,7 @@ fn strict_action_context(
         context.purpose().map(str::to_owned),
         context.result_effects().clone(),
     )
-    .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
+    .map(|claims| claims.with_audit_context(context.audit_context().cloned()))
     .and_then(|claims| match context.task_grant() {
         Some(binding) => claims.with_task_grant(binding.clone()),
         None => Ok(claims),
