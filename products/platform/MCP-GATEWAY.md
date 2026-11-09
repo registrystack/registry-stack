@@ -12,7 +12,7 @@ The service uses reviewed provider bindings, a fixed public tool ceiling and mai
 
 ## Protocol and tested surface
 
-The lockfile resolves `rmcp` 3.7.0. The edge advertises MCP `2026-07-28` through the SDK's initialization result. It serves Streamable HTTP with tools/list, tools/call and protected-resource metadata. It does not advertise resources, prompts, sampling or model-host administration.
+The lockfile resolves `rmcp` 3.9.0. The edge advertises MCP `2026-07-28` through the SDK's initialization result. It serves Streamable HTTP with tools/list, tools/call and protected-resource metadata. It does not advertise resources, prompts, sampling or model-host administration.
 
 The executable compatibility proof uses the maintained Rust MCP client and real routers. This is not a compatibility certification for every chat host or every protocol revision the SDK can recognize. A dependency update that moves the default protocol needs an explicit wire-contract review and test update.
 

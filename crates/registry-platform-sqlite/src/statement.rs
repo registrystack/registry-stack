@@ -322,10 +322,10 @@ impl ReadOnlyStatement {
         }
         profile.confirm()?;
         ensure_before(deadline)?;
-        let connections =
+        let mut connections =
             open_connection_pool_before(&profile, contract.limits.concurrency, Some(deadline))?;
         let first = connections
-            .first()
+            .first_mut()
             .ok_or_else(|| SqliteError::new(ErrorKind::InvalidPlan))?;
         ensure_before(deadline)?;
         let parameters = verify_statement(first, &contract)?;
@@ -392,7 +392,7 @@ impl ReadOnlyStatement {
         .await
         .map_err(|_| SqliteError::new(ErrorKind::Timeout))?
         .map_err(|_| SqliteError::new(ErrorKind::Concurrency))?;
-        let connection = self
+        let mut connection = self
             .connections
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -403,7 +403,7 @@ impl ReadOnlyStatement {
         let profile = self.profile.clone();
         let execution = tokio::task::spawn_blocking(move || {
             let execution =
-                execute_on_connection(&profile, &connection, &plan, &bindings, deadline);
+                execute_on_connection(&profile, &mut connection, &plan, &bindings, deadline);
             if return_or_replace_connection(&pool, &profile, connection, execution.reusable) {
                 drop(permit);
             } else {
@@ -441,14 +441,19 @@ impl ReadOnlyStatement {
         let bindings = bind_values(&self.plan.parameters, values)?;
         let deadline = bounded_deadline(self.plan.limits.timeout, caller_deadline)?;
         ensure_before(deadline)?;
-        let connection = self
+        let mut connection = self
             .connections
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop()
             .ok_or_else(|| SqliteError::new(ErrorKind::WorkerUnavailable))?;
-        let execution =
-            execute_on_connection(&self.profile, &connection, &self.plan, &bindings, deadline);
+        let execution = execute_on_connection(
+            &self.profile,
+            &mut connection,
+            &self.plan,
+            &bindings,
+            deadline,
+        );
         let restored = return_or_replace_connection(
             &self.connections,
             &self.profile,
@@ -502,9 +507,10 @@ pub fn check_statement_offline(contract: &StatementContract) -> Result<(), Sqlit
     if contains_positional_parameter(&contract.sql) {
         return Err(SqliteError::new(ErrorKind::UndeclaredParameter));
     }
-    let connection =
+    let mut connection =
         Connection::open_in_memory().map_err(|_| SqliteError::new(ErrorKind::ExecutionFailed))?;
-    install_authorizer(&connection).map_err(|_| SqliteError::new(ErrorKind::ExecutionFailed))?;
+    install_authorizer(&mut connection)
+        .map_err(|_| SqliteError::new(ErrorKind::ExecutionFailed))?;
     match connection.prepare(&contract.sql).map(|_| ()) {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -527,12 +533,12 @@ fn open_connection(profile: &DatabaseProfile) -> Result<Connection, SqliteError>
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let connection = Connection::open_with_flags(uri, flags)
+    let mut connection = Connection::open_with_flags(uri, flags)
         .map_err(|_| SqliteError::new(ErrorKind::DatabaseUnavailable))?;
     connection
         .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAXIMUM_ENGINE_VALUE_BYTES)
         .map_err(|_| SqliteError::new(ErrorKind::DatabaseUnavailable))?;
-    install_authorizer(&connection)
+    install_authorizer(&mut connection)
         .map_err(|_| SqliteError::new(ErrorKind::DatabaseUnavailable))?;
     confirm_connection_still_bound(&connection)?;
     Ok(connection)
@@ -573,7 +579,7 @@ fn confirm_connection_pool_still_bound(connections: &[Connection]) -> Result<(),
 
 fn execute_on_connection(
     profile: &DatabaseProfile,
-    connection: &Connection,
+    connection: &mut Connection,
     plan: &CompiledPlan,
     bindings: &[(usize, Value)],
     deadline: Instant,
@@ -590,7 +596,7 @@ fn execute_on_connection(
 
 fn execute_on_connection_with_post_statement_hook(
     profile: &DatabaseProfile,
-    connection: &Connection,
+    connection: &mut Connection,
     plan: &CompiledPlan,
     bindings: &[(usize, Value)],
     deadline: Instant,
@@ -713,7 +719,7 @@ pub(crate) fn database_uri(path: &Path, immutable: bool) -> Option<String> {
     Some(uri)
 }
 
-pub(crate) fn install_authorizer(connection: &Connection) -> rusqlite::Result<()> {
+pub(crate) fn install_authorizer(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.authorizer(Some(|context: AuthContext<'_>| authorize(&context.action)))
 }
 
@@ -903,7 +909,7 @@ const BUDGET_STEPS: u8 = 1;
 const BUDGET_TIME: u8 = 2;
 
 fn install_progress_handler(
-    connection: &Connection,
+    connection: &mut Connection,
     steps: u64,
     deadline: Instant,
 ) -> Result<Arc<AtomicU8>, SqliteError> {
@@ -932,7 +938,7 @@ fn install_progress_handler(
 }
 
 fn run_statement(
-    connection: &Connection,
+    connection: &mut Connection,
     plan: &CompiledPlan,
     bindings: &[(usize, Value)],
     deadline: Instant,
@@ -952,7 +958,7 @@ fn run_statement(
 }
 
 fn run_statement_in_transaction(
-    connection: &Connection,
+    connection: &mut Connection,
     plan: &CompiledPlan,
     bindings: &[(usize, Value)],
     deadline: Instant,
@@ -1005,7 +1011,7 @@ fn run_statement_in_transaction(
     Ok((collected, schema_fingerprint))
 }
 
-fn begin_read_transaction(connection: &Connection) -> Result<(), SqliteError> {
+fn begin_read_transaction(connection: &mut Connection) -> Result<(), SqliteError> {
     connection
         .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
         .map_err(|_| SqliteError::new(ErrorKind::ExecutionFailed))?;
@@ -1017,7 +1023,7 @@ fn begin_read_transaction(connection: &Connection) -> Result<(), SqliteError> {
     Ok(())
 }
 
-fn reset_connection_after_read(connection: &Connection) -> Result<(), SqliteError> {
+fn reset_connection_after_read(connection: &mut Connection) -> Result<(), SqliteError> {
     // Every reset is attempted even when an earlier one fails. In particular,
     // an authorizer-installation failure must not skip rollback, and a rollback
     // failure must not leave the connection without the reviewed authorizer.
@@ -1039,7 +1045,7 @@ fn reset_connection_after_read(connection: &Connection) -> Result<(), SqliteErro
 }
 
 fn verify_schema_at_open(
-    connection: &Connection,
+    connection: &mut Connection,
     binding: Option<&SchemaBinding>,
     limits: &StatementLimits,
     deadline: Instant,
@@ -1061,7 +1067,7 @@ fn verify_schema_at_open(
 }
 
 fn verify_schema_in_transaction(
-    connection: &Connection,
+    connection: &mut Connection,
     plan: &CompiledPlan,
     budget: &AtomicU8,
 ) -> Result<Option<String>, SqliteError> {
@@ -1072,7 +1078,7 @@ fn verify_schema_in_transaction(
 }
 
 fn schema_fingerprint_with_budget(
-    connection: &Connection,
+    connection: &mut Connection,
     binding: &SchemaBinding,
     statement_limits: &StatementLimits,
     budget: &AtomicU8,
@@ -1346,11 +1352,11 @@ mod tests {
     }
 
     fn reusable_test_connection() -> Connection {
-        let connection = Connection::open_in_memory().expect("test connection opens");
+        let mut connection = Connection::open_in_memory().expect("test connection opens");
         connection
             .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAXIMUM_ENGINE_VALUE_BYTES)
             .expect("engine limit installs");
-        install_authorizer(&connection).expect("reviewed authorizer installs");
+        install_authorizer(&mut connection).expect("reviewed authorizer installs");
         connection
     }
 
@@ -1422,7 +1428,7 @@ mod tests {
     }
 
     fn assert_failure_leaves_connection_reusable(
-        connection: &Connection,
+        connection: &mut Connection,
         plan: &CompiledPlan,
         deadline: Instant,
         expected: ErrorKind,
@@ -1538,10 +1544,11 @@ mod tests {
         database(&path, "governed");
         let profile =
             DatabaseProfile::Snapshot(CapturedSnapshot::capture(&path).expect("snapshot captures"));
-        let connection = open_replacement_connection(&profile).expect("snapshot connection opens");
+        let mut connection =
+            open_replacement_connection(&profile).expect("snapshot connection opens");
         let execution = execute_on_connection_with_post_statement_hook(
             &profile,
-            &connection,
+            &mut connection,
             &test_plan("SELECT id FROM records", 100_000),
             &[],
             Instant::now() + Duration::from_secs(1),
@@ -1570,9 +1577,9 @@ mod tests {
 
     #[test]
     fn step_deadline_engine_and_authorizer_failures_leave_connection_reusable() {
-        let connection = reusable_test_connection();
+        let mut connection = reusable_test_connection();
         assert_failure_leaves_connection_reusable(
-            &connection,
+            &mut connection,
             &test_plan(
                 "WITH RECURSIVE counter(n) AS (\
                      SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 50000000\
@@ -1583,19 +1590,19 @@ mod tests {
             ErrorKind::StepBudgetExceeded,
         );
         assert_failure_leaves_connection_reusable(
-            &connection,
+            &mut connection,
             &test_plan("SELECT 'too-late' AS id", 100_000),
             Instant::now(),
             ErrorKind::TimeBudgetExceeded,
         );
         assert_failure_leaves_connection_reusable(
-            &connection,
+            &mut connection,
             &test_plan("SELECT json_extract('not-json', '$') AS id", 100_000),
             Instant::now() + Duration::from_secs(1),
             ErrorKind::ExecutionFailed,
         );
         assert_failure_leaves_connection_reusable(
-            &connection,
+            &mut connection,
             &test_plan("SELECT random() AS id", 100_000),
             Instant::now() + Duration::from_secs(1),
             ErrorKind::AuthorizerRefused,
@@ -1623,7 +1630,7 @@ mod tests {
             false,
         ));
 
-        let replacement = connections
+        let mut replacement = connections
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop()
@@ -1635,7 +1642,7 @@ mod tests {
                 > 1
         );
         let answered = run_statement(
-            &replacement,
+            &mut replacement,
             &test_plan("SELECT 'replacement' AS id", 100_000),
             &[],
             Instant::now() + Duration::from_secs(1),
