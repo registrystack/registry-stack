@@ -230,6 +230,7 @@ pub(crate) fn source_uses_today(source: &str, _entrypoint: &str) -> bool {
     uses_today
 }
 
+#[cfg(feature = "runtime")]
 pub(crate) fn trusted_evaluation_date(
     action: &CompiledAction,
     registry: &CompiledRegistry,
