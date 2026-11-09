@@ -36,9 +36,13 @@ In scope:
   checkpoints, development state); it follows every rule except CFG-SCHEMA-2
   and CFG-SCHEMA-6, which cover the files people edit. An **output format**
   is written for people or for tools we do not own and is never read back
-  (explain output, `--format json` reports); it is registered with
-  `reader: none`, follows CFG-ENV, CFG-NAME, CFG-ID, CFG-QTY, and CFG-EMPTY,
-  and is exempt from CFG-YAML-1, CFG-CHECK-1, CFG-SCHEMA-2, and CFG-SCHEMA-6.
+  by a tool we maintain (explain output, `--format json` reports); it is
+  registered with `reader: none`, follows CFG-ENV, CFG-NAME, CFG-ID, CFG-QTY,
+  and CFG-EMPTY, and is exempt from CFG-YAML-1, CFG-CHECK-1, CFG-SCHEMA-2, and
+  CFG-SCHEMA-6. A product output that a maintained tool reads is a registered
+  contract: it is a read-back format, registered with a reader and a schema
+  that name that tool, whatever command prints it. Explain output a
+  maintained tool reads belongs here, not under `reader: none`.
   A **build artifact** is a read-back format that its own product's build
   writes and reads again and that no one edits (the compiled package model in
   BReg's `package.json`). It is registered with `audience: generated` and

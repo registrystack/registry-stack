@@ -27,6 +27,29 @@ bregctl check facility
 
 The excerpts below come from the template's `registry.yaml`.
 
+## Write down the legal footing
+
+A register has one legal owner. When two agencies both claim a register, that is joint control, and
+the law settles it before you configure anything. For each register, write a short block, and
+write "not stated" wherever your sources are silent; an honest gap is more useful than a guess:
+
+- the law that creates it;
+- the body that law mandates;
+- the data controller;
+- any operator distinct from the rule-maker;
+- the legal effect of an entry: constitutive (the entry creates the status), declaratory (it
+  records a status that exists anyway), or informational.
+
+Fill in a gap when you find the answer. Keep the block beside the register's description, so a reviewer sees who owns the data before
+reading the fields.
+
+## Combine starters by authority
+
+When you combine starters, keep together what one authority keeps, and link the rest by reference.
+A farmer and the land parcels they work belong in one project only if one authority keeps both. If
+a land authority keeps the parcels, the farmer register holds a reference to the parcel, not a copy
+of it.
+
 ## Separate an object from its registration
 
 Keep a thing separate from its registration when their lifecycles differ. A facility can change
@@ -153,6 +176,64 @@ Generated record routes suit directory maintenance where authorized callers patc
 directly. An immediate Action commits several effects atomically, such as a facility and its
 first assignment, and a Proposal Action keeps a durable draft for review and later application.
 [Actions and Proposals](../../configure/breg-actions/) explains how to choose.
+
+## Keep together what must be right together
+
+Keep together what must be right together, change it through one Action, and link the rest by
+reference. For example, a household and its memberships must agree about who belongs, so one Action
+changes them together. The person stays a separate Record type that memberships point to, and an
+enrolment in a programme is its own record, because a different body decides it and it changes on
+a different schedule.
+
+Name each Action after what happens in the programme, in the law's words: `register-birth` or
+`decide-eligibility`, not `update-record`.
+
+A short worked example, from a decision process to a recorded decision. Suppose the law says an
+officer decides whether a household is enrolled. The process has three steps: the household applies,
+an officer reviews, and the decision is recorded. Model the decision as a proposal-mode
+[Action](../../reference/glossary/#action): the application is submitted as a
+[Proposal](../../reference/glossary/#proposal), the officer's review is the review it requests,
+and applying it writes the enrolment record, with the decision and the officer's reference, in one
+change. The recorded decision is then an ordinary record that other offices can read under their
+own access profiles.
+
+## Model the law's lifecycle
+
+Model the lifecycle the law describes, even when the engine cannot express all of it, and report
+the gap. Never bend a legal lifecycle to fit the engine.
+
+For example, a law may allow revoking a licence that is active or suspended. A commit guard
+compares one field of one record with one literal or one input, so it cannot say "active or
+suspended". The tempting workaround is to force revocation to pass through suspension first, which
+adds a step the law does not have. Instead, keep revocation one step of the lifecycle and build it
+as two Actions with the same effect, one guarded on `active` and one on `suspended`, and note in
+the project that the pair exists only because of the engine gap. A visible, labelled gap can be
+fixed later; a bent lifecycle hides in the data.
+
+## Choose a licensing shape
+
+Licensing has two shapes. Choose by the legal question: does your law issue a new licence at
+renewal, or extend the same one?
+
+- **Extends the same licence.** Keep one stable licence with dated terms, and record regulatory
+  decisions (suspension, renewal, revocation) as separate records.
+- **Issues a new licence.** Create a successor licence for each renewal and link it to the previous
+  one.
+
+If your sources do not say, write "not stated" for the legal question and ask the licensing
+authority before you model renewals.
+
+Write periods with an inclusive last day. A `date` period whose source records the last day in
+force names it with `temporal.lastDayField` instead of `endField`, so a period ending on 31
+December includes that day. The [API reference](../../reference/breg-api/) describes how the
+temporal routes read it.
+
+## Derive roles from the job
+
+Roles come from the programme's job descriptions and the law's purposes, not from the product's
+permissions. Start with who does what in the programme, then grant each role the reads and Actions
+its job needs. Record why each grant exists, in a sentence ("the officer decides enrolment under
+the programme's rules"); write "not stated" if you cannot yet say.
 
 ## Declarations, provenance, and documents
 
