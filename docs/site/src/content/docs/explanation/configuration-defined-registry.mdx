@@ -110,6 +110,14 @@ every write.
     crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/lifecycle.rs;
     crates/registry-breg/src/history_store.rs. */}
 
+## Can I leave?
+
+Yes, by three routes that are true today. Your project is plain YAML in your own version control,
+and it runs on the products without anything else. You can take your data out with
+[`bregctl data export`](../../operate/breg-data/#export-with-a-checkpoint). And the records
+live in a PostgreSQL database you run. Nothing in this model needs a separate hosted service to keep
+working.
+
 ## Next
 
 - [Author a registry project](../../configure/breg/)

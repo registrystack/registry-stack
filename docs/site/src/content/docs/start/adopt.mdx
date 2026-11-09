@@ -67,6 +67,57 @@ retries, tracing, and signed delivery. You may publish a static
 others understand the module. Inclusion is optional metadata; it neither certifies availability
 nor enables the module. Real data services use datasets; workers need no fictional dataset.
 
+## Choose what goes in the registry
+
+Put in the facts your law makes you the source of and the decisions you are accountable for.
+Build the smallest version of supporting parts. Leave payroll, document management, and generic
+workflow where they are, and reach them through their own systems.
+
+Spend modeling time and legal review on rules, tables, formulas, and deadlines, because that is
+where policy lives. Keep a rule that an approver signs in a table or formula rather than in code,
+and note the legal basis beside each one in your own project notes. If a rule has no stated basis,
+write "not stated" and raise it for review.
+
+## Working with other institutions
+
+Start from the partner and the situation, then pick the product. "Do not integrate" is always a
+valid answer.
+
+| Situation | What you do | Product |
+| --- | --- | --- |
+| Others need a fact about your records | Publish a narrow answer, not the record | [Evidence](../../explanation/how-evidence-works/) |
+| A partner needs to read or change your records | Publish a governed record API | [BReg](../../explanation/configuration-defined-registry/) |
+| You need a fact held by someone else | Ask for the narrowest answer that does the job | Evidence, as the consumer |
+| You must load another system's data | Copy it in through a reviewed translator | [Adapter](https://github.com/registrystack/registry-stack/blob/main/products/adapter/README.md) packs; its ingestion job is not yet released |
+| A standard governs your edge | Follow it at the edge; keep your own model inside | Adapter facade |
+| A national system sets the contract | Follow its contract at the edge | Adapter facade |
+| The person can carry the proof | Let them bring it as a credential | Evidence with [OID4VCI delivery](../../configure/evidence-oid4vci/) |
+| Integration is not justified | Do not integrate, and write down why | None |
+
+Keep a one-page relationship sheet per partner. Write "not stated" for any line the source is
+silent on, and treat that as a finding to raise rather than a blocker.
+
+- The partner.
+- The legal basis.
+- Who defines the question.
+- What crosses.
+- The product that serves it.
+- Who owns changes.
+
+Promise Read first. Promise Write only when the source can refuse a stale update (see `If-Match`
+in the [BReg API](../../reference/breg-api/)), retry a create safely (`Idempotency-Key`), and
+return a version.
+
+Point to records another office keeps; do not copy them. Store their identifier with its scheme,
+and ask through Evidence when a decision needs the fact. In BReg an event record's subject or
+source can hold an identifier another system owns, declared with `external: {namespace}`; see the
+[event records guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/event-records.md).
+
+Payment and treasury hand-offs are custom code today. Build them as an application or a module
+(the third and fourth paths above); no Registry Stack product sends payments.
+
+For how much to share, see [the disclosure ladder](../../explanation/data-minimization-and-purpose-limitation/#ask-for-the-weakest-answer-that-does-the-job).
+
 ## Choose the next step
 
 Combine the smallest set of paths that meets the job. A configured register can have one custom
@@ -74,3 +125,14 @@ route and an independently deployed reminder worker. Add
 [Coordinator](../coordinator/) only when a durable, reviewed sequence across waits is useful.
 Before deployment, use the [operator handoff](../../operate/) to assign credentials, backups,
 retention, and recovery to named operators.
+
+## Signs it is time to climb
+
+Stay on the lightest path that works. Any one of these means a part of your work is a process,
+not only a register, so consider the next path (a small extension, an application, or a module):
+
+- A rule needs facts from more than one record.
+- A matter continues over weeks.
+- Money is owed or paid.
+- The law sets a clock.
+- Two parties must both agree.
