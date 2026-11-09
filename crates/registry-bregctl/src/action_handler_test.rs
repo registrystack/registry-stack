@@ -2,8 +2,8 @@
 //! Synthetic action handler evaluation and value-free exact assertions.
 use super::*;
 use registry_breg::action_handler::{
-    evaluate_action_detailed, evaluate_action_with_evidence, ActionHandlerError,
-    ActionHandlerOutcome,
+    evaluate_action_detailed, evaluate_action_detailed_at_date, evaluate_action_with_evidence,
+    evaluate_action_with_evidence_at_date, ActionHandlerError, ActionHandlerOutcome,
 };
 use registry_breg::model::{
     CompiledPlanEffect, CompiledPlanFunction, CompiledPlanFunctionKind, CompiledPlanMutation,
@@ -29,6 +29,7 @@ pub(super) fn run(
         .as_ref()
         .ok_or_else(|| failure("action", "select an action with a Rhai handler"))?;
     let identity = handler_identity(handler)?;
+    let evaluation_date = evaluation_date(args, handler)?;
     let path = args
         .input
         .as_ref()
@@ -55,16 +56,33 @@ pub(super) fn run(
     }));
     let evaluation = if !action.evidence.is_empty() {
         let state = transcript.clone();
-        evaluate_action_with_evidence(
+        let resolver = move |capability: &str, selectors: Value| {
+            state
+                .lock()
+                .map_err(|_| ActionHandlerError::Execution)?
+                .resolve(capability, selectors)
+        };
+        match evaluation_date {
+            Some(date) => evaluate_action_with_evidence_at_date(
+                action,
+                input,
+                date,
+                Instant::now() + PLANNER_TEST_DEADLINE,
+                resolver,
+            ),
+            None => evaluate_action_with_evidence(
+                action,
+                input,
+                Instant::now() + PLANNER_TEST_DEADLINE,
+                resolver,
+            ),
+        }
+    } else if let Some(date) = evaluation_date {
+        evaluate_action_detailed_at_date(
             action,
             input,
+            date,
             Instant::now() + PLANNER_TEST_DEADLINE,
-            move |capability, selectors| {
-                state
-                    .lock()
-                    .map_err(|_| ActionHandlerError::Execution)?
-                    .resolve(capability, selectors)
-            },
         )
     } else {
         evaluate_action_detailed(action, input, Instant::now() + PLANNER_TEST_DEADLINE)
@@ -243,6 +261,41 @@ pub(super) fn run(
         },
         effects: reports,
     })
+}
+
+fn evaluation_date(
+    args: &ProjectActionTestArgs,
+    handler: &CompiledPlanFunction,
+) -> Result<Option<time::Date>, FailureReport> {
+    let parsed = args
+        .evaluation_date
+        .as_deref()
+        .map(|value| {
+            if value.len() != 10 {
+                return Err(());
+            }
+            time::Date::parse(
+                value,
+                time::macros::format_description!("[year]-[month]-[day]"),
+            )
+            .map_err(|_| ())
+        })
+        .transpose()
+        .map_err(|_| {
+            action_test_failure(
+                "action-test.evaluation-date-invalid",
+                "evaluation-date",
+                "use a calendar date in YYYY-MM-DD form",
+            )
+        })?;
+    if handler.uses_today && parsed.is_none() {
+        return Err(action_test_failure(
+            "action-test.evaluation-date-required",
+            "evaluation-date",
+            "this handler calls today(); supply --evaluation-date YYYY-MM-DD",
+        ));
+    }
+    Ok(parsed)
 }
 
 /// The compiled backend this command executes, and the source fingerprint the
@@ -487,6 +540,7 @@ mod tests {
                 action: Some(action.into()),
                 input: Some(project.join(format!("examples/{branch}.input.json"))),
                 expect: Some(project.join(format!("examples/{branch}.expect.json"))),
+                evaluation_date: None,
             };
             let report = run(&args, &compiled)
                 .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
@@ -495,6 +549,34 @@ mod tests {
                 .unwrap()
                 .contains("Example entry"));
         }
+    }
+
+    #[test]
+    fn action_test_uses_the_authored_fixed_evaluation_date() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/fixtures/action-plan-branches")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let args = ProjectActionTestArgs {
+            project: project.clone(),
+            action: Some("create-dated-entry".into()),
+            input: Some(project.join("examples/date.input.json")),
+            expect: Some(project.join("examples/date.expect.json")),
+            evaluation_date: Some("2026-01-31".into()),
+        };
+        let report = run(&args, &compiled)
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        assert_eq!(report.assertions_passed, Some(true));
+
+        let mut missing = args;
+        missing.evaluation_date = None;
+        let failure = run(&missing, &compiled).expect_err("today() needs a fixed test date");
+        assert_eq!(
+            failure.diagnostics[0].code,
+            "action-test.evaluation-date-required"
+        );
     }
 
     #[test]
@@ -517,6 +599,7 @@ mod tests {
             action: Some("invalid-copy".into()),
             input: Some(project.join("examples/handler-failure.input.json")),
             expect: Some(expectation.clone()),
+            evaluation_date: None,
         };
         let failure = run(&args, &compiled).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "action-test.expect.mismatch");
@@ -556,6 +639,7 @@ mod tests {
                 action: Some("invalid-copy".into()),
                 input: Some(project.join("examples/handler-failure.input.json")),
                 expect: Some(expect),
+                evaluation_date: None,
             },
             &compiled,
         )
@@ -607,6 +691,7 @@ mod tests {
                     action: Some("register-landholding".into()),
                     input: Some(project.join("examples/status-only.input.json")),
                     expect: Some(expect.clone()),
+                    evaluation_date: None,
                 },
                 &compiled,
             );
@@ -724,6 +809,7 @@ accessProfiles:
             action: Some("register-person".into()),
             input: Some(input),
             expect: None,
+            evaluation_date: None,
         };
         let failure = run(&args, &compiled).expect_err("a WASM handler is not executed locally");
         let diagnostic = &failure.diagnostics[0];
@@ -755,6 +841,7 @@ accessProfiles:
             rhai_version: None,
             script_sha256: Some("sha256:script-digest".into()),
             module_sha256: None,
+            uses_today: false,
             script_bytes: Vec::new(),
             module_bytes: Vec::new(),
             limits: None,
@@ -845,6 +932,7 @@ accessProfiles:
                 ),
                 input: Some(project.join(format!("examples/{name}.input.json"))),
                 expect: Some(project.join(format!("examples/{name}.expect.json"))),
+                evaluation_date: None,
             };
             let report = run(&args, &compiled).unwrap_or_else(|failure| {
                 panic!("{name}: {}", serde_json::to_string(&failure).unwrap())
@@ -884,6 +972,7 @@ accessProfiles:
                 action: Some("register-landholding".into()),
                 input: Some(project.join("examples/status-only.input.json")),
                 expect: Some(expect.clone()),
+                evaluation_date: None,
             };
             let failure = run(&args, &compiled).expect_err("transcript mismatch must fail");
             assert_eq!(failure.diagnostics[0].code, code);
@@ -925,6 +1014,7 @@ accessProfiles:
                 action: Some("register-landholding".into()),
                 input: Some(project.join("examples/status-only.input.json")),
                 expect: Some(expect.clone()),
+                evaluation_date: None,
             };
             let failure = run(&args, &compiled).expect_err("typed mock contract must fail");
             assert_eq!(
@@ -984,7 +1074,9 @@ accessProfiles:
             "--input",
             "input.json",
             "--expect",
-            "expect.json"
+            "expect.json",
+            "--evaluation-date",
+            "2026-01-31"
         ])
         .is_ok());
         let help = Cli::try_parse_from(["bregctl", "project", "action-test", "--help"])
@@ -994,6 +1086,7 @@ accessProfiles:
             "pair with --input",
             "With --action and --input",
             "without an HTTP envelope",
+            "Fixed trusted date",
         ] {
             assert!(help.contains(guidance), "{help}");
         }
@@ -1020,6 +1113,7 @@ accessProfiles:
             action: Some("register-person".into()),
             input: Some(input.clone()),
             expect: Some(expect.clone()),
+            evaluation_date: None,
         };
         let report = run(&args, &compiled)
             .unwrap_or_else(|failure| panic!("evaluation failed: {}", failure.diagnostics[0].code));
@@ -1094,6 +1188,7 @@ accessProfiles:
             action: Some("register-person".into()),
             input: Some(input_path.clone()),
             expect: None,
+            evaluation_date: None,
         };
         for (input, expected_path) in [
             (

@@ -48,7 +48,14 @@ fn map(value: Value) -> Map<String, Value> {
 /// The guards read `status` and compare `capacity` with the `minimum` input;
 /// `readable` lists what the profile may read.
 fn registry(readable: &[&str]) -> registry_breg::CompiledRegistry {
-    let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+    registry_with_current_date_offset(readable, None)
+}
+
+fn registry_with_current_date_offset(
+    readable: &[&str],
+    offset_days: Option<i32>,
+) -> registry_breg::CompiledRegistry {
+    let mut source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"guard-failure-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://guard.example.test"},
         "datasets":[{"id":"directory"}],
         "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
@@ -77,6 +84,22 @@ fn registry(readable: &[&str]) -> registry_breg::CompiledRegistry {
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
                     "ownership":"caller","targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]});
+    if let Some(offset_days) = offset_days {
+        source["project"]["timezone"] = json!("UTC");
+        source["recordTypes"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"eligible-on", "type":"date", "classification":"internal"
+            }));
+        source["actions"][0]["commitGuards"]["targets"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "input":"target", "field":"eligible-on", "currentDate":"on-or-after",
+                "currentDateOffsetDays":offset_days, "reason":"outside-date-window"
+            }));
+    }
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).expect("guard project compiles")
 }
@@ -156,6 +179,26 @@ async fn bump_revision(fixture: &client_http::ClientFixture, record_id: &str) {
                 entity.physical_table
             ),
             &[&record_id],
+        )
+        .await
+        .unwrap();
+}
+
+async fn set_eligible_on(
+    fixture: &client_http::ClientFixture,
+    record_id: &str,
+    date: chrono::NaiveDate,
+) {
+    let entity = &fixture.registry.entities()["target"];
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.\"{}\" SET \"{}\" = $2::text::date WHERE record_id = $1::text::uuid",
+                entity.physical_table, entity.fields["eligible-on"].physical_name
+            ),
+            &[&record_id, &date.format("%Y-%m-%d").to_string()],
         )
         .await
         .unwrap();
@@ -246,6 +289,40 @@ async fn apply_names_a_failed_field_guard_and_keeps_stale_revisions_generic() {
         Some(BRegProblemCode::PreconditionFailed)
     );
     assert_eq!(stale.guard_reason(), None);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_apply_reevaluates_the_configured_current_date_offset() {
+    let fixture = client_http::ClientFixture::start(
+        registry_with_current_date_offset(
+            &["name", "status", "capacity", "eligible-on", "jurisdiction"],
+            Some(30),
+        ),
+        claims(),
+    )
+    .await;
+    let today = fixture
+        .registry
+        .local_date_at(time::OffsetDateTime::now_utc())
+        .unwrap();
+    let threshold = today.checked_add_days(chrono::Days::new(30)).unwrap();
+    let (draft, target_id) = draft(&fixture, "open", 10, "date-guard-apply").await;
+    set_eligible_on(&fixture, &target_id, threshold).await;
+    let submitted = submit(&fixture, &draft, "date-guard-submit").await.unwrap();
+
+    // Change only the guarded date, not the record revision. Apply must read
+    // current state and enforce the same offset again instead of trusting the
+    // guard result observed at Submit.
+    set_eligible_on(&fixture, &target_id, today).await;
+    let refusal = apply(&fixture, &submitted, "date-guard-apply-key")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal.problem_code(),
+        Some(BRegProblemCode::ActionGuardFailed)
+    );
+    assert_eq!(refusal.guard_reason(), Some("outside-date-window"));
     fixture.finish().await;
 }
 

@@ -2827,6 +2827,7 @@ mod source_owned_review_tests {
                 at_least: None,
                 at_most: None,
                 current_date: Some(crate::model::CompiledCurrentDateRelation::OnOrAfter),
+                current_date_offset_days: 0,
                 at_least_input: None,
                 at_most_input: None,
             }],

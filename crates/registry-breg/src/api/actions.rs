@@ -234,7 +234,7 @@ fn authorize_action<'a>(
             target_authority,
             grant.results.clone(),
         )
-        .with_grant_audit(claims)
+        .with_audit_context(claims)
         .with_task_grant(task_grant),
     })
 }
@@ -446,7 +446,7 @@ async fn action_refusal(
             &route.action_id,
             crate::audit::HttpRefusalAudit {
                 refusal_reason: None,
-                grant: crate::audit::GrantAuditContext::from_claims(claims),
+                context: crate::audit::RequestAuditContext::from_claims(claims),
                 method: route.method.into(),
                 operation_id: &route.id,
                 target_record: None,

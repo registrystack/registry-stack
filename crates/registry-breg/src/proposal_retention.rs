@@ -1596,7 +1596,7 @@ fn retention_terminal_entry(
     terminal_entry(
         profile,
         TerminalAudit {
-            grant: None,
+            context: None,
             outcome: TerminalAuditOutcome::Committed,
             method: HttpMethod::Delete,
             operation_id: RETENTION_OPERATION_ID.to_owned(),

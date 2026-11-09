@@ -1567,6 +1567,7 @@ async fn audited_known_revision_refusal(
             operation_id: route.id.clone(),
             target_record: target_record.cloned(),
             principal: claims.principal().map(str::to_owned),
+            requester_client: claims.requester_client().map(str::to_owned),
             selected_access_profile: None,
             purpose_present: claims.purpose().is_some(),
             correlation: correlation.clone(),
@@ -1593,6 +1594,7 @@ async fn audited_revision_refusal(
             operation_id: route.id.clone(),
             target_record: target_record.cloned(),
             principal: surface.context.principal().map(str::to_owned),
+            requester_client: surface.context.requester_client().map(str::to_owned),
             selected_access_profile: Some(surface.context.selected_profile().to_owned()),
             purpose_present: surface.context.purpose().is_some(),
             correlation: correlation.clone(),
@@ -1627,6 +1629,7 @@ async fn audited_revision_concealment(
             operation_id: route.id.clone(),
             target_record: target_record.cloned(),
             principal: claims.principal().map(str::to_owned),
+            requester_client: claims.requester_client().map(str::to_owned),
             selected_access_profile,
             purpose_present: claims.purpose().is_some(),
             correlation: correlation.clone(),
@@ -1655,6 +1658,7 @@ async fn audited_known_read_refusal(
                 operation_id: route.id.clone(),
                 target_record: target_record.cloned(),
                 principal: claims.principal().map(str::to_owned),
+                requester_client: claims.requester_client().map(str::to_owned),
                 selected_access_profile: None,
                 purpose_present: claims.purpose().is_some(),
                 correlation: correlation.clone(),
@@ -1705,6 +1709,7 @@ async fn audited_read_refusal_with_reason(
                 operation_id: route.id.clone(),
                 target_record: target_record.cloned(),
                 principal: surface.context.principal().map(str::to_owned),
+                requester_client: surface.context.requester_client().map(str::to_owned),
                 selected_access_profile: Some(surface.context.selected_profile().to_owned()),
                 purpose_present: surface.context.purpose().is_some(),
                 correlation: correlation.clone(),
@@ -1742,6 +1747,7 @@ async fn audited_read_concealment(
                 operation_id: route.id.clone(),
                 target_record: target_record.cloned(),
                 principal: claims.principal().map(str::to_owned),
+                requester_client: claims.requester_client().map(str::to_owned),
                 selected_access_profile,
                 purpose_present: claims.purpose().is_some(),
                 correlation: correlation.clone(),
@@ -2309,7 +2315,7 @@ async fn audited_mutation_refusal(
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             refusal_reason: None,
-            grant: context.grant_audit().cloned(),
+            context: context.audit_context().cloned(),
             method: route.method.into(),
             operation_id: &route.id,
             target_record,
@@ -2347,7 +2353,7 @@ async fn audited_mutation_concealment(
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             refusal_reason: None,
-            grant: crate::audit::GrantAuditContext::from_claims(claims),
+            context: crate::audit::RequestAuditContext::from_claims(claims),
             method: route.method.into(),
             operation_id: &route.id,
             target_record,
@@ -2578,7 +2584,7 @@ fn authorize_direct_route<'a>(
     .with_task_grant(
         task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
     )
-    .with_grant_audit(claims)
+    .with_audit_context(claims)
     .with_recipients(claims);
     Ok(AuthorizedSurface {
         route,
@@ -2646,7 +2652,7 @@ fn authorize_read_path_route<'a>(
         .with_task_grant(
             task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
         )
-        .with_grant_audit(claims)
+        .with_audit_context(claims)
         .with_recipients(claims),
         readable_fields,
         read_path: Some(read_path),

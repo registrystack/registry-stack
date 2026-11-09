@@ -50,6 +50,7 @@ impl ActionEvidenceEvaluator {
         &self,
         action: CompiledAction,
         inputs: Map<String, Value>,
+        evaluation_date: Option<time::Date>,
         deadline: Instant,
     ) -> FrozenEvidenceEvaluation {
         let unavailable = || FrozenEvidenceEvaluation {
@@ -118,6 +119,7 @@ impl ActionEvidenceEvaluator {
             let outcome = crate::action_handler::evaluate_with_engine(
                 &action,
                 &inputs,
+                evaluation_date,
                 deadline,
                 Some(Arc::new(resolver)),
                 Some(cancelled.clone()),

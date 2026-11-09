@@ -8,7 +8,7 @@ use crate::{
     rhai_planner::{self, PlanError},
 };
 #[cfg(feature = "postgres-test")]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use registry_platform_script::rhai as platform;
 use rhai::{Dynamic, Map, AST};
@@ -195,6 +195,97 @@ pub(crate) fn compile_source_for_function(
     Ok(ast)
 }
 
+pub(crate) fn source_uses_today(source: &str, _entrypoint: &str) -> bool {
+    // Inspect calls as authored. The ordinary compilation path optimizes the
+    // AST, which may fold or rewrite a zero-argument helper call before this
+    // metadata pass sees it. The fixed date only registers `today`; it is
+    // never evaluated while compiling.
+    let mut engine =
+        rhai_planner::engine_with_date(None, Some(time::macros::date!(2000 - 01 - 01)));
+    engine.set_optimization_level(rhai::OptimizationLevel::None);
+    let Ok(ast) = engine.compile(source) else {
+        return false;
+    };
+    if ast
+        .iter_functions()
+        .any(|function| function.name == "today" && function.params.is_empty())
+    {
+        return false;
+    }
+    let mut uses_today = false;
+    ast.walk(&mut |nodes| {
+        let is_today = match nodes.last() {
+            Some(rhai::ASTNode::Expr(rhai::Expr::FnCall(call, _)))
+            | Some(rhai::ASTNode::Stmt(rhai::Stmt::FnCall(call, _))) => {
+                !call.is_qualified() && call.name == "today" && call.args.is_empty()
+            }
+            Some(rhai::ASTNode::Expr(rhai::Expr::DynamicConstant(value, _))) => value
+                .read_lock::<rhai::FnPtr>()
+                .is_some_and(|pointer| pointer.fn_name() == "today"),
+            _ => false,
+        };
+        uses_today |= is_today;
+        !uses_today
+    });
+    uses_today
+}
+
+pub(crate) fn trusted_evaluation_date(
+    action: &CompiledAction,
+    registry: &CompiledRegistry,
+    now: time::OffsetDateTime,
+) -> Result<Option<time::Date>, ActionHandlerError> {
+    if !action
+        .handler
+        .as_ref()
+        .is_some_and(|handler| handler.uses_today)
+    {
+        return Ok(None);
+    }
+    #[cfg(feature = "postgres-test")]
+    if let Some(date) = TEST_EVALUATION_DATES
+        .lock()
+        .unwrap()
+        .get_mut(&action.definition_revision)
+        .and_then(VecDeque::pop_front)
+    {
+        return Ok(Some(date));
+    }
+    use chrono::Datelike as _;
+    let local = registry
+        .local_date_at(now)
+        .map_err(|_| ActionHandlerError::Execution)?;
+    let month =
+        time::Month::try_from(local.month() as u8).map_err(|_| ActionHandlerError::Execution)?;
+    time::Date::from_calendar_date(local.year(), month, local.day() as u8)
+        .map(Some)
+        .map_err(|_| ActionHandlerError::Execution)
+}
+
+#[cfg(feature = "postgres-test")]
+static TEST_EVALUATION_DATES: std::sync::Mutex<BTreeMap<String, VecDeque<time::Date>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Supply trusted dates for one exact compiled action revision. A queue makes
+/// it possible for PostgreSQL tests to prove which transaction evaluates a
+/// plan without replacing the runtime clock or weakening the registry zone.
+#[cfg(feature = "postgres-test")]
+pub fn set_test_action_evaluation_dates(action: &CompiledAction, dates: Vec<time::Date>) {
+    TEST_EVALUATION_DATES
+        .lock()
+        .unwrap()
+        .insert(action.definition_revision.clone(), dates.into());
+}
+
+#[cfg(feature = "postgres-test")]
+pub fn remaining_test_action_evaluation_dates(action: &CompiledAction) -> usize {
+    TEST_EVALUATION_DATES
+        .lock()
+        .unwrap()
+        .get(&action.definition_revision)
+        .map_or(0, VecDeque::len)
+}
+
 #[cfg(feature = "postgres-test")]
 static TEST_INVOCATIONS: std::sync::Mutex<BTreeMap<String, (usize, bool, bool)>> =
     std::sync::Mutex::new(BTreeMap::new());
@@ -243,6 +334,18 @@ pub fn evaluate_action(
     evaluate_action_detailed(action, inputs, deadline).map_err(|diagnostic| diagnostic.kind)
 }
 
+/// Evaluate with one trusted registry-local date. The date is captured by the
+/// caller once and is the only value `today()` can return during this plan.
+pub fn evaluate_action_at_date(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    evaluation_date: time::Date,
+    deadline: Instant,
+) -> Result<ActionHandlerOutcome, ActionHandlerError> {
+    evaluate_action_detailed_at_date(action, inputs, evaluation_date, deadline)
+        .map_err(|diagnostic| diagnostic.kind)
+}
+
 /// The shared handler input rule for HTTP, direct invocation and local tests.
 /// Callers admit optional null separately. The byte check also covers scalar
 /// parsers, such as RFC3339, that accept arbitrarily long fractional seconds.
@@ -273,6 +376,19 @@ pub fn evaluate_action_detailed(
     }
     validate_inputs(action, inputs)?;
     evaluate_admitted_action_detailed(action, inputs, deadline)
+}
+
+pub fn evaluate_action_detailed_at_date(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    evaluation_date: time::Date,
+    deadline: Instant,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    if Instant::now() >= deadline {
+        return Err(ActionHandlerError::Deadline.into());
+    }
+    validate_inputs(action, inputs)?;
+    evaluate_admitted_action_detailed_at_date(action, inputs, evaluation_date, deadline)
 }
 
 fn validate_inputs(
@@ -323,7 +439,25 @@ pub(crate) fn evaluate_admitted_action_detailed(
     inputs: &JsonMap<String, Value>,
     deadline: Instant,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
-    evaluate_with_engine(action, inputs, deadline, None, None)
+    evaluate_with_engine(action, inputs, None, deadline, None, None)
+}
+
+pub(crate) fn evaluate_admitted_action_detailed_at_date(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    evaluation_date: time::Date,
+    deadline: Instant,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    evaluate_admitted_action_detailed_with_date(action, inputs, Some(evaluation_date), deadline)
+}
+
+pub(crate) fn evaluate_admitted_action_detailed_with_date(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    evaluation_date: Option<time::Date>,
+    deadline: Instant,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    evaluate_with_engine(action, inputs, evaluation_date, deadline, None, None)
 }
 
 /// Both Action modes evaluate the same plan. Fixed plans never run a function;
@@ -332,6 +466,7 @@ pub(crate) fn evaluate_admitted_action_detailed(
 pub(crate) fn evaluate_plan_detailed(
     action: &CompiledAction,
     inputs: &JsonMap<String, Value>,
+    evaluation_date: Option<time::Date>,
     deadline: Instant,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     validate_inputs(action, inputs)?;
@@ -343,7 +478,7 @@ pub(crate) fn evaluate_plan_detailed(
             .map(ActionHandlerOutcome::Effects)
             .map_err(|_| ActionHandlerError::Result.into());
     }
-    evaluate_with_engine(action, inputs, deadline, None, None)
+    evaluate_with_engine(action, inputs, evaluation_date, deadline, None, None)
 }
 
 type EvidenceResolver =
@@ -361,6 +496,25 @@ pub fn evaluate_action_with_evidence(
     evaluate_with_engine(
         action,
         inputs,
+        None,
+        deadline,
+        Some(std::sync::Arc::new(resolver)),
+        None,
+    )
+}
+
+pub fn evaluate_action_with_evidence_at_date(
+    action: &CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    evaluation_date: time::Date,
+    deadline: Instant,
+    resolver: impl Fn(&str, Value) -> Result<Value, ActionHandlerError> + Send + Sync + 'static,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    validate_inputs(action, inputs)?;
+    evaluate_with_engine(
+        action,
+        inputs,
+        Some(evaluation_date),
         deadline,
         Some(std::sync::Arc::new(resolver)),
         None,
@@ -374,6 +528,7 @@ mod action_handler_benchmark_tests;
 pub(crate) fn evaluate_with_engine(
     action: &CompiledAction,
     inputs: &JsonMap<String, Value>,
+    evaluation_date: Option<time::Date>,
     deadline: Instant,
     resolver: Option<EvidenceResolver>,
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -395,6 +550,7 @@ pub(crate) fn evaluate_with_engine(
         handler,
         &ast,
         inputs,
+        evaluation_date,
         deadline,
         resolver,
         cancellation,
@@ -464,11 +620,16 @@ fn admit_handler<'a>(
 /// engine with its resolver registration shape, the bounded call, and result
 /// decoding. Shared by the fresh-compile path and the cached-program
 /// benchmark variant.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The checked program, trusted date, deadline and cancellation are independent inputs."
+)]
 fn execute_compiled_handler(
     action: &CompiledAction,
     handler: &CompiledPlanFunction,
     ast: &AST,
     inputs: &JsonMap<String, Value>,
+    evaluation_date: Option<time::Date>,
     deadline: Instant,
     resolver: Option<EvidenceResolver>,
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -493,7 +654,8 @@ fn execute_compiled_handler(
         }
         std::mem::take(&mut entry.2)
     };
-    let mut engine = rhai_planner::function_engine(deadline, handler.limits.as_ref());
+    let mut engine =
+        rhai_planner::function_engine(deadline, handler.limits.as_ref(), evaluation_date);
     let poisoned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let failed_capability = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
     let dependency_diagnostic = || {
@@ -733,6 +895,7 @@ pub(crate) fn evaluate_with_cached_program(
         handler,
         ast,
         inputs,
+        None,
         deadline,
         resolver,
         cancellation,

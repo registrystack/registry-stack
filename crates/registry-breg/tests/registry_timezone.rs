@@ -159,6 +159,76 @@ fn a_current_date_requirement_requires_a_timezone() {
 }
 
 #[test]
+fn a_plan_that_calls_today_requires_a_timezone() {
+    let mut source = action_support::project();
+    source["functions"] = json!([{
+        "id":"dated-plan", "runtime":"rhai", "source":"plans/dated.rhai",
+        "entrypoint":"plan", "abi":"registry.action-plan/v1"
+    }]);
+    source["actions"][0]["plan"] = json!({
+        "type":"function", "function":"dated-plan", "inputs":["parent"],
+        "writes":[{"id":"child","target":{"recordType":"child"},"operation":"create","fields":["parent","label"]}]
+    });
+    let assets = || {
+        vec![ModuleAssetSource {
+            module: None,
+            path: "plans/dated.rhai".into(),
+            bytes: br#"fn plan(ctx) { #{effects:[#{id:"child",set:#{parent:ctx.inputs.parent,label:today()}}]} }"#.to_vec(),
+        }]
+    };
+    let failure = compile_with_assets(&source, assets())
+        .expect_err("today() without a registry time zone is refused");
+    let errors = timezone_errors(&failure);
+    let diagnostics = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (&diagnostic.code, &diagnostic.path))
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1, "all diagnostics: {diagnostics:?}");
+    assert!(errors[0].message.contains("today()"));
+    assert!(errors[0].message.contains("register-child"));
+
+    source["project"]["timezone"] = json!("UTC");
+    compile_with_assets(&source, assets()).expect("a fixed registry time zone supplies today()");
+}
+
+#[test]
+fn a_user_defined_zero_argument_today_does_not_require_a_timezone() {
+    let mut source = action_support::project();
+    source["functions"] = json!([{
+        "id":"dated-plan", "runtime":"rhai", "source":"plans/dated.rhai",
+        "entrypoint":"plan", "abi":"registry.action-plan/v1"
+    }]);
+    source["actions"][0]["plan"] = json!({
+        "type":"function", "function":"dated-plan", "inputs":["parent"],
+        "writes":[{"id":"child","target":{"recordType":"child"},"operation":"create","fields":["parent","label"]}]
+    });
+    let asset = ModuleAssetSource {
+        module: None,
+        path: "plans/dated.rhai".into(),
+        bytes: br#"
+fn today() { "authored-date" }
+fn plan(ctx) {
+    #{effects:[#{id:"child",set:#{parent:ctx.inputs.parent,label:today()}}]}
+}
+"#
+        .to_vec(),
+    };
+    let compiled = compile_with_assets(&source, vec![asset])
+        .expect("an authored today() function is not the trusted host helper");
+    let action = &compiled.actions().actions[0];
+    let handler = action.handler.as_ref().unwrap();
+    assert!(!handler.uses_today);
+    assert!(
+        serde_json::to_value(handler)
+            .unwrap()
+            .get("usesToday")
+            .is_none(),
+        "the false metadata stays absent from the legacy digest payload"
+    );
+}
+
+#[test]
 fn a_live_derived_field_reading_the_evaluation_date_requires_a_timezone() {
     let mut source = date_interval_project("date");
     source["recordTypes"][0]

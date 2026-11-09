@@ -94,7 +94,8 @@ pub(crate) struct UnavailableCall {
 /// defines a function of that name itself. The left-out names are derived
 /// from the two engines rather than listed, so they follow the plan engine.
 pub(crate) fn unavailable_calls(script: &str) -> Vec<UnavailableCall> {
-    let mut engine = crate::rhai_planner::engine(None);
+    let mut engine =
+        crate::rhai_planner::engine_with_date(None, Some(time::macros::date!(2000 - 01 - 01)));
     // As above: inspect the calls as authored, not as the optimizer rewrote
     // them.
     engine.set_optimization_level(rhai::OptimizationLevel::None);

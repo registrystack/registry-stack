@@ -3540,6 +3540,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--evaluation-date <YYYY-MM-DD>",
+                  "description": "Fixed trusted date exposed to today(), in YYYY-MM-DD form",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -3581,6 +3590,14 @@
                 {
                   "kind": "requires-all",
                   "when": "--expect <JSON_FILE>",
+                  "arguments": [
+                    "--input <JSON_FILE>",
+                    "--action <ACTION>"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--evaluation-date <YYYY-MM-DD>",
                   "arguments": [
                     "--input <JSON_FILE>",
                     "--action <ACTION>"

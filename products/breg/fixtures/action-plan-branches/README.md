@@ -11,6 +11,7 @@ bregctl check products/breg/fixtures/action-plan-branches
 bregctl project action-test products/breg/fixtures/action-plan-branches --action create-entry --input products/breg/fixtures/action-plan-branches/examples/success.input.json --expect products/breg/fixtures/action-plan-branches/examples/success.expect.json
 bregctl project action-test products/breg/fixtures/action-plan-branches --action create-entry --input products/breg/fixtures/action-plan-branches/examples/refusal.input.json --expect products/breg/fixtures/action-plan-branches/examples/refusal.expect.json
 bregctl project action-test products/breg/fixtures/action-plan-branches --action invalid-copy --input products/breg/fixtures/action-plan-branches/examples/handler-failure.input.json --expect products/breg/fixtures/action-plan-branches/examples/handler-failure.expect.json
+bregctl project action-test products/breg/fixtures/action-plan-branches --action create-dated-entry --input products/breg/fixtures/action-plan-branches/examples/date.input.json --expect products/breg/fixtures/action-plan-branches/examples/date.expect.json --evaluation-date 2026-01-31
 ```
 
 A matching expectation reports `assertionsPassed: true`. A changed effect or

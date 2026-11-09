@@ -161,11 +161,21 @@ pub(crate) fn actions(value: &Value, lines: &mut Lines) {
                 ("equals", "equals"),
                 ("atLeast", "at least"),
                 ("atMost", "at most"),
-                ("currentDate", "current date"),
             ] {
                 if let Some(value) = guard.get(key) {
                     terms.push(format!("{label} {value}"));
                 }
+            }
+            if let Some(comparison) = guard.get("currentDate") {
+                let offset = guard["currentDateOffsetDays"]
+                    .as_i64()
+                    .filter(|days| *days != 0);
+                terms.push(match (comparison.as_str(), offset) {
+                    (Some(comparison), Some(days)) => {
+                        format!("current date {comparison} ({days:+} days)")
+                    }
+                    _ => format!("current date {comparison}"),
+                });
             }
             lines.listed(
                 2,
@@ -606,6 +616,27 @@ fn lifecycle(value: &Value, lines: &mut Lines) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn action_summary_names_a_current_date_offset() {
+        let value = json!([{
+            "id":"renew", "execution":{"mode":"immediate"}, "inputs":[],
+            "plan":{"effects":[]},
+            "commitGuards":[{
+                "input":"licence", "field":"valid-through", "revisionUnchanged":false,
+                "currentDate":"on-or-after", "currentDateOffsetDays":30
+            }],
+            "permissions":[]
+        }]);
+        let mut lines = Lines::new();
+        actions(&value, &mut lines);
+        let rendered = lines.finish();
+        let text = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            text.contains("current date on-or-after (+30 days)"),
+            "{rendered}"
+        );
+    }
 
     #[test]
     fn permission_gates_quote_literal_identifiers_and_label_empty_lists() {

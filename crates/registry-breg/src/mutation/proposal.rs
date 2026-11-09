@@ -458,7 +458,7 @@ impl MutationTransaction {
         let entry = crate::audit::terminal_entry(
             self.audit.profile(),
             TerminalAudit {
-                grant: authority.common.grant_audit().cloned(),
+                context: authority.common.audit_context().cloned(),
                 outcome: if count == 0 {
                     TerminalAuditOutcome::Empty
                 } else {
@@ -1258,9 +1258,17 @@ impl MutationTransaction {
                             .ok_or(MutationError::PreconditionFailed)?;
                         proposal_prepare::validate_inputs(action, values)?;
                         let values = values.clone();
+                        let trusted_now = time::OffsetDateTime::now_utc();
+                        let evaluation_date = crate::action_handler::trusted_evaluation_date(
+                            action,
+                            registry,
+                            trusted_now,
+                        )
+                        .map_err(MutationError::ActionHandlerFailure)?;
                         let candidate = crate::action_handler::evaluate_plan_detailed(
                             action,
                             &values,
+                            evaluation_date,
                             deadline.into_std(),
                         )
                         .map_err(|diagnostic| {
@@ -1299,6 +1307,7 @@ impl MutationTransaction {
                                 input.authority,
                                 &resolved,
                                 &values,
+                                trusted_now,
                             )
                             .await?;
                         // The exact-command replay lookup ran before plan evaluation.
@@ -2019,7 +2028,7 @@ impl MutationTransaction {
         changed_inputs: &[String],
     ) -> Result<AuditEntry, MutationError> {
         let terminal = TerminalAudit {
-            grant: input.authority.common.grant_audit().cloned(),
+            context: input.authority.common.audit_context().cloned(),
             outcome,
             method: HttpMethod::Post,
             operation_id: format!(
@@ -2139,6 +2148,7 @@ impl MutationTransaction {
         authority: &ProposalAuthority,
         resolved: &proposal_prepare::ResolvedProposalTargets,
         input: &Map<String, Value>,
+        trusted_now: time::OffsetDateTime,
     ) -> Result<
         (
             BTreeMap<(String, Uuid), (i64, Map<String, Value>)>,
@@ -2226,7 +2236,7 @@ impl MutationTransaction {
                 revision,
                 Some(revision),
                 registry,
-                time::OffsetDateTime::now_utc(),
+                trusted_now,
             )?;
             guards.insert(guard.input.clone(), (id, revision, row));
         }
@@ -2329,6 +2339,7 @@ impl MutationTransaction {
         authority: &ProposalAuthority,
         frozen: &crate::proposal_workflow::ProposalSnapshot,
     ) -> Result<(), MutationError> {
+        let trusted_now = time::OffsetDateTime::now_utc();
         let Some(preconditions) = frozen.application_preconditions() else {
             return if action.requires.is_empty() {
                 Ok(())
@@ -2394,7 +2405,7 @@ impl MutationTransaction {
                     row.record_revision,
                     Some(target.expected_revision),
                     registry,
-                    time::OffsetDateTime::now_utc(),
+                    trusted_now,
                 )?;
             }
             if let Some(fields) =
@@ -4547,6 +4558,7 @@ mod commit_guard_date_tests {
             at_least: None,
             at_most: None,
             current_date: Some(crate::model::CompiledCurrentDateRelation::OnOrAfter),
+            current_date_offset_days: 0,
             at_least_input: None,
             at_most_input: None,
         };

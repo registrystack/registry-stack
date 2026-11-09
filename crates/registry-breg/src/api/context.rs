@@ -341,7 +341,7 @@ pub struct AuthorizedRequestContext {
     selected_profile: String,
     row_boundaries: Vec<VerifiedRowBoundary>,
     task_grant: Option<TaskGrantBinding>,
-    grant_audit: Option<crate::audit::GrantAuditContext>,
+    audit_context: Option<crate::audit::RequestAuditContext>,
     human_identity: Option<registry_review_client::HumanIdentity>,
     recipients: BTreeSet<String>,
 }
@@ -361,7 +361,7 @@ impl AuthorizedRequestContext {
             selected_profile,
             row_boundaries,
             task_grant: None,
-            grant_audit: None,
+            audit_context: None,
             human_identity: None,
             recipients: BTreeSet::new(),
         }
@@ -378,8 +378,8 @@ impl AuthorizedRequestContext {
         &self.recipients
     }
 
-    pub(crate) fn with_grant_audit(mut self, claims: &VerifiedRequestClaims) -> Self {
-        self.grant_audit = crate::audit::GrantAuditContext::from_claims(claims);
+    pub(crate) fn with_audit_context(mut self, claims: &VerifiedRequestClaims) -> Self {
+        self.audit_context = crate::audit::RequestAuditContext::from_claims(claims);
         self.human_identity = claims.human_identity().cloned();
         self.requester_client = claims.requester_client().map(str::to_owned);
         self
@@ -404,8 +404,8 @@ impl AuthorizedRequestContext {
             crate::subject_access_log::forwarded_attribution(entity, self, headers)?;
         Ok(())
     }
-    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
-        self.grant_audit.as_ref()
+    pub(crate) fn audit_context(&self) -> Option<&crate::audit::RequestAuditContext> {
+        self.audit_context.as_ref()
     }
     pub(crate) fn human_identity(&self) -> Option<&registry_review_client::HumanIdentity> {
         self.human_identity.as_ref()
@@ -470,7 +470,7 @@ pub struct AuthorizedActionContext {
     selected_profile: String,
     target_authority: BTreeMap<String, Vec<VerifiedRowBoundary>>,
     result_effects: BTreeSet<String>,
-    grant_audit: Option<crate::audit::GrantAuditContext>,
+    audit_context: Option<crate::audit::RequestAuditContext>,
     task_grant: Option<TaskGrantBinding>,
 }
 
@@ -490,17 +490,17 @@ impl AuthorizedActionContext {
             selected_profile,
             target_authority,
             result_effects,
-            grant_audit: None,
+            audit_context: None,
             task_grant: None,
         }
     }
 
-    pub(crate) fn with_grant_audit(mut self, claims: &VerifiedRequestClaims) -> Self {
-        self.grant_audit = crate::audit::GrantAuditContext::from_claims(claims);
+    pub(crate) fn with_audit_context(mut self, claims: &VerifiedRequestClaims) -> Self {
+        self.audit_context = crate::audit::RequestAuditContext::from_claims(claims);
         self
     }
-    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
-        self.grant_audit.as_ref()
+    pub(crate) fn audit_context(&self) -> Option<&crate::audit::RequestAuditContext> {
+        self.audit_context.as_ref()
     }
 
     pub(crate) fn with_task_grant(mut self, grant: Option<TaskGrantBinding>) -> Self {

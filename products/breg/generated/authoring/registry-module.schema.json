@@ -808,6 +808,13 @@
         "currentDate": {
           "$ref": "#/$defs/CurrentDatePredicateSource"
         },
+        "currentDateOffsetDays": {
+          "description": "Whole calendar days added to the registry-local date before applying\n`currentDate`. Zero preserves the unshifted comparison.",
+          "format": "int32",
+          "maximum": 365000,
+          "minimum": -365000,
+          "type": "integer"
+        },
         "equals": {
           "$ref": "#/$defs/ScalarLiteral"
         },

@@ -62,12 +62,17 @@ An omitted optional Rhai input is the unit value `()`. Omit the corresponding
 field from an effect's `set` map. Copying `()` or `null` into a required,
 non-null field is a handler result failure; it does not clear the field.
 
-The Action ABI supplies no trusted calendar date in `ctx`. When a command needs
-a caller-selected business date, declare a typed input such as `asOfDate`; treat
-it as caller data, not current server time. Plan logic runs only when that
-Action is invoked and is not a Record field-validation boundary. If a rule must
-not be bypassed, withhold the ordinary Create profile that could write the same
-state without the Action.
+The Rhai Action ABI provides three bounded date-string helpers: `today()` returns
+the registry-local `YYYY-MM-DD` date captured once for the evaluation,
+`add_days(date, days)` adds from -365,000 through 365,000 whole days, and
+`add_months(date, months)` adds from -12,000 through 12,000 months while clamping
+to the target month's last day. Invalid dates, an out-of-range result, or an
+offset outside those bounds fails the handler without exposing the supplied
+value. A Function that calls `today()` requires `project.timezone`; a
+caller-selected business date remains a typed input such as `asOfDate` and is
+caller data. Plan logic runs only when that Action is invoked and is not a
+Record field-validation boundary. If a rule must not be bypassed, withhold the
+ordinary Create profile that could write the same state without the Action.
 
 `bregctl check` performs one narrow source check for literal catalogue mistakes:
 it validates the string literal in a returned root map whose only key has the
@@ -95,6 +100,21 @@ does not compare that grant's operations or row boundaries, and Action target
 authority does not grant ordinary CRUD. For a Proposal Action, a `write` use
 under the Start grant describes an effect the proposal may apply after approval;
 it does not grant the Start caller a direct Record write.
+
+A date guard may shift the registry-local date by a signed whole-day offset:
+
+```yaml
+commitGuards:
+  targets:
+    - input: licence
+      field: valid-through
+      currentDate: on-or-after
+      currentDateOffsetDays: 30
+```
+
+An absent or zero `currentDateOffsetDays` compares with today, preserving the
+earlier `currentDate` behavior. The bounded offset is applied to the same local
+date for advisory availability and commit or Proposal Apply re-evaluation.
 
 An invocation commits record effects, revisions, history, audit, idempotency
 receipt, and outbox together. A refused effect leaves no partial record or event.
@@ -207,11 +227,13 @@ advisory `guardReason` is neither authority nor a reservation.
 ```sh
 bregctl check ./registry
 bregctl --format json explain actions ./registry
-bregctl project action-test ./registry --action <action-id> --input /path/to/input.json
+bregctl project action-test ./registry --action <action-id> --input /path/to/input.json --evaluation-date 2026-01-31
 ```
 
 `action-test` runs a named plan function over bounded synthetic JSON using logical
-input IDs, without a wire envelope. Add `--expect /path/to/expected.json` to check
+input IDs, without a wire envelope. A handler that calls `today()` requires the
+fixed `--evaluation-date`; the command never reads the workstation clock. Add
+`--expect /path/to/expected.json` to check
 exact effects, a declared refusal, or a handler failure. The public
 [`action-plan-branches` fixture](fixtures/action-plan-branches/README.md) carries
 all three examples. A handler result error is asserted as

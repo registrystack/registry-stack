@@ -202,7 +202,7 @@ fn authorize_with_reason(
     .with_task_grant(
         task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
     )
-    .with_grant_audit(claims)
+    .with_audit_context(claims)
     .with_recipients(claims))
 }
 
@@ -347,7 +347,7 @@ async fn refusal_for_operation(
         backend.expected(),
         HttpRefusalAudit {
             refusal_reason: reason,
-            grant: crate::audit::GrantAuditContext::from_claims(claims),
+            context: crate::audit::RequestAuditContext::from_claims(claims),
             method,
             operation_id,
             target_record: None,
@@ -521,7 +521,7 @@ async fn dispatch(
         StatisticsTerminalAudit {
             read: ReadTerminalAudit {
                 terminal: TerminalAudit {
-                    grant: context.grant_audit().cloned(),
+                    context: context.audit_context().cloned(),
                     outcome: if success {
                         if route.kind.method() == HttpMethod::Post {
                             if lifecycle.as_ref().is_some_and(|l: &Lifecycle| l.replayed) {

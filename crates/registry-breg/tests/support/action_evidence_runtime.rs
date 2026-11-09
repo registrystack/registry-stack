@@ -79,6 +79,7 @@ fn queued_worker_retains_capacity_after_request_cancellation() {
                 .evaluate(
                     first_action,
                     inputs(),
+                    None,
                     Instant::now() + Duration::from_secs(3),
                 )
                 .await
@@ -88,6 +89,7 @@ fn queued_worker_retains_capacity_after_request_cancellation() {
             .evaluate(
                 compiled,
                 inputs(),
+                None,
                 Instant::now() + Duration::from_millis(30),
             )
             .await;
@@ -122,6 +124,7 @@ async fn paused_provider_cancellation_and_deadline_release_workers() {
             .evaluate(
                 first_action,
                 inputs(),
+                None,
                 Instant::now() + Duration::from_secs(3),
             )
             .await
@@ -139,6 +142,7 @@ async fn paused_provider_cancellation_and_deadline_release_workers() {
         .evaluate(
             compiled.clone(),
             inputs(),
+            None,
             Instant::now() + Duration::from_millis(100),
         )
         .await;
@@ -152,7 +156,12 @@ async fn paused_provider_cancellation_and_deadline_release_workers() {
     );
     provider.resume();
     let successful = evaluator
-        .evaluate(compiled, inputs(), Instant::now() + Duration::from_secs(3))
+        .evaluate(
+            compiled,
+            inputs(),
+            None,
+            Instant::now() + Duration::from_secs(3),
+        )
         .await;
     assert!(
         matches!(successful.outcome, Ok(ActionHandlerOutcome::Effects(_))),
@@ -217,7 +226,12 @@ async fn runtime_dependency_failure_carries_the_verified_alias_only() {
     let evaluator =
         ActionEvidenceEvaluator::new(Arc::new(EvidenceActionClient::new(BTreeMap::new())));
     let result = evaluator
-        .evaluate(action(), inputs(), Instant::now() + Duration::from_secs(2))
+        .evaluate(
+            action(),
+            inputs(),
+            None,
+            Instant::now() + Duration::from_secs(2),
+        )
         .await;
     assert!(matches!(result.outcome,
         Err(MutationError::ActionEvidenceFailure { capability: Some(ref id) }) if id == "farmer-status"));

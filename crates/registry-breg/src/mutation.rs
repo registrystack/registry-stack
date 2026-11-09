@@ -1209,7 +1209,7 @@ impl MutationTransaction {
             let entry = terminal_entry(
                 self.audit.profile(),
                 TerminalAudit {
-                    grant: request.claims.grant_audit().cloned(),
+                    context: request.claims.audit_context().cloned(),
                     outcome: TerminalAuditOutcome::Replayed,
                     method: request.plan.route.method,
                     operation_id: request.plan.route.id.clone(),
@@ -1369,7 +1369,7 @@ impl MutationTransaction {
         let entry = terminal_entry(
             self.audit.profile(),
             TerminalAudit {
-                grant: request.claims.grant_audit().cloned(),
+                context: request.claims.audit_context().cloned(),
                 outcome: TerminalAuditOutcome::Committed,
                 method: request.plan.route.method,
                 operation_id: request.plan.route.id.clone(),
@@ -1788,7 +1788,7 @@ impl MutationTransaction {
             let entry = terminal_entry(
                 self.audit.profile(),
                 TerminalAudit {
-                    grant: request.claims.grant_audit().cloned(),
+                    context: request.claims.audit_context().cloned(),
                     outcome: TerminalAuditOutcome::Replayed,
                     method: request.plan.route.method,
                     operation_id: request.plan.route.id.clone(),
@@ -2003,7 +2003,7 @@ impl MutationTransaction {
         let entry = terminal_entry(
             self.audit.profile(),
             TerminalAudit {
-                grant: request.claims.grant_audit().cloned(),
+                context: request.claims.audit_context().cloned(),
                 outcome: TerminalAuditOutcome::Committed,
                 method: request.plan.route.method,
                 operation_id: request.plan.route.id.clone(),

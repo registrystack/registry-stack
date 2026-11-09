@@ -188,6 +188,12 @@ retained task subjects, under the existing operator retention boundary.
 
 ## Audit
 
+Request audit records include an activation-scoped keyed `clientReference`
+when the bearer verifier matches an allowed OAuth client. It uses the same
+pseudonym as `authorization.clientPseudonym` and distinguishes two clients
+acting for the same principal. An unrestricted verifier has no matched client
+to record. Client identifiers and tokens stay out of the journal.
+
 Terminal and refusal records for a request carrying a verified task grant include
 an `authorization` object using the shared authorization audit fields. Grant,
 principal, client and approver identifiers are keyed pseudonyms, scoped to the
@@ -202,8 +208,8 @@ the keyed pseudonym of `act.sub`, scoped to the package revision like the other
 identifiers. `principalPseudonym` then names the person the agent acts for and
 `clientPseudonym` the agent's client. A standing agent carries no grant, so its
 object has no grant, approver, source issuer or deadline. The raw actor
-identifier never reaches the journal. A task-grant token without `act` records
-exactly what it did before.
+identifier never reaches the journal. A task-grant token without `act` keeps
+the same `authorization` fields.
 
 Both kinds of token also carry the object on a read's terminal record: record
 reads, lists and lookups, revision reads, and history and snapshot reads. A

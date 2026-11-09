@@ -739,6 +739,10 @@ mod tests {
                 "--expect <JSON_FILE>",
                 vec!["--action <ACTION>", "--input <JSON_FILE>"],
             ),
+            (
+                "--evaluation-date <YYYY-MM-DD>",
+                vec!["--action <ACTION>", "--input <JSON_FILE>"],
+            ),
         ]
         .into_iter()
         .map(|(when, arguments)| {
