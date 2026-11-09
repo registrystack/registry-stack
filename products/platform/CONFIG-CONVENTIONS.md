@@ -40,8 +40,8 @@ In scope:
   registered with `reader: none`, follows CFG-ENV, CFG-NAME, CFG-ID, CFG-QTY,
   and CFG-EMPTY, and is exempt from CFG-YAML-1, CFG-CHECK-1, CFG-SCHEMA-2, and
   CFG-SCHEMA-6. A product output that a maintained tool reads is a registered
-  contract: it is a read-back format, registered with a reader and a schema
-  that name that tool, whatever command prints it. Explain output a
+  contract: it is a read-back format, registered with its schema and a `reader` entry
+  naming that tool's reading function, whatever command prints it. Explain output a
   maintained tool reads belongs here, not under `reader: none`.
   A **build artifact** is a read-back format that its own product's build
   writes and reads again and that no one edits (the compiled package model in

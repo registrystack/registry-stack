@@ -87,10 +87,9 @@ valid answer.
 | --- | --- | --- |
 | Others need a fact about your records | Publish a narrow answer, not the record | [Evidence](../../explanation/how-evidence-works/) |
 | A partner needs to read or change your records | Publish a governed record API | [BReg](../../explanation/configuration-defined-registry/) |
-| You need a fact held by someone else | Ask for the narrowest answer that does the job | Evidence, as the consumer |
+| You need a fact held by someone else | Ask for the narrowest answer that does the job | [Evidence, as the consumer](../../tutorials/verify-an-assertion-as-a-consumer/) |
 | You must load another system's data | Copy it in through a reviewed translator | [Adapter](https://github.com/registrystack/registry-stack/blob/main/products/adapter/README.md) packs; its ingestion job is not yet released |
-| A standard governs your edge | Follow it at the edge; keep your own model inside | Adapter facade |
-| A national system sets the contract | Follow its contract at the edge | Adapter facade |
+| A standard or national system fixes the wire contract | Serve it at the edge | Adapter facade profile |
 | The person can carry the proof | Let them bring it as a credential | Evidence with [OID4VCI delivery](../../configure/evidence-oid4vci/) |
 | Integration is not justified | Do not integrate, and write down why | None |
 
@@ -118,6 +117,23 @@ Payment and treasury hand-offs are custom code today. Build them as an applicati
 
 For how much to share, see [the disclosure ladder](../../explanation/data-minimization-and-purpose-limitation/#ask-for-the-weakest-answer-that-does-the-job).
 
+{/* Evidence: products/adapter/README.md, adapter-job; products/adapter/EFFECTIVE-CONTRACT.md, facade;
+    products/breg/event-records.md, namespace;
+    docs/site/src/content/docs/reference/breg-api.mdx, If-Match and Idempotency-Key;
+    docs/site/src/content/docs/configure/evidence-oid4vci.mdx, OID4VCI. */}
+
+## Signs part of your work is a process
+
+Any one of these means part of your work is a process, not only a register. Check
+[where each rule lives](../../explanation/where-each-rule-lives/) first; a timer, workflow or
+review policy may already hold it.
+
+- A rule needs facts from more than one record.
+- A matter continues over weeks.
+- Money is owed or paid.
+- The law sets a clock.
+- Two parties must both agree.
+
 ## Choose the next step
 
 Combine the smallest set of paths that meets the job. A configured register can have one custom
@@ -125,14 +141,3 @@ route and an independently deployed reminder worker. Add
 [Coordinator](../coordinator/) only when a durable, reviewed sequence across waits is useful.
 Before deployment, use the [operator handoff](../../operate/) to assign credentials, backups,
 retention, and recovery to named operators.
-
-## Signs it is time to climb
-
-Stay on the lightest path that works. Any one of these means a part of your work is a process,
-not only a register, so consider the next path (a small extension, an application, or a module):
-
-- A rule needs facts from more than one record.
-- A matter continues over weeks.
-- Money is owed or paid.
-- The law sets a clock.
-- Two parties must both agree.

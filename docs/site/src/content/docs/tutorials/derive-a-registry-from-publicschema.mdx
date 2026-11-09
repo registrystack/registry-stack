@@ -43,11 +43,12 @@ copy of PublicSchema 0.3.0, so deriving from it needs no network.
 
 PublicSchema is a starting vocabulary inside your registry and a contract at its edge. Starting
 from the model gives you field names, types, and code lists that other institutions already use.
-Your fields carry PublicSchema concept URIs (the `conceptUri` of each Record type and the
-`concepts` of each field in `registry.yaml`), so a mapping to a partner starts from shared
-definitions. Your register may diverge where your mandate needs it. Naming is where the
+Your registry carries PublicSchema concept URIs (the `conceptUri` of each Record type under
+`manifestProjection`, and `concepts` on each field the catalogue describes), so a mapping to a
+partner starts from shared definitions. Your register may diverge where your mandate needs it. Naming is where the
 programme's language gets settled, with the people who run it; the model gives you a draft to
-settle it from, not a replacement for that conversation. Deriving also settles the mechanical choices the same way every time: each concept you
+settle it from, not a replacement for that conversation. Deriving also settles the mechanical
+choices the same way every time: each concept you
 select becomes a Record type with an identifier the caller supplies, each property becomes a
 bounded field, an enumeration short enough to read becomes a closed list of codes, and a property
 the model marks sensitive becomes a `restricted` field.
@@ -151,10 +152,10 @@ the model. Keep this notice with the project and with any package built from it.
 
 Keep it with the project and with any package you build from it.
 
-The generated catalogue names a placeholder body. Under `manifestProjection.catalog` in
-`registry.yaml`, the `publisher`, the entry in `authorities`, and the dataset `owner` are all
-`"{title} Authority"` (with a made-up IRI under your reserved base), and `publicService.competentAuthority` points at that authority's `id`. Replace them with the body
-your law names for the register. Where your sources do not say, write "not stated" in the
+The generated catalogue names a placeholder body. Under `manifestProjection` in `registry.yaml`,
+`catalog.publisher`, the `authorities` entry, and each dataset `owner` are `"{title} Authority"`
+with an IRI under `https://<id>.example.invalid`, and `publicService.competentAuthority` points at
+that authority's `id`. Replace them with the body your law names for the register. Where your sources do not say, write "not stated" in the
 dataset description rather than inventing a body; you can fill it in later.
 
 `model/selection.yaml` is the input the project was derived from. You edit it later when you derive
