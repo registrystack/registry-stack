@@ -114,22 +114,19 @@ pub(crate) fn unavailable_calls(script: &str) -> Vec<UnavailableCall> {
         .collect::<BTreeSet<_>>();
     let mut calls = Vec::new();
     ast.walk(&mut |path| {
-        let named = match path.last() {
+        let named = literal_function_pointer(path).or_else(|| match path.last() {
             Some(ASTNode::Expr(Expr::FnCall(call, position))) if !call.is_qualified() => {
-                if call.name == "Fn" && call.args.len() == 1 {
-                    literal_string(&call.args[0]).map(|name| (name, *position))
-                } else {
+                if !(call.name == "Fn" && call.args.len() == 1) {
                     Some((call.name.to_string(), *position))
+                } else {
+                    None
                 }
             }
             Some(ASTNode::Expr(Expr::MethodCall(call, position))) => {
                 Some((call.name.to_string(), *position))
             }
-            Some(ASTNode::Expr(Expr::DynamicConstant(value, position))) => value
-                .read_lock::<FnPtr>()
-                .map(|pointer| (pointer.fn_name().to_owned(), *position)),
             _ => None,
-        };
+        });
         if let Some((function, position)) = named {
             if unavailable.contains(&function) {
                 calls.push(UnavailableCall { function, position });
@@ -138,6 +135,23 @@ pub(crate) fn unavailable_calls(script: &str) -> Vec<UnavailableCall> {
         true
     });
     calls
+}
+
+/// A function pointer named by a literal `Fn("name")` call, or by the
+/// optimizer's equivalent constant. Both authoring checks must recognize the
+/// same pointer spelling regardless of optimization level.
+pub(crate) fn literal_function_pointer(path: &[ASTNode<'_>]) -> Option<(String, rhai::Position)> {
+    match path.last() {
+        Some(ASTNode::Expr(Expr::FnCall(call, position)))
+            if !call.is_qualified() && call.name == "Fn" && call.args.len() == 1 =>
+        {
+            literal_string(&call.args[0]).map(|name| (name, *position))
+        }
+        Some(ASTNode::Expr(Expr::DynamicConstant(value, position))) => value
+            .read_lock::<FnPtr>()
+            .map(|pointer| (pointer.fn_name().to_owned(), *position)),
+        _ => None,
+    }
 }
 
 fn function_names(engine: &Engine) -> BTreeSet<String> {

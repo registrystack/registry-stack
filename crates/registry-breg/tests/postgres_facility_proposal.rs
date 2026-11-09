@@ -794,11 +794,12 @@ async fn proposal_date_plan_is_frozen_at_submit_across_apply_date_boundary() {
     );
     let plan = br#"
 fn plan(ctx) {
+    let current_date = Fn("today");
     #{
         effects: [#{
             id: "facility-address",
             set: #{
-                "address-line": today(),
+                "address-line": current_date.call(),
                 "city": ctx.inputs["city"],
                 "postal-code": ctx.inputs["postal-code"]
             }

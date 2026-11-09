@@ -214,16 +214,16 @@ pub(crate) fn source_uses_today(source: &str, _entrypoint: &str) -> bool {
     }
     let mut uses_today = false;
     ast.walk(&mut |nodes| {
-        let is_today = match nodes.last() {
+        let direct_today = match nodes.last() {
             Some(rhai::ASTNode::Expr(rhai::Expr::FnCall(call, _)))
             | Some(rhai::ASTNode::Stmt(rhai::Stmt::FnCall(call, _))) => {
                 !call.is_qualified() && call.name == "today" && call.args.is_empty()
             }
-            Some(rhai::ASTNode::Expr(rhai::Expr::DynamicConstant(value, _))) => value
-                .read_lock::<rhai::FnPtr>()
-                .is_some_and(|pointer| pointer.fn_name() == "today"),
             _ => false,
         };
+        let is_today = direct_today
+            || crate::rhai_literal_lint::literal_function_pointer(nodes)
+                .is_some_and(|(function, _)| function == "today");
         uses_today |= is_today;
         !uses_today
     });
