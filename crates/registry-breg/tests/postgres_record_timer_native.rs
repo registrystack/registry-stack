@@ -887,6 +887,18 @@ async fn removed_timer_fences_predecessor_process(
     harness
         .wait_replica_unready(predecessor, Duration::from_secs(10))
         .await?;
+    // Readiness already refuses once the successor is active, before the
+    // parked worker resumes. The worker writes its fenced-iteration warning
+    // only after it leaves the checkpoint, so wait for that line: it proves
+    // the predecessor resumed and was fenced before the unchanged-lease check
+    // below, and the crash cannot cut it off.
+    harness
+        .wait_for_log_code(
+            predecessor,
+            "record_timer.worker.iteration_failed",
+            Duration::from_secs(10),
+        )
+        .await?;
     harness.expect_non_info_code_range(
         predecessor,
         "record_timer.worker.iteration_failed",

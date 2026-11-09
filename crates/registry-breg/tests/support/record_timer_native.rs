@@ -2904,6 +2904,21 @@ impl NativeTimerHarness {
         code: &str,
         timeout: Duration,
     ) -> Result<(), String> {
+        self.wait_for_log_code_count(replica, code, 1, timeout)
+            .await
+    }
+
+    /// Wait until one replica's log holds at least `count` lines carrying
+    /// `code`. A worker writes its iteration warning only after the step it
+    /// reports, so neither database evidence nor readiness proves the line
+    /// exists yet; stopping the replica first can cut it off.
+    pub async fn wait_for_log_code_count(
+        &self,
+        replica: usize,
+        code: &str,
+        count: usize,
+        timeout: Duration,
+    ) -> Result<(), String> {
         let replica = self
             .replicas
             .get(replica)
@@ -2913,14 +2928,16 @@ impl NativeTimerHarness {
             loop {
                 let rendered = fs::read_to_string(&replica.log_path)
                     .map_err(|_| "native timer process log could not be read".to_owned())?;
-                if rendered.contains(&needle) {
+                if rendered.matches(&needle).count() >= count {
                     return Ok(());
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
         })
         .await
-        .map_err(|_| "native timer process did not emit the expected log code".to_owned())?
+        .map_err(|_| {
+            format!("native timer process did not emit {count} {code} log line(s) before the bound")
+        })?
     }
 
     /// Terminate only the PostgreSQL sessions owned by one native process.
