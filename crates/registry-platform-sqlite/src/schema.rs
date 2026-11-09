@@ -85,13 +85,13 @@ pub fn inspect_schema(
 ) -> Result<SchemaCatalog, SqliteError> {
     limits.validate()?;
     profile_confirm(profile)?;
-    let connection = open_for_schema(profile)?;
+    let mut connection = open_for_schema(profile)?;
     // Establish one read snapshot. The only SQL below is fixed schema-catalog
     // inspection; no caller SQL or raw connection crosses this boundary.
     connection
         .execute_batch("BEGIN")
         .map_err(|_| SqliteError::new(ErrorKind::DatabaseUnavailable))?;
-    let outcome = collect_schema(&connection, limits);
+    let outcome = collect_schema(&mut connection, limits);
     profile_confirm(profile)?;
     confirm_connection_still_bound(&connection)?;
     drop(connection);
@@ -141,7 +141,7 @@ fn open_for_schema(profile: &DatabaseProfile) -> Result<Connection, SqliteError>
 }
 
 fn collect_schema(
-    connection: &Connection,
+    connection: &mut Connection,
     limits: &InspectionLimits,
 ) -> Result<Vec<SchemaObject>, SqliteError> {
     const WITHIN: u8 = 0;
