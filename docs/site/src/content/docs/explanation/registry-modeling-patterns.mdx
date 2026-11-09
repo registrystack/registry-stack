@@ -29,9 +29,9 @@ The excerpts below come from the template's `registry.yaml`.
 
 ## Write down the legal footing
 
-A register has one legal owner. When two agencies both claim a register, that is joint control, and
-the law settles it before you configure anything. For each register, write a short block, and
-write "not stated" wherever your sources are silent; an honest gap is more useful than a guess:
+A register has one legal owner. When two agencies both claim a register, that is joint control;
+record which law settles it, or "not stated". For each register, write a short block, and write
+"not stated" wherever your sources are silent; an honest gap is more useful than a guess:
 
 - the law that creates it;
 - the body that law mandates;
@@ -47,8 +47,8 @@ reading the fields.
 
 When you combine starters, keep together what one authority keeps, and link the rest by reference.
 A farmer and the land parcels they work belong in one project only if one authority keeps both. If
-a land authority keeps the parcels, the farmer register holds a reference to the parcel, not a copy
-of it.
+a land authority keeps the parcels, the farmer register holds the parcel's identifier with its scheme, not a
+copy of it.
 
 ## Separate an object from its registration
 
@@ -162,6 +162,10 @@ one operator, several, or one primary beside other roles. A Record type's `tempo
 names its start and end fields; exclusivity needs a separate `temporal-non-overlap` constraint with
 the right `scopeFields`. A date or role field alone imposes nothing.
 
+When your source states the last day in force, name it with `temporal.lastDayField` instead of
+`endField`, so a period ending on 31 December includes that day. The
+[API reference](../../reference/breg-api/) describes how the temporal routes read it.
+
 Keep effective time separate from recording time: "who operated the facility on June 1?" differs
 from "what had the registry recorded on June 1?". Test adjacent and open-ended periods and a
 correction to an earlier period.
@@ -190,12 +194,16 @@ Name each Action after what happens in the programme, in the law's words: `regis
 
 A short worked example, from a decision process to a recorded decision. Suppose the law says an
 officer decides whether a household is enrolled. The process has three steps: the household applies,
-an officer reviews, and the decision is recorded. Model the decision as a proposal-mode
-[Action](../../reference/glossary/#action): the application is submitted as a
-[Proposal](../../reference/glossary/#proposal), the officer's review is the review it requests,
-and applying it writes the enrolment record, with the decision and the officer's reference, in one
-change. The recorded decision is then an ordinary record that other offices can read under their
-own access profiles.
+an officer reviews, and the decision is recorded. Model the officer's decision as an
+[Action](../../reference/glossary/#action), `decide-enrolment`, whose inputs carry the outcome and
+the officer's reference and whose plan writes a decision record either way. If the law requires a
+second look, make it a proposal-mode Action: a reviewer approves or rejects that exact submission
+(a [Proposal](../../reference/glossary/#proposal)), and only applying it writes the record. The
+recorded decision is then an ordinary record that other offices can read under their own access
+profiles.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, ActionSource, ActionValueSource, ProposalApplicationSource;
+    docs/site/src/content/docs/configure/breg-actions.mdx. */}
 
 ## Model the law's lifecycle
 
@@ -221,12 +229,7 @@ renewal, or extend the same one?
   one.
 
 If your sources do not say, write "not stated" for the legal question and ask the licensing
-authority before you model renewals.
-
-Write periods with an inclusive last day. A `date` period whose source records the last day in
-force names it with `temporal.lastDayField` instead of `endField`, so a period ending on 31
-December includes that day. The [API reference](../../reference/breg-api/) describes how the
-temporal routes read it.
+authority.
 
 ## Derive roles from the job
 

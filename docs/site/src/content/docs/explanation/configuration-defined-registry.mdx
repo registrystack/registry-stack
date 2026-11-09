@@ -112,11 +112,16 @@ every write.
 
 ## Can I leave?
 
-Yes, by three routes that are true today. Your project is plain YAML in your own version control,
-and it runs on the products without anything else. You can take your data out with
-[`bregctl data export`](../../operate/breg-data/#export-with-a-checkpoint). And the records
-live in a PostgreSQL database you run. Nothing in this model needs a separate hosted service to keep
-working.
+Yes, by three routes. Your project is YAML, plus any Rhai, SQL, or Wasm files it includes, in your
+own version control, and it runs on the products without anything else. You can take your current
+records out, with the fields you name, using
+[`bregctl data export`](../../operate/breg-data/#export-with-a-checkpoint) through an access
+profile that has `allowDataExport`. And the records live in a PostgreSQL database you run. Nothing
+in this model needs a separate hosted service to keep working.
+
+{/* Evidence: crates/registry-breg/src/wasm_handler.rs; crates/registry-breg/src/derived_sql.rs;
+    crates/registry-breg/src/tooling.rs, allowDataExport;
+    docs/site/src/content/docs/operate/breg-data.mdx. */}
 
 ## Next
 

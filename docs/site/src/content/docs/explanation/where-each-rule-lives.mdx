@@ -74,11 +74,8 @@ products hold what happens around a record.
 
 ## Keep numbers that change in records, not in scripts
 
-Rates, thresholds, and fee tables change more often than the logic that uses them. Store each as a
-dated record (a Record type with `temporal` validity, one record per period) and keep the Action
-plan or script small: it takes the value as an input rather than carrying the number. A change
-then becomes a reviewed, dated record with its own history, not an edit to code. The table above
-shows how a workflow reads the record in force and passes it to the Action.
+Keep a rate or fee table in a dated record, as the parameters row shows, so each change is a
+reviewed record with history, not a code edit.
 
 ## Choosing a plan for an Action
 
