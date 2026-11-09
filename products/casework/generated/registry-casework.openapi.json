@@ -4058,10 +4058,12 @@
             "items": {
               "$ref": "#/components/schemas/LocalId"
             },
+            "minItems": 1,
             "type": [
               "array",
               "null"
-            ]
+            ],
+            "uniqueItems": true
           },
           "queue": {
             "type": "string"

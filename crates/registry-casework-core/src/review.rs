@@ -239,10 +239,17 @@ pub struct ReviewStagePolicy {
     pub required_approvals: u16,
     /// Outcome identifiers offered by this stage. Omission offers the whole
     /// policy catalogue.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_unique_local_ids",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<Vec<registry_platform_yaml::LocalId>>")
+        schemars(
+            with = "Option<registry_platform_yaml::UniqueList<registry_platform_yaml::LocalId>>",
+            length(min = 1)
+        )
     )]
     pub outcomes: Option<Vec<String>>,
     /// Controls whether a rejection or change request settles the whole review.
@@ -3092,24 +3099,22 @@ mod tests {
         }
     }
 
-    fn policy_with_final_outcomes(outcomes: Value) -> ReviewPolicy {
-        let mut policy =
-            serde_json::to_value(approval_policy(vec![stage("local", 1), stage("final", 1)]))
-                .unwrap();
-        policy["stages"][1]["outcomes"] = outcomes;
-        serde_json::from_value(policy).unwrap()
+    fn policy_with_final_outcomes(outcomes: &[&str]) -> ReviewPolicy {
+        let mut policy = approval_policy(vec![stage("local", 1), stage("final", 1)]);
+        policy.stages[1].outcomes = Some(outcomes.iter().map(|id| (*id).to_owned()).collect());
+        policy
     }
 
     #[test]
     fn stage_outcomes_reject_empty_unknown_and_duplicate_choices() {
         for (outcomes, code) in [
-            (json!([]), "casework.review-policy.no-stage-outcomes"),
+            (&[][..], "casework.review-policy.no-stage-outcomes"),
             (
-                json!(["approved", "unknown"]),
+                &["approved", "unknown"],
                 "casework.review-policy.unknown-stage-outcome",
             ),
             (
-                json!(["approved", "approved"]),
+                &["approved", "approved"],
                 "casework.review-policy.duplicate-stage-outcome",
             ),
         ] {
@@ -3123,7 +3128,7 @@ mod tests {
 
     #[test]
     fn stage_outcomes_limit_decisions_on_the_frozen_policy() {
-        let snapshot = policy_with_final_outcomes(json!(["approved", "rejected"]))
+        let snapshot = policy_with_final_outcomes(&["approved", "rejected"])
             .closure_with(crate::ReviewPolicyDependencies::default())
             .unwrap();
         let request_id = Uuid::from_u128(100);

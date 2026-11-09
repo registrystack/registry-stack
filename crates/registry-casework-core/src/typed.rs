@@ -91,6 +91,17 @@ where
     UniqueList::<T>::deserialize(deserializer).map(UniqueList::into_vec)
 }
 
+/// An optional set of local identifiers, kept in authored order.
+pub(crate) fn optional_unique_local_ids<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let ids = Option::<UniqueList<LocalId>>::deserialize(deserializer)?;
+    Ok(ids.map(|ids| ids.into_iter().map(LocalId::into_string).collect()))
+}
+
 /// Named items, unique by `id` (CFG-ID-5): a repeated id is refused at the
 /// second item's `id`.
 pub fn unique_id_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
