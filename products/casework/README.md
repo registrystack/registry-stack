@@ -142,7 +142,9 @@ response cannot authorize a later state.
 Each stage may set `outcomes` to the non-empty subset of policy outcome ids it
 offers. Omitting the field offers every policy outcome, preserving existing
 projects. `caseworkctl check` refuses an unknown outcome id and a stage with no
-available path to advance or settle the review. `caseworkctl explain` always
+available path to advance or settle the review: every stage must offer an
+outcome whose settlement is `approved` (`answered` for an answer policy).
+`caseworkctl explain` always
 reports the effective outcomes for each stage, including the all-policy default.
 A `changes-requested` result ends that review version. A resubmission is a new
 version that starts at the policy's first stage; it does not resume the earlier
