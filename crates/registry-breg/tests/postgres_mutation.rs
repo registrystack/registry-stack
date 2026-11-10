@@ -5971,3 +5971,246 @@ async fn real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spen
     drop(client);
     database.cleanup().await;
 }
+
+fn linked_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id":"local-records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"mutation-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "recordTypes":[{
+            "id":"local-record","primaryDataset":"local-records","route":"local-records","mutationMode":"mutable","classification":"internal",
+            "fields":[
+              {"id":"subjectkey","type":"string","maximumLength":32,"classification":"internal"},
+              {"id":"localtitle","type":"string","maximumLength":120,"classification":"internal"}
+            ]
+          }],
+          "externalRecordTypes":[{
+            "id":"external-subject","authority":"urn:example:source","identifierScheme":"urn:example:subject-key",
+            "fields":[{"id":"label","type":"string","classification":"internal"}]
+          }],
+          "externalProjections":[{
+            "id":"approved-subjects","recordType":"external-subject","operation":"subjects-by-key","operationVersion":"1",
+            "purpose":"local-consultation","scope":"approved-subjects","selectorScheme":"urn:example:subject-key",
+            "mode":"indexed","cardinality":"one","cacheTtlSeconds":600,"fields":["label"]
+          }],
+          "externalViews":[{
+            "id":"local-with-subject","recordType":"local-record",
+            "links":[{"id":"subject","projection":"approved-subjects","fromField":"subjectkey",
+              "identifierScheme":"urn:example:subject-key","fields":["label"]}]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
+            "requiredPurposes":["local-consultation"],
+            "permissions":{"records":[{
+              "recordType":"local-record","operations":["create","get","list","patch"],
+              "readableFields":["subjectkey","localtitle"],
+              "writableFields":["subjectkey","localtitle"],
+              "rowBoundaries":"unrestricted"
+            }],
+            "externalViews":[{"view":"local-with-subject","links":[{"link":"subject","readableFields":["label"]}]}]}
+          }]
+        }"#,
+    )
+    .expect("linked fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("linked fixture compiles")
+}
+
+fn linked_create<'a>(
+    plan: &'a MutationPlan,
+    key: &'a str,
+    claims: &'a ClaimContext,
+    subject_key: &str,
+    title: &str,
+) -> MutationRequest<'a> {
+    MutationRequest {
+        plan,
+        idempotency_key: key,
+        claims,
+        record_id: None,
+        expected_etag: None,
+        body: MutationBody::Create(Map::from_iter([
+            (
+                "subjectkey".to_owned(),
+                Value::String(subject_key.to_owned()),
+            ),
+            ("localtitle".to_owned(), Value::String(title.to_owned())),
+        ])),
+        response_fields: BTreeSet::from(["subjectkey".to_owned(), "localtitle".to_owned()]),
+        representation: registry_breg::record_profile::RecordRepresentation::Json,
+        correlation: registry_breg::correlation::RequestCorrelation::breg_created(),
+    }
+}
+
+fn linked_patch<'a>(
+    plan: &'a MutationPlan,
+    key: &'a str,
+    claims: &'a ClaimContext,
+    record_id: &'a str,
+    expected_etag: &'a str,
+    field: &str,
+    value: &str,
+) -> MutationRequest<'a> {
+    MutationRequest {
+        plan,
+        idempotency_key: key,
+        claims,
+        record_id: Some(record_id),
+        expected_etag: Some(expected_etag),
+        body: MutationBody::Patch(vec![PatchOperation::Replace {
+            path: format!("/data/{field}"),
+            value: Value::String(value.to_owned()),
+        }]),
+        response_fields: BTreeSet::from(["subjectkey".to_owned(), "localtitle".to_owned()]),
+        representation: registry_breg::record_profile::RecordRepresentation::Json,
+        correlation: registry_breg::correlation::RequestCorrelation::breg_created(),
+    }
+}
+
+/// A key that cannot be sent to the source is refused on write to the
+/// field an external view links from, and accepted anywhere else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_malformed_external_link_key_is_refused_on_write_to_the_linked_field_only() {
+    let database = TestDatabase::create(10).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = linked_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs the compiler-owned schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-mutation-1",
+        },
+    )
+    .await
+    .expect("migration initializes the active package");
+    migration_task.abort();
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let coordinator = audited_coordinator(&database, &identity);
+    let create_plan = MutationPlan::from_compiled(&compiled, "records.local-record.create")
+        .expect("create plan comes from the compiled inventory");
+    let patch_plan = MutationPlan::from_compiled(&compiled, "records.local-record.patch")
+        .expect("patch plan comes from the compiled inventory");
+    let claims = ClaimContext::for_compiled(
+        &compiled,
+        "local-record",
+        Some(PRINCIPAL_CANARY.to_owned()),
+        "operator",
+        Some("local-consultation".to_owned()),
+        Vec::new(),
+    )
+    .expect("claim context is compiler-bound");
+    let table = &compiled.entities()["local-record"].physical_table;
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+
+    coordinator
+        .execute(
+            &mut client,
+            linked_create(
+                &create_plan,
+                "well-formed-create",
+                &claims,
+                "key-0",
+                "title",
+            ),
+        )
+        .await
+        .expect("a well-formed key is accepted on the linked field");
+
+    for (index, malformed) in [" padded", "trailing ", "bell\u{7}key", "trailing\u{3000}"]
+        .into_iter()
+        .enumerate()
+    {
+        let key = format!("malformed-create-{index}");
+        let before = durable_counts(&database, table).await;
+        let refused = coordinator
+            .execute(
+                &mut client,
+                linked_create(&create_plan, &key, &claims, malformed, "title"),
+            )
+            .await;
+        assert_eq!(
+            refused,
+            Err(MutationError::InvalidRequestAt(
+                RequestLocation::data_field("subjectkey")
+            )),
+            "{malformed:?} is refused on create"
+        );
+        let after = durable_counts(&database, table).await;
+        assert_eq!(after.current, before.current, "nothing is written");
+        assert_eq!(after.revisions, before.revisions, "no revision is written");
+    }
+
+    let long = "k".repeat(513);
+    // maximumLength is 32, so the length rule is exercised by the unit
+    // tests; here the character rule alone decides.
+    assert!(long.len() > 32);
+
+    // The same malformed value in an unlinked field is accepted.
+    let accepted = coordinator
+        .execute(
+            &mut client,
+            linked_create(&create_plan, "unlinked-create", &claims, "key-1", " padded"),
+        )
+        .await
+        .expect("a malformed-looking value is accepted in an unlinked field");
+    let record_id = response_id(&accepted);
+    let etag = response_etag(&accepted);
+
+    let before = durable_counts(&database, table).await;
+    let refused = coordinator
+        .execute(
+            &mut client,
+            linked_patch(
+                &patch_plan,
+                "malformed-patch",
+                &claims,
+                &record_id,
+                &etag,
+                "subjectkey",
+                "bell\u{7}key",
+            ),
+        )
+        .await;
+    assert_eq!(
+        refused,
+        Err(MutationError::InvalidRequestAt(
+            RequestLocation::patch_operation(0, Some(PatchMember::Value))
+        )),
+        "a malformed key is refused on patch"
+    );
+    let after = durable_counts(&database, table).await;
+    assert_eq!(after.current, before.current);
+    assert_eq!(
+        after.revisions, before.revisions,
+        "the patch writes nothing"
+    );
+
+    let patched = coordinator
+        .execute(
+            &mut client,
+            linked_patch(
+                &patch_plan,
+                "unlinked-patch",
+                &claims,
+                &record_id,
+                &etag,
+                "localtitle",
+                "bell\u{7}title",
+            ),
+        )
+        .await
+        .expect("the same value is accepted in an unlinked field");
+    assert!(!patched.replayed());
+}

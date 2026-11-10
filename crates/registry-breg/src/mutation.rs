@@ -2990,9 +2990,10 @@ async fn insert_current_row(
             }
             continue;
         }
-        values.push(BoundValue::Text(sql_value(
+        values.push(BoundValue::Text(written_sql_value(
+            entity,
+            field,
             &data[&field.id],
-            &field.field_type,
         )?));
         field_columns.push(quote_identifier(&field.physical_name));
         field_parameters.push(typed_parameter(values.len(), &field.field_type));
@@ -3073,9 +3074,10 @@ async fn update_current_row(
             }
             continue;
         }
-        values.push(BoundValue::Text(sql_value(
+        values.push(BoundValue::Text(written_sql_value(
+            entity,
+            field,
             &data[&field.id],
-            &field.field_type,
         )?));
         assignments.push(format!(
             "{} = {}",
@@ -3456,7 +3458,8 @@ fn apply_patch_document(
                 if value.is_null() && field.required {
                     return Err(at(PatchMember::Value));
                 }
-                sql_value(value, &field.field_type).map_err(|_| at(PatchMember::Value))?;
+                written_sql_value(&request.plan.entity, field, value)
+                    .map_err(|_| at(PatchMember::Value))?;
                 materialized.insert(field_id.clone(), value.clone());
                 changed.insert(field_id, value.clone());
                 mutated = true;
@@ -3754,7 +3757,7 @@ fn validate_request(
             if value.is_null() && field.required {
                 return Err(location());
             }
-            sql_value(value, &field.field_type).map_err(|_| location())?;
+            written_sql_value(&request.plan.entity, field, value).map_err(|_| location())?;
         }
     }
     Ok(())
@@ -3996,7 +3999,8 @@ fn validate_patch_static(
                 if value.is_null() && field.required {
                     return Err(at(PatchMember::Value));
                 }
-                sql_value(value, &field.field_type).map_err(|_| at(PatchMember::Value))?;
+                written_sql_value(&request.plan.entity, field, value)
+                    .map_err(|_| at(PatchMember::Value))?;
                 mutated = true;
             }
             PatchOperation::Remove { .. } => {
@@ -4132,6 +4136,22 @@ fn record_reference(
         .key_hasher()
         .audit_reference_hash("breg-record-v1", package_revision, record_id)
         .map_err(|_| MutationError::Unavailable)
+}
+
+/// The SQL text of a value written to `field`, refusing a link key an
+/// external view could not send to its source. Every record write passes
+/// through here, so the check holds on each write path.
+fn written_sql_value(
+    entity: &CompiledEntity,
+    field: &CompiledField,
+    value: &Value,
+) -> Result<Option<String>, MutationError> {
+    if entity.external_link_fields.contains(&field.id)
+        && matches!(value, Value::String(key) if !crate::external_views::link_key_acceptable(key))
+    {
+        return Err(MutationError::InvalidRequest);
+    }
+    sql_value(value, &field.field_type)
 }
 
 pub(crate) fn sql_value(

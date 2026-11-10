@@ -378,6 +378,7 @@ pub fn compile_project_with_assets(
             "external view compilation",
         )
     })?;
+    crate::external_views::mark_link_fields(&external_views, &mut entities);
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
     crate::event_record::compile(&sources, &mut entities);
@@ -7915,6 +7916,7 @@ fn compile_entities(
                 display: source.display.display(),
                 grouping: source.display.grouping(),
                 event_record: None,
+                external_link_fields: BTreeSet::new(),
                 definition_revision: record_definition_revision(source, &constraints),
                 id: source.id.clone(),
                 source_module,
