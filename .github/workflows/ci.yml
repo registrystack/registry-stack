@@ -2697,6 +2697,16 @@ jobs:
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl -p registry-rstack --bins
 
+      - name: Verify the combined licensing development run with native PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-rstack
+          python3 products/platform/scripts/test-rstack-dev.py \
+            --bin-dir "${GITHUB_WORKSPACE}/target/debug" \
+            --postgres-bin-dir "$(pg_config --bindir)" \
+            --scratch-parent "${RUNNER_TEMP}"
+
       - name: Execute the Registry Casework tutorials from a reader directory
         shell: bash
         env:

@@ -1,0 +1,176 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/project-dev/v1alpha1
+kind: ProjectDevPlan
+issuer: https://issuer.example.test
+products:
+  - {product: breg, project: registry, audience: "urn:journey:breg"}
+  - {product: casework, project: casework, audience: "urn:journey:casework"}
+bindings:
+  bregReviewAuthority: {id: casework, producer: registry, person: producer}
+  caseworkContextProvider: {id: registry, person: context-status, action: correct-status}
+people:
+  operator:
+    subject: generic-registry-operator
+    client: operator
+    grants:
+      breg:
+        profile: operator
+        scopes: ["registry:generic:operate"]
+        claims: {registry_actor_kind: human, registry_purpose: registry-operations}
+  source:
+    subject: evidence-source
+    client: source
+    grants:
+      breg:
+        profile: evidence-source
+        scopes: ["registry:evidence:lookup"]
+        claims: {registry_actor_kind: service, registry_purpose: evidence-source-read}
+  applier:
+    subject: applier
+    client: applier
+    grants:
+      breg:
+        profile: applier
+        scopes: ["registry:apply"]
+        claims: {registry_actor_kind: human, registry_purpose: registry-operations}
+  reviewer:
+    subject: staff
+    client: staff
+    caseworkContext: true
+    grants:
+      breg:
+        profile: reviewer
+        scopes: ["registry:review", "casework:staff"]
+        claims: {registry_actor_kind: human, registry_purpose: registry-operations}
+      casework:
+        profile: staff
+        scopes: ["registry:review", "casework:staff"]
+        claims: {registry_actor_kind: human, registry_purpose: registry-operations}
+  administrator:
+    subject: administrator
+    client: administrator
+    grants:
+      casework:
+        profile: administrator
+        scopes: ["casework:admin"]
+        claims: {registry_actor_kind: human}
+  producer:
+    subject: producer
+    client: producer
+    grants:
+      casework:
+        profile: requester
+        scopes: ["casework:request"]
+        claims: {registry_actor_kind: service}
+  context-status:
+    subject: context-status
+    client: context-status
+    grants:
+      breg:
+        profile: review-status
+        scopes: ["registry:review-status"]
+        claims: {registry_actor_kind: service, registry_purpose: registry-operations}
+journey:
+  id: native-review-handoff
+  steps:
+    - id: staff-queue
+      product: casework
+      as: administrator
+      method: POST
+      path: /v1/directory/bootstrap
+      headers: {If-Match: '"0"', Idempotency-Key: staff-queue}
+      body:
+        teamId: reviewers
+        staff: [{issuer: https://issuer.example.test, subject: staff}]
+        supervisors: []
+        queueId: reviews
+      expect: {status: 200}
+    - id: create-record
+      product: breg
+      as: operator
+      method: POST
+      path: /v1/records/records
+      headers: {Idempotency-Key: create-record}
+      body:
+        data: {code: DEV-PROOF, registrationNumber: DEV-REG, status: retired, label: Synthetic record}
+      expect: {status: 201}
+      capture: {record: /data/recordIdentifier}
+    - id: start-proposal
+      product: breg
+      as: operator
+      method: POST
+      path: /v1/actions/correct-status/proposals
+      headers: {Idempotency-Key: start-proposal}
+      body: {input: {subjectId: "{{record}}", status: active}}
+      expect: {status: 201}
+      capture: {proposal: /id, draftEtag: {header: etag}}
+    - id: submit-proposal
+      product: breg
+      as: operator
+      method: POST
+      path: "/v1/proposals/{{proposal}}/submit"
+      headers: {If-Match: "{{draftEtag}}", Idempotency-Key: submit-proposal}
+      body: {}
+      expect: {status: 200, json: {/state: submitted}}
+      capture: {submissionVersion: /submissionVersion, effectDigest: /effectDigest}
+    - id: find-task
+      product: casework
+      as: reviewer
+      method: GET
+      path: /v1/review-tasks?queue=reviews
+      headers: {Registry-Source-Profile: reviewer}
+      expect: {status: 200}
+      poll: {timeoutMs: 60000, intervalMs: 500}
+      capture:
+        task: {find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /taskId}
+        request: {find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /requestId}
+        taskRevision: {find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /revision}
+    - id: read-context-from-breg
+      product: casework
+      as: reviewer
+      method: GET
+      path: "/v1/review-tasks/{{task}}/context"
+      headers: {Registry-Source-Profile: reviewer}
+      expect:
+        status: 200
+        json:
+          /context/projection/display/currentStatus: retired
+          /context/projection/display/proposedStatus: active
+    - id: claim-task
+      product: casework
+      as: reviewer
+      method: POST
+      path: "/v1/review-tasks/{{task}}/claim"
+      headers: {If-Match: '"{{taskRevision}}"', Idempotency-Key: claim-task, Registry-Source-Profile: reviewer}
+      expect: {status: 200}
+      capture: {claimRevision: /revision}
+    - id: approve-correction
+      product: casework
+      as: reviewer
+      method: POST
+      path: "/v1/review-tasks/{{task}}/decisions"
+      headers: {If-Match: '"{{claimRevision}}"', Idempotency-Key: approve-correction, Registry-Source-Profile: reviewer}
+      body: {decision: {type: approve, outcome: approved}}
+      expect: {status: 204}
+    - id: read-review-result
+      product: casework
+      as: producer
+      method: GET
+      path: "/v1/review-requests/{{request}}/result"
+      expect: {status: 200, json: {/subject/id: "{{proposal}}", /status: approved}}
+    - id: await-source-decision
+      product: breg
+      as: applier
+      method: GET
+      path: "/v1/proposals/{{proposal}}"
+      expect: {status: 200, json: {/decision/status: approved}}
+      poll: {timeoutMs: 60000, intervalMs: 500}
+      capture: {approvalEtag: {header: etag}}
+    - id: apply-correction
+      product: breg
+      as: applier
+      method: POST
+      path: "/v1/proposals/{{proposal}}/apply"
+      headers: {If-Match: "{{approvalEtag}}", Idempotency-Key: apply-correction}
+      body: {submissionVersion: "{{submissionVersion}}", effectDigest: "{{effectDigest}}"}
+      expect: {status: 200, json: {/state: applied}}

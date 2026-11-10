@@ -1,0 +1,913 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Run-local bindings between BReg and Casework.
+//!
+//! The token endpoint exists only for one development run. It accepts the two
+//! machine identities the plan explicitly binds, verifies their private-key
+//! JWT assertions, and mints the same bounded product token a named test person
+//! would receive. Keys, tokens, and assertion identifiers never enter reports
+//! or logs.
+
+use anyhow::{ensure, Context, Result};
+use axum::{
+    body::Bytes,
+    extract::{DefaultBodyLimit, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::post,
+    Json, Router,
+};
+use registry_platform_crypto::{
+    generate_private_jwk,
+    jws::{parse_compact_jws, JwsLimits},
+    parse_json_strict, GeneratedKeyAlgorithm, PrivateJwk, PublicJwk, SigningAlgorithm,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::{Ipv4Addr, TcpListener},
+    path::Path,
+    sync::{Arc, Mutex, Weak},
+    thread,
+    time::Duration,
+};
+use zeroize::Zeroizing;
+
+use super::{
+    clock,
+    issuer::Issuer,
+    plan::{self, Person, Plan, Product},
+    write_private, RunInput,
+};
+
+const ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+const FORM_LIMIT: usize = 16 * 1024;
+const ASSERTION_LIMIT: usize = 12 * 1024;
+const ASSERTION_LIFETIME_SECONDS: u64 = 300;
+const TOKEN_LIFETIME_SECONDS: u64 = 300;
+const CLOCK_LEEWAY_SECONDS: u64 = 5;
+const MAXIMUM_REPLAY_ENTRIES: usize = 256;
+
+#[derive(Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct Bindings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) breg_review_authority: Option<BregReviewAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) casework_context_provider: Option<CaseworkContextProvider>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(super) struct BregReviewAuthority {
+    pub(super) id: String,
+    pub(super) producer: String,
+    pub(super) person: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(super) struct CaseworkContextProvider {
+    pub(super) id: String,
+    pub(super) person: String,
+    pub(super) action: String,
+}
+
+impl Bindings {
+    pub(super) fn validate(&self, plan: &Plan) -> Result<()> {
+        if self.breg_review_authority.is_none() && self.casework_context_provider.is_none() {
+            return Ok(());
+        }
+        let breg = product_position(plan, Product::Breg);
+        let casework = product_position(plan, Product::Casework);
+        ensure!(
+            breg.is_some() && casework.is_some(),
+            "dev.yaml /bindings requires both BReg and Casework products"
+        );
+        ensure!(
+            breg < casework,
+            "dev.yaml /products must place BReg before Casework when /bindings is configured"
+        );
+
+        if let Some(binding) = &self.breg_review_authority {
+            ensure!(
+                plan::identifier(&binding.id),
+                "dev.yaml /bindings/bregReviewAuthority/id must be a local identifier"
+            );
+            ensure!(
+                plan::identifier(&binding.producer),
+                "dev.yaml /bindings/bregReviewAuthority/producer must be a local identifier"
+            );
+            require_machine_person(
+                plan,
+                &binding.person,
+                Product::Casework,
+                "/bindings/bregReviewAuthority/person",
+            )?;
+        }
+        if let Some(binding) = &self.casework_context_provider {
+            ensure!(
+                plan::identifier(&binding.id),
+                "dev.yaml /bindings/caseworkContextProvider/id must be a local identifier"
+            );
+            ensure!(
+                plan::identifier(&binding.action),
+                "dev.yaml /bindings/caseworkContextProvider/action must be a local identifier"
+            );
+            require_machine_person(
+                plan,
+                &binding.person,
+                Product::Breg,
+                "/bindings/caseworkContextProvider/person",
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn product_position(plan: &Plan, product: Product) -> Option<usize> {
+    plan.products
+        .iter()
+        .position(|entry| entry.product == product)
+}
+
+fn require_machine_person<'a>(
+    plan: &'a Plan,
+    alias: &str,
+    product: Product,
+    field: &str,
+) -> Result<&'a Person> {
+    ensure!(
+        plan::identifier(alias),
+        "dev.yaml {field} must be a test person alias"
+    );
+    let person = plan
+        .people
+        .get(alias)
+        .with_context(|| format!("dev.yaml {field} must name a test person"))?;
+    let grant = person.grants.get(&product).with_context(|| {
+        format!(
+            "dev.yaml {field} must name a person with a {} grant",
+            product.name()
+        )
+    })?;
+    ensure!(
+        !grant.scopes.is_empty(),
+        "dev.yaml {field} must name a person whose {} grant has a scope",
+        product.name()
+    );
+    Ok(person)
+}
+
+struct PreparedBinding {
+    client_id_ref: String,
+    client_assertion_key_ref: String,
+    person: String,
+    product: Product,
+}
+
+struct TokenServer {
+    endpoint: String,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for TokenServer {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct RuntimeBindings {
+    server: Option<TokenServer>,
+    breg_review: Option<PreparedBinding>,
+    casework_context: Option<PreparedBinding>,
+    input: Option<Arc<RunInput>>,
+    origins: BTreeMap<Product, String>,
+    // Kept outside the server state so Issuer's Tokio runtime is dropped on
+    // the supervisor thread, never from inside the token server's runtime.
+    _issuer: Option<Arc<Issuer>>,
+}
+
+impl RuntimeBindings {
+    pub(super) fn prepare(
+        root: &Path,
+        input: Arc<RunInput>,
+        issuer: Arc<Issuer>,
+        origins: &BTreeMap<Product, String>,
+    ) -> Result<Self> {
+        let bindings = &input.plan.bindings;
+        if bindings.breg_review_authority.is_none() && bindings.casework_context_provider.is_none()
+        {
+            return Ok(Self::default());
+        }
+        bindings.validate(&input.plan)?;
+        ensure!(
+            origins.contains_key(&Product::Breg) && origins.contains_key(&Product::Casework),
+            "run-local bindings require reserved BReg and Casework origins"
+        );
+
+        let mut clients = Vec::new();
+        let breg_review = bindings
+            .breg_review_authority
+            .as_ref()
+            .map(|binding| {
+                prepare_binding(
+                    root,
+                    &input,
+                    &binding.person,
+                    Product::Casework,
+                    "breg-review-client",
+                    &mut clients,
+                )
+            })
+            .transpose()?;
+        let casework_context = bindings
+            .casework_context_provider
+            .as_ref()
+            .map(|binding| {
+                prepare_binding(
+                    root,
+                    &input,
+                    &binding.person,
+                    Product::Breg,
+                    "casework-context-client",
+                    &mut clients,
+                )
+            })
+            .transpose()?;
+        let server = start_token_server(input.clone(), issuer.clone(), clients)?;
+        Ok(Self {
+            server: Some(server),
+            breg_review,
+            casework_context,
+            input: Some(input),
+            origins: origins.clone(),
+            _issuer: Some(issuer),
+        })
+    }
+
+    pub(super) fn configure(&self, product: Product, config: &mut Value) {
+        let Some(input) = self.input.as_ref() else {
+            return;
+        };
+        let endpoint = &self
+            .server
+            .as_ref()
+            .expect("prepared token server")
+            .endpoint;
+        match product {
+            Product::Breg => {
+                let (Some(binding), Some(prepared)) = (
+                    input.plan.bindings.breg_review_authority.as_ref(),
+                    self.breg_review.as_ref(),
+                ) else {
+                    return;
+                };
+                let person = &input.plan.people[&prepared.person];
+                let grant = &person.grants[&prepared.product];
+                config["reviewAuthorities"][binding.id.as_str()] = json!({
+                    "endpoint": self.origins[&Product::Casework],
+                    "profile": grant.profile,
+                    "privateKeyJwt": {
+                        "tokenEndpoint": endpoint,
+                        "clientIdRef": prepared.client_id_ref,
+                        "clientAssertionKeyRef": prepared.client_assertion_key_ref,
+                        "assertionAudience": input.plan.issuer,
+                        "resource": input.plan.product(Product::Casework).audience,
+                        "scopes": grant.scopes,
+                    },
+                    "producerId": binding.producer,
+                    "recoveryDays": 7,
+                });
+            }
+            Product::Casework => {
+                let (Some(binding), Some(prepared)) = (
+                    input.plan.bindings.casework_context_provider.as_ref(),
+                    self.casework_context.as_ref(),
+                ) else {
+                    return;
+                };
+                let person = &input.plan.people[&prepared.person];
+                let grant = &person.grants[&prepared.product];
+                config["contextProviders"][binding.id.as_str()] = json!({
+                    "baseUrl": self.origins[&Product::Breg],
+                    "statusProfile": grant.profile,
+                    "tokenEndpoint": endpoint,
+                    "clientAssertionAudience": input.plan.issuer,
+                    "resource": input.plan.product(Product::Breg).audience,
+                    "scopes": grant.scopes,
+                    "clientIdRef": prepared.client_id_ref,
+                    "clientAssertionKeyRef": prepared.client_assertion_key_ref,
+                });
+            }
+        }
+    }
+}
+
+fn prepare_binding(
+    root: &Path,
+    input: &RunInput,
+    person_alias: &str,
+    product: Product,
+    filename: &str,
+    clients: &mut Vec<MachineClient>,
+) -> Result<PreparedBinding> {
+    let person = require_machine_person(&input.plan, person_alias, product, "/bindings")?;
+    let grant = &person.grants[&product];
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256)?;
+    let public_key = key.public();
+    let key_name = format!("{filename}-key");
+    let id_name = format!("{filename}-id");
+    let encoded = encode_private_jwk(&key)?;
+    write_private(&root.join(&key_name), &encoded)?;
+    write_private(&root.join(&id_name), person.client.as_bytes())?;
+    clients.push(MachineClient {
+        client_id: person.client.clone(),
+        person: person_alias.to_owned(),
+        product,
+        public_key,
+        resource: input.plan.product(product).audience.clone(),
+        scope: grant.scopes.join(" "),
+    });
+    Ok(PreparedBinding {
+        client_id_ref: format!("secret:file/{id_name}"),
+        client_assertion_key_ref: format!("secret:file/{key_name}"),
+        person: person_alias.to_owned(),
+        product,
+    })
+}
+
+#[derive(Serialize)]
+struct PrivateJwkDocument<'a> {
+    kty: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kid: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alg: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crv: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    x: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    y: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    q: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dp: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dq: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qi: Option<&'a str>,
+}
+
+pub(super) fn encode_private_jwk(key: &PrivateJwk) -> Result<Zeroizing<Vec<u8>>> {
+    Ok(Zeroizing::new(serde_json::to_vec(&PrivateJwkDocument {
+        kty: &key.kty,
+        kid: key.kid.as_deref(),
+        alg: key.alg.as_deref(),
+        crv: key.crv.as_deref(),
+        d: key.d.as_deref(),
+        x: key.x.as_deref(),
+        y: key.y.as_deref(),
+        n: key.n.as_deref(),
+        e: key.e.as_deref(),
+        p: key.p.as_deref(),
+        q: key.q.as_deref(),
+        dp: key.dp.as_deref(),
+        dq: key.dq.as_deref(),
+        qi: key.qi.as_deref(),
+    })?))
+}
+
+struct MachineClient {
+    client_id: String,
+    person: String,
+    product: Product,
+    public_key: PublicJwk,
+    resource: String,
+    scope: String,
+}
+
+struct TokenState {
+    input: Arc<RunInput>,
+    issuer: Weak<Issuer>,
+    clients: Vec<MachineClient>,
+    audience: String,
+    replay: Mutex<BTreeMap<String, u64>>,
+}
+
+fn start_token_server(
+    input: Arc<RunInput>,
+    issuer: Arc<Issuer>,
+    clients: Vec<MachineClient>,
+) -> Result<TokenServer> {
+    ensure!(!clients.is_empty(), "a binding token client is required");
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .context("cannot bind the run-local token endpoint")?;
+    listener.set_nonblocking(true)?;
+    let origin = format!("http://{}", listener.local_addr()?);
+    let endpoint = format!("{origin}/oauth2/token");
+    let state = Arc::new(TokenState {
+        audience: input.plan.issuer.clone(),
+        input,
+        issuer: Arc::downgrade(&issuer),
+        clients,
+        replay: Mutex::new(BTreeMap::new()),
+    });
+    let app = Router::new()
+        .route("/oauth2/token", post(token))
+        .layer(DefaultBodyLimit::max(FORM_LIMIT))
+        .with_state(state);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let server_thread = thread::Builder::new()
+        .name("rstack-dev-token".to_owned())
+        .spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            runtime.block_on(async move {
+                let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
+                    return;
+                };
+                let _ = axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await;
+            });
+        })?;
+    Ok(TokenServer {
+        endpoint,
+        shutdown: Some(shutdown_tx),
+        thread: Some(server_thread),
+    })
+}
+
+async fn token(State(state): State<Arc<TokenState>>, headers: HeaderMap, body: Bytes) -> Response {
+    match tokio::time::timeout(Duration::from_secs(5), issue_token(state, headers, body)).await {
+        Ok(response) => response,
+        Err(_) => oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable"),
+    }
+}
+
+async fn issue_token(state: Arc<TokenState>, headers: HeaderMap, body: Bytes) -> Response {
+    if !headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|media| media.trim() == "application/x-www-form-urlencoded")
+        })
+        || body.len() > FORM_LIMIT
+        || !body.is_ascii()
+    {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let Some(form) = parse_form(&body) else {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if form.get("grant_type").map(String::as_str) != Some("client_credentials") {
+        return oauth_error(StatusCode::BAD_REQUEST, "unsupported_grant_type");
+    }
+    if form.get("client_assertion_type").map(String::as_str) != Some(ASSERTION_TYPE) {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    }
+    let (Some(client_id), Some(assertion), Some(resource), Some(scope)) = (
+        form.get("client_id"),
+        form.get("client_assertion"),
+        form.get("resource"),
+        form.get("scope"),
+    ) else {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    if assertion.len() > ASSERTION_LIMIT {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    }
+
+    let limits = JwsLimits {
+        max_compact_bytes: ASSERTION_LIMIT,
+        max_header_bytes: 1024,
+        max_payload_bytes: 2048,
+    };
+    let Ok(parsed) = parse_compact_jws(assertion, &limits) else {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    };
+    let Some(kid) = parsed.header().get("kid").and_then(Value::as_str) else {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    };
+    let Some(client) = state.clients.iter().find(|candidate| {
+        candidate.client_id == client_id.as_str()
+            && candidate.public_key.kid.as_deref() == Some(kid)
+            && candidate.resource == resource.as_str()
+            && candidate.scope == scope.as_str()
+    }) else {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    };
+    if parsed.header().len() != 3
+        || parsed.header().get("typ").and_then(Value::as_str) != Some("JWT")
+        || parsed.header().get("alg").and_then(Value::as_str) != Some("ES256")
+    {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    }
+    let Ok(payload) = parsed.verify(&client.public_key, &[SigningAlgorithm::Es256]) else {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    };
+    let Ok(payload) = parse_json_strict(payload) else {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    };
+    let Ok(claims) = serde_json::from_value::<AssertionClaims>(payload) else {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    };
+    let Ok(now) = clock() else {
+        return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
+    };
+    if claims.iss != client.client_id
+        || claims.sub != client.client_id
+        || claims.aud != state.audience
+        || claims.jti.is_empty()
+        || claims.jti.len() > 128
+        || claims
+            .jti
+            .chars()
+            .any(|value| value.is_control() || value.is_whitespace())
+        || claims.iat > now.saturating_add(CLOCK_LEEWAY_SECONDS)
+        || claims.exp <= now
+        || !(1..=ASSERTION_LIFETIME_SECONDS).contains(&claims.exp.saturating_sub(claims.iat))
+    {
+        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+    }
+    {
+        let Ok(mut replay) = state.replay.lock() else {
+            return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
+        };
+        replay.retain(|_, expiry| *expiry > now);
+        if replay.contains_key(&claims.jti) || replay.len() >= MAXIMUM_REPLAY_ENTRIES {
+            return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
+        }
+        replay.insert(claims.jti, claims.exp);
+    }
+    let Some(person) = state.input.plan.people.get(&client.person) else {
+        return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
+    };
+    let Some(issuer) = state.issuer.upgrade() else {
+        return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
+    };
+    let Ok(access_token) = issuer
+        .sign(
+            &state.input,
+            person,
+            client.product,
+            now.saturating_add(TOKEN_LIFETIME_SECONDS),
+        )
+        .await
+    else {
+        return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+        ],
+        Json(json!({
+            "access_token": &*access_token,
+            "token_type": "Bearer",
+            "expires_in": TOKEN_LIFETIME_SECONDS,
+        })),
+    )
+        .into_response()
+}
+
+fn parse_form(body: &[u8]) -> Option<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    let allowed = BTreeSet::from([
+        "grant_type",
+        "client_id",
+        "client_assertion_type",
+        "client_assertion",
+        "resource",
+        "scope",
+    ]);
+    for (name, value) in url::form_urlencoded::parse(body) {
+        if !allowed.contains(name.as_ref())
+            || values
+                .insert(name.into_owned(), value.into_owned())
+                .is_some()
+        {
+            return None;
+        }
+    }
+    (values.len() == allowed.len()).then_some(values)
+}
+
+fn oauth_error(status: StatusCode, error: &'static str) -> Response {
+    (
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({"error": error})),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssertionClaims {
+    iss: String,
+    sub: String,
+    aud: String,
+    iat: u64,
+    exp: u64,
+    jti: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project_dev::{
+        plan::{Grant, Journey, ProductPlan},
+        BregAuthority,
+    };
+    use registry_platform_crypto::{jws::sign_compact_jws, LocalJwkSigner, PrivateJwk};
+    use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
+    use serde_json::{Map, Value};
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    fn grant(profile: &str, scope: &str) -> Grant {
+        Grant {
+            profile: profile.to_owned(),
+            scopes: vec![scope.to_owned()],
+            claims: Map::new(),
+        }
+    }
+
+    fn plan() -> Plan {
+        Plan {
+            issuer: "https://identity.example.test/realms/dev".to_owned(),
+            products: vec![
+                ProductPlan {
+                    product: Product::Breg,
+                    project: PathBuf::from("registry"),
+                    audience: "urn:dev:breg".to_owned(),
+                },
+                ProductPlan {
+                    product: Product::Casework,
+                    project: PathBuf::from("casework"),
+                    audience: "urn:dev:casework".to_owned(),
+                },
+            ],
+            people: BTreeMap::from([
+                (
+                    "producer".to_owned(),
+                    Person {
+                        subject: "review-producer".to_owned(),
+                        client: "review-producer-client".to_owned(),
+                        grants: BTreeMap::from([(
+                            Product::Casework,
+                            grant("producer", "casework:review:produce"),
+                        )]),
+                        casework_context: false,
+                    },
+                ),
+                (
+                    "context-reader".to_owned(),
+                    Person {
+                        subject: "context-reader".to_owned(),
+                        client: "context-reader-client".to_owned(),
+                        grants: BTreeMap::from([(
+                            Product::Breg,
+                            grant("casework-review-status", "registry:proposal:review-status"),
+                        )]),
+                        casework_context: false,
+                    },
+                ),
+            ]),
+            bindings: Bindings {
+                breg_review_authority: Some(BregReviewAuthority {
+                    id: "casework".to_owned(),
+                    producer: "registry".to_owned(),
+                    person: "producer".to_owned(),
+                }),
+                casework_context_provider: Some(CaseworkContextProvider {
+                    id: "registry".to_owned(),
+                    person: "context-reader".to_owned(),
+                    action: "reviewed-change".to_owned(),
+                }),
+            },
+            journey: Journey {
+                id: "binding".to_owned(),
+                steps: Vec::new(),
+            },
+            schema_test_people: BTreeMap::new(),
+        }
+    }
+
+    fn input(plan: Plan) -> RunInput {
+        RunInput {
+            run_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            project: PathBuf::from("/tmp/project"),
+            plan,
+            ttl_seconds: 300,
+            schema_people: Vec::new(),
+            breg_authority: Some(BregAuthority {
+                principal: "sub".to_owned(),
+                purpose: false,
+                named_clients: BTreeSet::new(),
+            }),
+            casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),
+            binaries: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn validation_refuses_missing_grants_and_wrong_product_order() {
+        let mut value = plan();
+        value.products.reverse();
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(error.contains("/products"), "{error}");
+
+        let mut value = plan();
+        value.people.get_mut("producer").unwrap().grants.clear();
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(
+            error.contains("/bindings/bregReviewAuthority/person"),
+            "{error}"
+        );
+    }
+
+    async fn sign_assertion(
+        key: &PrivateJwk,
+        client: &str,
+        audience: &str,
+        issued_at: u64,
+        jti: &str,
+    ) -> String {
+        let signer = LocalJwkSigner::new(key.clone()).unwrap();
+        let claims = serde_json::to_vec(&json!({
+            "iss": client, "sub": client, "aud": audience,
+            "iat": issued_at, "exp": issued_at + 60, "jti": jti,
+        }))
+        .unwrap();
+        sign_compact_jws(
+            Map::from_iter([("typ".to_owned(), Value::String("JWT".to_owned()))]),
+            &claims,
+            &signer,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[test]
+    fn endpoint_accepts_one_assertion_and_refuses_replay_tampering_and_wrong_resource() {
+        let root = tempfile::tempdir().unwrap();
+        let input = Arc::new(input(plan()));
+        let issuer = Arc::new(Issuer::create(root.path()).unwrap());
+        let origins = BTreeMap::from([
+            (Product::Breg, "http://127.0.0.1:31001".to_owned()),
+            (Product::Casework, "http://127.0.0.1:31002".to_owned()),
+        ]);
+        let runtime =
+            RuntimeBindings::prepare(root.path(), input.clone(), issuer, &origins).unwrap();
+        let endpoint = runtime.server.as_ref().unwrap().endpoint.clone();
+        let encoded =
+            Zeroizing::new(std::fs::read(root.path().join("casework-context-client-key")).unwrap());
+        let key = PrivateJwk::parse(std::str::from_utf8(&encoded).unwrap()).unwrap();
+        let now = clock().unwrap();
+        let request_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let provider = PrivateKeyJwt::new(
+            PrivateKeyJwtConfig::new(
+                endpoint.parse().unwrap(),
+                "context-reader-client",
+                key.clone(),
+            )
+            .with_audience(input.plan.issuer.clone())
+            .with_resource("urn:dev:breg")
+            .with_scopes(vec!["registry:proposal:review-status".to_owned()]),
+        )
+        .unwrap();
+        request_runtime
+            .block_on(provider.bearer_token())
+            .expect("the maintained private-key JWT client obtains a token");
+
+        let assertion = request_runtime.block_on(sign_assertion(
+            &key,
+            "context-reader-client",
+            &input.plan.issuer,
+            now,
+            "assertion-once",
+        ));
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let form = [
+            ("grant_type", "client_credentials"),
+            ("client_id", "context-reader-client"),
+            ("client_assertion_type", ASSERTION_TYPE),
+            ("client_assertion", assertion.as_str()),
+            ("resource", "urn:dev:breg"),
+            ("scope", "registry:proposal:review-status"),
+        ];
+        let response = request_runtime
+            .block_on(client.post(&endpoint).form(&form).send())
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let replay = request_runtime
+            .block_on(client.post(&endpoint).form(&form).send())
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+
+        let mut tampered = assertion.clone().into_bytes();
+        let last = tampered.last_mut().unwrap();
+        *last = if *last == b'A' { b'B' } else { b'A' };
+        let tampered = String::from_utf8(tampered).unwrap();
+        let invalid = [
+            ("grant_type", "client_credentials"),
+            ("client_id", "context-reader-client"),
+            ("client_assertion_type", ASSERTION_TYPE),
+            ("client_assertion", tampered.as_str()),
+            ("resource", "urn:dev:breg"),
+            ("scope", "registry:proposal:review-status"),
+        ];
+        let response = request_runtime
+            .block_on(client.post(&endpoint).form(&invalid).send())
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let second = request_runtime.block_on(sign_assertion(
+            &key,
+            "context-reader-client",
+            &input.plan.issuer,
+            now,
+            "wrong-resource",
+        ));
+        let wrong = [
+            ("grant_type", "client_credentials"),
+            ("client_id", "context-reader-client"),
+            ("client_assertion_type", ASSERTION_TYPE),
+            ("client_assertion", second.as_str()),
+            ("resource", "urn:dev:casework"),
+            ("scope", "registry:proposal:review-status"),
+        ];
+        let response = request_runtime
+            .block_on(client.post(&endpoint).form(&wrong).send())
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn configure_writes_native_product_bindings() {
+        let root = tempfile::tempdir().unwrap();
+        let input = Arc::new(input(plan()));
+        let issuer = Arc::new(Issuer::create(root.path()).unwrap());
+        let origins = BTreeMap::from([
+            (Product::Breg, "http://127.0.0.1:31001".to_owned()),
+            (Product::Casework, "http://127.0.0.1:31002".to_owned()),
+        ]);
+        let runtime = RuntimeBindings::prepare(root.path(), input, issuer, &origins).unwrap();
+        let mut breg = json!({});
+        runtime.configure(Product::Breg, &mut breg);
+        assert_eq!(
+            breg["reviewAuthorities"]["casework"]["endpoint"],
+            "http://127.0.0.1:31002"
+        );
+        assert_eq!(
+            breg["reviewAuthorities"]["casework"]["privateKeyJwt"]["resource"],
+            "urn:dev:casework"
+        );
+        assert!(breg["reviewAuthorities"]["casework"]["tokenRef"].is_null());
+
+        let mut casework = json!({});
+        runtime.configure(Product::Casework, &mut casework);
+        assert_eq!(
+            casework["contextProviders"]["registry"]["baseUrl"],
+            "http://127.0.0.1:31001"
+        );
+        assert_eq!(
+            casework["contextProviders"]["registry"]["statusProfile"],
+            "casework-review-status"
+        );
+    }
+}

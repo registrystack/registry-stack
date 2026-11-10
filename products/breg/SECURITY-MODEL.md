@@ -461,6 +461,12 @@ mitigation, and related matrix IDs.
 - `database.testOnlyPlaintext` exists only in test builds; a release binary
   refuses it with `breg.runtime.plaintext-database`.
 
+`rstack dev` can instead activate BReg as part of an isolated project run.
+It uses the normal package and database activation checks, distinct TLS
+PostgreSQL credentials, and a loopback listener. The runtime trusts the
+run's static signing key under the declared issuer name. See
+[Run isolation](../platform/PROJECT-DEV.md#run-isolation).
+
 ## 5. Reporting
 
 Report vulnerabilities privately as described in [SECURITY.md](../../SECURITY.md).

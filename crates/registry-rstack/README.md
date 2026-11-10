@@ -100,6 +100,12 @@ from the products' own configuration and one operator deployment file, and
 `rstack identity check FILE` checks that file or a product's identity facts
 offline. See [Generate ThunderID configuration](../../docs/site/src/content/docs/operate/advanced/generate-identity-configuration.mdx).
 
+## Develop a composed project
+
+Run BReg and Casework together with `rstack dev start PROJECT` against a
+dedicated TLS PostgreSQL server. The project's `dev.yaml` declares the
+products, test people and journey. See [Run a project for development](../../products/platform/PROJECT-DEV.md).
+
 ## Command migration
 
 | Previous local command | Managed command |

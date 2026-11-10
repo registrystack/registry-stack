@@ -1945,6 +1945,8 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/tutorial-runner/toolsets.mjs",
             "docs/site/src/content/docs/tutorials/first-casework.mdx",
             "docs/site/package.json",
+            "products/platform/examples/licensing/dev.yaml",
+            "products/platform/scripts/test-rstack-dev.py",
         )
         for path in infrastructure:
             with self.subTest(path=path):

@@ -197,6 +197,37 @@ impl<'a> Grant<'a> {
     }
 }
 
+fn compiled_grants(compiled: &CompiledRegistry) -> impl Iterator<Item = Grant<'_>> {
+    let entity_grants = compiled
+        .entities()
+        .values()
+        .flat_map(|entity| entity.access_profiles.values().map(Grant::profile));
+    let dataset_grants = compiled
+        .statistical_datasets()
+        .values()
+        .flat_map(|dataset| dataset.access_profiles.values().map(Grant::profile));
+    let action_grants = compiled.actions().actions.iter().flat_map(|action| {
+        let proposal = match &action.execution {
+            CompiledActionExecution::Proposal { proposal } => proposal.permissions.as_slice(),
+            CompiledActionExecution::Immediate => &[],
+        };
+        action
+            .permissions
+            .iter()
+            .map(Grant::action)
+            .chain(proposal.iter().map(Grant::proposal))
+    });
+    entity_grants.chain(dataset_grants).chain(action_grants)
+}
+
+/// Clients the runtime must list even if no fixture mints tokens for them.
+pub(crate) fn named_requester_clients(compiled: &CompiledRegistry) -> BTreeSet<String> {
+    compiled_grants(compiled)
+        .flat_map(|grant| grant.requester_clients)
+        .chain(compiled.recipients().clients().map(str::to_owned))
+        .collect()
+}
+
 /// The claims BReg refuses a token for a grant without, apart from the
 /// subject every token carries and the reserved consent claims the engine
 /// fills from the verified client.
@@ -286,26 +317,7 @@ pub(crate) fn facts(
 
     let mut profiles: BTreeMap<String, FactsProfile> = BTreeMap::new();
     let mut omitted_agent_profiles = BTreeSet::new();
-    let entity_grants = compiled
-        .entities()
-        .values()
-        .flat_map(|entity| entity.access_profiles.values().map(Grant::profile));
-    let dataset_grants = compiled
-        .statistical_datasets()
-        .values()
-        .flat_map(|dataset| dataset.access_profiles.values().map(Grant::profile));
-    let action_grants = compiled.actions().actions.iter().flat_map(|action| {
-        let proposal = match &action.execution {
-            CompiledActionExecution::Proposal { proposal } => proposal.permissions.as_slice(),
-            CompiledActionExecution::Immediate => &[],
-        };
-        action
-            .permissions
-            .iter()
-            .map(Grant::action)
-            .chain(proposal.iter().map(Grant::proposal))
-    });
-    for grant in entity_grants.chain(dataset_grants).chain(action_grants) {
+    for grant in compiled_grants(compiled) {
         if grant.actor_kind == Some(ActorKindSource::Agent) {
             omitted_agent_profiles.insert(grant.id.to_owned());
             continue;

@@ -32,6 +32,10 @@ const EXAMPLES: &[(&str, &str)] = &[
         "products/breg/acceptance/facility/dev-clients.yaml",
     ),
     (
+        "project-dev.v1alpha1.schema.json",
+        "products/platform/examples/licensing/dev.yaml",
+    ),
+    (
         "example-scenarios.v1alpha1.schema.json",
         "products/breg/examples/minimal/examples/scenarios.json",
     ),
@@ -401,13 +405,14 @@ fn a_wrong_header_a_missing_header_and_an_explicit_null_are_refused() {
 }
 
 /// The identifiers the catalog records, in file-name order.
-const IDENTIFIERS: [&str; 7] = [
+const IDENTIFIERS: [&str; 8] = [
     "https://id.registrystack.org/schemas/breg/backup-binding/backup-binding.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/example-scenarios/example-scenarios.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json",
     "https://id.registrystack.org/schemas/breg/migration-descriptor/migration-descriptor.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json",
+    "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/schema-test-credentials/schema-test-credentials.v1.schema.json",
 ];
 

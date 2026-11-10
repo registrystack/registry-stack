@@ -331,6 +331,7 @@ tempfile = { version = "3" }
 thiserror = { version = "2" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+postgres-protocol = "=0.6.12"
 tokio-postgres = { version = "=0.7.18", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-postgres-rustls = { version = "=0.14.0", default-features = false, features = ["ring", "native-certs"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

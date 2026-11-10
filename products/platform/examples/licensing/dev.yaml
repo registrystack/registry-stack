@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/project-dev/v1alpha1
+kind: ProjectDevPlan
+issuer: https://identity.licensing.example.test
+products:
+  - {product: breg, project: registry, audience: "urn:example:licensing:registry"}
+  - {product: casework, project: casework, audience: "urn:example:licensing:review"}
+people:
+  applicant:
+    subject: applicant
+    client: applicant-portal
+    grants:
+      breg:
+        profile: applicant
+        scopes: ["licensing:apply"]
+        claims: {application_reference: application-001, registry_actor_kind: human}
+  intake:
+    subject: intake
+    client: licensing-intake
+    grants:
+      casework:
+        profile: intake
+        scopes: ["casework:intake"]
+        claims: {registry_actor_kind: service}
+  administrator:
+    subject: administrator
+    client: licensing-workbench
+    grants:
+      casework:
+        profile: administrator
+        scopes: ["casework:admin"]
+        claims: {registry_actor_kind: human}
+  reviewer:
+    subject: reviewer
+    client: licensing-workbench
+    grants:
+      casework:
+        profile: reviewer
+        scopes: ["casework:review"]
+        claims: {registry_actor_kind: human}
+journey:
+  id: licensing-approval
+  steps:
+    - id: create-application
+      product: breg
+      as: applicant
+      method: POST
+      path: /v1/records/applications
+      headers: {Idempotency-Key: create-application}
+      body: {data: {reference: application-001, profession: Surveyor}}
+      expect: {status: 201}
+      capture: {application: /data/recordIdentifier}
+    - id: staff-review-queue
+      product: casework
+      as: administrator
+      method: POST
+      path: /v1/directory/bootstrap
+      headers: {If-Match: '"0"', Idempotency-Key: staff-review-queue}
+      body:
+        teamId: licensing-reviewers
+        staff: [{issuer: https://identity.licensing.example.test, subject: reviewer}]
+        supervisors: []
+        queueId: applications
+      expect: {status: 200}
+    - id: request-approval
+      product: casework
+      as: intake
+      method: POST
+      path: /v1/review-requests
+      headers: {Idempotency-Key: request-approval}
+      body:
+        policy: {id: licensing-approval}
+        subject:
+          source: licensing
+          type: application
+          id: "{{application}}"
+          version: "1"
+          # SHA-256 of the synthetic submitted snapshot's canonical JSON.
+          digest: "sha256:847c1042e1013e5b80dc8bdb7c021b584be3a7b778a4f242e42777b07539b9e5"
+        requesterReference: application-001
+        initiator: {issuer: https://identity.licensing.example.test, subject: applicant}
+        context:
+          mode: submitted
+          snapshot: {reference: application-001, profession: Surveyor}
+      expect: {status: 201}
+      capture: {request: /requestId}
+    - id: find-review-task
+      product: casework
+      as: reviewer
+      method: GET
+      path: /v1/review-tasks?queue=applications
+      expect: {status: 200, json: {/items/0/requestId: "{{request}}"}}
+      capture: {task: /items/0/taskId, task-revision: /items/0/revision}
+    - id: claim-review
+      product: casework
+      as: reviewer
+      method: POST
+      path: "/v1/review-tasks/{{task}}/claim"
+      headers: {If-Match: '"{{task-revision}}"', Idempotency-Key: claim-review}
+      expect: {status: 200}
+      capture: {claim-revision: /revision}
+    - id: approve-application
+      product: casework
+      as: reviewer
+      method: POST
+      path: "/v1/review-tasks/{{task}}/decisions"
+      headers: {If-Match: '"{{claim-revision}}"', Idempotency-Key: approve-application}
+      body: {decision: {type: approve, outcome: approved}}
+      expect: {status: 204}
+    - id: read-approval
+      product: casework
+      as: intake
+      method: GET
+      path: "/v1/review-requests/{{request}}/result"
+      expect:
+        status: 200
+        json:
+          /subject/id: "{{application}}"
+          /status: approved
+          /outcome: approved

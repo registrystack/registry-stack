@@ -192,6 +192,13 @@ Deployment behavior is in the [README](README.md),
   keys with a static `jwksSource`.
 - **Related:** CASEWORK-SEC-01.
 
+`rstack dev` uses a loopback listener and a private static key pin for each
+development run. The shared issuer gives a named synthetic person only
+the scopes and additional claims declared in their Casework grant. A
+reviewer token forwarded to BReg uses authority explicitly declared in both
+grants. Casework applies its usual client, profile, and human-identity checks. See
+[Run isolation](../platform/PROJECT-DEV.md#run-isolation).
+
 ### CASEWORK-RES-09: key refusal is by `kid`, locally, at startup
 
 - **Condition:** `authentication.oidc.revokedKeyIds` lists a compromised or

@@ -1,0 +1,464 @@
+{
+  "$defs": {
+    "Bindings": {
+      "additionalProperties": false,
+      "properties": {
+        "bregReviewAuthority": {
+          "$ref": "#/$defs/BregReviewAuthority"
+        },
+        "caseworkContextProvider": {
+          "$ref": "#/$defs/CaseworkContextProvider"
+        }
+      },
+      "type": "object"
+    },
+    "BregReviewAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "person": {
+          "type": "string"
+        },
+        "producer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "producer",
+        "person"
+      ],
+      "type": "object"
+    },
+    "Capture": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/HeaderCapture"
+        },
+        {
+          "$ref": "#/$defs/FindCapture"
+        },
+        {
+          "$ref": "#/$defs/ValueCapture"
+        }
+      ]
+    },
+    "CapturedHeader": {
+      "enum": [
+        "etag"
+      ],
+      "type": "string"
+    },
+    "CaseworkContextProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "person": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "person",
+        "action"
+      ],
+      "type": "object"
+    },
+    "Check": {
+      "additionalProperties": false,
+      "properties": {
+        "contains": true,
+        "equals": true,
+        "length": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pointer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pointer"
+      ],
+      "type": "object"
+    },
+    "Expected": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Check"
+          },
+          "type": "array"
+        },
+        "code": {
+          "type": "string"
+        },
+        "json": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "status": {
+          "$ref": "#/$defs/ExpectedStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "ExpectedStatus": {
+      "anyOf": [
+        {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "FindCapture": {
+      "additionalProperties": false,
+      "properties": {
+        "find": {
+          "type": "string"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "where": {
+          "$ref": "#/$defs/FindWhere"
+        }
+      },
+      "required": [
+        "find",
+        "where",
+        "pointer"
+      ],
+      "type": "object"
+    },
+    "FindWhere": {
+      "additionalProperties": false,
+      "properties": {
+        "equals": true,
+        "pointer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pointer",
+        "equals"
+      ],
+      "type": "object"
+    },
+    "Grant": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "profile",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "HeaderCapture": {
+      "additionalProperties": false,
+      "properties": {
+        "header": {
+          "$ref": "#/$defs/CapturedHeader"
+        }
+      },
+      "required": [
+        "header"
+      ],
+      "type": "object"
+    },
+    "Journey": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "Method": {
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ],
+      "type": "string"
+    },
+    "Person": {
+      "additionalProperties": false,
+      "properties": {
+        "caseworkContext": {
+          "default": false,
+          "description": "Forward the same authority to both products. Both grants must declare the same scopes and additional claims.",
+          "type": "boolean"
+        },
+        "client": {
+          "type": "string"
+        },
+        "grants": {
+          "additionalProperties": false,
+          "properties": {
+            "breg": {
+              "$ref": "#/$defs/Grant"
+            },
+            "casework": {
+              "$ref": "#/$defs/Grant"
+            }
+          },
+          "type": "object"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "client",
+        "grants"
+      ],
+      "type": "object"
+    },
+    "Poll": {
+      "additionalProperties": false,
+      "properties": {
+        "intervalMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeoutMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "timeoutMs",
+        "intervalMs"
+      ],
+      "type": "object"
+    },
+    "Product": {
+      "enum": [
+        "breg",
+        "casework"
+      ],
+      "type": "string"
+    },
+    "ProductPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "product": {
+          "$ref": "#/$defs/Product"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product",
+        "project",
+        "audience"
+      ],
+      "type": "object"
+    },
+    "RawBody": {
+      "additionalProperties": false,
+      "properties": {
+        "base64": {
+          "type": "string"
+        },
+        "contentType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contentType",
+        "base64"
+      ],
+      "type": "object"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "properties": {
+        "as": {
+          "type": "string"
+        },
+        "body": true,
+        "capture": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Capture"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "expect": {
+          "$ref": "#/$defs/Expected"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "method": {
+          "$ref": "#/$defs/Method"
+        },
+        "path": {
+          "type": "string"
+        },
+        "poll": {
+          "$ref": "#/$defs/Poll"
+        },
+        "product": {
+          "$ref": "#/$defs/Product"
+        },
+        "raw": {
+          "$ref": "#/$defs/RawBody"
+        }
+      },
+      "required": [
+        "id",
+        "product",
+        "as",
+        "method",
+        "path",
+        "expect"
+      ],
+      "type": "object"
+    },
+    "ValueCapture": {
+      "additionalProperties": false,
+      "properties": {
+        "pointer": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pointer"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/project-dev/v1alpha1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "bindings": {
+      "$ref": "#/$defs/Bindings",
+      "default": {}
+    },
+    "issuer": {
+      "type": "string"
+    },
+    "journey": {
+      "$ref": "#/$defs/Journey"
+    },
+    "kind": {
+      "const": "ProjectDevPlan",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    },
+    "people": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Person"
+      },
+      "type": "object"
+    },
+    "products": {
+      "items": {
+        "$ref": "#/$defs/ProductPlan"
+      },
+      "type": "array"
+    },
+    "schemaTestPeople": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "default": {},
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "issuer",
+    "products",
+    "people",
+    "journey"
+  ],
+  "title": "Registry Stack project development plan",
+  "type": "object"
+}

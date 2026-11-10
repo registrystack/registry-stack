@@ -5,6 +5,7 @@ use crate::install::{self, BootstrapOptions};
 use crate::store::{GenerationStore, InvocationLease};
 use crate::ReleaseManifest;
 use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::fs;
@@ -153,8 +154,86 @@ enum Command {
         #[command(subcommand)]
         command: IdentityCommand,
     },
+    /// Run and inspect a local Registry Stack development environment.
+    Dev {
+        #[command(subcommand)]
+        command: DevCommand,
+    },
     #[command(external_subcommand)]
     Product(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum DevCommand {
+    /// Start a development environment for a registry project.
+    Start {
+        /// Project directory containing dev.yaml.
+        #[arg(value_name = "PROJECT")]
+        project: PathBuf,
+        /// TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL.
+        #[arg(long, value_name = "URL")]
+        database_url: Option<String>,
+        /// Lifetime after readiness, from 1s to 24h. Defaults to 30m.
+        #[arg(long, value_name = "DURATION")]
+        ttl: Option<String>,
+        /// Emit the runner's JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report the state of a development environment.
+    Status {
+        /// Run ID returned by rstack dev start.
+        #[arg(value_name = "RUN_ID")]
+        run_id: String,
+        /// Emit the runner's JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Issue a development token for one named synthetic person.
+    Token {
+        /// Run ID returned by rstack dev start.
+        #[arg(value_name = "RUN_ID")]
+        run_id: String,
+        /// Synthetic person configured by the project.
+        #[arg(long = "as", value_name = "NAME")]
+        person: String,
+        /// Emit the runner's JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop a development environment.
+    Stop {
+        /// Run ID returned by rstack dev start.
+        #[arg(value_name = "RUN_ID")]
+        run_id: String,
+        /// Emit the runner's JSON report.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum DevRequest<'a> {
+    Start {
+        project: &'a std::path::Path,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ttl: Option<&'a str>,
+        json: bool,
+    },
+    Status {
+        run_id: &'a str,
+        json: bool,
+    },
+    Token {
+        run_id: &'a str,
+        person: &'a str,
+        json: bool,
+    },
+    Stop {
+        run_id: &'a str,
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -548,6 +627,7 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
             ReportFormat::Human => {
                 reportln!("rstack <product> <action> [options]");
                 reportln!("Use rstack help <product> for offline product help.");
+                reportln!("Use rstack dev --help for local development commands.");
                 reportln!("Use rstack components list to inspect installation availability.");
                 reportln!("Products: {}", PRODUCTS.join(", "));
             }
@@ -691,6 +771,7 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
                 PRODUCTS.join(" ")
             );
         }
+        Some(Command::Dev { command }) => dispatch_dev(&cli, command, format)?,
         Some(Command::Identity { command }) => match command {
             IdentityCommand::Generate {
                 target: IdentityTarget::Thunderid(arguments),
@@ -1239,6 +1320,155 @@ fn first_path_rstack() -> Option<PathBuf> {
     None
 }
 
+fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
+    let launcher_json = matches!(format, ReportFormat::Json);
+    let (request, database_url, needs_services) = match action {
+        DevCommand::Start {
+            project,
+            database_url,
+            ttl,
+            json,
+        } => (
+            DevRequest::Start {
+                project,
+                ttl: ttl.as_deref(),
+                json: *json || launcher_json,
+            },
+            database_url.as_deref(),
+            true,
+        ),
+        DevCommand::Status { run_id, json } => (
+            DevRequest::Status {
+                run_id,
+                json: *json || launcher_json,
+            },
+            None,
+            false,
+        ),
+        DevCommand::Token {
+            run_id,
+            person,
+            json,
+        } => (
+            DevRequest::Token {
+                run_id,
+                person,
+                json: *json || launcher_json,
+            },
+            None,
+            false,
+        ),
+        DevCommand::Stop { run_id, json } => (
+            DevRequest::Stop {
+                run_id,
+                json: *json || launcher_json,
+            },
+            None,
+            false,
+        ),
+    };
+    let request = serde_json::to_string(&request).map_err(|error| {
+        CliFailure::operational(format!("cannot encode development request: {error}"))
+    })?;
+
+    let selected = selected_state(cli)?;
+    let (mut command, lease) = if let Some((lease, selection, manifest)) = selected {
+        let required_components = if needs_services {
+            &["breg", "casework"][..]
+        } else {
+            &["breg"][..]
+        };
+        for component in required_components {
+            if !selection.components.iter().any(|name| name == component) {
+                return Err(CliFailure::domain(format!(
+                    "component {component} is missing; run rstack install {component}"
+                )));
+            }
+        }
+        let executable = lease.path().join("components/breg/bregctl/bregctl");
+        if !executable.is_file() {
+            return Err(CliFailure::operational(
+                "selected BReg helper is missing".into(),
+            ));
+        }
+        let mut command = ProcessCommand::new(executable);
+        set_selected_generation_environment(&mut command, lease.path(), &selection, &manifest)?;
+        let required_variables = if needs_services {
+            &[
+                "RSTACK_BREGCTL_BIN",
+                "RSTACK_BREG_BIN",
+                "RSTACK_CASEWORKCTL_BIN",
+                "RSTACK_CASEWORK_BIN",
+            ][..]
+        } else {
+            &["RSTACK_BREGCTL_BIN"][..]
+        };
+        let missing: Vec<_> = required_variables
+            .iter()
+            .filter(|variable| {
+                !command.get_envs().any(|(name, value)| {
+                    name == std::ffi::OsStr::new(**variable) && value.is_some()
+                })
+            })
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            return Err(CliFailure::operational(format!(
+                "selected release lacks development binaries for {}",
+                missing.join(", ")
+            )));
+        }
+        (command, Some(lease))
+    } else {
+        let variables = if needs_services {
+            &[
+                "RSTACK_BREGCTL_BIN",
+                "RSTACK_BREG_BIN",
+                "RSTACK_CASEWORKCTL_BIN",
+                "RSTACK_CASEWORK_BIN",
+            ][..]
+        } else {
+            &["RSTACK_BREGCTL_BIN"][..]
+        };
+        let mut paths = Vec::with_capacity(variables.len());
+        let mut missing = Vec::new();
+        for variable in variables {
+            let path = std::env::var_os(variable)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from);
+            match path {
+                Some(path) if path.is_file() => paths.push((*variable, path)),
+                _ => missing.push(*variable),
+            }
+        }
+        if !missing.is_empty() {
+            return Err(CliFailure::domain(format!(
+                "without a managed installation, rstack dev requires existing source binary overrides: {}",
+                missing.join(", ")
+            )));
+        }
+        let mut command = ProcessCommand::new(&paths[0].1);
+        for (variable, path) in paths {
+            command.env(variable, path);
+        }
+        (command, None)
+    };
+
+    command
+        .arg("project-dev")
+        .env("RSTACK_PROJECT_DEV_REQUEST", request);
+    if let Some(database_url) = database_url {
+        command.env("RSTACK_DEV_DATABASE_URL", database_url);
+    }
+    if let Some(lease) = &lease {
+        inherit_invocation_lease(lease)?;
+    }
+    Err(CliFailure::operational(format!(
+        "cannot launch development helper: {}",
+        command.exec()
+    )))
+}
+
 fn dispatch_product(
     cli: &Cli,
     product: &str,
@@ -1312,6 +1542,14 @@ fn dispatch_product(
     } else {
         command.args(arguments);
     }
+    inherit_invocation_lease(&lease)?;
+    Err(CliFailure::operational(format!(
+        "cannot launch {product}: {}",
+        command.exec()
+    )))
+}
+
+fn inherit_invocation_lease(lease: &InvocationLease) -> Result<(), CliFailure> {
     let mut flags = rustix::io::fcntl_getfd(lease.lease_file()).map_err(|error| {
         CliFailure::operational(format!("cannot inspect invocation lease: {error}"))
     })?;
@@ -1319,10 +1557,7 @@ fn dispatch_product(
     rustix::io::fcntl_setfd(lease.lease_file(), flags).map_err(|error| {
         CliFailure::operational(format!("cannot inherit invocation lease: {error}"))
     })?;
-    Err(CliFailure::operational(format!(
-        "cannot launch {product}: {}",
-        command.exec()
-    )))
+    Ok(())
 }
 
 /// Put a launcher report format before the first native Evidence runtime token

@@ -62,6 +62,7 @@ mod instance_claim_lifecycle;
 mod module_lock_patch;
 mod package_inspection;
 mod package_lifecycle;
+mod project_dev;
 mod proposal_retention;
 mod reconcile_lifecycle;
 mod report;
@@ -225,6 +226,8 @@ enum Command {
     Examples(dev::examples::ExamplesArgs),
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
+    #[command(name = "project-dev", hide = true)]
+    ProjectDev(project_dev::Args),
     /// Explain compiled model, access, route, or event inventories.
     Explain(ExplainArgs),
     /// Compare an authoring candidate with a rederived closed package.
@@ -2901,6 +2904,9 @@ where
                     ExitCode::from(OPERATIONAL_FAILURE_EXIT)
                 }
             };
+        }
+        Command::ProjectDev(args) => {
+            return ExitCode::from(project_dev::run(args, stdout, stderr));
         }
         Command::Init(args) => match (args.from, args.template.as_deref()) {
             (None, None) => init(&args.destination),
