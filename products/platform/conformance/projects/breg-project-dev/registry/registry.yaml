@@ -1,1 +1,66 @@
-# This file establishes the referenced product root for development-plan checks.
+# This deliberately small product is compiled by `rstack dev check`; it has no
+# journeys fixture because the conformance plan has no explicit assignments.
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: conformance-registry
+  canonicalBaseIri: https://registry.example.invalid
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: Conformance registry
+    description: Minimal product for the development-plan conformance corpus.
+package:
+  sourceRevision: conformance-registry-0.1.0
+datasets:
+  - id: records
+    display: {label: Records, description: Conformance records.}
+reviewAuthorities:
+  - id: local-review
+    protocol: id.registrystack.org/protocols/review/v1
+    display: {label: Local review, description: Review authority used by development-plan checks.}
+recordTypes:
+  - id: record
+    route: records
+    primaryDataset: records
+    mutationMode: mutable
+    display: {label: Record, description: A conformance record.}
+    fields:
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: internal}
+      - {id: owner, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: internal}
+actions:
+  - id: review-action
+    display: {label: Review action, description: Create one conformance record.}
+    execution: {mode: immediate}
+    inputs:
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: internal}
+      - {id: owner, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: record
+          target: {recordType: record}
+          operation: create
+          set:
+            name: {fromInput: name}
+            owner: {fromInput: owner}
+accessProfiles:
+  - id: operator
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
+    permissions:
+      records:
+        - recordType: record
+          operations: [get, list]
+          readableFields: [name, owner]
+          rowBoundaries:
+            - {field: owner, claim: registry_principal, operator: equals}
+      actions:
+        - action: review-action
+          operations: [invoke]
+          targets:
+            - recordType: record
+              rowBoundaries:
+                - {field: owner, claim: registry_principal, operator: equals}
+          results: [record]

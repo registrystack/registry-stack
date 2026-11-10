@@ -289,6 +289,21 @@ fn check(
         Err(error) => match error.downcast::<Report>() {
             Ok(report) => (report, crate::DOMAIN_REFUSAL_EXIT),
             Err(error) => {
+                if let Some(unavailable) = error.downcast_ref::<products::InspectionUnavailable>() {
+                    let report = Report::new(vec![Diagnostic::error(
+                        "breg.project-dev.check-unavailable",
+                        unavailable.field(),
+                        unavailable.reason(),
+                        unavailable.remedy(),
+                    )]);
+                    return write_check_report(
+                        report,
+                        crate::OPERATIONAL_FAILURE_EXIT,
+                        machine,
+                        stdout,
+                        stderr,
+                    );
+                }
                 let (code, action, exit) = if error.is::<io::Error>() {
                     (
                         "breg.project-dev.check-unavailable",
@@ -309,6 +324,16 @@ fn check(
             }
         },
     };
+    write_check_report(report, exit, machine, stdout, stderr)
+}
+
+fn write_check_report(
+    report: Report,
+    exit: u8,
+    machine: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> u8 {
     let result = if machine {
         let payload = json!({
             "ok": exit == 0,
@@ -339,10 +364,8 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
         .context("cannot open the development project directory")?;
     let plan = plan::load(&project)?;
     let schema_people = products::schema_people(&project, &plan, true)?;
-    let breg_authority = products::breg_authority(&project, &plan)?;
     let signals = signals()?;
-    let casework_principals =
-        products::casework_principals(&project, &plan, breg_authority.as_ref(), &signals)?;
+    let inspection = products::inspect(&project, &plan, &signals)?;
     let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
     ensure!(
         env::var_os(DATABASE_URL).is_some_and(|value| !value.is_empty()),
@@ -364,8 +387,8 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
         plan,
         ttl_seconds,
         schema_people,
-        breg_authority,
-        casework_principals,
+        breg_authority: inspection.breg_authority,
+        casework_principals: inspection.casework_principals,
         binaries,
     };
     let preparation = (|| {
@@ -701,25 +724,33 @@ fn stopping(root: &Path, signals: &AtomicBool) -> bool {
     signals.load(Ordering::Relaxed) || root.join("stop").exists()
 }
 
+fn binary(name: &str) -> Result<PathBuf> {
+    let path = env::var_os(name)
+        .map(PathBuf::from)
+        .with_context(|| format!("{name} is required for the development run"))?;
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("cannot resolve {name}"))?;
+    ensure!(path.is_file(), "{name} must be a binary file");
+    Ok(path)
+}
+
+fn product_tool(product: Product) -> Result<PathBuf> {
+    binary(match product {
+        Product::Breg => "RSTACK_BREGCTL_BIN",
+        Product::Casework => "RSTACK_CASEWORKCTL_BIN",
+    })
+}
+
 fn binaries(product: Product) -> Result<Binaries> {
-    let get = |name: &str| -> Result<PathBuf> {
-        let path = env::var_os(name)
-            .map(PathBuf::from)
-            .with_context(|| format!("{name} is required for the development run"))?;
-        let path = path
-            .canonicalize()
-            .with_context(|| format!("cannot resolve {name}"))?;
-        ensure!(path.is_file(), "{name} must be a binary file");
-        Ok(path)
-    };
     Ok(match product {
         Product::Breg => Binaries {
-            tool: get("RSTACK_BREGCTL_BIN")?,
-            runtime: get("RSTACK_BREG_BIN")?,
+            tool: product_tool(product)?,
+            runtime: binary("RSTACK_BREG_BIN")?,
         },
         Product::Casework => Binaries {
-            tool: get("RSTACK_CASEWORKCTL_BIN")?,
-            runtime: get("RSTACK_CASEWORK_BIN")?,
+            tool: product_tool(product)?,
+            runtime: binary("RSTACK_CASEWORK_BIN")?,
         },
     })
 }

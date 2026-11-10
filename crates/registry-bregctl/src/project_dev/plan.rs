@@ -474,6 +474,20 @@ pub(super) struct SemanticRefusal {
     remedy: String,
 }
 
+impl SemanticRefusal {
+    pub(super) fn new(
+        field: impl Into<String>,
+        reason: impl Into<String>,
+        remedy: impl Into<String>,
+    ) -> Self {
+        Self {
+            field: field.into(),
+            reason: reason.into(),
+            remedy: remedy.into(),
+        }
+    }
+}
+
 pub(super) type SemanticResult<T> = std::result::Result<T, SemanticRefusal>;
 
 pub(super) fn require(
@@ -483,21 +497,13 @@ pub(super) fn require(
     remedy: impl Into<String>,
 ) -> SemanticResult<()> {
     if !condition {
-        return Err(SemanticRefusal {
-            field: field.to_owned(),
-            reason: reason.into(),
-            remedy: remedy.into(),
-        });
+        return Err(SemanticRefusal::new(field, reason, remedy));
     }
     Ok(())
 }
 
 pub(super) fn refuse<T>(field: &str, reason: &str, remedy: &str) -> SemanticResult<T> {
-    Err(SemanticRefusal {
-        field: field.to_owned(),
-        reason: reason.to_owned(),
-        remedy: remedy.to_owned(),
-    })
+    Err(SemanticRefusal::new(field, reason, remedy))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -566,6 +572,13 @@ pub(crate) fn check(root: &Path) -> Result<Report> {
     validate_plan(root, &decoded)?;
     if let Err(refusal) = super::products::schema_people(root, &decoded.value, false) {
         return Err(refusal_report(&decoded, &refusal).into());
+    }
+    let terminate = super::signals()?;
+    if let Err(error) = super::products::inspect(root, &decoded.value, &terminate) {
+        return match error.downcast::<SemanticRefusal>() {
+            Ok(refusal) => Err(refusal_report(&decoded, &refusal).into()),
+            Err(error) => Err(error),
+        };
     }
     Ok(decoded.document.report_with(Vec::new()))
 }

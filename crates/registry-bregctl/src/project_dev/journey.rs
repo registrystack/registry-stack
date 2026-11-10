@@ -156,9 +156,13 @@ fn execute_step(
         .poll
         .as_ref()
         .map(|poll| Instant::now() + Duration::from_millis(poll.timeout_ms));
+    let mut last_status = 0;
 
     loop {
         active()?;
+        if poll_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Ok((last_status, false, BTreeMap::new()));
+        }
         add_attempt(attempts)?;
         add_transfer(transferred, request_bytes)?;
         let token = issuer.token(input, person, step.product, clock()? + 300)?;
@@ -180,8 +184,12 @@ fn execute_step(
                 .header(reqwest::header::CONTENT_TYPE, &spec.content_type)
                 .body(body.clone());
         }
-        let (response, response_bytes) = runtime.block_on(read_response(request))?;
-        add_transfer(transferred, response_bytes)?;
+        let Some(response) =
+            read_response_before_deadline(runtime, request, poll_deadline, transferred)?
+        else {
+            return Ok((last_status, false, BTreeMap::new()));
+        };
+        last_status = response.status;
         let captures = matches_expectation(step, &response, lookup)?
             .then(|| capture_updates(step, &response, lookup))
             .and_then(Result::ok);
@@ -443,7 +451,31 @@ fn add_attempt(attempts: &mut usize) -> Result<()> {
     Ok(())
 }
 
-async fn read_response(request: reqwest::RequestBuilder) -> Result<(ResponseData, usize)> {
+fn read_response_before_deadline(
+    runtime: &tokio::runtime::Runtime,
+    request: reqwest::RequestBuilder,
+    deadline: Option<Instant>,
+    transferred: &mut usize,
+) -> Result<Option<ResponseData>> {
+    let response = read_response(request, transferred);
+    let Some(deadline) = deadline else {
+        return runtime.block_on(response).map(Some);
+    };
+    if Instant::now() >= deadline {
+        return Ok(None);
+    }
+    let timeout = tokio::time::Instant::from_std(deadline);
+    match runtime.block_on(async { tokio::time::timeout_at(timeout, response).await }) {
+        Ok(response) if Instant::now() < deadline => response.map(Some),
+        Ok(_) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
+
+async fn read_response(
+    request: reqwest::RequestBuilder,
+    transferred: &mut usize,
+) -> Result<ResponseData> {
     let mut response = request.send().await?;
     let status = response.status().as_u16();
     let headers = response.headers().clone();
@@ -454,17 +486,14 @@ async fn read_response(request: reqwest::RequestBuilder) -> Result<(ResponseData
             "journey response is too large"
         );
         bytes.extend_from_slice(&chunk);
+        add_transfer(transferred, chunk.len())?;
     }
-    let length = bytes.len();
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    Ok((
-        ResponseData {
-            status,
-            headers,
-            body,
-        },
-        length,
-    ))
+    Ok(ResponseData {
+        status,
+        headers,
+        body,
+    })
 }
 
 #[cfg(test)]
@@ -472,9 +501,209 @@ mod tests {
     use super::*;
     use crate::project_dev::plan::ExpectedStatus;
     use serde_json::json;
+    use std::{
+        io::{Read, Write},
+        net::{Ipv4Addr, TcpListener, TcpStream},
+        path::PathBuf,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+    };
+
+    static POLL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn no_capture(_: &str) -> Result<Value> {
         anyhow::bail!("unexpected capture")
+    }
+
+    struct SyntheticServer {
+        url: String,
+        requests: Arc<AtomicUsize>,
+        thread: thread::JoinHandle<()>,
+    }
+
+    impl SyntheticServer {
+        fn finish(self) -> usize {
+            self.thread.join().unwrap();
+            self.requests.load(Ordering::SeqCst)
+        }
+    }
+
+    fn synthetic_server(responses: Vec<(Duration, u16, &'static str)>) -> SyntheticServer {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = requests.clone();
+        let thread = thread::spawn(move || {
+            let end = Instant::now() + Duration::from_millis(500);
+            let mut response = 0;
+            while Instant::now() < end {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        stream.set_nonblocking(false).unwrap();
+                        read_request(&mut stream);
+                        let &(delay, status, body) = responses
+                            .get(response)
+                            .unwrap_or_else(|| responses.last().unwrap());
+                        response += 1;
+                        let reason = if status == 200 { "OK" } else { "Accepted" };
+                        let headers = format!(
+                            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        if write_to_client(&mut stream, headers.as_bytes()) {
+                            thread::sleep(delay);
+                            write_to_client(&mut stream, body.as_bytes());
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("synthetic server accept failed: {error}"),
+                }
+            }
+        });
+        SyntheticServer {
+            url,
+            requests,
+            thread,
+        }
+    }
+
+    fn read_request(stream: &mut TcpStream) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 2048];
+        while request.len() < 16 * 1024 && !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(length) => request.extend_from_slice(&chunk[..length]),
+            }
+        }
+        assert!(request.windows(4).any(|part| part == b"\r\n\r\n"));
+    }
+
+    fn write_to_client(stream: &mut TcpStream, bytes: &[u8]) -> bool {
+        match stream.write_all(bytes) {
+            Ok(()) => true,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::NotConnected
+                ) =>
+            {
+                false
+            }
+            Err(error) => panic!("synthetic server write failed: {error}"),
+        }
+    }
+
+    fn polling_input(maximum_wait: u64, interval: u64) -> RunInput {
+        let plan = serde_json::from_value(json!({
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "breg", "project": ".", "audience": "registry"}],
+            "people": {"reader": {
+                "subject": "reader", "client": "reader-client",
+                "grants": {"breg": {"profile": "reader", "scopes": ["registry:read"]}}
+            }},
+            "journey": {"id": "poll", "steps": [{
+                "id": "wait", "product": "breg", "as": "reader", "method": "GET",
+                "path": "/v1/result", "expect": {"status": 200, "json": {"/state": "ready"}},
+                "poll": {
+                    "maximumWaitMilliseconds": maximum_wait,
+                    "pollIntervalMilliseconds": interval
+                }
+            }]}
+        }))
+        .unwrap();
+        RunInput {
+            run_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            project: PathBuf::from("/tmp/project"),
+            plan,
+            ttl_seconds: 300,
+            schema_people: Vec::new(),
+            breg_authority: Some(super::super::BregAuthority {
+                principal: "sub".to_owned(),
+                purpose: false,
+                requires_postgis: false,
+                named_clients: Default::default(),
+            }),
+            casework_principals: BTreeMap::new(),
+            binaries: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn poll_refuses_a_matching_response_that_finishes_after_its_deadline() {
+        let _lock = POLL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = synthetic_server(vec![
+            (Duration::ZERO, 202, r#"{"state":"waiting"}"#),
+            (Duration::from_millis(500), 200, r#"{"state":"ready"}"#),
+        ]);
+        let root = tempfile::tempdir().unwrap();
+        let issuer = Issuer::create(root.path()).unwrap();
+        let input = polling_input(300, 50);
+        let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
+
+        let report = run(&input, &issuer, &urls, || Ok(())).unwrap();
+
+        assert_eq!(report.result, "failed");
+        assert_eq!(report.steps[0].status, 202);
+        assert_eq!(server.finish(), 2);
+    }
+
+    #[test]
+    fn poll_starts_no_retry_after_its_deadline() {
+        let _lock = POLL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = synthetic_server(vec![(Duration::ZERO, 202, r#"{"state":"waiting"}"#)]);
+        let root = tempfile::tempdir().unwrap();
+        let issuer = Issuer::create(root.path()).unwrap();
+        let input = polling_input(300, 300);
+        let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
+
+        let report = run(&input, &issuer, &urls, || Ok(())).unwrap();
+
+        assert_eq!(report.result, "failed");
+        assert_eq!(report.steps[0].status, 202);
+        assert_eq!(server.finish(), 1);
+    }
+
+    #[test]
+    fn poll_sends_nothing_with_zero_remaining_budget() {
+        let _lock = POLL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let server = synthetic_server(vec![(Duration::ZERO, 200, r#"{"state":"ready"}"#)]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let request = reqwest::Client::new().get(format!("{}v1/result", server.url));
+        let mut transferred = 0;
+
+        let response = read_response_before_deadline(
+            &runtime,
+            request,
+            Some(Instant::now()),
+            &mut transferred,
+        )
+        .unwrap();
+
+        assert!(response.is_none());
+        assert_eq!(transferred, 0);
+        assert_eq!(server.finish(), 0);
     }
 
     #[test]
