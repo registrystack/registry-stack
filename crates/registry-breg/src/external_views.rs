@@ -184,19 +184,28 @@ pub(crate) fn mark_link_fields(
     }
 }
 
+/// The longest key the source contract accepts for a selector.
+#[cfg(feature = "runtime")]
+const MAXIMUM_LINK_KEY_BYTES: usize = 512;
+
 /// Whether `key` is a link key BReg accepts: the form the source contract
 /// accepts for a selector. The write path refuses any other key on a field an
 /// external view links from, and every read treats one that is already stored
 /// as no outside value. An empty key is not a key; it names no outside
 /// subject and is accepted.
+#[cfg(feature = "runtime")]
 pub(crate) fn link_key_acceptable(key: &str) -> bool {
-    key.is_empty() || registry_adapter_core::projection_token_valid(key)
+    key.is_empty()
+        || (key.len() <= MAXIMUM_LINK_KEY_BYTES
+            && key.trim() == key
+            && !key.chars().any(char::is_control))
 }
 
 /// The SQL form of [`link_key_acceptable`] over the column or expression
 /// `key`: the key itself when it is NULL, empty or acceptable, otherwise
 /// NULL. The character classes are the explicit code point sets of Rust's
 /// `char::is_control` and `str::trim`, so both forms agree on every string.
+#[cfg(feature = "runtime")]
 pub(crate) fn acceptable_link_key_sql(key: &str) -> String {
     const WHITESPACE: &str =
         r"\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000";
