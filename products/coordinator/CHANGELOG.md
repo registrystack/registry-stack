@@ -17,7 +17,13 @@
   or timezone changed; a changed schedule runs nothing the previous one left
   due, and logs and audits (`calendar-reschedule`) how many it skipped. Each
   admission is audited before it is written, and replicas skip a cursor
-  another replica is checking.
+  another replica is checking. A trigger that leaves the served set loses
+  its cursor, so adding it back starts from its first check.
+- Add an optional service deadline, `workflow.serviceDeadlineSeconds`, with a
+  disjoint `onDeadline` path. It counts from durable Run admission, caps wait
+  wake-ups, and takes `onDeadline` once for a still-pending wait, including
+  after restart. A shorter wait keeps its own timeout route, and an operator
+  cancel ends the service deadline.
 - Add optional `onFailure` to read and evaluation call steps. It routes only
   after the ordinary retry limit is exhausted by a definite availability
   category, or when the next retry would not fit before the run deadline,

@@ -673,7 +673,9 @@ without rescanning history every poll.
 The serving process checks each reviewed calendar trigger once a second, in a
 loop beside the worker. PostgreSQL transaction time, not the process clock,
 decides which occurrence is due. A trigger's first check seeds its cursor at
-that database time. Each check locks only its own cursor row and skips a row
+that database time. A sweep first deletes the cursors of triggers the served
+Workflows no longer declare, under the admission lock, so a trigger added back
+later is seeded afresh. Each check locks only its own cursor row and skips a row
 another replica holds, so replicas share the triggers without waiting on each
 other. A due check holds the cursor row and the ordinary admission lock,
 admits only the latest due occurrence, adds older due occurrences to the
