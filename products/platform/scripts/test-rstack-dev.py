@@ -52,9 +52,6 @@ def port():
 
 def prepare_postgres(root, pg):
     password = secrets.token_urlsafe(32)
-    pwfile = root / "init-password"
-    pwfile.touch(mode=0o600)
-    pwfile.write_text(password)
     cluster = root / "postgres"
     checked(
         pg / "initdb",
@@ -62,15 +59,14 @@ def prepare_postgres(root, pg):
         cluster,
         "-U",
         "devadmin",
-        "--pwfile",
-        pwfile,
+        "--pwfile=/dev/stdin",
         "--auth-local=trust",
         "--auth-host=scram-sha-256",
         "--no-locale",
         "-E",
         "UTF8",
+        data=f"{password}\n".encode(),
     )
-    pwfile.unlink()
     ca = root / "ca.pem"
     checked(
         "openssl",
@@ -278,10 +274,12 @@ def verify_deployment_key(root, bin_dir, env, run_root, headers):
         while time.monotonic() < deadline:
             assert process.poll() is None, "the independently pinned verifier exited"
             try:
-                if get(origin + "/ready", {}) == 200:
-                    break
+                status = get(origin + "/ready", {})
             except OSError:
-                pass
+                # The verifier may still be opening its listener.
+                status = None
+            if status == 200:
+                break
             time.sleep(0.2)
         else:
             raise RuntimeError("the independently pinned verifier did not become ready")
