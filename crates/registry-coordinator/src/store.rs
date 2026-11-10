@@ -2,7 +2,7 @@
 //! Coordinator-owned durable rows, driven by the shared Dispatch lease engine.
 
 use crate::{
-    calendar_trigger::CalendarTriggerError,
+    calendar_trigger::{CalendarSchedule, CalendarTriggerError},
     definition::{Definition, DefinitionCache, Step, DEFINITION_REFUSED, HELD_RUN_ADVICE},
     metrics::{DispatchDepth, Metrics, RunOutcome},
     protected_state::StateKeys,
@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::{Hook, HookError, Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
-use registry_platform_audit::{AuditEntry, AuditProfile, AuditWriter};
+use registry_platform_audit::{AuditEntry, AuditProfile, AuditRequest, AuditWriter};
 use registry_platform_crypto::domain_separated_sha256;
 use registry_platform_dispatch::postgres::{
     enqueue, AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection,
@@ -67,10 +67,6 @@ const POOL_SIZE: usize = 32;
 /// and an idle session takes to prove it still answers before it is replaced.
 const POOL_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Calendar sweeps must yield quickly to ordinary starts and worker progress.
-/// The whole sweep has a separate process deadline in `CalendarRunner`.
-const CALENDAR_ADMISSION_LOCK_TIMEOUT: &str = "50ms";
-
 const JOIN: &str = "JOIN {schema}.runs AS run ON run.run_id = state.run_id JOIN {schema}.control AS control ON control.id";
 const SELECT: SelectSql = SelectSql {
     columns: "run.snapshot, run.input, run.outputs, run.deadline_at, run.binding_digest, state.command, state.uncertain, state.receipt_expired, run.deadline_at > transaction_timestamp(), state.pure, run.start_identity, run.cancel_requested, control.restore_hold, run.owner_hash, run.restore_review_required, run.authored_cancel_requested, run.authored_cancel_pending_step, run.service_deadline_at",
@@ -119,6 +115,20 @@ pub struct CalendarAdmission {
     pub scheduled_at: DateTime<Utc>,
     /// Due occurrences deliberately skipped before this latest admission.
     pub skipped: u64,
+}
+
+/// What one check of a calendar trigger did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CalendarCheck {
+    /// Nothing was due, the cursor was first seeded, or another replica holds
+    /// the cursor.
+    Idle,
+    /// The latest due occurrence was admitted.
+    Admitted(CalendarAdmission),
+    /// The trigger's cron or time zone changed. The cursor moved to the
+    /// check's time, and `skipped` due occurrences of the previous schedule
+    /// were not admitted.
+    Rescheduled { skipped: u64 },
 }
 
 /// Safe progress metadata plus the workflow author's declared terminal output.
@@ -540,6 +550,7 @@ pub(crate) fn schema_statements(namespace: &str) -> Result<Vec<String>> {
             INSERT INTO {0}.admission_lock VALUES(true);
             CREATE TABLE {0}.calendar_cursors (
             workflow_id text NOT NULL, trigger_id text NOT NULL, workflow_revision text NOT NULL,
+            schedule_cron text NOT NULL, schedule_timezone text NOT NULL,
             cursor_at timestamptz NOT NULL, skipped_count bigint NOT NULL DEFAULT 0 CHECK(skipped_count>=0),
             PRIMARY KEY(workflow_id,trigger_id))", namespace, SCHEMA_VERSION),
     ];
@@ -600,6 +611,24 @@ fn unavailable(_: impl std::fmt::Display) -> CoordinatorError {
 }
 fn refused(code: &'static str, message: &'static str) -> CoordinatorError {
     CoordinatorError::new(code, message)
+}
+
+fn restore_held() -> CoordinatorError {
+    refused("restore-hold", "execution is held until the prior deployment is externally fenced and recovery is reviewed")
+}
+
+fn admissions_held() -> CoordinatorError {
+    refused("restore-admissions-held","recover complete admission history before enabling starts; inspect known runs while ingress is held")
+}
+
+/// A calendar count as the cursor's durable `bigint`.
+fn calendar_count(count: u64) -> Result<i64> {
+    i64::try_from(count).map_err(|_| {
+        refused(
+            "calendar-overflow",
+            "calendar catch-up exceeds the supported durable count",
+        )
+    })
 }
 
 fn calendar_refused(error: CalendarTriggerError) -> CoordinatorError {
@@ -1163,7 +1192,7 @@ impl Store {
             .map_err(unavailable)?
             .get(0);
         if held {
-            return Err(refused("restore-admissions-held","recover complete admission history before enabling starts; inspect known runs while ingress is held"));
+            return Err(admissions_held());
         }
         Ok(())
     }
@@ -1314,16 +1343,23 @@ impl Store {
         Ok((run, true))
     }
 
-    /// Evaluate and admit at most one latest due occurrence while holding the
-    /// ordinary admission fence and one durable calendar cursor. A fresh
+    /// Check one calendar trigger and admit at most its latest due occurrence.
+    /// PostgreSQL is the clock and the replica fence: the check locks the
+    /// trigger's durable cursor with `SKIP LOCKED`, so a cursor another
+    /// replica is checking is left to it rather than waited on. A fresh
     /// trigger starts at its first observed database time, never by replaying
-    /// the institution's unbounded past.
+    /// the institution's unbounded past. A new Workflow revision keeps the
+    /// cursor while the trigger's cron and time zone are unchanged; a changed
+    /// schedule moves the cursor to the check's time and counts the previous
+    /// schedule's due occurrences it does not run. An admission or reschedule
+    /// is audited before it is written, and takes the ordinary admission
+    /// fence only after its audit record is durable.
     pub async fn admit_calendar_due(
         &self,
         definition: &Definition,
         trigger_id: &str,
         runtime: &crate::runtime::RuntimeConfig,
-    ) -> Result<Option<CalendarAdmission>> {
+    ) -> Result<CalendarCheck> {
         let schedule = definition
             .workflow
             .calendar_triggers
@@ -1336,6 +1372,7 @@ impl Store {
             })?
             .schedule()
             .map_err(calendar_refused)?;
+        let cron = schedule.expression();
         let binding_digest = runtime.binding_digest_for(&definition.workflow)?;
         let producer = self.security.keys.commitment(
             "calendar-owner",
@@ -1347,53 +1384,140 @@ impl Store {
         );
         let mut client = self.client().await.map_err(unavailable)?;
         let tx = client.transaction().await.map_err(unavailable)?;
-        tx.batch_execute(&format!(
-            "SET LOCAL lock_timeout = '{CALENDAR_ADMISSION_LOCK_TIMEOUT}'"
-        ))
-        .await
-        .map_err(unavailable)?;
-        self.lock_admission(&tx).await?;
-        self.require_unheld(&tx).await?;
         let now: DateTime<Utc> = tx
             .query_one("SELECT transaction_timestamp()", &[])
             .await
             .map_err(unavailable)?
             .get(0);
-        let inserted = tx
-            .execute(
+        let cursor = tx
+            .query_opt(
                 &format!(
-                    "INSERT INTO {}.calendar_cursors (workflow_id,trigger_id,workflow_revision,cursor_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-                    self.namespace
-                ),
-                &[
-                    &definition.workflow.id,
-                    &trigger_id,
-                    &definition.digest,
-                    &now,
-                ],
-            )
-            .await
-            .map_err(unavailable)?;
-        let row = tx
-            .query_one(
-                &format!(
-                    "SELECT workflow_revision,cursor_at FROM {}.calendar_cursors WHERE workflow_id=$1 AND trigger_id=$2 FOR UPDATE",
+                    "SELECT schedule_cron,schedule_timezone,cursor_at FROM {}.calendar_cursors WHERE workflow_id=$1 AND trigger_id=$2 FOR UPDATE SKIP LOCKED",
                     self.namespace
                 ),
                 &[&definition.workflow.id, &trigger_id],
             )
             .await
             .map_err(unavailable)?;
-        if inserted == 1 {
+        let Some(cursor) = cursor else {
+            let exists: bool = tx
+                .query_one(
+                    &format!(
+                        "SELECT EXISTS(SELECT 1 FROM {}.calendar_cursors WHERE workflow_id=$1 AND trigger_id=$2)",
+                        self.namespace
+                    ),
+                    &[&definition.workflow.id, &trigger_id],
+                )
+                .await
+                .map_err(unavailable)?
+                .get(0);
+            // An existing cursor the lock skipped is another replica's check.
+            if !exists {
+                self.lock_admission(&tx).await?;
+                self.require_unheld(&tx).await?;
+                tx.execute(
+                    &format!(
+                        "INSERT INTO {}.calendar_cursors (workflow_id,trigger_id,workflow_revision,schedule_cron,schedule_timezone,cursor_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+                        self.namespace
+                    ),
+                    &[
+                        &definition.workflow.id,
+                        &trigger_id,
+                        &definition.digest,
+                        &cron,
+                        &schedule.timezone(),
+                        &now,
+                    ],
+                )
+                .await
+                .map_err(unavailable)?;
+            }
             tx.commit().await.map_err(unavailable)?;
-            return Ok(None);
+            return Ok(CalendarCheck::Idle);
+        };
+        let previous_cron: String = cursor.get(0);
+        let previous_timezone: String = cursor.get(1);
+        let cursor_at: DateTime<Utc> = cursor.get(2);
+        if previous_cron != cron || previous_timezone != schedule.timezone() {
+            let previous = CalendarSchedule::parse(&previous_cron, &previous_timezone)
+                .map_err(calendar_refused)?;
+            let dropped = previous
+                .latest_since(cursor_at, now)
+                .map_err(calendar_refused)?;
+            let skipped = dropped
+                .skipped
+                .checked_add(u64::from(dropped.latest.is_some()))
+                .ok_or_else(|| calendar_refused(CalendarTriggerError::Overflow))?;
+            let durable_skipped = calendar_count(skipped)?;
+            self.require_calendar_unheld(&tx).await?;
+            let request = self
+                .begin_calendar_audit("calendar-reschedule", definition, trigger_id)
+                .await?;
+            let timezone = schedule.timezone();
+            let rescheduled = async move {
+                self.lock_admission(&tx).await?;
+                self.require_unheld(&tx).await?;
+                tx.execute(
+                    &format!(
+                        "UPDATE {}.calendar_cursors SET workflow_revision=$3,schedule_cron=$4,schedule_timezone=$5,cursor_at=GREATEST(cursor_at,$6),skipped_count=skipped_count+$7 WHERE workflow_id=$1 AND trigger_id=$2",
+                        self.namespace
+                    ),
+                    &[
+                        &definition.workflow.id,
+                        &trigger_id,
+                        &definition.digest,
+                        &cron,
+                        &timezone,
+                        &now,
+                        &durable_skipped,
+                    ],
+                )
+                .await
+                .map_err(unavailable)?;
+                tx.commit().await.map_err(unavailable)
+            }
+            .await;
+            Self::finish_calendar_audit(request, "calendar-reschedule", &rescheduled, |()| {
+                serde_json::json!({"action":"calendar-reschedule","outcome":"accepted","skipped":skipped})
+            })
+            .await?;
+            rescheduled?;
+            return Ok(CalendarCheck::Rescheduled { skipped });
         }
-        let workflow_revision: String = row.get(0);
-        let cursor: DateTime<Utc> = row.get(1);
-        if workflow_revision != definition.digest {
+        let catch_up = schedule
+            .latest_since(cursor_at, now)
+            .map_err(calendar_refused)?;
+        let Some(occurrence) = catch_up.latest else {
+            tx.commit().await.map_err(unavailable)?;
+            return Ok(CalendarCheck::Idle);
+        };
+        let durable_skipped = calendar_count(catch_up.skipped)?;
+        self.require_calendar_unheld(&tx).await?;
+        let request = self
+            .begin_calendar_audit("calendar-admit", definition, trigger_id)
+            .await?;
+        let scheduled_at = occurrence.scheduled_at;
+        let admitted = async move {
+            self.lock_admission(&tx).await?;
+            self.require_unheld(&tx).await?;
+            let key = scheduled_at.to_rfc3339();
+            let admitted = self
+                .admit_bound_locked(
+                    &tx,
+                    definition,
+                    occurrence.input(),
+                    &producer,
+                    &key,
+                    &binding_digest,
+                    Some(runtime),
+                    &definition.digest,
+                    None,
+                    now,
+                )
+                .await?;
             tx.execute(
                 &format!(
-                    "UPDATE {}.calendar_cursors SET workflow_revision=$3,cursor_at=GREATEST(cursor_at,$4) WHERE workflow_id=$1 AND trigger_id=$2",
+                    "UPDATE {}.calendar_cursors SET workflow_revision=$3,cursor_at=$4,skipped_count=skipped_count+$5 WHERE workflow_id=$1 AND trigger_id=$2",
                     self.namespace
                 ),
                 &[
@@ -1401,88 +1525,31 @@ impl Store {
                     &trigger_id,
                     &definition.digest,
                     &now,
+                    &durable_skipped,
                 ],
             )
             .await
             .map_err(unavailable)?;
             tx.commit().await.map_err(unavailable)?;
-            return Ok(None);
+            Ok(admitted)
         }
-        let catch_up = schedule
-            .latest_since(cursor, now)
-            .map_err(calendar_refused)?;
-        let Some(occurrence) = catch_up.latest else {
-            tx.commit().await.map_err(unavailable)?;
-            return Ok(None);
-        };
-        let skipped = i64::try_from(catch_up.skipped).map_err(|_| {
-            refused(
-                "calendar-overflow",
-                "calendar catch-up exceeds the supported durable count",
-            )
-        })?;
-        let request = self
-            .security
-            .audit
-            .begin(
-                AUDIT_SCHEMA,
-                Uuid::new_v4().to_string(),
-                serde_json::json!({
-                    "action":"calendar-admit",
-                    "workflowRef":self.reference("workflow-v1",&definition.workflow.id),
-                    "triggerRef":self.reference("calendar-trigger-v1",trigger_id),
-                    "outcome":"unknown"
-                }),
-                serde_json::json!({"action":"calendar-admit","outcome":"unknown"}),
-            )
-            .await
-            .map_err(|_| refused("audit-unavailable", "durable audit is unavailable"))?;
-        let key = occurrence.scheduled_at.to_rfc3339();
-        let (run, inserted) = self
-            .admit_bound_locked(
-                &tx,
-                definition,
-                occurrence.input(),
-                &producer,
-                &key,
-                &binding_digest,
-                Some(runtime),
-                &definition.digest,
-                None,
-                now,
-            )
-            .await?;
-        tx.execute(
-            &format!(
-                "UPDATE {}.calendar_cursors SET workflow_revision=$3,cursor_at=$4,skipped_count=skipped_count+$5 WHERE workflow_id=$1 AND trigger_id=$2",
-                self.namespace
-            ),
-            &[
-                &definition.workflow.id,
-                &trigger_id,
-                &definition.digest,
-                &now,
-                &skipped,
-            ],
-        )
-        .await
-        .map_err(unavailable)?;
-        tx.commit().await.map_err(unavailable)?;
-        if inserted {
+        .await;
+        if let Ok((_, true)) = admitted {
             self.metrics.record_run_admitted();
         }
-        request
-            .finish(serde_json::json!({
+        Self::finish_calendar_audit(request, "calendar-admit", &admitted, |(run, _)| {
+            serde_json::json!({
                 "action":"calendar-admit",
                 "outcome":"accepted",
                 "runRef":self.reference("run-v1",&run.to_string()),
                 "skipped":catch_up.skipped
-            }))
-            .await
-            .map_err(|_| refused("audit-response-unavailable", "calendar admission may have committed; inspect the durable cursor and run before retrying"))?;
-        Ok(Some(CalendarAdmission {
+            })
+        })
+        .await?;
+        let (run, _) = admitted?;
+        Ok(CalendarCheck::Admitted(CalendarAdmission {
             run_id: run,
-            scheduled_at: occurrence.scheduled_at,
+            scheduled_at,
             skipped: catch_up.skipped,
         }))
     }
@@ -1510,9 +1577,77 @@ impl Store {
             ));
         }
         if held {
-            return Err(refused("restore-hold", "execution is held until the prior deployment is externally fenced and recovery is reviewed"));
+            return Err(restore_held());
         }
         Ok(())
+    }
+
+    /// Refuse a held or moved deployment before a calendar check writes its
+    /// audit record, so a hold does not add a record every sweep. The read
+    /// takes no lock: the admission fence checks the same state again, under
+    /// its locks, before the check writes anything.
+    async fn require_calendar_unheld(&self, tx: &Transaction<'_>) -> Result<()> {
+        self.verify_transaction(tx).await.map_err(unavailable)?;
+        let row = tx
+            .query_one(
+                &format!(
+                    "SELECT restore_hold,admissions_hold FROM {}.control WHERE id",
+                    self.namespace
+                ),
+                &[],
+            )
+            .await
+            .map_err(unavailable)?;
+        if row.get::<_, bool>(0) {
+            return Err(restore_held());
+        }
+        if row.get::<_, bool>(1) {
+            return Err(admissions_held());
+        }
+        Ok(())
+    }
+
+    async fn begin_calendar_audit(
+        &self,
+        action: &str,
+        definition: &Definition,
+        trigger_id: &str,
+    ) -> Result<AuditRequest> {
+        self.security
+            .audit
+            .begin(
+                AUDIT_SCHEMA,
+                Uuid::new_v4().to_string(),
+                serde_json::json!({
+                    "action":action,
+                    "workflowRef":self.reference("workflow-v1",&definition.workflow.id),
+                    "triggerRef":self.reference("calendar-trigger-v1",trigger_id),
+                    "outcome":"unknown"
+                }),
+                serde_json::json!({"action":action,"outcome":"unknown"}),
+            )
+            .await
+            .map_err(|_| refused("audit-unavailable", "durable audit is unavailable"))
+    }
+
+    /// Finish a calendar audit request as `audited` does: `accepted` once the
+    /// cursor transaction committed, `unknown` otherwise.
+    async fn finish_calendar_audit<T>(
+        request: AuditRequest,
+        action: &str,
+        result: &Result<T>,
+        accepted: impl FnOnce(&T) -> Value,
+    ) -> Result<()> {
+        let record = match result {
+            Ok(value) => accepted(value),
+            Err(_) => serde_json::json!({"action":action,"outcome":"unknown"}),
+        };
+        request.finish(record).await.map_err(|_| {
+            refused(
+                "audit-response-unavailable",
+                "the calendar check may have committed; inspect the durable cursor and run before retrying",
+            )
+        })
     }
 
     fn status_state() -> &'static str {
@@ -3219,7 +3354,7 @@ mod tests {
             (SCHEMA_VERSION, digest.as_str()),
             (
                 6,
-                "8d33ddc04df7fd5c3cac84e1e15d5a288892522c04ce22f989c306ff6e8f95d2"
+                "c9e4c5df5c2d5f5dfe4a1db6ee69e05f637bc74e98a7a2f2db0bdc42b931ec91"
             ),
             "the protected state schema DDL changed at this SCHEMA_VERSION; {MIGRATION_PIN_RULE}"
         );

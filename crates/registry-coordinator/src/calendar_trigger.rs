@@ -6,20 +6,12 @@ use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use registry_platform_calendar::{local_date, resolve_local_instant, CalendarEvaluationError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex, PoisonError,
-    },
-    time::{Duration, Instant},
-};
 
 use crate::{
-    deployment::Workflows, runtime::RuntimeConfig, store::Store, CoordinatorError,
-    Result as CoordinatorResult,
+    deployment::Workflows,
+    runtime::RuntimeConfig,
+    store::{CalendarCheck, Store},
 };
-
-const CALENDAR_SWEEP_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// A calendar expression is outside the reviewed first slice, names an
 /// unknown timezone, or cannot be evaluated inside Chrono's date range.
@@ -102,105 +94,45 @@ pub struct CalendarNextExplanation {
     pub next_local_time: String,
 }
 
-/// The serving process's small calendar-admission sweep. PostgreSQL remains
-/// the durable clock and replica fence; this one-second process gate only
-/// avoids opening a cursor transaction on every ordinary worker poll.
-pub struct CalendarRunner {
-    next_poll: Mutex<Instant>,
-    sweep_cursor: FairSweepCursor,
-}
-
-/// In-memory ordering state for bounded calendar sweeps. The durable cursor
-/// and admission transaction remain in PostgreSQL.
-#[derive(Default)]
-struct FairSweepCursor {
-    next_workflow: AtomicUsize,
-}
-
-impl FairSweepCursor {
-    fn order(&self, workflow_count: usize) -> Vec<usize> {
-        if workflow_count == 0 {
-            return Vec::new();
-        }
-        let start = self.next_workflow.load(Ordering::Relaxed) % workflow_count;
-        (0..workflow_count)
-            .map(|offset| (start + offset) % workflow_count)
-            .collect()
-    }
-
-    fn advance_after(&self, attempted: usize, workflow_count: usize) {
-        if workflow_count != 0 {
-            self.next_workflow
-                .store((attempted + 1) % workflow_count, Ordering::Relaxed);
-        }
-    }
-}
-
-impl Default for CalendarRunner {
-    fn default() -> Self {
-        Self {
-            next_poll: Mutex::new(Instant::now()),
-            sweep_cursor: FairSweepCursor::default(),
-        }
-    }
-}
-
-impl CalendarRunner {
-    pub async fn tick(
-        &self,
-        store: &Store,
-        workflows: &Workflows,
-        runtime: &RuntimeConfig,
-    ) -> CoordinatorResult<bool> {
-        {
-            let now = Instant::now();
-            let mut next = self
-                .next_poll
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if now < *next {
-                return Ok(false);
-            }
-            *next = now + Duration::from_secs(1);
-        }
-        tokio::time::timeout(
-            CALENDAR_SWEEP_TIMEOUT,
-            self.sweep(store, workflows, runtime),
-        )
-        .await
-        .map_err(|_| {
-            CoordinatorError::new(
-                "calendar-sweep-timeout",
-                "calendar admission sweep exceeded its bounded execution time",
-            )
-        })?
-    }
-
-    async fn sweep(
-        &self,
-        store: &Store,
-        workflows: &Workflows,
-        runtime: &RuntimeConfig,
-    ) -> CoordinatorResult<bool> {
-        let mut admitted = false;
-        let eligible = workflows
-            .iter()
-            .filter(|(_, package)| !package.definition.workflow.calendar_triggers.is_empty())
-            .collect::<Vec<_>>();
-        for index in self.sweep_cursor.order(eligible.len()) {
-            // Advance before awaiting admission so timeout cancellation cannot
-            // leave the same sorted workflow permanently at the head.
-            self.sweep_cursor.advance_after(index, eligible.len());
-            let (_, package) = eligible[index];
-            for trigger_id in package.definition.workflow.calendar_triggers.keys() {
-                admitted |= store
-                    .admit_calendar_due(&package.definition, trigger_id, runtime)
-                    .await?
-                    .is_some();
+/// Check every calendar trigger of the served Workflows once, in order. Each
+/// check takes only its own cursor row and skips one another replica holds, so
+/// a slow or refused check delays nothing but itself. A refusal is logged and
+/// the sweep goes on; the result is true when any check was refused. Log lines
+/// carry fixed messages, counts and failure codes; the audit record of an
+/// admission or reschedule carries the Workflow and trigger references.
+pub async fn sweep(store: &Store, workflows: &Workflows, runtime: &RuntimeConfig) -> bool {
+    let mut refused = false;
+    for (_, package) in workflows.iter() {
+        let definition = &package.definition;
+        for trigger_id in definition.workflow.calendar_triggers.keys() {
+            match store
+                .admit_calendar_due(definition, trigger_id, runtime)
+                .await
+            {
+                Ok(CalendarCheck::Idle) => {}
+                Ok(CalendarCheck::Admitted(admission)) => tracing::info!(
+                    skipped = admission.skipped,
+                    "calendar occurrence admitted"
+                ),
+                Ok(CalendarCheck::Rescheduled { skipped: 0 }) => tracing::info!(
+                    "calendar schedule changed; no occurrence of the previous schedule was due"
+                ),
+                Ok(CalendarCheck::Rescheduled { skipped }) => tracing::warn!(
+                    skipped,
+                    "calendar schedule changed; due occurrences of the previous schedule were not run"
+                ),
+                Err(error) => {
+                    refused = true;
+                    tracing::warn!(
+                        code = %error.code,
+                        suggested_action = error.suggested_action.as_deref(),
+                        "calendar check was refused; it is retried at a later sweep"
+                    );
+                }
             }
         }
-        Ok(admitted)
     }
+    refused
 }
 
 impl CalendarSchedule {
@@ -225,6 +157,12 @@ impl CalendarSchedule {
         })
     }
 
+    /// The named IANA time zone the schedule is evaluated in.
+    pub fn timezone(&self) -> &str {
+        &self.timezone
+    }
+
+    /// The canonical cron form: the same schedule always gives the same text.
     pub fn expression(&self) -> String {
         format!(
             "{} {} {} * *",
@@ -513,22 +451,5 @@ mod tests {
         );
         assert_eq!(explanation.next_local_date.to_string(), "2026-01-31");
         assert_eq!(explanation.next_local_time, "08:05");
-    }
-
-    #[test]
-    fn a_cutoff_rotates_the_next_sweep_to_the_earliest_unattempted_workflow() {
-        let cursor = FairSweepCursor::default();
-
-        assert!(cursor.order(0).is_empty());
-        assert_eq!(cursor.order(3), [0, 1, 2]);
-
-        // The deadline cuts the first sweep off after alpha starts. Advancing
-        // before its await makes beta the deterministic head of the next one.
-        cursor.advance_after(0, 3);
-        assert_eq!(cursor.order(3), [1, 2, 0]);
-
-        // A second cutoff still advances rather than pinning the sorted head.
-        cursor.advance_after(1, 3);
-        assert_eq!(cursor.order(3), [2, 0, 1]);
     }
 }

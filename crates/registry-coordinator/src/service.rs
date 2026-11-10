@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use crate::{
     adapters::HttpAdapters,
-    calendar_trigger::CalendarRunner,
-    deployment,
+    calendar_trigger, deployment,
     http::{self, HttpState},
     metrics,
     protocol::AdapterSet,
@@ -23,6 +22,9 @@ const DEPLOYMENT_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 /// answered: one attempt plus the finalization allowance its lease carries,
 /// so an attempt that began just before the stop can still record its outcome.
 const SHUTDOWN_GRACE: Duration = ATTEMPT_TIMEOUT.saturating_add(LEASE_FINALIZATION_ALLOWANCE);
+/// Pause between calendar sweeps. An idle check reads one cursor row and an
+/// occurrence is due at most once a month, so a second is prompt enough.
+const CALENDAR_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Parser)]
 #[command(
     name = "coordinator",
@@ -65,7 +67,6 @@ async fn execute(cli: Cli) -> Result<()> {
     }
     let adapters: Arc<dyn AdapterSet> = Arc::new(HttpAdapters::new(&runtime)?);
     let worker = Worker::new(store.clone(), adapters.clone());
-    let calendar = CalendarRunner::default();
     let listener = tokio::net::TcpListener::bind(d.listener.bind.socket_addr())
         .await
         .map_err(|_| {
@@ -119,6 +120,12 @@ async fn execute(cli: Cli) -> Result<()> {
         };
         tokio::try_join!(public, metrics).map(|_| ())
     };
+    let calendar = calendar_loop(
+        CALENDAR_SWEEP_INTERVAL,
+        cli.recovery_only,
+        stopped.clone(),
+        || calendar_trigger::sweep(&store, &workflows, &runtime),
+    );
     let worker = worker_loop(
         Duration::from_millis(cli.poll_ms),
         cli.recovery_only,
@@ -128,7 +135,7 @@ async fn execute(cli: Cli) -> Result<()> {
                 .await
                 .map(|_| ())
         },
-        || service_tick(&calendar, &worker, &store, &workflows, &runtime),
+        || worker.tick(),
     );
     tracing::info!(
         listener = %d.listener.bind.socket_addr(),
@@ -136,28 +143,62 @@ async fn execute(cli: Cli) -> Result<()> {
         recovery_only = cli.recovery_only,
         "serving Registry Coordinator"
     );
-    serve_until(server, worker, shutdown, stop).await
+    serve_until(server, alongside(worker, calendar), shutdown, stop).await
 }
 
-async fn service_tick(
-    calendar: &CalendarRunner,
-    worker: &Worker,
-    store: &crate::store::Store,
-    workflows: &deployment::Workflows,
-    runtime: &RuntimeConfig,
-) -> Result<bool> {
-    let admitted = match calendar.tick(store, workflows, runtime).await {
-        Ok(admitted) => admitted,
-        Err(error) => {
-            tracing::warn!(
-                code = %error.code,
-                suggested_action = error.suggested_action.as_deref(),
-                "calendar admission sweep was refused; continuing existing Run work"
-            );
-            false
+/// Run the worker loop and the calendar loop together, as one part of the
+/// service. A worker failure ends it at once, as it ends the service; once the
+/// worker has stopped, the calendar sweep in flight finishes first.
+async fn alongside(
+    worker: impl Future<Output = Result<()>>,
+    calendar: impl Future<Output = ()>,
+) -> Result<()> {
+    tokio::pin!(worker, calendar);
+    tokio::select! {
+        result = &mut worker => {
+            result?;
+            calendar.await;
+            Ok(())
         }
-    };
-    Ok(worker.tick().await? || admitted)
+        () = &mut calendar => worker.await,
+    }
+}
+
+/// Sweep the calendar triggers every `interval` until a stop is requested,
+/// apart from the worker so neither waits on the other. A sweep with a refused
+/// check pauses as a failed worker poll does, from one second doubling to the
+/// refresh interval, so an outage or a hold is not retried every second. Every
+/// fence is checked in the admitting transaction itself; a moved activation is
+/// also found by the worker loop's deployment check, which stops the service.
+/// A stop ends the loop at its next pause; a sweep in flight finishes first.
+async fn calendar_loop<S, SF>(
+    interval: Duration,
+    recovery_only: bool,
+    stopped: watch::Receiver<bool>,
+    mut sweep: S,
+) where
+    S: FnMut() -> SF,
+    SF: Future<Output = bool>,
+{
+    if recovery_only {
+        return;
+    }
+    let mut failures: u32 = 0;
+    loop {
+        if *stopped.borrow() {
+            return;
+        }
+        let delay = if sweep().await {
+            failures = failures.saturating_add(1);
+            retry_delay(failures)
+        } else {
+            failures = 0;
+            interval
+        };
+        if pause(delay, &stopped).await {
+            return;
+        }
+    }
 }
 
 /// Recovery disables event intake, so unavailable ingress secrets must not
@@ -851,6 +892,134 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.code, "listener-unavailable");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_calendar_is_swept_on_its_own_interval() {
+        let sweeps = Arc::new(AtomicUsize::new(0));
+        let task = tokio::spawn(calendar_loop(Duration::from_secs(1), false, running(), {
+            let sweeps = sweeps.clone();
+            move || {
+                increment(&sweeps);
+                std::future::ready(false)
+            }
+        }));
+        tokio::task::yield_now().await;
+        assert_eq!(sweeps.load(Ordering::SeqCst), 1);
+        for (advance, seen) in [(999, 1), (1, 2), (1_000, 3)] {
+            tokio::time::advance(Duration::from_millis(advance)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(sweeps.load(Ordering::SeqCst), seen, "{advance} ms later");
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_calendar_check_backs_off_like_a_failed_poll() {
+        let sweeps = Arc::new(AtomicUsize::new(0));
+        let task = tokio::spawn(calendar_loop(Duration::from_secs(1), false, running(), {
+            let sweeps = sweeps.clone();
+            move || {
+                let sweep = sweeps.fetch_add(1, Ordering::SeqCst) + 1;
+                std::future::ready(sweep <= 3)
+            }
+        }));
+        tokio::task::yield_now().await;
+        assert_eq!(
+            sweeps.load(Ordering::SeqCst),
+            1,
+            "the first sweep was refused"
+        );
+        for (advance, seen) in [
+            (999, 1),
+            (1, 2),
+            (1_999, 2),
+            (1, 3),
+            (3_999, 3),
+            (1, 4),
+            (1_000, 5),
+        ] {
+            tokio::time::advance(Duration::from_millis(advance)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(sweeps.load(Ordering::SeqCst), seen, "{advance} ms later");
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn recovery_only_never_sweeps_the_calendar() {
+        calendar_loop(Duration::from_secs(1), true, running(), || async {
+            panic!("recovery-only mode must never admit")
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_finishes_the_calendar_sweep_in_flight_and_sweeps_nothing_more() {
+        let (stop, stopped) = watch::channel(false);
+        let started = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicUsize::new(0));
+        let task = tokio::spawn(calendar_loop(Duration::from_secs(1), false, stopped, {
+            let (started, finished) = (started.clone(), finished.clone());
+            move || {
+                let (started, finished) = (started.clone(), finished.clone());
+                async move {
+                    increment(&started);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    increment(&finished);
+                    false
+                }
+            }
+        }));
+        tokio::task::yield_now().await;
+        stop.send_replace(true);
+        let begun = Instant::now();
+        task.await.unwrap();
+        assert_eq!(begun.elapsed(), Duration::from_secs(5));
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        assert_eq!(finished.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_worker_failure_ends_the_service_without_waiting_for_the_calendar() {
+        let error = alongside(
+            std::future::ready(Err(refusal("deployment.refused"))),
+            std::future::pending(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "deployment.refused");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stopped_worker_waits_for_the_calendar_sweep_in_flight() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let begun = Instant::now();
+        alongside(std::future::ready(Ok(())), {
+            let finished = finished.clone();
+            async move {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                finished.store(true, Ordering::SeqCst);
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(begun.elapsed(), Duration::from_secs(3));
+        assert!(finished.load(Ordering::SeqCst));
+        // A calendar that stops first still leaves the worker its own stop.
+        let begun = Instant::now();
+        alongside(
+            async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                Err(refusal("worker-unavailable"))
+            },
+            std::future::ready(()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(begun.elapsed(), Duration::from_secs(2));
     }
 
     #[cfg(feature = "postgres-test")]
