@@ -832,9 +832,11 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
     let root = run_dir(run_id)?;
     let input: RunInput = read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)?;
     let signer = Issuer::load(&root)?;
-    let expires = report["expires_at"]
+    let run_expires = report["expires_at"]
         .as_u64()
         .context("run expiry is missing")?;
+    // Report the expiry the tokens carry, which is earlier than the run's.
+    let expires = issuer::token_expiry(run_expires, clock()?);
     let subject = input
         .plan
         .people
