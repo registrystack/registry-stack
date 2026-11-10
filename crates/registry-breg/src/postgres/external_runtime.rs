@@ -35,7 +35,7 @@ use crate::external_views::{
 use crate::model::{CompiledEntity, CompiledRegistry, HttpMethod};
 
 use super::cancellation::QueryCancellationGuard;
-use super::external_label_acquisition::{LabelAcquisition, LabelAfter};
+use super::external_label_acquisition::{LabelAcquisition, LabelAfter, SupportingSnapshot};
 use super::external_projection::{
     self as store, AcceptedSnapshot, ProjectionGeneration, ProjectionRow, ProjectionScope,
     RefreshFailure, RefreshTicket, RetentionPermission,
@@ -1035,6 +1035,8 @@ struct RefreshAuthority {
     lock_timeout: Duration,
     scope: ProjectionScope,
     parent: Option<(ProjectionScope, ProjectionGeneration)>,
+    /// The parent snapshots that supplied this page's label selectors.
+    supporting: Vec<SupportingSnapshot>,
 }
 
 impl RefreshAuthority {
@@ -1079,6 +1081,24 @@ impl RefreshAuthority {
                 .await
                 .map_err(|_| EvidenceHookError::Authority)?;
             if &current != generation {
+                return Err(EvidenceHookError::Authority);
+            }
+            // Only the parent snapshots that supplied this page's selectors
+            // matter; refreshes of other parents leave the sweep running.
+            let keys = self
+                .supporting
+                .iter()
+                .map(|parent| parent.subject_key.as_str())
+                .collect::<Vec<_>>();
+            let ids = self
+                .supporting
+                .iter()
+                .map(|parent| parent.snapshot_id.as_str())
+                .collect::<Vec<_>>();
+            if !store::snapshots_current(&transaction, parent, &keys, &ids)
+                .await
+                .map_err(|_| EvidenceHookError::Authority)?
+            {
                 return Err(EvidenceHookError::Authority);
             }
         }
@@ -1310,6 +1330,7 @@ struct RefreshRows {
     next: Option<RefreshAfter>,
     eligibility: String,
     supporting_until: Option<i64>,
+    supporting: Vec<SupportingSnapshot>,
 }
 
 struct RefreshWork {
@@ -1374,6 +1395,7 @@ impl PostgresExternalViewService {
                 }),
                 eligibility: selectors.publication_eligibility().to_owned(),
                 supporting_until: page.minimum_parent_expires_at,
+                supporting: page.supporting,
             });
         }
         let after = match after {
@@ -1400,6 +1422,7 @@ impl PostgresExternalViewService {
             next,
             eligibility: keys.publication_eligibility,
             supporting_until: None,
+            supporting: Vec::new(),
         })
     }
 
@@ -1498,6 +1521,7 @@ impl PostgresExternalViewService {
                 lock_timeout: self.lock_timeout,
                 scope: scope.clone(),
                 parent: parent.clone(),
+                supporting: page.supporting.clone(),
             });
             let outcomes = self
                 .fetch_refresh(request, plan, &work, page.supporting_until, authority)
@@ -1512,10 +1536,17 @@ impl PostgresExternalViewService {
                 return Err(ExternalViewError::Unavailable);
             }
             if let (Some(parent), Some((_, selected_generation))) = (&plan.label_parent, &parent) {
-                let parent_is_current = self
+                // A rotated or withdrawn parent abandons the page. A database
+                // or lock failure is reported as such and leaves the receipts
+                // to expire with their leases.
+                let parent_is_current = match self
                     .lock_scope(&transaction, parent.source, parent.projection.id.as_str())
                     .await
-                    .is_ok_and(|(_, generation)| &generation == selected_generation);
+                {
+                    Ok((_, generation)) => &generation == selected_generation,
+                    Err(ExternalViewError::ProjectionUnavailable(_)) => false,
+                    Err(error) => return Err(error),
+                };
                 if !parent_is_current
                     || page
                         .supporting_until
@@ -1960,6 +1991,27 @@ mod postgres_tests {
         ("00000000-0000-4000-8000-000000000004", "hidden", "other"),
     ];
 
+    async fn bound_scope(fixture: &Activated, projection: &str) -> ProjectionScope {
+        let row = fixture
+            .migration
+            .query_one(
+                "SELECT epoch,binding_digest,grant_digest,cache_ttl_seconds
+                 FROM registry_internal.registry_external_projection_scopes
+                 WHERE projection_id=$1",
+                &[&projection],
+            )
+            .await
+            .unwrap();
+        ProjectionScope::new(
+            projection,
+            row.get(0),
+            row.get::<_, String>(1).as_str(),
+            row.get::<_, String>(2).as_str(),
+            row.get(3),
+        )
+        .unwrap()
+    }
+
     /// A bound, keyed runtime behind the in-process HTTP router. Three roots
     /// sit in the `allowed` tenant and one outside it.
     struct Served {
@@ -1976,24 +2028,7 @@ mod postgres_tests {
             let fixture = Activated::new(&registry).await;
             let mut service = service_with(&registry, &fixture, lock_timeout);
             service.bind_configured_scopes(true).await.ok().unwrap();
-            let row = fixture
-                .migration
-                .query_one(
-                    "SELECT epoch,binding_digest,grant_digest,cache_ttl_seconds
-                     FROM registry_internal.registry_external_projection_scopes
-                     WHERE projection_id='projection'",
-                    &[],
-                )
-                .await
-                .unwrap();
-            let scope = ProjectionScope::new(
-                "projection",
-                row.get(0),
-                row.get::<_, String>(1).as_str(),
-                row.get::<_, String>(2).as_str(),
-                row.get(3),
-            )
-            .unwrap();
+            let scope = bound_scope(&fixture, "projection").await;
             let entity = &registry.entities()["local-record"];
             let column = |id: &str| {
                 entity
@@ -2190,6 +2225,80 @@ mod postgres_tests {
         let (status, next) = served.get(&format!("&$skiptoken={cursor}"), caller).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{next}");
         assert_eq!(labels(&next).len(), 1);
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_continuation_reads_through_a_concurrent_publish() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        served.publish_all().await;
+        let caller = reader("reader-principal", &["allowed"]);
+        let ordered = "&$top=1&$orderby=label%20asc&$count=true";
+        let (status, first) = served.get(ordered, caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{first}");
+        assert_eq!(labels(&first), ["first"]);
+        assert_eq!(first["count"], 3);
+        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+
+        // A refresh publishes a later key between pages. The continuation
+        // keeps its position and reads the value current for its own page.
+        served
+            .fixture
+            .publish_label(&served.scope, "third", "thirdly")
+            .await;
+        let (status, second) = served
+            .get(&format!("&$skiptoken={cursor}"), caller.clone())
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{second}");
+        assert_eq!(labels(&second), ["second"]);
+        assert_eq!(second["count"], 3);
+        let cursor = second["nextCursor"].as_str().unwrap().to_owned();
+        let (status, third) = served.get(&format!("&$skiptoken={cursor}"), caller).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{third}");
+        assert_eq!(labels(&third), ["thirdly"]);
+        assert!(third.get("nextCursor").is_none());
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_label_sweep_survives_a_holdings_refresh_for_another_parent() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        let registry =
+            super::super::external_view_query::tests::compile_project(&two_projection_project());
+        served.publish_all().await;
+        let parent = served.scope.clone();
+        let generation = ProjectionGeneration {
+            epoch: parent.epoch,
+            generation: served.generation().await,
+        };
+        let authority = RefreshAuthority {
+            pool: served.fixture.pool.clone(),
+            expected: served.fixture.expected.clone(),
+            lock_key: RegistryLockKey::derive(registry.registry_id()).unwrap(),
+            lock_timeout: Duration::from_secs(2),
+            scope: bound_scope(&served.fixture, "other").await,
+            parent: Some((parent.clone(), generation)),
+            supporting: vec![SupportingSnapshot {
+                subject_key: "first".to_owned(),
+                snapshot_id: "first-first".to_owned(),
+            }],
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        authority.check(deadline).await.unwrap();
+        // A holdings refresh for another root leaves this sweep's parent as
+        // selected, so acquisition for its selectors goes ahead.
+        served
+            .fixture
+            .publish_label(&parent, "second", "renewed")
+            .await;
+        authority.check(deadline).await.unwrap();
+        // A refresh of the sweep's own parent replaces the snapshot its
+        // selectors came from, so acquisition stops before the source call.
+        served
+            .fixture
+            .publish_label(&parent, "first", "renewed")
+            .await;
+        assert!(authority.check(deadline).await.is_err());
         served.fixture.cleanup().await;
     }
 
