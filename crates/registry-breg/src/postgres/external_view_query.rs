@@ -552,7 +552,22 @@ fn sql_type(kind: ExternalFieldType) -> &'static str {
     }
 }
 
+/// Largest string a request filter may carry.
+const MAXIMUM_FILTER_STRING_BYTES: usize = 4096;
+/// Largest sort value a continuation resumes from. Only a cursor BReg sealed
+/// carries one, and the cursor's own payload bound (8 KiB, shared with the
+/// request's key, query and binding) is the effective limit above this.
+pub(crate) const MAXIMUM_CURSOR_SORT_VALUE_BYTES: usize = 6144;
+
 fn scalar(value: &Value, kind: ExternalFieldType) -> Result<Option<String>, ExternalQueryError> {
+    bounded_scalar(value, kind, MAXIMUM_FILTER_STRING_BYTES)
+}
+
+fn bounded_scalar(
+    value: &Value,
+    kind: ExternalFieldType,
+    maximum_string_bytes: usize,
+) -> Result<Option<String>, ExternalQueryError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -560,7 +575,7 @@ fn scalar(value: &Value, kind: ExternalFieldType) -> Result<Option<String>, Exte
     let result = match kind {
         ExternalFieldType::String => value
             .as_str()
-            .filter(|s| s.len() <= 4096)
+            .filter(|s| s.len() <= maximum_string_bytes)
             .map(str::to_owned)
             .ok_or_else(invalid)?,
         ExternalFieldType::Integer => value.as_i64().map(|v| v.to_string()).ok_or_else(invalid)?,
@@ -630,7 +645,8 @@ fn continuation_sql(
                     .map_err(|_| ExternalQueryError::InvalidQuery)?,
                 _ => Value::String(value.clone()),
             };
-            let value = scalar(&parsed, kind)?.ok_or(ExternalQueryError::InvalidQuery)?;
+            let value = bounded_scalar(&parsed, kind, MAXIMUM_CURSOR_SORT_VALUE_BYTES)?
+                .ok_or(ExternalQueryError::InvalidQuery)?;
             let value = parameter(parameters, Some(value));
             let cast = sql_type(kind);
             Ok(format!("({column} {} {value}::{cast} OR {column} IS NULL OR ({column}={value}::{cast} AND {tie}))",direction.comparison()))
@@ -765,6 +781,37 @@ pub(crate) mod tests {
             scalar(&json!("-12.50"), ExternalFieldType::Decimal).unwrap(),
             Some("-12.50".into())
         );
+    }
+
+    #[test]
+    fn a_sort_value_past_the_filter_bound_resumes_within_the_cursor_bound() {
+        let order = |value: String| {
+            let after = PageAfter {
+                root_id: Uuid::nil(),
+                source_key: "row".into(),
+                sort_value: Some(value),
+            };
+            let mut params = vec![];
+            continuation_sql(
+                Some((
+                    &after,
+                    Some((
+                        "sort_key",
+                        ExternalFieldType::String,
+                        SortDirection::Ascending,
+                    )),
+                )),
+                &mut params,
+            )
+        };
+        assert!(order("a".repeat(5000)).is_ok());
+        assert!(order("a".repeat(MAXIMUM_CURSOR_SORT_VALUE_BYTES)).is_ok());
+        assert!(matches!(
+            order("a".repeat(MAXIMUM_CURSOR_SORT_VALUE_BYTES + 1)),
+            Err(ExternalQueryError::InvalidQuery)
+        ));
+        // A request filter keeps its own, smaller bound.
+        assert!(scalar(&json!("a".repeat(5000)), ExternalFieldType::String).is_err());
     }
 
     #[test]
