@@ -1196,29 +1196,22 @@ impl RootKeys {
         Ok(row.map(|row| row.get(1)))
     }
 
+    fn page_sql(&self) -> String {
+        format!(
+            "{} WHERE ($1::uuid IS NULL OR {} > $1) ORDER BY {} LIMIT $2",
+            self.select, self.id, self.id
+        )
+    }
+
     async fn page(
         &self,
         transaction: &GuardedTransaction<'_>,
         after: Option<Uuid>,
         limit: u16,
     ) -> Result<Vec<(Uuid, Option<String>)>> {
-        // The row policy can make PostgreSQL underestimate the eligible
-        // population. Prefer the existing primary-key order for this
-        // bounded refresh transaction to avoid sorting the scope per page.
-        transaction
-            .transaction()
-            .batch_execute("SET LOCAL enable_sort = off")
-            .await
-            .map_err(|_| ExternalViewError::Unavailable)?;
         let rows = transaction
             .transaction()
-            .query(
-                &format!(
-                    "{} WHERE ($1::uuid IS NULL OR {} > $1) ORDER BY {} LIMIT $2",
-                    self.select, self.id, self.id
-                ),
-                &[&after, &i64::from(limit)],
-            )
+            .query(&self.page_sql(), &[&after, &i64::from(limit)])
             .await
             .map_err(|_| ExternalViewError::Unavailable)?;
         Ok(rows
@@ -2566,6 +2559,85 @@ mod postgres_tests {
             .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{next}");
         assert_eq!(labels(&next), ["second"]);
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_refresh_pages_a_dense_scope_in_key_order_without_sorting_it() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        let entity = &served.service.registry.entities()["local-record"];
+        let column = |id: &str| {
+            entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == id)
+                .unwrap()
+                .physical_name
+                .clone()
+        };
+        // Most of a large scope is eligible, so sorting it for each page
+        // would read the whole scope.
+        served
+            .fixture
+            .database
+            .admin
+            .batch_execute(&format!(
+                "INSERT INTO registry_data.\"{table}\"
+                 (record_id,active_package_revision,\"{key}\",\"{tenant}\")
+                 SELECT gen_random_uuid(),'fixture','bulk-'||g,
+                        CASE WHEN g % 20 = 0 THEN 'other' ELSE 'allowed' END
+                 FROM generate_series(1,20000) AS g;
+                 ANALYZE registry_data.\"{table}\";",
+                table = entity.physical_table,
+                key = column("subject-key"),
+                tenant = column("tenant"),
+            ))
+            .await
+            .unwrap();
+        let refresh = request("link");
+        let plan = served.service.plan(&refresh, None).ok().unwrap();
+        let claims = ClaimContext::for_compiled(
+            &served.service.registry,
+            &plan.root.id,
+            Some("reader-principal".to_owned()),
+            "reader",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::context::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "allowed".to_owned(),
+            }],
+        )
+        .unwrap();
+        let keys = RootKeys::new(&plan).ok().unwrap();
+        let middle = Uuid::parse_str("80000000-0000-4000-8000-000000000000").unwrap();
+        for after in [None, Some(middle)] {
+            let mut session = served.service.session().await.ok().unwrap();
+            let transaction = served
+                .service
+                .transaction(
+                    &mut session,
+                    &claims,
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .await
+                .ok()
+                .unwrap();
+            let page = keys.page(&transaction, after, 101).await.ok().unwrap();
+            assert_eq!(page.len(), 101);
+            let explained = transaction
+                .transaction()
+                .query(
+                    &format!("EXPLAIN (COSTS OFF) {}", keys.page_sql()),
+                    &[&after, &101i64],
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| row.get::<_, String>(0))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!explained.contains("Sort"), "after {after:?}: {explained}");
+        }
         served.fixture.cleanup().await;
     }
 }
