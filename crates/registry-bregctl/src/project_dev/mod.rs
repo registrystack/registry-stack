@@ -758,7 +758,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     } else {
         Ok(())
     }
-    .and_then(|()| fs::remove_dir_all(root).context("cannot remove run scratch files"));
+    .and_then(|()| remove_run_dir(root));
     if let Some(error) = failure.filter(|_| !told_parent) {
         let error = match removed.as_ref() {
             Ok(()) => error,
@@ -1132,8 +1132,24 @@ fn keep_logs(root: &Path, run_id: &str) -> Result<Option<PathBuf>> {
 
 fn remove_failed_run(root: &Path, run_id: &str) -> Result<Option<PathBuf>> {
     let kept = keep_logs(root, run_id)?;
-    fs::remove_dir_all(root)?;
+    remove_run_dir(root)?;
     Ok(kept)
+}
+
+/// Where a run directory goes while it is deleted. The name is not a run ID,
+/// so `status` and `stop` never read it as a run.
+fn removing_dir(root: &Path) -> Result<PathBuf> {
+    let name = root.file_name().context("run directory has no name")?;
+    Ok(root.with_file_name(format!(".{}.removing", name.to_string_lossy())))
+}
+
+/// Renames the run directory away before deleting it, so `status` sees either
+/// the whole run or no run, never a run whose report is already deleted.
+fn remove_run_dir(root: &Path) -> Result<()> {
+    let doomed = removing_dir(root)?;
+    fs::rename(root, &doomed).context("cannot remove run scratch files")?;
+    fs::remove_dir_all(&doomed)
+        .with_context(|| format!("cannot remove run scratch files at {}", doomed.display()))
 }
 
 fn note_kept_logs(error: anyhow::Error, kept: Option<PathBuf>) -> anyhow::Error {
@@ -1292,6 +1308,23 @@ mod tests {
         assert_eq!(status["recovery"]["databases_and_roles"][1], "role");
         let text = recovery_message(RUN_ID, &status["recovery"]);
         assert!(text.contains("database or role role"), "{text}");
+    }
+
+    #[test]
+    fn a_run_directory_disappears_in_one_step_and_leaves_nothing() {
+        let scratch = tempfile::tempdir().unwrap();
+        let base = scratch.path().canonicalize().unwrap();
+        let root = base.join(RUN_ID);
+        private_directory(&root).unwrap();
+        fs::write(root.join(REPORT), "{}").unwrap();
+        private_directory(&root.join("logs")).unwrap();
+        fs::write(root.join("logs").join("breg-check.log"), "boom").unwrap();
+        let doomed = removing_dir(&root).unwrap();
+        assert_eq!(doomed.parent(), Some(base.as_path()));
+        assert!(run_dir(&doomed.file_name().unwrap().to_string_lossy()).is_err());
+        remove_run_dir(&root).unwrap();
+        assert!(!root.exists());
+        assert_eq!(fs::read_dir(&base).unwrap().count(), 0);
     }
 
     #[test]
