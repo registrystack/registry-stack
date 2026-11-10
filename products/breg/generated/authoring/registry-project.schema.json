@@ -2810,7 +2810,8 @@
       "properties": {
         "cacheTtlSeconds": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 31536000,
+          "minimum": 1,
           "type": "integer"
         },
         "cardinality": {

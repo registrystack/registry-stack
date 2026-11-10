@@ -363,7 +363,7 @@ def runtime_fragment(origin, key_file_name, grant_cutoff):
             "connection": connection, "endpointPolicies": policy,
             "allowedFields": sorted(fields),
             "grantValidUntil": grant_cutoff,
-            "acquisition": {"maximumDataOperations": 8, "timeoutMilliseconds": 8000,
+            "acquisition": {"maximumDataOperations": 8, "attemptTimeoutMilliseconds": 8000,
                             "maximumResponseBytes": 262144},
         }
         bindings.append(entry)

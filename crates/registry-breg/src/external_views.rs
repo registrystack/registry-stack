@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use registry_platform_yaml::{ExternalId, LocalId};
+use registry_platform_yaml::{BoundedU32, ExternalId, LocalId};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{
@@ -65,6 +65,10 @@ pub enum ExternalCardinality {
     Many,
 }
 
+/// The longest cache lifetime, in seconds, of an indexed projection: one year.
+/// The deployment binding and the stored scope hold the same bound.
+pub const MAXIMUM_CACHE_TTL_SECONDS: u32 = 31_536_000;
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -80,7 +84,7 @@ pub struct ExternalProjectionSource {
     pub cardinality: ExternalCardinality,
     pub fields: UniqueSet<LocalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_ttl_seconds: Option<u32>,
+    pub cache_ttl_seconds: Option<BoundedU32<1, MAXIMUM_CACHE_TTL_SECONDS>>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -262,7 +266,7 @@ pub(crate) fn compile(
                 format!("{path}/cacheTtlSeconds"),
                 "Remove the cache lifetime for a live projection.",
             ),
-            (ExternalProjectionMode::Indexed, None | Some(0)) => error(
+            (ExternalProjectionMode::Indexed, None) => error(
                 &mut diagnostics,
                 "indexed-cache",
                 format!("{path}/cacheTtlSeconds"),
