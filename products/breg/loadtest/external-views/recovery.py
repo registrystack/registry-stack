@@ -7,7 +7,8 @@ import json
 import re
 import subprocess
 
-import fixture_path  # noqa: F401
+import fixture_path
+fixture_path.ensure_importable()
 from journey import JourneyError, expect, records, request
 
 PROJECTION = "holdings-indexed"
