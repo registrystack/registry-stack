@@ -12,10 +12,12 @@
   skipped count, and uses the ordinary fenced Run admission transaction.
 - Add optional `onFailure` to read and evaluation call steps. It routes only
   after the ordinary retry limit is exhausted by a definite availability
-  category, records that bounded category on the run, and provides no call
-  output on the failure edge. Mutations, authorization and configuration
-  refusals, preparation failures, invalid protocol answers and uncertain
-  outcomes remain operational failures.
+  category, or when the next retry would not fit before the run deadline,
+  records that bounded category on the run, and provides no call output on
+  the failure edge. Mutations, authorization and configuration refusals,
+  preparation failures, invalid protocol answers and uncertain outcomes
+  remain operational failures. In a scenario, one `retryable` reply with such
+  a category takes the edge, as the runtime does once retries are exhausted.
 
 ## 0.46.0 - 2026-11-08
 

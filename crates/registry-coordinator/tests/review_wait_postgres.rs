@@ -1152,6 +1152,81 @@ async fn historical_authored_cancellation_does_not_apply_to_a_later_wait() {
 }
 
 #[tokio::test]
+async fn an_operator_cancel_wins_over_a_later_service_deadline() {
+    // Cleanup reaches a wait-until, then a wait-for, or the wait-for alone.
+    for cleanup_until in [false, true] {
+        let mut h = harness_with_options(true, true, true).await;
+        let mut authored = registry_platform_yaml::Reader::new("workflow.yaml")
+            .scan(workflow_with_cancel(true, true, true).as_bytes())
+            .unwrap()
+            .unwrap()
+            .to_json_value();
+        let workflow = &mut authored["workflow"];
+        workflow["serviceDeadlineSeconds"] = json!(60);
+        workflow["onDeadline"] = json!("service-expired");
+        workflow["steps"]["service-expired"] = json!({"type":"finish","outcome":"service-expired"});
+        workflow["outcomes"]["service-expired"] = json!({"type":"null"});
+        if cleanup_until {
+            workflow["steps"]["withdraw"]["next"] = json!("cleanup-until");
+            workflow["steps"]["cleanup-until"] = json!({"type":"wait-until","waitUntil":{"type":"literal","value":"2000-01-01T00:00:00Z"},"next":"cleanup-wait"});
+        }
+        std::fs::write(
+            h._project.path().join("workflow.yaml"),
+            authored.to_string(),
+        )
+        .unwrap();
+        h.definition = Definition::load(h._project.path()).unwrap();
+        let fake = Fake::new(vec![
+            CompletionObservation::Pending { retry_after: None },
+            CompletionObservation::Pending { retry_after: None },
+            CompletionObservation::Settled(result("cancelled")),
+        ]);
+        let worker = Worker::new(h.store.clone(), fake.clone());
+        let run = h.admit().await;
+        h.drain(&worker).await;
+        let routed = h
+            .store
+            .cancel_owned(run, &operator(), "synthetic-authored-withdrawal")
+            .await
+            .unwrap();
+        assert_eq!(routed.step, "withdraw");
+        // The service deadline passes while cleanup runs.
+        h.sql("UPDATE {schema}.runs SET service_deadline_at=clock_timestamp()-interval '1 second' WHERE service_deadline_at IS NOT NULL").await;
+        h.drain(&worker).await;
+        let waiting = h.store.status(run).await.unwrap();
+        assert_eq!(
+            (waiting.step.as_str(), waiting.state.as_str()),
+            ("cleanup-wait", "running"),
+            "cleanup-until {cleanup_until}: the cleanup wait is not diverted"
+        );
+        assert_eq!(fake.reads(), 2);
+        let cleared: bool = h
+            .client()
+            .await
+            .query_one(
+                &format!(
+                    "SELECT service_deadline_at IS NULL FROM {}.runs WHERE run_id=$1",
+                    h.namespace
+                ),
+                &[&run],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(cleared, "the routed cancel ends the service deadline");
+        h.sql("UPDATE {schema}.completion_waits SET not_before=clock_timestamp()-interval '1 second'; UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp() WHERE step='cleanup-wait' AND state='pending'").await;
+        h.drain(&worker).await;
+        assert_eq!(fake.reads(), 3);
+        assert_eq!(
+            status(&h, run).await,
+            ("finished".into(), Some("withdrawn".into()), None),
+            "cleanup-until {cleanup_until}"
+        );
+        assert!(h.wait_row(run).await.is_none());
+    }
+}
+
+#[tokio::test]
 async fn authored_wait_cancellation_refuses_a_corrupted_snapshot_without_stopping_the_run() {
     let h = harness_with_cancel(true, true).await;
     let fake = Fake::new(vec![]);

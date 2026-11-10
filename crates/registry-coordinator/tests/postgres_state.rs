@@ -926,6 +926,49 @@ async fn an_exhausted_read_routes_after_restart_with_a_bounded_category_and_no_o
 }
 
 #[tokio::test]
+async fn a_read_whose_retry_cannot_fit_before_the_run_deadline_takes_its_failure_route() {
+    // (pause hint, seconds left before the run deadline). The first expires
+    // the retry outright; the second leaves too little time for the next
+    // attempt's timeout and finalization.
+    for (hint, deadline) in [(Some(60), 30), (None, 12)] {
+        let h = read_failure_harness().await;
+        let run = h.admit().await;
+        let setup = Worker::new(h.store.clone(), Fake::new(vec![]));
+        assert!(
+            setup.tick().await.unwrap(),
+            "the timer advances to the read"
+        );
+        h.sql(&format!(
+            "UPDATE {{schema}}.runs SET deadline_at=clock_timestamp()+interval '{deadline} seconds'"
+        ))
+        .await;
+        let fake = Arc::new(ReadFailureFake {
+            outcome: Mutex::new(Some(CallOutcome::Retryable {
+                code: "transport-unavailable".into(),
+                retry_after: hint.map(std::time::Duration::from_secs),
+            })),
+            calls: Mutex::new(vec![]),
+        });
+        let worker = Worker::new(h.store.clone(), fake.clone());
+        assert!(worker.tick().await.unwrap(), "the first read attempt runs");
+        let routed = h.store.status(run).await.unwrap();
+        assert_eq!(
+            (routed.state.as_str(), routed.step.as_str()),
+            ("running", "unavailable"),
+            "hint {hint:?}, deadline {deadline}s"
+        );
+        assert_eq!(
+            routed.failure_code.as_deref(),
+            Some("transport-unavailable")
+        );
+        assert!(worker.tick().await.unwrap(), "the failure route finishes");
+        let finished = h.store.status(run).await.unwrap();
+        assert_eq!(finished.outcome.as_deref(), Some("unavailable"));
+        assert_eq!(fake.calls.lock().unwrap().len(), 1, "no retry was sent");
+    }
+}
+
+#[tokio::test]
 async fn an_authorization_refusal_never_takes_a_read_failure_route() {
     let h = read_failure_harness().await;
     let run = h.admit().await;

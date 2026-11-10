@@ -391,13 +391,23 @@ impl Worker {
         match step {
             // Acceptance checkpoints the timer wake. Store checks the current
             // deadline atomically before advancing the workflow at commit.
+            // The service deadline takes the route only when it falls at or
+            // before the wait's authored instant. A wait that fell due first
+            // keeps its own route, however late a worker picks it up.
             Step::WaitUntil { next, .. } => {
-                let service_deadline_due = job
-                    .job
-                    .service_deadline_at
-                    .is_some_and(|at| SystemTime::from(at) <= job.attempt_started_at);
+                let service_deadline_first = match (deadline_target, job.job.service_deadline_at) {
+                    (Some(_), Some(service_deadline_at)) => {
+                        match evaluate()
+                            .and_then(|value| crate::definition::parse_timestamp(&value))
+                        {
+                            Ok(due) => service_deadline_at <= due,
+                            Err(_) => return Ok(failed("mapping-invalid", false)),
+                        }
+                    }
+                    _ => false,
+                };
                 let detail = deadline_target
-                    .filter(|_| service_deadline_due)
+                    .filter(|_| service_deadline_first)
                     .map_or_else(|| advance(next.clone(), None), deadline_route);
                 Ok(accepted(detail))
             }
@@ -753,13 +763,27 @@ impl Worker {
                         request.operation.has_dispatch_risk() || job.job.uncertain,
                     ));
                 }
+                // The automatic retries are exhausted at the attempt limit,
+                // and also when the run deadline leaves no room for the next
+                // retry: Dispatch would expire the job rather than send it.
+                let exhausted = final_attempt
+                    || matches!(
+                        &result,
+                        CallOutcome::Retryable { retry_after, .. }
+                            if !retry_fits(
+                                &job.policy,
+                                job.attempt,
+                                job.attempt_started_at,
+                                *retry_after,
+                            )
+                    );
                 Ok(call_result_with_failure(
                     retry_or_hold(result, job),
                     next,
                     on_failure.as_deref(),
                     on_declared_refusal.as_deref(),
                     job.job.uncertain,
-                    final_attempt,
+                    exhausted,
                 ))
             }
         }

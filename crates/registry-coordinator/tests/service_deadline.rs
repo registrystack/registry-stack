@@ -185,3 +185,169 @@ async fn a_wait_crosses_the_service_deadline_once_across_restart() {
     drop(db);
     connection.await.unwrap().unwrap();
 }
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn a_wait_due_before_the_service_deadline_keeps_its_route_when_picked_up_late() {
+    use async_trait::async_trait;
+    use chrono::{Duration, Utc};
+    use registry_coordinator::{
+        protocol::{AdapterSet, CallOutcome, CallRequest},
+        store::Store,
+        worker::Worker,
+    };
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    struct Local;
+    #[async_trait]
+    impl AdapterSet for Local {
+        fn binding_digest(&self) -> &str {
+            "local"
+        }
+        async fn call(&self, _: &CallRequest) -> CallOutcome {
+            panic!("the test workflow has no external operations")
+        }
+    }
+
+    let url = std::env::var("COORDINATOR_TEST_DATABASE_URL")
+        .expect("use a disposable local PostgreSQL database");
+    let namespace = format!("coordinator_{}", Uuid::new_v4().simple());
+    let store = Arc::new(Store::connect(&url, &namespace).await.unwrap());
+    store.migrate().await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), &project());
+    let definition = Definition::load(root.path()).unwrap();
+    // The wait fell due before the service deadline, but no worker picked it
+    // up until after the service deadline had passed.
+    let run = store
+        .admit(
+            &definition,
+            json!({"at": (Utc::now() - Duration::minutes(2)).to_rfc3339()}),
+            "p",
+            "late-pickup",
+            "local",
+        )
+        .await
+        .unwrap();
+    let (db, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    db.execute(
+        &format!(
+            "UPDATE {namespace}.runs SET service_deadline_at=clock_timestamp()-interval '1 minute' WHERE run_id=$1"
+        ),
+        &[&run],
+    )
+    .await
+    .unwrap();
+    let worker = Worker::new(store.clone(), Arc::new(Local));
+    assert!(worker.tick().await.unwrap());
+    assert_eq!(store.status(run).await.unwrap().step, "done");
+    assert!(worker.tick().await.unwrap());
+    assert_eq!(
+        store.status(run).await.unwrap().outcome.as_deref(),
+        Some("done")
+    );
+    drop(db);
+    connection.await.unwrap().unwrap();
+}
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn two_replicas_take_each_service_deadline_route_exactly_once() {
+    use async_trait::async_trait;
+    use chrono::{Duration, Utc};
+    use registry_coordinator::{
+        protocol::{AdapterSet, CallOutcome, CallRequest},
+        store::Store,
+        worker::Worker,
+    };
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    struct Local;
+    #[async_trait]
+    impl AdapterSet for Local {
+        fn binding_digest(&self) -> &str {
+            "local"
+        }
+        async fn call(&self, _: &CallRequest) -> CallOutcome {
+            panic!("the test workflow has no external operations")
+        }
+    }
+
+    let url = std::env::var("COORDINATOR_TEST_DATABASE_URL")
+        .expect("use a disposable local PostgreSQL database");
+    let namespace = format!("coordinator_{}", Uuid::new_v4().simple());
+    let first = Arc::new(Store::connect(&url, &namespace).await.unwrap());
+    first.migrate().await.unwrap();
+    let second = Arc::new(Store::connect(&url, &namespace).await.unwrap());
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), &project());
+    let definition = Definition::load(root.path()).unwrap();
+    let mut runs = Vec::new();
+    for index in 0..8 {
+        runs.push(
+            first
+                .admit(
+                    &definition,
+                    json!({"at": (Utc::now() + Duration::hours(1)).to_rfc3339()}),
+                    "p",
+                    &format!("contended-{index}"),
+                    "local",
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let (db, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    db.batch_execute(&format!(
+        "UPDATE {namespace}.runs SET service_deadline_at=clock_timestamp();
+         UPDATE {namespace}.jobs SET next_attempt_at=clock_timestamp() WHERE state='pending'"
+    ))
+    .await
+    .unwrap();
+    let workers = [
+        Worker::new(first.clone(), Arc::new(Local)),
+        Worker::new(second.clone(), Arc::new(Local)),
+    ];
+    async fn drain(worker: &registry_coordinator::worker::Worker) -> usize {
+        let mut attempts = 0;
+        while worker.tick().await.unwrap() {
+            attempts += 1;
+        }
+        attempts
+    }
+    let (a, b) = tokio::join!(drain(&workers[0]), drain(&workers[1]));
+    // Each run takes one wake and one finish; nothing is attempted twice.
+    assert_eq!(a + b, 2 * runs.len());
+    for worker in &workers {
+        assert!(!worker.tick().await.unwrap());
+    }
+    for run in &runs {
+        let status = second.status(*run).await.unwrap();
+        assert_eq!(
+            (status.step.as_str(), status.outcome.as_deref()),
+            ("escalate", Some("late"))
+        );
+    }
+    let row = db
+        .query_one(
+            &format!(
+                "SELECT count(*) FILTER (WHERE j.step='escalate' AND j.state='delivered'), count(*) FILTER (WHERE j.step='done'), count(*) FILTER (WHERE r.service_deadline_at IS NOT NULL) FROM {namespace}.jobs j JOIN {namespace}.runs r USING (run_id)"
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), runs.len() as i64);
+    assert_eq!(row.get::<_, i64>(1), 0);
+    assert_eq!(row.get::<_, i64>(2), 0, "every route consumed its deadline");
+    drop(db);
+    connection.await.unwrap().unwrap();
+}

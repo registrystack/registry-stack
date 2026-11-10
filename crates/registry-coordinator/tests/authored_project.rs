@@ -485,23 +485,77 @@ fn reads_and_evaluations_accept_on_failure_but_mutations_refuse_it() {
     let definition = Definition::load(root.path()).expect("a read may route exhausted failure");
     let snapshot: Value = serde_json::from_str(&definition.snapshot().unwrap()).unwrap();
     assert_eq!(snapshot["workflow"]["steps"]["act"]["onFailure"], "refused");
+    // One retryable reply stands for the step's automatic retries, all
+    // failed, so an availability category takes onFailure at once, as the
+    // runtime does when those retries are exhausted.
     let scenarios = root.path().join("scenarios.yaml");
-    fs::write(&scenarios, json!({
-        "apiVersion": registry_coordinator::scenarios::API_VERSION,
-        "kind": registry_coordinator::scenarios::KIND,
-        "cases": [{
-            "id":"availability-exhausted",
+    let case = |id: &str, replies: Value, expect: Value| {
+        json!({
+            "id": id,
             "admittedAt":"2026-11-10T00:00:00Z",
             "input":{},
-            "replies":{"act":vec![json!({"type":"retryable","code":"transport-unavailable"});10]},
+            "replies":{"act": replies},
             "recovery":{"act":"retry-same"},
-            "expect":{"path":["act","refused"],"state":"completed"}
-        }]
-    }).to_string()).unwrap();
+            "expect": expect
+        })
+    };
+    fs::write(
+        &scenarios,
+        json!({
+            "apiVersion": registry_coordinator::scenarios::API_VERSION,
+            "kind": registry_coordinator::scenarios::KIND,
+            "cases": [
+                case(
+                    "availability-exhausted",
+                    json!([{"type":"retryable","code":"transport-unavailable"}]),
+                    json!({"path":["act","refused"],"state":"completed"}),
+                ),
+                case(
+                    "not-availability",
+                    json!([{"type":"retryable","code":"credential-unavailable"}]),
+                    json!({"path":["act"],"state":"retryable"}),
+                ),
+                case(
+                    "after-uncertain",
+                    json!([
+                        {"type":"uncertain","code":"transport-uncertain"},
+                        {"type":"retryable","code":"transport-unavailable"}
+                    ]),
+                    json!({"path":["act"],"state":"uncertain"}),
+                ),
+                case(
+                    "after-failure-route",
+                    json!([
+                        {"type":"retryable","code":"transport-unavailable"},
+                        {"type":"retryable","code":"transport-unavailable"}
+                    ]),
+                    json!({"path":["act","refused"],"state":"completed"}),
+                ),
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
     let cases = registry_coordinator::scenarios::load(&scenarios).unwrap();
     let result = registry_coordinator::scenarios::run(&definition, &cases.cases[0]).unwrap();
     assert_eq!(result.path, ["act", "refused"]);
     assert_eq!(result.outcome.as_deref(), Some("refused"));
+    assert_eq!(result.call_attempts["act"], 1);
+    // A code outside the availability categories, or a reply after an
+    // uncertain one, never takes the failure route.
+    for (index, state) in [(1, "retryable"), (2, "uncertain")] {
+        let result =
+            registry_coordinator::scenarios::run(&definition, &cases.cases[index]).unwrap();
+        assert_eq!(result.path, ["act"], "case {index}");
+        assert_eq!(result.state, state, "case {index}");
+        assert_eq!(result.outcome, None, "case {index}");
+    }
+    // The run leaves the step at onFailure, so no later reply is consumed.
+    let error = registry_coordinator::scenarios::run(&definition, &cases.cases[3])
+        .err()
+        .expect("a reply after the failure route is refused");
+    assert_eq!(error.code, "scenario.recovery");
+    assert_eq!(error.field.as_deref(), Some("/replies/act/1"));
 
     let evaluation = json!({
         "apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1",

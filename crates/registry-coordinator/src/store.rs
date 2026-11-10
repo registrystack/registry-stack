@@ -2268,6 +2268,8 @@ impl Store {
     /// Take a waiting step's authored cancellation edge while holding its
     /// job and run locks. The run's separate marker keeps later cancellation
     /// requests from setting the ordinary stop flag while cleanup dispatches.
+    /// The operator's cancel wins over the service deadline: the cleanup
+    /// path runs to its own end, so the edge ends the service deadline.
     async fn route_authored_cancel(
         &self,
         tx: &Transaction<'_>,
@@ -2286,7 +2288,7 @@ impl Store {
         let changed = tx
             .execute(
                 &format!(
-                    "UPDATE {}.runs SET authored_cancel_requested=true,authored_cancel_pending_step=NULL,step=$3,state='running',outcome=NULL,terminal_output=NULL,failure_code=NULL,failure_path=NULL,completed_at=NULL WHERE run_id=$1 AND step=$2",
+                    "UPDATE {}.runs SET authored_cancel_requested=true,authored_cancel_pending_step=NULL,step=$3,state='running',outcome=NULL,terminal_output=NULL,failure_code=NULL,failure_path=NULL,completed_at=NULL,service_deadline_at=NULL WHERE run_id=$1 AND step=$2",
                     self.namespace
                 ),
                 &[&run, &step, next],

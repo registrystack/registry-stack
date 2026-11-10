@@ -66,8 +66,8 @@ struct AuthoredScenario {
     /// The start input, which must satisfy the workflow input schema.
     input: ForeignValue,
     /// The synthetic replies each call step receives, by step, in the order
-    /// its attempts consume them, up to the runtime attempt limit. A reply
-    /// after the first needs a recovery for that step.
+    /// its attempts consume them: 1 to 8 per step. A reply after the first
+    /// needs a recovery for that step.
     #[cfg_attr(feature = "schema", schemars(schema_with = "replies_schema"))]
     replies: BTreeMap<LocalId, Vec<AuthoredReply>>,
     /// The operator recovery each call step receives after a retryable or
@@ -107,9 +107,12 @@ enum AuthoredReply {
         /// output contract.
         value: ForeignValue,
     },
-    /// The call failed and may be retried; the run stops as retryable, or as
-    /// uncertain after an earlier uncertain reply, unless a recovery consumes
-    /// another reply.
+    /// The call failed after its automatic retries; the run stops as
+    /// retryable, or as uncertain after an earlier uncertain reply, unless a
+    /// recovery consumes another reply. A step with `onFailure` takes that
+    /// edge instead when the code is an availability category and no earlier
+    /// reply was uncertain, as the runtime does once those retries are
+    /// exhausted.
     Retryable {
         /// The code the reply carries, such as credential-unavailable.
         code: LocalId,
@@ -309,7 +312,6 @@ enum ExpectedOutcome {
 registry_platform_yaml::tagged_union!(ExpectedOutcome);
 
 const MAX_SCENARIO_BYTES: u64 = 1_048_576;
-const MAX_SCENARIO_REPLIES: usize = crate::operations::MAXIMUM_ATTEMPTS as usize;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -529,8 +531,8 @@ impl CoordinatorScenarios {
             for (step, replies) in &case.replies {
                 bound(
                     &format!("{path}/replies/{step}"),
-                    (1..=MAX_SCENARIO_REPLIES).contains(&replies.len()),
-                    &format!("expected from 1 to {MAX_SCENARIO_REPLIES} synthetic replies"),
+                    (1..=8).contains(&replies.len()),
+                    "expected from 1 to 8 synthetic replies",
                 );
             }
         }
@@ -655,7 +657,7 @@ fn replies_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema
         "propertyNames": generator.subschema_for::<LocalId>(),
         "maxProperties": 64,
         "additionalProperties": {
-            "type": "array", "minItems": 1, "maxItems": MAX_SCENARIO_REPLIES,
+            "type": "array", "minItems": 1, "maxItems": 8,
             "items": generator.subschema_for::<AuthoredReply>(),
         },
     })
@@ -886,15 +888,16 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
             )
         })? {
             Step::WaitUntil { next, .. } => {
-                let due = now
-                    .max(parse_timestamp(&definition.evaluate_synthetic(
-                        &step,
-                        &scenario.input,
-                        &outputs,
-                    )?)?)
-                    .min(deadline);
+                let authored = parse_timestamp(&definition.evaluate_synthetic(
+                    &step,
+                    &scenario.input,
+                    &outputs,
+                )?)?;
+                let due = now.max(authored).min(deadline);
+                // As at run time, the service deadline takes the route only
+                // when it falls at or before the wait's authored instant.
                 if let (Some(at), Some(target)) = (
-                    service_deadline.filter(|at| *at <= due),
+                    service_deadline.filter(|at| *at <= authored),
                     on_service_deadline,
                 ) {
                     now = now.max(at);
@@ -1035,7 +1038,12 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                         }
                     }
                     Wait::Cancel => match on_cancel {
-                        Some(route) => step = route.clone(),
+                        // The operator's cancel wins over the service
+                        // deadline, as at run time.
+                        Some(route) => {
+                            service_deadline = None;
+                            step = route.clone();
+                        }
                         None => {
                             report.state = "cancelled".into();
                             break;
@@ -1287,11 +1295,21 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             break;
                         }
                         Reply::Retryable { retryable } => {
+                            // One retryable reply stands for the step's
+                            // automatic retries, all failed: an availability
+                            // category takes onFailure, as at run time.
                             if let Some(target) = on_failure.as_ref().filter(|_| {
                                 !prior_unknown
-                                    && index + 1 == MAX_SCENARIO_REPLIES
                                     && crate::worker::availability_failure(retryable).is_some()
                             }) {
+                                if index + 1 < replies.len() {
+                                    return Err(error(
+                                        "scenario.recovery",
+                                        format!("/replies/{step}/{}", index + 1),
+                                        format!("step {step} replies after a retryable reply that takes onFailure, so no later reply is consumed"),
+                                        "End the replies at the retryable one, as the run leaves the step there.",
+                                    ));
+                                }
                                 completion = Some((target.clone(), None));
                                 break;
                             }
