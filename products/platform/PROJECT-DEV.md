@@ -178,8 +178,10 @@ Use a bounded GET `poll` for asynchronous delivery or result retrieval. Set
 requests and transfer at most 8 MiB of request and response bodies in total.
 
 `token` writes a short-lived bearer header file for each grant. Its JSON report
-gives the person's `alias`, an `expires_at` time, and a `credentials` list whose
-entries carry the `product`, the selected `profile` and the `header_file` path.
+gives the person's `alias`, the `expires_at` time when the tokens expire
+(five minutes after issue, or with the run if that is sooner), and a
+`credentials` list whose entries carry the `product`, the selected `profile`
+and the `header_file` path.
 Pass the file to curl with `--header @HEADER_FILE`. With BReg, include the
 selected profile as the `accessProfile` query parameter. With Casework, the
 header file carries the profile.

@@ -6,7 +6,7 @@ use registry_platform_crypto::{
     generate_private_jwk, jws::sign_compact_jws, GeneratedKeyAlgorithm, LocalJwkSigner, PrivateJwk,
 };
 use serde_json::{json, Value};
-use std::{path::Path, time::Duration};
+use std::path::Path;
 use zeroize::Zeroizing;
 
 use super::{
@@ -14,6 +14,15 @@ use super::{
     plan::{self, Product, TestPerson},
     write_private, RunInput,
 };
+
+/// How long a token the local issuer signs stays valid.
+pub(super) const TOKEN_LIFETIME_SECONDS: u64 = 300;
+
+/// When a token issued at `now` expires: one lifetime later, or with the run
+/// if that comes first.
+pub(super) fn token_expiry(run_expires: u64, now: u64) -> u64 {
+    run_expires.min(now.saturating_add(TOKEN_LIFETIME_SECONDS))
+}
 
 pub(super) struct Issuer {
     signer: LocalJwkSigner,
@@ -70,7 +79,7 @@ impl Issuer {
         expires: u64,
     ) -> Result<Zeroizing<String>> {
         let now = clock()?;
-        let expires = expires.min(now + Duration::from_secs(300).as_secs());
+        let expires = token_expiry(expires, now);
         ensure!(expires > now, "the development run has expired");
         let plan = &input.plan;
         let grant = &person.grants[&product];
@@ -121,5 +130,16 @@ impl Issuer {
         )
         .await?;
         Ok(Zeroizing::new(token))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_token_expires_five_minutes_after_issue_or_with_the_run() {
+        assert_eq!(token_expiry(10_000, 1_000), 1_000 + TOKEN_LIFETIME_SECONDS);
+        assert_eq!(token_expiry(1_100, 1_000), 1_100);
     }
 }

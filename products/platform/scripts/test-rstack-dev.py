@@ -212,7 +212,10 @@ def dev(bin_dir, env, cwd, *args, expected=0):
 
 
 def credential(bin_dir, env, cwd, run, alias):
+    before = time.time()
     report = dev(bin_dir, env, cwd, "token", run, "--as", alias)
+    # The report gives the expiry the tokens carry, at most five minutes away.
+    assert before < report["expires_at"] <= time.time() + 300, report
     [entry] = report["credentials"]
     header_file = Path(entry["header_file"])
     assert header_file.stat().st_mode & 0o077 == 0
