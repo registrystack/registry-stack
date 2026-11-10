@@ -236,11 +236,10 @@ pub(crate) fn trusted_evaluation_date(
     registry: &CompiledRegistry,
     now: time::OffsetDateTime,
 ) -> Result<Option<time::Date>, ActionHandlerError> {
-    if !action
-        .handler
-        .as_ref()
-        .is_some_and(|handler| handler.uses_today)
-    {
+    // The helper is available to every plan of a registry that declares a time
+    // zone. The metadata scan of the script only decides whether the compiler
+    // requires that zone, so a call it cannot see still runs.
+    if action.handler.is_none() || registry.timezone().is_none() {
         return Ok(None);
     }
     #[cfg(feature = "postgres-test")]

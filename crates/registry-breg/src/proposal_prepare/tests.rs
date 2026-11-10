@@ -371,6 +371,45 @@ fn proposal_preparation_freezes_the_date_computed_at_submission() {
 }
 
 #[test]
+fn today_is_available_to_a_plan_the_call_detector_cannot_see() {
+    // The function name is computed, so the metadata scan does not mark the
+    // handler as using today(); the host still answers the call.
+    let script = r#"fn plan(ctx) {
+        let name = "to" + "day";
+        let helper = Fn(name);
+        #{effects:[#{id:"patch-first",set:#{first:helper.call()}}]}
+    }"#;
+    let now = time::macros::datetime!(2026-01-31 12:00 UTC);
+    let input = map(json!({"one":TARGET,"value":"ignored"}));
+
+    let mut with_zone = function_source();
+    with_zone["project"]["timezone"] = json!("UTC");
+    let registry = compile(with_zone, Some(script));
+    assert!(!action(&registry).handler.as_ref().unwrap().uses_today);
+    let date = crate::action_handler::trusted_evaluation_date(action(&registry), &registry, now)
+        .unwrap();
+    assert_eq!(date, Some(time::macros::date!(2026 - 01 - 31)));
+    let ActionHandlerOutcome::Effects(effects) = evaluate_plan_detailed(
+        action(&registry),
+        &input,
+        date,
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap() else {
+        panic!("effects expected")
+    };
+    let effects = serde_json::to_string(&effects).unwrap();
+    assert!(effects.contains("2026-01-31"), "{effects}");
+
+    // Without a declared zone nothing answers today().
+    let registry = compile(function_source(), Some(script));
+    assert_eq!(
+        crate::action_handler::trusted_evaluation_date(action(&registry), &registry, now).unwrap(),
+        None
+    );
+}
+
+#[test]
 fn unchanged_snapshot_bytes_count_toward_the_full_packet_limit() {
     let registry = fixture(json!([patch_effect()]));
     let before = map(json!({"first":"old","notes":"a".repeat(MAX_PROPOSAL_SNAPSHOT_BYTES/2)}));
