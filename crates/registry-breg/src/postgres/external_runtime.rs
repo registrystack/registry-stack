@@ -1890,6 +1890,16 @@ mod tests {
     }
 
     #[test]
+    fn a_no_store_acquisition_is_recorded_as_a_retention_refusal() {
+        assert_eq!(
+            acquisition_failure(Some(ExternalSourceError::Acquisition(
+                AdapterProjectionError::NoStore
+            ))),
+            RefreshFailure::RetentionRefused
+        );
+    }
+
+    #[test]
     fn a_refresh_lease_outlives_the_page_deadline() {
         // The longest configurable request deadline is a minute.
         let lease = refresh_lease(Instant::now() + Duration::from_secs(60));
