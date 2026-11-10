@@ -21,6 +21,8 @@ before Adapter acquisition. The current checker refuses unknown binding configur
 
 Write access to a link's `fromField` chooses which outside subject BReg fetches. Whoever can set that field on a root decides which subject the source is asked for under the deployment's source grant, and which subject's values readers of that root then see. Grant write access to a link field only to identities trusted to assert that link, and review changes to it as you would review a disclosure.
 
+A source states a decimal field as a JSON number, and BReg serves it as a string. An integer keeps its exact digits. Any other number is read as a double, so a value with more than about 15 significant digits is rounded before BReg serves it. A source that needs exact decimals beyond that cannot send them as JSON numbers; BReg does not accept decimal strings from a source.
+
 ## Freshness and purge
 
 `cacheTtlSeconds` is the one cache lifetime of a source result. A deployment binding may set its own `cacheTtlSeconds` to shorten, but never extend, the authored value. The lifetime is measured from the original source observation time, not from refresh completion. The effective expiry is the earlier of that lifetime and the deployment binding's source grant cutoff, `grantValidUntil`. From a successful source response, BReg honours only `no-store`; it reads no other expiry or storage permission there, so set `grantValidUntil` no later than the source permits storage. There is no retention period after expiry: an expired value is purged.
