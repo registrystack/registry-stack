@@ -1093,6 +1093,14 @@ async fn absent_optional_copy_has_the_same_safe_failure_at_invoke_and_submit() {
             )
             .to_vec(),
         },
+        ModuleAssetSource {
+            module: None,
+            path: "plans/create-dated-entry.rhai".into(),
+            bytes: include_bytes!(
+                "../../../products/breg/fixtures/action-plan-branches/plans/create-dated-entry.rhai"
+            )
+            .to_vec(),
+        },
     ];
     let registry =
         compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring).unwrap();
