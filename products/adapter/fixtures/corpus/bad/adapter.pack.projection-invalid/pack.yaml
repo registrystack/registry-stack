@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.projection-invalid: this artifact set must be refused with
+# exactly adapter.pack.projection-invalid. An exact projection reads records by a selector
+# scheme other than its record key scheme.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.projection-invalid/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{{type}}/{{case_id}}
+            pathParameters:
+              type:
+                constant: welfare
+              case_id:
+                header: recordId
+            query:
+              _format:
+                constant: json
+sourceRoutes:
+  - id: person-exact
+    projection:
+      operation: exact
+      operationVersion: "1"
+      authority: urn:example:population-register
+      purpose: licensing
+      scope: licensing-holders
+      selectorScheme: urn:example:person-number
+      recordKeyScheme: urn:example:tax-number
+      retention: live-only
+      absence: authoritative
+      localDisclosure: host-profiles
+      fieldsSchema:
+        path: schemas/person.json
+        digest: sha256:1c1ad6f4c266d0470b8a28c054d360744c6a9f36ba61c379d6e75e0c791035b7
+      maximumBatchKeys: 1
+      maximumPages: 1
+      maximumRows: 1
+    steps: []
+capabilities: {}
