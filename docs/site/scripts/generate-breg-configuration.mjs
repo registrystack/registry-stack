@@ -25,8 +25,14 @@ export const CONTRACTS = [
 
 // Files `bregctl` reads beside a project: adopter tooling, published by the
 // `tool-schema` example under products/breg/generated/tools. Listed in the
-// order an adopter meets them, which is the order the reference page shows.
+// order an adopter meets them; the generated inventory preserves this order.
 export const TOOL_CONTRACTS = [
+  {
+    id: 'project-dev',
+    title: 'dev.yaml',
+    file: 'tools/project-dev.v1alpha1.schema.json',
+    reference: 'reference/breg-configuration.mdx',
+  },
   {
     id: 'dev-clients',
     title: 'dev-clients.yaml',

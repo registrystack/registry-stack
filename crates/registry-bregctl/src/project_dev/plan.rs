@@ -2,7 +2,13 @@
 
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader};
+use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
+use registry_platform_yaml::{
+    ApiVersion, BoundedU32, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, LocalId, Reader,
+    Report, Severity, UniqueIdList, UniqueList,
+};
+#[cfg(feature = "schema")]
+use registry_platform_yaml::{ExternalId, Url as PlatformUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -11,14 +17,15 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
 };
-use url::Url;
+use url::Url as ParsedUrl;
+
+pub(crate) const API_VERSION: &str = "id.registrystack.org/formats/breg/project-dev/v1alpha1";
+pub(crate) const KIND: &str = "BRegProjectDev";
 
 pub(crate) const FORMAT: FormatSpec<'static> = FormatSpec {
-    kind: "ProjectDevPlan",
+    kind: KIND,
     envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(
-            "id.registrystack.org/formats/project-dev/v1alpha1",
-        )],
+        api_versions: &[ApiVersion::current(API_VERSION)],
         retired_api_versions: &[],
     },
     removed_keys: &[],
@@ -27,6 +34,109 @@ pub(crate) const FORMAT: FormatSpec<'static> = FormatSpec {
 #[cfg(feature = "schema")]
 pub(crate) fn schema() -> schemars::Schema {
     schemars::schema_for!(Plan)
+}
+
+#[cfg(feature = "schema")]
+fn keyed_schema<K: schemars::JsonSchema, V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<K>(),
+        "additionalProperties": generator.subschema_for::<V>(),
+    })
+}
+
+#[cfg(feature = "schema")]
+struct DerivedId;
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for DerivedId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DerivedId".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+            "description": "A dotted development journey step identifier whose segments are local identifiers.",
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+fn step_id_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [
+            generator.subschema_for::<LocalId>(),
+            generator.subschema_for::<DerivedId>(),
+        ],
+    })
+}
+
+#[cfg(feature = "schema")]
+fn capture_map_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let names = schemars::json_schema!({
+        "allOf": [
+            generator.subschema_for::<ExternalId>(),
+            {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$",
+            },
+        ],
+    });
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": names,
+        "additionalProperties": generator.subschema_for::<Capture>(),
+    })
+}
+
+#[cfg(feature = "schema")]
+fn schema_test_people_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let steps = schemars::json_schema!({
+        "type": "object",
+        "propertyNames": step_id_schema(generator),
+        "additionalProperties": generator.subschema_for::<LocalId>(),
+    });
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<LocalId>(),
+        "additionalProperties": steps,
+    })
+}
+
+#[cfg(feature = "schema")]
+fn claims_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<ExternalId>(),
+        "additionalProperties": true,
+        "x-registry-passthrough": "Claim values are written into the development token as given.",
+    })
+}
+
+#[cfg(feature = "schema")]
+fn scopes_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "items": generator.subschema_for::<ExternalId>(),
+        "maxItems": 32,
+        "uniqueItems": true,
+    })
+}
+
+#[cfg(feature = "schema")]
+fn expected_json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<ExternalId>(),
+        "additionalProperties": true,
+        "x-registry-passthrough": "Expected values are compared with the product response at the named JSON pointers.",
+    })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -50,13 +160,22 @@ impl Product {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Plan {
+    #[cfg_attr(feature = "schema", schemars(with = "PlatformUrl"))]
     pub issuer: String,
     pub products: Vec<ProductPlan>,
-    pub people: BTreeMap<String, Person>,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
+    )]
+    pub people: BTreeMap<String, TestPerson>,
     pub journey: Journey,
     #[serde(default)]
     pub bindings: super::bindings::Bindings,
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "schema_test_people_schema")
+    )]
     pub schema_test_people: BTreeMap<String, BTreeMap<String, String>>,
 }
 
@@ -66,15 +185,19 @@ pub(super) struct Plan {
 pub(super) struct ProductPlan {
     pub product: Product,
     pub project: PathBuf,
+    #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub audience: String,
 }
 
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub(super) struct Person {
+pub(super) struct TestPerson {
+    #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub subject: String,
+    #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
+    #[serde(deserialize_with = "deserialize_grants")]
     pub grants: BTreeMap<Product, Grant>,
     /// Forward the same authority to both products. Both grants must declare the same scopes and additional claims.
     #[serde(default, rename = "caseworkContext")]
@@ -85,17 +208,60 @@ pub(super) struct Person {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Grant {
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub profile: String,
+    #[serde(deserialize_with = "deserialize_scopes")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "scopes_schema"))]
     pub scopes: Vec<String>,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "claims_schema"))]
     pub claims: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GrantsDocument {
+    breg: Option<Grant>,
+    casework: Option<Grant>,
+}
+
+fn deserialize_grants<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<Product, Grant>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let grants = GrantsDocument::deserialize(deserializer)?;
+    Ok([
+        grants.breg.map(|grant| (Product::Breg, grant)),
+        grants.casework.map(|grant| (Product::Casework, grant)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect())
+}
+
+fn deserialize_scopes<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    UniqueList::<String>::deserialize(deserializer).map(UniqueList::into_vec)
+}
+
+fn deserialize_steps<'de, D>(deserializer: D) -> std::result::Result<Vec<Step>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    UniqueIdList::<Step>::deserialize(deserializer).map(UniqueIdList::into_vec)
 }
 
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Journey {
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "deserialize_steps")]
     pub steps: Vec<Step>,
 }
 
@@ -103,20 +269,33 @@ pub(super) struct Journey {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Step {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "step_id_schema"))]
     pub id: String,
     pub product: Product,
     #[serde(rename = "as")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub person: String,
     pub method: Method,
     pub path: String,
     pub body: Option<Value>,
     pub raw: Option<RawBody>,
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<ExternalId, String>")
+    )]
     pub headers: BTreeMap<String, String>,
     pub expect: Expected,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "capture_map_schema"))]
     pub capture: BTreeMap<String, Capture>,
     pub poll: Option<Poll>,
+}
+
+impl Identified for Step {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -148,39 +327,48 @@ impl From<&Method> for reqwest::Method {
 pub(super) struct Expected {
     pub status: ExpectedStatus,
     #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "expected_json_schema"))]
     pub json: BTreeMap<String, Value>,
     #[serde(default)]
     pub checks: Vec<Check>,
     pub code: Option<String>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
+#[cfg_attr(feature = "schema", schemars(untagged))]
 pub(super) enum ExpectedStatus {
-    One(u16),
-    Many(Vec<u16>),
+    One(BoundedU32<200, 599>),
+    Many(Vec<BoundedU32<200, 599>>),
 }
+
+registry_platform_yaml::shape_union!(ExpectedStatus {
+    scalar => One,
+    list => Many,
+});
 
 impl ExpectedStatus {
     pub(super) fn first(&self) -> u16 {
         match self {
-            Self::One(status) => *status,
-            Self::Many(statuses) => statuses[0],
+            Self::One(status) => status.get() as u16,
+            Self::Many(statuses) => statuses[0].get() as u16,
         }
     }
 
     pub(super) fn contains(&self, status: u16) -> bool {
         match self {
-            Self::One(expected) => *expected == status,
-            Self::Many(expected) => expected.contains(&status),
+            Self::One(expected) => expected.get() == u32::from(status),
+            Self::Many(expected) => expected
+                .iter()
+                .any(|expected| expected.get() == u32::from(status)),
         }
     }
 
     fn values(&self) -> Vec<u16> {
         match self {
-            Self::One(status) => vec![*status],
-            Self::Many(statuses) => statuses.clone(),
+            Self::One(status) => vec![status.get() as u16],
+            Self::Many(statuses) => statuses.iter().map(|status| status.get() as u16).collect(),
         }
     }
 }
@@ -191,25 +379,30 @@ impl ExpectedStatus {
 pub(super) struct Check {
     pub pointer: String,
     pub equals: Option<Value>,
+    #[cfg_attr(feature = "schema", schemars(range(min = 0, max = 1_048_576)))]
     pub length: Option<usize>,
     pub contains: Option<Value>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) enum Capture {
-    Pointer(String),
-    Header(HeaderCapture),
-    Find(FindCapture),
-    Value(ValueCapture),
-}
-
-#[derive(Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub(super) struct HeaderCapture {
-    pub header: CapturedHeader,
+    Pointer {
+        pointer: String,
+    },
+    Header {
+        header: CapturedHeader,
+    },
+    Find {
+        find: String,
+        r#where: FindWhere,
+        pointer: String,
+    },
+    Value {
+        pointer: String,
+        query: Option<String>,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -217,23 +410,6 @@ pub(super) struct HeaderCapture {
 #[serde(rename_all = "lowercase")]
 pub(super) enum CapturedHeader {
     Etag,
-}
-
-#[derive(Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub(super) struct ValueCapture {
-    pub pointer: String,
-    pub query: Option<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub(super) struct FindCapture {
-    pub find: String,
-    pub r#where: FindWhere,
-    pub pointer: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -248,7 +424,11 @@ pub(super) struct FindWhere {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Poll {
+    #[serde(rename = "maximumWaitMilliseconds")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 60_000)))]
     pub timeout_ms: u64,
+    #[serde(rename = "pollIntervalMilliseconds")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 50, max = 5_000)))]
     pub interval_ms: u64,
 }
 
@@ -261,10 +441,7 @@ pub(super) struct RawBody {
 }
 
 pub(super) fn identifier(value: &str) -> bool {
-    (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    LocalId::new(value).is_ok()
 }
 
 fn bounded_atom(value: &str) -> bool {
@@ -305,14 +482,49 @@ pub(super) fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) fn load(root: &Path) -> Result<Plan> {
+fn read_plan(root: &Path) -> Result<Decoded<Plan>> {
     let file = root.join("dev.yaml");
-    let bytes = read(&file, 256 * 1024).context("cannot read dev.yaml")?;
-    let plan = Reader::new("dev.yaml")
-        .decode::<Plan>(&bytes, &Expect::one(&FORMAT))?
-        .value;
-    plan.validate(root)?;
-    Ok(plan)
+    let bytes = read(
+        &file,
+        registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64 + 1,
+    )
+    .context("cannot read dev.yaml")?;
+    Ok(Reader::new(file.display().to_string())
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE,
+        })
+        .decode::<Plan>(&bytes, &Expect::one(&FORMAT))?)
+}
+
+fn validate_plan(root: &Path, decoded: &Decoded<Plan>) -> Result<()> {
+    if let Err(error) = decoded.value.validate(root) {
+        let rendered = error.to_string();
+        let path = rendered
+            .strip_prefix("dev.yaml ")
+            .and_then(|detail| detail.split_once(' '))
+            .map_or("", |(path, _)| path);
+        let diagnostic = decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "rstack.dev.invalid-plan",
+            path,
+            "The development plan is inconsistent.",
+            "Correct the named development plan field, then run the check again.",
+        );
+        return Err(decoded.document.report_with([diagnostic]).into());
+    }
+    Ok(())
+}
+
+pub(crate) fn check(root: &Path) -> Result<Report> {
+    let decoded = read_plan(root)?;
+    validate_plan(root, &decoded)?;
+    Ok(decoded.document.report_with(Vec::new()))
+}
+
+pub(super) fn load(root: &Path) -> Result<Plan> {
+    let decoded = read_plan(root)?;
+    validate_plan(root, &decoded)?;
+    Ok(decoded.value)
 }
 
 impl Plan {
@@ -325,7 +537,7 @@ impl Plan {
 
     fn validate(&self, root: &Path) -> Result<()> {
         require(
-            Url::parse(&self.issuer).is_ok_and(|url| {
+            ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
                 url.scheme() == "https"
                     && url.host().is_some()
                     && url.username().is_empty()
@@ -658,19 +870,21 @@ impl Journey {
                     "must use unique bounded capture names",
                 )?;
                 match capture {
-                    Capture::Pointer(pointer_value) => require(
+                    Capture::Pointer {
+                        pointer: pointer_value,
+                    } => require(
                         pointer(pointer_value),
                         &format!("{field}/capture/{name}"),
                         "must use a JSON pointer",
                     )?,
-                    Capture::Header(_) => {}
-                    Capture::Value(capture) => {
+                    Capture::Header { .. } => {}
+                    Capture::Value { pointer, query } => {
                         require(
-                            pointer(&capture.pointer),
+                            self::pointer(pointer),
                             &format!("{field}/capture/{name}/pointer"),
                             "must be a JSON pointer",
                         )?;
-                        if let Some(query) = &capture.query {
+                        if let Some(query) = query {
                             require(
                                 bounded_atom(query),
                                 &format!("{field}/capture/{name}/query"),
@@ -678,15 +892,17 @@ impl Journey {
                             )?;
                         }
                     }
-                    Capture::Find(capture) => {
+                    Capture::Find {
+                        find,
+                        r#where,
+                        pointer: selected,
+                    } => {
                         require(
-                            pointer(&capture.find)
-                                && pointer(&capture.r#where.pointer)
-                                && pointer(&capture.pointer),
+                            pointer(find) && pointer(&r#where.pointer) && pointer(selected),
                             &format!("{field}/capture/{name}"),
                             "must use JSON pointers",
                         )?;
-                        expand_json(&capture.r#where.equals, |value| {
+                        expand_json(&r#where.equals, |value| {
                             captures
                                 .contains(value)
                                 .then(|| value.to_owned())
@@ -704,12 +920,7 @@ impl Journey {
 
 fn step_identifier(value: &str) -> bool {
     (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-.".contains(&byte))
-        && !matches!(value.as_bytes().first(), Some(b'-' | b'.'))
-        && !value.ends_with('.')
-        && !value.contains("..")
+        && (identifier(value) || (value.contains('.') && value.split('.').all(identifier)))
 }
 
 fn capture_identifier(value: &str) -> bool {
@@ -806,9 +1017,10 @@ mod tests {
                 ]
             },
             "capture": {
-                "requestId": {"pointer": "/requestId", "query": "id"},
-                "etag": {"header": "etag"},
+                "requestId": {"type": "value", "pointer": "/requestId", "query": "id"},
+                "etag": {"type": "header", "header": "etag"},
                 "selected-item": {
+                    "type": "find",
                     "find": "/items", "where": {"pointer": "/id", "equals": "one"},
                     "pointer": "/value"
                 }
@@ -818,7 +1030,7 @@ mod tests {
         assert!(plan.journey.steps[0].expect.status.contains(201));
         assert!(matches!(
             plan.journey.steps[0].capture["etag"],
-            Capture::Header(_)
+            Capture::Header { .. }
         ));
         assert!(!plan.people["operator"].casework_context);
     }
@@ -829,10 +1041,94 @@ mod tests {
             "id": "read.v1", "product": "breg", "as": "operator",
             "method": "GET", "path": "/v1/records",
             "expect": {"status": [200, 202]},
-            "capture": {"recordId": "/recordIdentifier"},
-            "poll": {"timeoutMs": 500, "intervalMs": 50}
+            "capture": {"draftEtag": {"type": "pointer", "pointer": "/recordIdentifier"}},
+            "poll": {"maximumWaitMilliseconds": 500, "pollIntervalMilliseconds": 50}
         }));
+        let mut value = serde_json::to_value(plan).unwrap();
+        let person = value["people"]
+            .as_object_mut()
+            .unwrap()
+            .remove("operator")
+            .unwrap();
+        value["people"]["date_of_birth"] = person;
+        value["people"]["date_of_birth"]["grants"]["breg"]["profile"] = json!("date_of_birth");
+        value["journey"]["id"] = json!("review_flow");
+        value["journey"]["steps"][0]["as"] = json!("date_of_birth");
+        value["journey"]["steps"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id": "use.v1", "product": "breg", "as": "date_of_birth",
+                "method": "GET", "path": "/v1/records/{{draftEtag}}",
+                "expect": {"status": 200}
+            }));
+        value["schemaTestPeople"] = json!({
+            "review_flow": {"read.v1": "date_of_birth"}
+        });
+        let plan: Plan = serde_json::from_value(value).unwrap();
+
         plan.validate(&canonical(&root)).unwrap();
+    }
+
+    #[test]
+    fn identifier_grammars_refuse_values_the_schema_refuses() {
+        for accepted in ["date-of-birth", "date_of_birth"] {
+            assert!(identifier(accepted), "local identifier: {accepted}");
+        }
+        for refused in ["-person", "1person", "Person", "person.name"] {
+            assert!(!identifier(refused), "local identifier: {refused}");
+        }
+
+        for accepted in ["read", "read_v1", "read.v1", "read_record.v1_beta"] {
+            assert!(step_identifier(accepted), "step identifier: {accepted}");
+        }
+        for refused in [
+            "-read", "1read", ".read", "read.", "read..v1", "read.-v1", "Read.v1",
+        ] {
+            assert!(!step_identifier(refused), "step identifier: {refused}");
+        }
+
+        for accepted in ["draftEtag", "DraftEtag", "draft-etag"] {
+            assert!(
+                capture_identifier(accepted),
+                "capture identifier: {accepted}"
+            );
+        }
+        for refused in ["1draft", "draft_etag", "draft.etag"] {
+            assert!(
+                !capture_identifier(refused),
+                "capture identifier: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_refuses_a_product_project_outside_the_development_project() {
+        let (root, mut plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        plan.products[0].project = PathBuf::from("../outside");
+
+        let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+
+        assert!(error.contains("/products/0/project"), "{error}");
+    }
+
+    #[test]
+    fn validation_refuses_a_product_project_link_outside_the_development_project() {
+        let (root, mut plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("registry.yaml"), "fixture").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("registry")).unwrap();
+        plan.products[0].project = PathBuf::from("registry");
+
+        let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+
+        assert!(error.contains("/products/0/project"), "{error}");
     }
 
     #[test]
@@ -841,7 +1137,7 @@ mod tests {
             "id": "create", "product": "breg", "as": "operator",
             "method": "POST", "path": "/v1/records", "body": {},
             "expect": {"status": 201},
-            "poll": {"timeoutMs": 500, "intervalMs": 50}
+            "poll": {"maximumWaitMilliseconds": 500, "pollIntervalMilliseconds": 50}
         }));
         let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
         assert!(error.contains("supported only for GET"), "{error}");
@@ -853,7 +1149,7 @@ mod tests {
             "id": "read", "product": "breg", "as": "operator",
             "method": "GET", "path": "/v1/records/{{later}}",
             "expect": {"status": 200},
-            "capture": {"later": "/recordIdentifier"}
+            "capture": {"later": {"type": "pointer", "pointer": "/recordIdentifier"}}
         }));
         let error = format!("{:#}", plan.validate(&canonical(&root)).unwrap_err());
         assert!(error.contains("earlier capture"), "{error}");
@@ -865,7 +1161,7 @@ mod tests {
             "id": "read", "product": "breg", "as": "operator",
             "method": "GET", "path": "/v1/records",
             "expect": {"status": 200},
-            "poll": {"timeoutMs": 30000, "intervalMs": 50}
+            "poll": {"maximumWaitMilliseconds": 30000, "pollIntervalMilliseconds": 50}
         }));
         let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
         assert!(error.contains("at most 250 attempts"), "{error}");
@@ -876,7 +1172,7 @@ mod tests {
         let (root, plan) = plan(json!({
             "id": "read", "product": "breg", "as": "operator",
             "method": "GET", "path": "/v1/records", "expect": {"status": 200},
-            "poll": {"timeoutMs": 60000, "intervalMs": 250}
+            "poll": {"maximumWaitMilliseconds": 60000, "pollIntervalMilliseconds": 250}
         }));
         plan.validate(&canonical(&root)).unwrap();
     }
@@ -932,7 +1228,7 @@ mod tests {
                     }
                 },
                 "bindings": {"caseworkContextProvider": {
-                    "id": "registry", "person": "context-reader", "action": "review-record"
+                    "id": "registry", "identity": "context-reader", "action": "review-record"
                 }},
                 "journey": {"id": "review", "steps": [{
                     "id": "read", "product": "breg", "as": "reviewer",

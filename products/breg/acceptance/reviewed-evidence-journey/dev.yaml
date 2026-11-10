@@ -1,13 +1,13 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
-apiVersion: id.registrystack.org/formats/project-dev/v1alpha1
-kind: ProjectDevPlan
+apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
+kind: BRegProjectDev
 issuer: https://issuer.example.test
 products:
   - {product: breg, project: registry, audience: "urn:journey:breg"}
   - {product: casework, project: casework, audience: "urn:journey:casework"}
 bindings:
-  bregReviewAuthority: {id: casework, producer: registry, person: producer}
-  caseworkContextProvider: {id: registry, person: context-status, action: correct-status}
+  bregReviewAuthority: {id: casework, producer: registry, identity: producer}
+  caseworkContextProvider: {id: registry, identity: context-status, action: correct-status}
 people:
   operator:
     subject: generic-registry-operator
@@ -94,7 +94,7 @@ journey:
       body:
         data: {code: DEV-PROOF, registrationNumber: DEV-REG, status: retired, label: Synthetic record}
       expect: {status: 201}
-      capture: {record: /data/recordIdentifier}
+      capture: {record: {type: pointer, pointer: /data/recordIdentifier}}
     - id: start-proposal
       product: breg
       as: operator
@@ -103,7 +103,9 @@ journey:
       headers: {Idempotency-Key: start-proposal}
       body: {input: {subjectId: "{{record}}", status: active}}
       expect: {status: 201}
-      capture: {proposal: /id, draftEtag: {header: etag}}
+      capture:
+        proposal: {type: pointer, pointer: /id}
+        draftEtag: {type: header, header: etag}
     - id: submit-proposal
       product: breg
       as: operator
@@ -112,7 +114,9 @@ journey:
       headers: {If-Match: "{{draftEtag}}", Idempotency-Key: submit-proposal}
       body: {}
       expect: {status: 200, json: {/state: submitted}}
-      capture: {submissionVersion: /submissionVersion, effectDigest: /effectDigest}
+      capture:
+        submissionVersion: {type: pointer, pointer: /submissionVersion}
+        effectDigest: {type: pointer, pointer: /effectDigest}
     - id: find-task
       product: casework
       as: reviewer
@@ -120,11 +124,11 @@ journey:
       path: /v1/review-tasks?queue=reviews
       headers: {Registry-Source-Profile: reviewer}
       expect: {status: 200}
-      poll: {timeoutMs: 60000, intervalMs: 500}
+      poll: {maximumWaitMilliseconds: 60000, pollIntervalMilliseconds: 500}
       capture:
-        task: {find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /taskId}
-        request: {find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /requestId}
-        taskRevision: {find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /revision}
+        task: {type: find, find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /taskId}
+        request: {type: find, find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /requestId}
+        taskRevision: {type: find, find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /revision}
     - id: read-context-from-breg
       product: casework
       as: reviewer
@@ -143,7 +147,7 @@ journey:
       path: "/v1/review-tasks/{{task}}/claim"
       headers: {If-Match: '"{{taskRevision}}"', Idempotency-Key: claim-task, Registry-Source-Profile: reviewer}
       expect: {status: 200}
-      capture: {claimRevision: /revision}
+      capture: {claimRevision: {type: pointer, pointer: /revision}}
     - id: approve-correction
       product: casework
       as: reviewer
@@ -164,8 +168,8 @@ journey:
       method: GET
       path: "/v1/proposals/{{proposal}}"
       expect: {status: 200, json: {/decision/status: approved}}
-      poll: {timeoutMs: 60000, intervalMs: 500}
-      capture: {approvalEtag: {header: etag}}
+      poll: {maximumWaitMilliseconds: 60000, pollIntervalMilliseconds: 500}
+      capture: {approvalEtag: {type: header, header: etag}}
     - id: apply-correction
       product: breg
       as: applier

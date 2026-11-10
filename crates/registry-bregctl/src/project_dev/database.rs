@@ -46,8 +46,36 @@ pub(super) struct Database {
 
 #[derive(Clone)]
 struct Endpoint {
-    host: String,
+    host: UrlHost<String>,
     port: Option<u16>,
+}
+
+impl Endpoint {
+    fn product_url(&self, database: &str, user: &str, password: &str) -> Result<String> {
+        let mut url =
+            Url::parse("postgresql://localhost/").expect("the fixed PostgreSQL URL base is valid");
+        match &self.host {
+            UrlHost::Domain(host) => url.set_host(Some(host)).map_err(|_| {
+                anyhow!("the PostgreSQL host cannot be represented in a product URL")
+            })?,
+            UrlHost::Ipv4(address) => url.set_ip_host((*address).into()).map_err(|_| {
+                anyhow!("the PostgreSQL host cannot be represented in a product URL")
+            })?,
+            UrlHost::Ipv6(address) => url.set_ip_host((*address).into()).map_err(|_| {
+                anyhow!("the PostgreSQL host cannot be represented in a product URL")
+            })?,
+        }
+        url.set_port(self.port)
+            .map_err(|_| anyhow!("the PostgreSQL port cannot be represented in a product URL"))?;
+        url.set_username(user)
+            .map_err(|_| anyhow!("the generated PostgreSQL role cannot be represented in a URL"))?;
+        url.set_password(Some(password)).map_err(|_| {
+            anyhow!("the generated PostgreSQL password cannot be represented in a URL")
+        })?;
+        url.set_path(&format!("/{database}"));
+        url.query_pairs_mut().append_pair("sslmode", "require");
+        Ok(url.into())
+    }
 }
 
 impl Database {
@@ -234,20 +262,7 @@ impl Database {
     }
 
     fn product_url(&self, database: &str, user: &str, password: &str) -> Result<String> {
-        let mut url =
-            Url::parse("postgresql://localhost/").expect("the fixed PostgreSQL URL base is valid");
-        url.set_host(Some(&self.endpoint.host))
-            .map_err(|_| anyhow!("the PostgreSQL host cannot be represented in a product URL"))?;
-        url.set_port(self.endpoint.port)
-            .map_err(|_| anyhow!("the PostgreSQL port cannot be represented in a product URL"))?;
-        url.set_username(user)
-            .map_err(|_| anyhow!("the generated PostgreSQL role cannot be represented in a URL"))?;
-        url.set_password(Some(password)).map_err(|_| {
-            anyhow!("the generated PostgreSQL password cannot be represented in a URL")
-        })?;
-        url.set_path(&format!("/{database}"));
-        url.query_pairs_mut().append_pair("sslmode", "require");
-        Ok(url.into())
+        self.endpoint.product_url(database, user, password)
     }
 }
 
@@ -373,11 +388,7 @@ fn admin_config(admin_url: &str) -> Result<(Config, Endpoint)> {
         bail!("the PostgreSQL admin URL must name one TCP host, user, password, and database");
     }
 
-    let host = match parsed.host().expect("the host was checked") {
-        UrlHost::Domain(value) => value.to_owned(),
-        UrlHost::Ipv4(value) => value.to_string(),
-        UrlHost::Ipv6(value) => value.to_string(),
-    };
+    let host = parsed.host().expect("the host was checked").to_owned();
     Ok((
         config,
         Endpoint {
@@ -501,15 +512,45 @@ mod tests {
     #[test]
     fn generated_product_urls_contain_only_generated_credentials_and_required_tls() {
         let endpoint = Endpoint {
-            host: "db.example".to_owned(),
+            host: UrlHost::Domain("db.example".to_owned()),
             port: Some(5543),
         };
-        let url = product_url_for_test(&endpoint, "owned", "runtime", "generated-secret");
+        let url = endpoint
+            .product_url("owned", "runtime", "generated-secret")
+            .unwrap();
         assert_eq!(
             url,
             "postgresql://runtime:generated-secret@db.example:5543/owned?sslmode=require"
         );
         assert!(!url.contains("admin"));
+    }
+
+    #[test]
+    fn generated_product_urls_round_trip_ipv6_hosts_and_credentials() {
+        for address_text in ["::1", "2001:db8:1234:5678::9"] {
+            let address = address_text.parse().unwrap();
+            let (_, endpoint) = admin_config(&format!(
+                "postgresql://admin:secret@[{address_text}]:5543/postgres"
+            ))
+            .unwrap();
+            for (user, database, password) in [
+                ("runtime", "owned", "runtime-generated-secret"),
+                ("migration", "owned_test", "migration-generated-secret"),
+            ] {
+                let rendered = endpoint.product_url(database, user, password).unwrap();
+                let parsed = Url::parse(&rendered).unwrap();
+                assert_eq!(parsed.host(), Some(UrlHost::Ipv6(address)), "{rendered}");
+                assert_eq!(parsed.port(), Some(5543), "{rendered}");
+                assert_eq!(parsed.username(), user, "{rendered}");
+                assert_eq!(parsed.password(), Some(password), "{rendered}");
+                assert_eq!(parsed.path(), format!("/{database}"), "{rendered}");
+                assert_eq!(parsed.query(), Some("sslmode=require"), "{rendered}");
+                assert!(
+                    rendered.contains(&format!("@[{address}]:5543/")),
+                    "{rendered}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -588,21 +629,5 @@ mod tests {
     fn empty_or_malformed_custom_root_sets_are_refused() {
         assert!(tls_connector(Some(b"")).is_err());
         assert!(tls_connector(Some(b"not a certificate")).is_err());
-    }
-
-    fn product_url_for_test(
-        endpoint: &Endpoint,
-        database: &str,
-        user: &str,
-        password: &str,
-    ) -> String {
-        let mut url = Url::parse("postgresql://localhost/").unwrap();
-        url.set_host(Some(&endpoint.host)).unwrap();
-        url.set_port(endpoint.port).unwrap();
-        url.set_username(user).unwrap();
-        url.set_password(Some(password)).unwrap();
-        url.set_path(&format!("/{database}"));
-        url.query_pairs_mut().append_pair("sslmode", "require");
-        url.into()
     }
 }

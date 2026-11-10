@@ -16,35 +16,102 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
-        "person": {
-          "type": "string"
+        "identity": {
+          "$ref": "#/$defs/LocalId"
         },
         "producer": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
         "id",
         "producer",
-        "person"
+        "identity"
       ],
       "type": "object"
     },
     "Capture": {
-      "anyOf": [
+      "oneOf": [
         {
-          "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "pointer": {
+              "type": "string"
+            },
+            "type": {
+              "const": "pointer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pointer"
+          ],
+          "type": "object"
         },
         {
-          "$ref": "#/$defs/HeaderCapture"
+          "additionalProperties": false,
+          "properties": {
+            "header": {
+              "$ref": "#/$defs/CapturedHeader"
+            },
+            "type": {
+              "const": "header",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "header"
+          ],
+          "type": "object"
         },
         {
-          "$ref": "#/$defs/FindCapture"
+          "additionalProperties": false,
+          "properties": {
+            "find": {
+              "type": "string"
+            },
+            "pointer": {
+              "type": "string"
+            },
+            "type": {
+              "const": "find",
+              "type": "string"
+            },
+            "where": {
+              "$ref": "#/$defs/FindWhere"
+            }
+          },
+          "required": [
+            "type",
+            "find",
+            "where",
+            "pointer"
+          ],
+          "type": "object"
         },
         {
-          "$ref": "#/$defs/ValueCapture"
+          "additionalProperties": false,
+          "properties": {
+            "pointer": {
+              "type": "string"
+            },
+            "query": {
+              "type": "string"
+            },
+            "type": {
+              "const": "value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pointer"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -58,18 +125,18 @@
       "additionalProperties": false,
       "properties": {
         "action": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
-        "person": {
-          "type": "string"
+        "identity": {
+          "$ref": "#/$defs/LocalId"
         }
       },
       "required": [
         "id",
-        "person",
+        "identity",
         "action"
       ],
       "type": "object"
@@ -81,6 +148,7 @@
         "equals": true,
         "length": {
           "format": "uint",
+          "maximum": 1048576,
           "minimum": 0,
           "type": "integer"
         },
@@ -92,6 +160,12 @@
         "pointer"
       ],
       "type": "object"
+    },
+    "DerivedId": {
+      "description": "A dotted development journey step identifier whose segments are local identifiers.",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+      "type": "string"
     },
     "Expected": {
       "additionalProperties": false,
@@ -109,7 +183,11 @@
         "json": {
           "additionalProperties": true,
           "default": {},
-          "type": "object"
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-passthrough": "Expected values are compared with the product response at the named JSON pointers."
         },
         "status": {
           "$ref": "#/$defs/ExpectedStatus"
@@ -123,41 +201,28 @@
     "ExpectedStatus": {
       "anyOf": [
         {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 200,
           "type": "integer"
         },
         {
           "items": {
-            "format": "uint16",
-            "maximum": 65535,
-            "minimum": 0,
+            "format": "uint32",
+            "maximum": 599,
+            "minimum": 200,
             "type": "integer"
           },
           "type": "array"
         }
       ]
     },
-    "FindCapture": {
-      "additionalProperties": false,
-      "properties": {
-        "find": {
-          "type": "string"
-        },
-        "pointer": {
-          "type": "string"
-        },
-        "where": {
-          "$ref": "#/$defs/FindWhere"
-        }
-      },
-      "required": [
-        "find",
-        "where",
-        "pointer"
-      ],
-      "type": "object"
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
     },
     "FindWhere": {
       "additionalProperties": false,
@@ -179,16 +244,22 @@
         "claims": {
           "additionalProperties": true,
           "default": {},
-          "type": "object"
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-passthrough": "Claim values are written into the development token as given."
         },
         "profile": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "scopes": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/ExternalId"
           },
-          "type": "array"
+          "maxItems": 32,
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [
@@ -197,23 +268,11 @@
       ],
       "type": "object"
     },
-    "HeaderCapture": {
-      "additionalProperties": false,
-      "properties": {
-        "header": {
-          "$ref": "#/$defs/CapturedHeader"
-        }
-      },
-      "required": [
-        "header"
-      ],
-      "type": "object"
-    },
     "Journey": {
       "additionalProperties": false,
       "properties": {
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "steps": {
           "items": {
@@ -228,6 +287,11 @@
       ],
       "type": "object"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "Method": {
       "enum": [
         "GET",
@@ -238,57 +302,25 @@
       ],
       "type": "string"
     },
-    "Person": {
-      "additionalProperties": false,
-      "properties": {
-        "caseworkContext": {
-          "default": false,
-          "description": "Forward the same authority to both products. Both grants must declare the same scopes and additional claims.",
-          "type": "boolean"
-        },
-        "client": {
-          "type": "string"
-        },
-        "grants": {
-          "additionalProperties": false,
-          "properties": {
-            "breg": {
-              "$ref": "#/$defs/Grant"
-            },
-            "casework": {
-              "$ref": "#/$defs/Grant"
-            }
-          },
-          "type": "object"
-        },
-        "subject": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "subject",
-        "client",
-        "grants"
-      ],
-      "type": "object"
-    },
     "Poll": {
       "additionalProperties": false,
       "properties": {
-        "intervalMs": {
+        "maximumWaitMilliseconds": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 60000,
+          "minimum": 1,
           "type": "integer"
         },
-        "timeoutMs": {
+        "pollIntervalMilliseconds": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 5000,
+          "minimum": 50,
           "type": "integer"
         }
       },
       "required": [
-        "timeoutMs",
-        "intervalMs"
+        "maximumWaitMilliseconds",
+        "pollIntervalMilliseconds"
       ],
       "type": "object"
     },
@@ -303,7 +335,7 @@
       "additionalProperties": false,
       "properties": {
         "audience": {
-          "type": "string"
+          "$ref": "#/$defs/ExternalId"
         },
         "product": {
           "$ref": "#/$defs/Product"
@@ -339,7 +371,7 @@
       "additionalProperties": false,
       "properties": {
         "as": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "body": true,
         "capture": {
@@ -347,6 +379,18 @@
             "$ref": "#/$defs/Capture"
           },
           "default": {},
+          "propertyNames": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/ExternalId"
+              },
+              {
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$",
+                "type": "string"
+              }
+            ]
+          },
           "type": "object"
         },
         "expect": {
@@ -357,10 +401,20 @@
             "type": "string"
           },
           "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         },
         "id": {
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "$ref": "#/$defs/DerivedId"
+            }
+          ]
         },
         "method": {
           "$ref": "#/$defs/Method"
@@ -388,20 +442,46 @@
       ],
       "type": "object"
     },
-    "ValueCapture": {
+    "TestPerson": {
       "additionalProperties": false,
       "properties": {
-        "pointer": {
-          "type": "string"
+        "caseworkContext": {
+          "default": false,
+          "description": "Forward the same authority to both products. Both grants must declare the same scopes and additional claims.",
+          "type": "boolean"
         },
-        "query": {
-          "type": "string"
+        "client": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "grants": {
+          "additionalProperties": false,
+          "properties": {
+            "breg": {
+              "$ref": "#/$defs/Grant"
+            },
+            "casework": {
+              "$ref": "#/$defs/Grant"
+            }
+          },
+          "type": "object"
+        },
+        "subject": {
+          "$ref": "#/$defs/ExternalId"
         }
       },
       "required": [
-        "pointer"
+        "subject",
+        "client",
+        "grants"
       ],
       "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
@@ -409,7 +489,7 @@
   "additionalProperties": false,
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/project-dev/v1alpha1",
+      "const": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
       "description": "The format and version this file is written in.",
       "type": "string"
     },
@@ -418,19 +498,22 @@
       "default": {}
     },
     "issuer": {
-      "type": "string"
+      "$ref": "#/$defs/Url"
     },
     "journey": {
       "$ref": "#/$defs/Journey"
     },
     "kind": {
-      "const": "ProjectDevPlan",
+      "const": "BRegProjectDev",
       "description": "The kind of document this file is.",
       "type": "string"
     },
     "people": {
       "additionalProperties": {
-        "$ref": "#/$defs/Person"
+        "$ref": "#/$defs/TestPerson"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
       },
       "type": "object"
     },
@@ -443,11 +526,24 @@
     "schemaTestPeople": {
       "additionalProperties": {
         "additionalProperties": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
+        },
+        "propertyNames": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "$ref": "#/$defs/DerivedId"
+            }
+          ]
         },
         "type": "object"
       },
       "default": {},
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
       "type": "object"
     }
   },

@@ -59,8 +59,8 @@ test('BReg covers every committed tool schema, in the order an adopter meets the
   const root = new URL('../../../products/breg/generated/tools/', import.meta.url);
   assert.deepEqual((await readdir(root)).map((name) => `tools/${name}`).sort(),
     TOOL_CONTRACTS.map((entry) => entry.file.split('/generated/')[1]).sort());
-  assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['dev-clients', 'example-scenarios', 'journeys',
-    'schema-test-credentials', 'migration-descriptor', 'backup-binding', 'model-selection']);
+  assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['project-dev', 'dev-clients', 'example-scenarios',
+    'journeys', 'schema-test-credentials', 'migration-descriptor', 'backup-binding', 'model-selection']);
 });
 
 test('BReg tool and service references read the committed schemas they name', async () => {
@@ -71,6 +71,10 @@ test('BReg tool and service references read the committed schemas they name', as
   for (const entry of [...TOOL_CONTRACTS, ...SERVICE_CONTRACTS]) {
     const schema = JSON.parse(await readFile(new URL(entry.file.split('/generated/')[1], root), 'utf8'));
     assert.ok(typeof schema.title === 'string' && schema.title.length > 0, entry.file);
+    if (entry.id === 'project-dev') {
+      assert.equal(schema.$id,
+        'https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json');
+    }
   }
   for (const entry of [...document.tools, ...document.services]) {
     assert.ok(['tooling', 'beta'].includes(entry.status), entry.id);
@@ -78,6 +82,11 @@ test('BReg tool and service references read the committed schemas they name', as
   }
   const fields = (group, id) => new Map(document[group].find((entry) => entry.id === id)
     .fields.map((field) => [field.key_path, field]));
+
+  const projectDev = fields('tools', 'project-dev');
+  assert.deepEqual(projectDev.get('kind').values, ['BRegProjectDev']);
+  assert.ok(projectDev.has('products[].product'));
+  assert.ok(projectDev.has('journey.steps[].expect.status'));
 
   const descriptor = fields('tools', 'migration-descriptor');
   assert.deepEqual(descriptor.get('steps[].type').values,

@@ -169,8 +169,17 @@ def files(root):
 
 
 def dev(bin_dir, env, cwd, *args, expected=0):
+    install_root = Path(env["RSTACK_DEV_STATE_DIR"]).with_name("rstack-install")
     result = command(
-        bin_dir / "rstack", "dev", *args, "--json", env=env, cwd=cwd, timeout=390
+        bin_dir / "rstack",
+        "--install-root",
+        install_root,
+        "dev",
+        *args,
+        "--json",
+        env=env,
+        cwd=cwd,
+        timeout=390,
     )
     try:
         report = json.loads(result.stdout)
@@ -180,7 +189,10 @@ def dev(bin_dir, env, cwd, *args, expected=0):
         ) from None
     if result.returncode != expected:
         raise RuntimeError(f"rstack dev {args[0]} exited {result.returncode}: {report}")
-    assert report["schema_version"] == "registry.rstack.dev.v1"
+    if args[0] == "check":
+        assert report["kind"] == "BRegCtlReport" and report["command"] == "dev-check"
+    else:
+        assert report["schema_version"] == "registry.rstack.dev.v1"
     return report
 
 
@@ -422,6 +434,22 @@ def main():
         prefix="rstack-dev-", dir=args.scratch_parent
     ) as directory:
         root = Path(directory)
+        bin_dir = args.bin_dir.resolve()
+        project = STACK / "products/platform/examples/licensing"
+        check_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"RSTACK_DEV_DATABASE_URL", "RSTACK_DEV_DATABASE_CA"}
+        }
+        check_env["RSTACK_BREGCTL_BIN"] = str(bin_dir / "bregctl")
+        check_env["RSTACK_DEV_STATE_DIR"] = str(root / "offline-check-runs")
+        report = dev(bin_dir, check_env, project, "check", ".")
+        assert (
+            report["ok"]
+            and report["status"] == "complete"
+            and report["diagnostics"] == []
+        )
+        assert not (root / "offline-check-runs").exists()
         pg = args.postgres_bin_dir.resolve()
         cluster, ca, url, pg_env = prepare_postgres(root, pg)
         checked(
@@ -438,9 +466,9 @@ def main():
             )
             exercise(
                 root,
-                args.bin_dir.resolve(),
+                bin_dir,
                 pg,
-                STACK / "products/platform/examples/licensing",
+                project,
                 ca,
                 url,
                 pg_env,

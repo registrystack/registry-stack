@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 
 use super::{
     clock,
-    plan::{self, Person, Product},
+    plan::{self, Product, TestPerson},
     write_private, RunInput,
 };
 
@@ -54,7 +54,7 @@ impl Issuer {
     pub(super) fn token(
         &self,
         input: &RunInput,
-        person: &Person,
+        person: &TestPerson,
         product: Product,
         expires: u64,
     ) -> Result<Zeroizing<String>> {
@@ -65,7 +65,7 @@ impl Issuer {
     pub(super) async fn sign(
         &self,
         input: &RunInput,
-        person: &Person,
+        person: &TestPerson,
         product: Product,
         expires: u64,
     ) -> Result<Zeroizing<String>> {

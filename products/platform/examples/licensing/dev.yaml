@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
-apiVersion: id.registrystack.org/formats/project-dev/v1alpha1
-kind: ProjectDevPlan
+apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
+kind: BRegProjectDev
 issuer: https://identity.licensing.example.test
 products:
   - {product: breg, project: registry, audience: "urn:example:licensing:registry"}
@@ -49,7 +49,7 @@ journey:
       headers: {Idempotency-Key: create-application}
       body: {data: {reference: application-001, profession: Surveyor}}
       expect: {status: 201}
-      capture: {application: /data/recordIdentifier}
+      capture: {application: {type: pointer, pointer: /data/recordIdentifier}}
     - id: staff-review-queue
       product: casework
       as: administrator
@@ -83,14 +83,16 @@ journey:
           mode: submitted
           snapshot: {reference: application-001, profession: Surveyor}
       expect: {status: 201}
-      capture: {request: /requestId}
+      capture: {request: {type: pointer, pointer: /requestId}}
     - id: find-review-task
       product: casework
       as: reviewer
       method: GET
       path: /v1/review-tasks?queue=applications
       expect: {status: 200, json: {/items/0/requestId: "{{request}}"}}
-      capture: {task: /items/0/taskId, task-revision: /items/0/revision}
+      capture:
+        task: {type: pointer, pointer: /items/0/taskId}
+        task-revision: {type: pointer, pointer: /items/0/revision}
     - id: claim-review
       product: casework
       as: reviewer
@@ -98,7 +100,7 @@ journey:
       path: "/v1/review-tasks/{{task}}/claim"
       headers: {If-Match: '"{{task-revision}}"', Idempotency-Key: claim-review}
       expect: {status: 200}
-      capture: {claim-revision: /revision}
+      capture: {claim-revision: {type: pointer, pointer: /revision}}
     - id: approve-application
       product: casework
       as: reviewer

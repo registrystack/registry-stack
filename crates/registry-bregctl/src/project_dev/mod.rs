@@ -10,6 +10,7 @@ pub(crate) mod plan;
 mod products;
 
 use anyhow::{bail, ensure, Context, Result};
+use registry_platform_yaml::{Diagnostic, Report};
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -17,7 +18,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     os::unix::{
         fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
         process::CommandExt,
@@ -57,6 +58,11 @@ pub(crate) struct Args {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
+    Check {
+        project: PathBuf,
+        deny_warnings: bool,
+        json: bool,
+    },
     Start {
         project: PathBuf,
         ttl: Option<String>,
@@ -80,7 +86,8 @@ enum Request {
 impl Request {
     fn json(&self) -> bool {
         match self {
-            Self::Start { json, .. }
+            Self::Check { json, .. }
+            | Self::Start { json, .. }
             | Self::Status { json, .. }
             | Self::Token { json, .. }
             | Self::Stop { json, .. } => *json,
@@ -170,6 +177,11 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
     let machine = request.json();
     let starting = matches!(&request, Request::Start { .. });
     let outcome = match request {
+        Request::Check {
+            project,
+            deny_warnings,
+            ..
+        } => return check(&project, deny_warnings, machine, stdout, stderr),
         Request::Start { project, ttl, .. } => start(&project, ttl.as_deref()),
         Request::Status { run_id, .. } => status(&run_id),
         Request::Token { run_id, person, .. } => token(&run_id, &person),
@@ -181,8 +193,9 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
             (emit(stdout, &value, machine), code)
         }
         Err(error) if machine => {
-            let mut report =
-                json!({"schema_version": SCHEMA, "status": "error", "error": format!("{error:#}")});
+            let mut report = json!({
+                "schema_version": SCHEMA, "status": "error", "error": format!("{error:#}")
+            });
             if let Some(pending) = error.downcast_ref::<CleanupPending>() {
                 report["run_id"] = json!(pending.run_id);
                 report["cleanup_pending"] = json!(true);
@@ -248,6 +261,69 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     Ok(())
 }
 
+fn check(
+    project: &Path,
+    deny_warnings: bool,
+    machine: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> u8 {
+    let outcome = project
+        .canonicalize()
+        .context("cannot open the development project directory")
+        .and_then(|project| plan::check(&project));
+    let (report, exit) = match outcome {
+        Ok(report) => {
+            let refused = report.has_errors() || (deny_warnings && report.warning_count() > 0);
+            (report, u8::from(refused))
+        }
+        Err(error) => match error.downcast::<Report>() {
+            Ok(report) => (report, crate::DOMAIN_REFUSAL_EXIT),
+            Err(error) => {
+                let (code, action, exit) = if error.is::<io::Error>() {
+                    (
+                        "breg.project-dev.check-unavailable",
+                        "Name a project directory containing a readable dev.yaml.",
+                        crate::OPERATIONAL_FAILURE_EXIT,
+                    )
+                } else {
+                    (
+                        "breg.project-dev.invalid-plan",
+                        "Correct the development plan at the reported field.",
+                        crate::DOMAIN_REFUSAL_EXIT,
+                    )
+                };
+                (
+                    Report::new(vec![Diagnostic::error(code, "", error.to_string(), action)]),
+                    exit,
+                )
+            }
+        },
+    };
+    let result = if machine {
+        let payload = json!({
+            "ok": exit == 0,
+            "command": "dev-check",
+            "status": registry_cli_report::Status::from_exit(exit).as_str(),
+            "diagnostics": report.to_json_value(),
+        });
+        crate::write_ctl_report(stdout, &payload)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else if exit == 0 {
+        writeln!(stdout, "Development plan is valid")
+            .and_then(|()| write!(stdout, "{}", report.render_human()))
+    } else {
+        write!(stderr, "{}", report.render_human())
+    };
+    if result.is_ok() {
+        exit
+    } else {
+        let _ = writeln!(stderr, "rstack dev check: output could not be written");
+        crate::OPERATIONAL_FAILURE_EXIT
+    }
+}
+
 fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     let project = project
         .canonicalize()
@@ -255,8 +331,9 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     let plan = plan::load(&project)?;
     let schema_people = products::schema_people(&project, &plan)?;
     let breg_authority = products::breg_authority(&project, &plan)?;
+    let signals = signals()?;
     let casework_principals =
-        products::casework_principals(&project, &plan, breg_authority.as_ref())?;
+        products::casework_principals(&project, &plan, breg_authority.as_ref(), &signals)?;
     let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
     ensure!(
         env::var_os(DATABASE_URL).is_some_and(|value| !value.is_empty()),
@@ -267,7 +344,6 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
         .iter()
         .map(|entry| Ok((entry.product, binaries(entry.product)?)))
         .collect::<Result<_>>()?;
-    let signals = signals()?;
     let run_id = Uuid::new_v4().simple().to_string();
     let base = state_dir();
     ensure_private(&base, true)?;
@@ -549,7 +625,7 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
     }
     Ok(json!({
         "schema_version": SCHEMA, "run_id": run_id, "status": "token",
-        "person": person, "credentials": credentials,
+        "alias": person, "credentials": credentials,
     }))
 }
 
