@@ -49,17 +49,21 @@ A call whose catalog effect is `read` or `evaluation` may declare `onFailure`.
 The edge is taken only after the normal retry limit is exhausted by one of the
 host's closed, definite availability categories: transport unavailable, rate
 limited, attempt timeout, external unavailable, external rate limited, or
-decision unavailable. The category is recorded as the run's bounded failure
-code while the routed successor is current, and inspection retains it on the
-completed call step after later progress. The call contributes no step output
-on this edge, so a mapping cannot turn an operational diagnostic into a
-business result. Authentication, authorization, credential configuration,
+decision unavailable. The retries also count as exhausted when the next retry
+would not fit before the run deadline, so the edge is taken then rather than
+letting the hard deadline stop the run. The category is recorded as the run's
+bounded failure code while the routed successor is current, and inspection
+retains it on the completed call step after later progress. The call contributes
+no step output on this edge, so a mapping cannot turn an operational diagnostic
+into a business result. Authentication, authorization, credential configuration,
 preparation, binding, command or response validation, and protocol refusals
-remain operational failures. An uncertain outcome never routes, including a
-lost evaluation reply after possible model dispatch. Mutations cannot declare
+remain operational failures. An uncertain outcome never routes, including a lost
+evaluation reply after possible model dispatch. Mutations cannot declare
 `onFailure`. The compiler checks those rules, the target, reachability and
 output dominance in the frozen graph. Omitting the edge preserves the existing
-failure behavior.
+failure behavior. In a scenario, one `retryable` reply stands for the step's
+automatic retries, all failed, so a reply with one of those categories takes
+`onFailure` at once unless an earlier reply was `uncertain`.
 
 A `fields` mapping builds an object member by member. Each member is a reference (`input`, `step`
 or `literal`) or itself a `fields` mapping, so a Workflow builds a structured operation input, such
@@ -468,8 +472,13 @@ floor and budget for a final observation. A settled result takes its ordinary
 route. A still-pending wait at the service deadline takes `onDeadline` once,
 including after restart. The transition consumes the service deadline in the
 same transaction that enqueues its successor. A shorter wait keeps its own
-timeout route. The deadline route carries no output from the interrupted wait.
-Calls already in progress keep their dispatch and recovery rules.
+timeout route. A `wait-until` takes `onDeadline` only when the service deadline
+falls at or before its authored instant; a wait that fell due first keeps its
+own route, however late a worker picks it up. The deadline route carries no
+output from the interrupted wait. Calls already in progress keep their dispatch
+and recovery rules. An operator cancel wins over the service deadline: taking
+`onCancel` ends the service deadline, so the cleanup path runs to its own end,
+bounded only by the run deadline.
 
 Definite retryable effect responses can resend the durable original command under bounded retry
 and deadline rules. An ambiguous mutation stays uncertain. Messaging submission and Scheduling

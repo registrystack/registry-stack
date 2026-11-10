@@ -713,6 +713,39 @@ fn a_scenario_exercises_authored_operator_cancellation_separately_from_timeout()
 }
 
 #[test]
+fn a_scenario_operator_cancel_wins_over_a_later_service_deadline() {
+    let withdrawn = format!(
+        "    withdraw:\n    - {{type: success, value: {{outcome: cancelled, result: {}}}}}\n",
+        result("cancelled", "")
+    );
+    let (code, report, _) = tested(
+        &[
+            (
+                "      onTimeout: withdraw\n",
+                "      onTimeout: withdraw\n      onCancel: withdraw\n",
+            ),
+            (
+                "  deadlineSeconds: 2592000\n",
+                "  deadlineSeconds: 2592000\n  serviceDeadlineSeconds: 60\n  onDeadline: service-expired\n",
+            ),
+            (
+                "      next: confirm-withdrawal\n",
+                "      next: cleanup-until\n    cleanup-until:\n      type: wait-until\n      waitUntil: {type: literal, value: '2026-10-12T10:00:00Z'}\n      next: confirm-withdrawal\n    service-expired:\n      type: finish\n      outcome: service-expired\n",
+            ),
+            ("  outcomes:\n", "  outcomes:\n    service-expired: {type: 'null'}\n"),
+        ],
+        &case(
+            "cancelled-before-the-service-deadline",
+            "{type: cancel}",
+            &withdrawn,
+            "    path: [submit-review, await-review, withdraw, cleanup-until, confirm-withdrawal, withdrawn]\n    state: completed\n    outcome: {type: named, value: withdrawn}\n    output: {resultId: 00000000-0000-4000-8000-000000000011}\n    workflowElapsedSeconds: 3600\n",
+        ),
+    );
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(reached(&report)[0].3, Value::from("withdrawn"));
+}
+
+#[test]
 fn a_scenario_cancel_without_an_authored_route_stops_as_cancelled() {
     let (code, report, _) = tested(
         &[],

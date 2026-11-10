@@ -64,7 +64,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The call failed and may be retried; the run stops as retryable, or as\nuncertain after an earlier uncertain reply, unless a recovery consumes\nanother reply.",
+          "description": "The call failed after its automatic retries; the run stops as\nretryable, or as uncertain after an earlier uncertain reply, unless a\nrecovery consumes another reply. A step with `onFailure` takes that\nedge instead when the code is an availability category and no earlier\nreply was uncertain, as the runtime does once those retries are\nexhausted.",
           "properties": {
             "code": {
               "$ref": "#/$defs/LocalId",
@@ -210,11 +210,11 @@
             "items": {
               "$ref": "#/$defs/AuthoredReply"
             },
-            "maxItems": 10,
+            "maxItems": 8,
             "minItems": 1,
             "type": "array"
           },
-          "description": "The synthetic replies each call step receives, by step, in the order\nits attempts consume them, up to the runtime attempt limit. A reply\nafter the first needs a recovery for that step.",
+          "description": "The synthetic replies each call step receives, by step, in the order\nits attempts consume them: 1 to 8 per step. A reply after the first\nneeds a recovery for that step.",
           "maxProperties": 64,
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
