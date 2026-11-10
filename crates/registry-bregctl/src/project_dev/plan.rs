@@ -1430,8 +1430,8 @@ mod tests {
             json!({
                 "issuer": "https://issuer.example.invalid",
                 "products": [
-                    {"product": "breg", "project": ".", "audience": "registry"},
-                    {"product": "casework", "project": ".", "audience": "review"}
+                    {"product": "breg", "project": ".", "audience": "urn:example:registry"},
+                    {"product": "casework", "project": ".", "audience": "urn:example:review"}
                 ],
                 "people": {
                     "context-reader": {

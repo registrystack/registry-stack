@@ -131,7 +131,9 @@ Casework producer, and `bindings.caseworkContextProvider` identifies the BReg
 context provider and action. `rstack dev check` refuses a binding that names a
 review authority or action the BReg project does not declare, or a producer or
 context provider the Casework project does not declare; `start` refuses it
-before it provisions anything. The run pairs the provider on a private copy
+before it provisions anything. A binding requests tokens for the other
+product's audience as an OAuth resource, so that audience must be an absolute
+URI, such as `urn:example:review`. The run pairs the provider on a private copy
 before packaging. A reviewer whose Casework context call forwards the bearer
 to BReg declares both grants, one shared client, and `caseworkContext: true`.
 Both grants declare the same scopes and additional claims. Casework reads the

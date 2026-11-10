@@ -112,6 +112,14 @@ impl Bindings {
             "Products must place BReg before Casework when bindings are configured.",
             "Move the BReg product before the Casework product.",
         )?;
+        // Each binding requests a token for the other product's audience as
+        // its OAuth resource, which the products accept only as an absolute URI.
+        if self.breg_review_authority.is_some() {
+            require_resource_audience(plan, casework, "bregReviewAuthority")?;
+        }
+        if self.casework_context_provider.is_some() {
+            require_resource_audience(plan, breg, "caseworkContextProvider")?;
+        }
 
         if let Some(binding) = &self.breg_review_authority {
             plan::require(
@@ -161,6 +169,22 @@ fn product_position(plan: &Plan, product: Product) -> Option<usize> {
     plan.products
         .iter()
         .position(|entry| entry.product == product)
+}
+
+fn require_resource_audience(
+    plan: &Plan,
+    position: Option<usize>,
+    binding: &str,
+) -> plan::SemanticResult<()> {
+    let Some(index) = position else {
+        return Ok(());
+    };
+    plan::require(
+        registry_platform_httputil::valid_resource_uri(&plan.products[index].audience),
+        &format!("/products/{index}/audience"),
+        format!("The audience must be an absolute URI because /bindings/{binding} requests tokens for it as an OAuth resource."),
+        "Set audience to an absolute URI without a fragment or credentials, such as `urn:example:review`.",
+    )
 }
 
 fn require_machine_person<'a>(
@@ -804,6 +828,25 @@ mod tests {
             error.contains("/bindings/bregReviewAuthority/identity"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn validation_refuses_a_bound_audience_that_is_not_a_resource_uri() {
+        let mut value = plan();
+        value.products[1].audience = "review".to_owned();
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(error.contains("/products/1/audience"), "{error}");
+        assert!(error.contains("absolute URI"), "{error}");
+
+        let mut value = plan();
+        value.products[0].audience = "registry".to_owned();
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(error.contains("/products/0/audience"), "{error}");
+
+        let mut value = plan();
+        value.bindings.casework_context_provider = None;
+        value.products[0].audience = "registry".to_owned();
+        value.bindings.validate(&value).unwrap();
     }
 
     async fn sign_assertion(
