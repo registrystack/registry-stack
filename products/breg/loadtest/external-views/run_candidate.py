@@ -22,10 +22,11 @@ from urllib.error import URLError
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
+import fixture_path  # noqa: F401
 from journey import HTTP, Journey, JourneyError, expect, request
 from synthetic_source import Fixture, handler, runtime_fragment
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = Path(__file__).resolve().parents[2] / "examples/external-views"
 ISSUER = "https://fixture-issuer.example.test/licensing"
 AUDIENCE = "urn:breg:external-views-fixture"
 KEY_ID = "external-views-fixture"

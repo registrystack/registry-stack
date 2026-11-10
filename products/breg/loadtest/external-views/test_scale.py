@@ -5,6 +5,7 @@
 
 import unittest
 
+import fixture_path  # noqa: F401
 from scale_exercise import (
     ABSENT_KEYS, BATCH_KEYS, DENIED_ROOTS, ELIGIBLE_ROOTS, HOLDER_KEYS,
     MATCH_KEYS, PERSON_REQUEST_BUDGET, REFRESH_PAGE_SIZE, ScaleFixture,

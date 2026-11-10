@@ -10,6 +10,7 @@ import re
 import subprocess
 from urllib.parse import unquote, urlsplit
 
+import fixture_path  # noqa: F401
 from journey import JourneyError, expect, records, request
 
 PROJECTION = "holdings-indexed"
