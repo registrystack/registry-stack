@@ -1347,24 +1347,36 @@ impl Store {
     /// trigger id pairs), so a trigger added back later starts from its first
     /// check instead of resuming a cursor that is months old. The delete runs
     /// under the admission fence, so a held or moved deployment retires
-    /// nothing. Returns the number of cursors removed.
+    /// nothing. A call with no stale cursor returns zero without taking the
+    /// fence. Returns the number of cursors removed.
     pub async fn retire_calendar_cursors(&self, active: &[(String, String)]) -> Result<u64> {
         let (workflows, triggers): (Vec<&str>, Vec<&str>) = active
             .iter()
             .map(|(workflow, trigger)| (workflow.as_str(), trigger.as_str()))
             .unzip();
         let mut client = self.client().await.map_err(unavailable)?;
+        let stale = format!(
+            "FROM {}.calendar_cursors c WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[],$2::text[]) a(workflow_id,trigger_id) WHERE a.workflow_id=c.workflow_id AND a.trigger_id=c.trigger_id)",
+            self.namespace
+        );
+        // The common sweep has nothing to retire; it reads without the
+        // admission lock so it neither waits on admissions nor is refused by a hold.
+        let any_stale: bool = client
+            .query_one(
+                &format!("SELECT EXISTS (SELECT 1 {stale})"),
+                &[&workflows, &triggers],
+            )
+            .await
+            .map_err(unavailable)?
+            .get(0);
+        if !any_stale {
+            return Ok(0);
+        }
         let tx = client.transaction().await.map_err(unavailable)?;
         self.lock_admission(&tx).await?;
         self.require_unheld(&tx).await?;
         let removed = tx
-            .execute(
-                &format!(
-                    "DELETE FROM {}.calendar_cursors c WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[],$2::text[]) a(workflow_id,trigger_id) WHERE a.workflow_id=c.workflow_id AND a.trigger_id=c.trigger_id)",
-                    self.namespace
-                ),
-                &[&workflows, &triggers],
-            )
+            .execute(&format!("DELETE {stale}"), &[&workflows, &triggers])
             .await
             .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
