@@ -318,7 +318,11 @@ fn compile(
     let root_param = parameter(&mut parameters, request.root_id.map(|id| id.to_string()));
     let now = parameter(&mut parameters, Some(request.now.to_string()));
     let scope = scope_predicate("s", request.scope, request.generation, &mut parameters);
-    let root_sql = format!("SELECT {} AS root_id,({})::text AS subject_key FROM {} WHERE current_setting('registry.access_profile',true)={profile_param} AND ({root_param}::uuid IS NULL OR {}={root_param}::uuid)",relations.id_expression,key.sql,relations.from_sql,relations.id_expression);
+    // Root fields carry the generated text collation. Reading the link key in
+    // the snapshot and value keys' own collation lets their primary keys serve
+    // the lookup for each root; both collations are deterministic, so
+    // equality is unchanged.
+    let root_sql = format!("SELECT {} AS root_id,({})::text COLLATE \"default\" AS subject_key FROM {} WHERE current_setting('registry.access_profile',true)={profile_param} AND ({root_param}::uuid IS NULL OR {}={root_param}::uuid)",relations.id_expression,key.sql,relations.from_sql,relations.id_expression);
     let many = projection.cardinality == ExternalCardinality::Many;
     let expected_kind = if many {
         "o.kind='complete-collection'"
@@ -1210,6 +1214,187 @@ mod postgres_tests {
         let second = run(&runtime, &registry, &request).await;
         let rows: Vec<ExternalViewRow> = serde_json::from_value(second.get(5)).unwrap();
         assert_eq!(rows[0].fields["label"], "B");
+        runtime_task.abort();
+        migration_task.abort();
+        drop(runtime);
+        drop(migration);
+        database.cleanup().await;
+    }
+
+    fn plan_nodes<'a>(plan: &'a Value, nodes: &mut Vec<&'a Value>) {
+        nodes.push(plan);
+        for child in plan["Plans"].as_array().into_iter().flatten() {
+            plan_nodes(child, nodes);
+        }
+    }
+
+    fn root(g: u32) -> Uuid {
+        Uuid::parse_str(&format!("00000000-0000-4000-8000-{g:012x}")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_indexed_read_looks_up_each_root_snapshot_by_its_primary_key() {
+        let database = harness::TestDatabase::create(2).await;
+        let (migration, migration_task) = database.connect_migration().await;
+        let registry = super::tests::registry();
+        super::super::install_compiled_schema(&migration, &registry, &database.runtime_role)
+            .await
+            .unwrap();
+        install(&migration, &database.runtime_role).await.unwrap();
+        migration
+            .batch_execute(&INSTALL_SQL.replace(
+                "floor(extract(epoch FROM clock_timestamp()))::bigint",
+                "1000",
+            ))
+            .await
+            .unwrap();
+        let scope =
+            ProjectionScope::new("projection", Uuid::new_v4(), "binding", "grant", 60).unwrap();
+        configure_scope(&migration, &scope).await.unwrap();
+        let entity = &registry.entities()["local-record"];
+        let column = |id: &str| {
+            entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == id)
+                .unwrap()
+                .physical_name
+                .clone()
+        };
+        // A dense scope: every root holds a fresh value. Every thousandth
+        // root belongs to a narrow tenant.
+        database
+            .admin
+            .batch_execute(&format!(
+                "INSERT INTO registry_data.\"{table}\" (record_id,active_package_revision,\"{key}\",\"{tenant}\")
+                 SELECT ('00000000-0000-4000-8000-'||lpad(to_hex(g),12,'0'))::uuid,'fixture','key-'||g,
+                        CASE WHEN g % 1000 = 0 THEN 'narrow' ELSE 'allowed' END
+                 FROM generate_series(1,20000) AS g;
+                 INSERT INTO registry_internal.registry_external_projection_snapshots
+                     (projection_id,epoch,subject_key,snapshot_id,observed_at,expires_at,refresh_sequence,kind)
+                 SELECT 'projection','{epoch}'::uuid,'key-'||g,'snapshot-'||g,990,1050,g,'one'
+                 FROM generate_series(1,20000) AS g;
+                 INSERT INTO registry_internal.registry_external_projection_values
+                     (projection_id,epoch,subject_key,source_key,fields)
+                 SELECT 'projection','{epoch}'::uuid,'key-'||g,'key-'||g,jsonb_build_object('label','label-'||g)
+                 FROM generate_series(1,20000) AS g;
+                 ANALYZE registry_data.\"{table}\";
+                 ANALYZE registry_internal.registry_external_projection_snapshots;
+                 ANALYZE registry_internal.registry_external_projection_values;",
+                table = entity.physical_table,
+                key = column("subject-key"),
+                tenant = column("tenant"),
+                epoch = scope.epoch,
+            ))
+            .await
+            .unwrap();
+        let (runtime, connection) = database
+            .runtime_config
+            .postgres()
+            .connect(NoTls)
+            .await
+            .unwrap();
+        let runtime_task = tokio::spawn(async move {
+            connection.await.expect("query fixture connection");
+        });
+        runtime.batch_execute("SET registry.access_profile='reader'; SET registry.principal='staff'; SET registry.purpose='consultation';").await.unwrap();
+
+        let mut detail = super::tests::request(&scope, 0);
+        detail.root_id = Some(root(10_001));
+        let mut narrow = super::tests::request(&scope, 0);
+        narrow.include_count = true;
+        // A list page reads its rows and one lookahead row.
+        for (tenant, request, expected) in [("allowed", &detail, 1_usize), ("narrow", &narrow, 11)]
+        {
+            runtime
+                .batch_execute(&format!("SET registry.row_boundaries='[{{\"field\":\"tenant\",\"operator\":\"equals\",\"values\":[\"{tenant}\"]}}]';"))
+                .await
+                .unwrap();
+            let statement = compile(&registry, request).unwrap();
+            let result = run_statement(&runtime, &statement).await;
+            assert!(result.get::<_, bool>(1), "{tenant}: coverage is complete");
+            let rows: Vec<ExternalViewRow> = serde_json::from_value(result.get(5)).unwrap();
+            assert_eq!(rows.len(), expected, "{tenant}");
+            assert!(rows
+                .iter()
+                .all(|row| row.availability == ExternalAvailability::Available));
+
+            let parameters = statement
+                .parameters
+                .iter()
+                .map(|value| {
+                    (
+                        value as &(dyn tokio_postgres::types::ToSql + Sync),
+                        Type::TEXT,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let explained: Value = runtime
+                .query_typed_one(
+                    &format!(
+                        "EXPLAIN (ANALYZE, FORMAT JSON, COSTS OFF, TIMING OFF, SUMMARY OFF) {}",
+                        statement.sql
+                    ),
+                    &parameters,
+                )
+                .await
+                .unwrap()
+                .get(0);
+            let mut nodes = Vec::new();
+            plan_nodes(&explained[0]["Plan"], &mut nodes);
+            let tables = [
+                "registry_external_projection_snapshots",
+                "registry_external_projection_values",
+            ];
+            for table in tables {
+                let scans = nodes
+                    .iter()
+                    .filter(|node| node["Relation Name"] == table)
+                    .collect::<Vec<_>>();
+                assert!(!scans.is_empty(), "{tenant}: {explained}");
+                for node in scans {
+                    // Each root's snapshot and value are one primary key
+                    // lookup, never a scan of the whole projection.
+                    assert_eq!(
+                        node["Index Name"],
+                        format!("{table}_pkey"),
+                        "{tenant}: {explained}"
+                    );
+                    assert!(
+                        node["Index Cond"]
+                            .as_str()
+                            .is_some_and(|condition| condition.contains("subject_key")),
+                        "{tenant}: {explained}"
+                    );
+                }
+            }
+            // Only the page's own rows are put in order; no sort reads a
+            // projection table.
+            for sort in nodes.iter().filter(|node| node["Node Type"] == "Sort") {
+                let mut below = Vec::new();
+                plan_nodes(sort, &mut below);
+                assert!(
+                    !below.iter().any(|node| node["Relation Name"]
+                        .as_str()
+                        .is_some_and(|name| tables.contains(&name))),
+                    "{tenant}: {explained}"
+                );
+            }
+            for node in &nodes {
+                if node["Relation Name"] == entity.physical_table.as_str() {
+                    // The root table read follows the authorized population,
+                    // which this test does not bound.
+                    continue;
+                }
+                let loops = node["Actual Loops"].as_f64().unwrap_or(1.0);
+                let rows = node["Actual Rows"].as_f64().unwrap_or(0.0) * loops;
+                let removed = node["Rows Removed by Filter"].as_f64().unwrap_or(0.0) * loops;
+                assert!(
+                    rows + removed <= 60.0,
+                    "{tenant}: each node reads about the authorized roots: {explained}"
+                );
+            }
+        }
         runtime_task.abort();
         migration_task.abort();
         drop(runtime);
