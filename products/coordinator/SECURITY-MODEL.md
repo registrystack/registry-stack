@@ -624,32 +624,39 @@ calendar starts would reopen ingress through the scheduler.
 
 **Enforcement.** `CalendarSchedule` accepts only the reviewed monthly first or
 last day subset and delegates named-zone gap and fold resolution to
-`registry-platform-calendar`. `Store::admit_calendar_due` takes the ordinary
-`admission_lock`, verifies custody and the active workflow digest, checks both
-admission and restore holds, and locks the workflow and trigger cursor. It
-evaluates through PostgreSQL transaction time, selects the latest due
-occurrence, and counts every older due occurrence as skipped. The Run, first
-job and advanced cursor commit in the same transaction. The ordinary start
-identity binds the workflow, trigger and exact occurrence instant, so a
-rewound cursor recovers the existing Run instead of inserting another one. A
-new cursor starts at first observation and creates no historical Run. A
-changed Workflow revision advances the cursor monotonically to its own first
-observation before evaluation. Calendar admission uses a short lock timeout
-and the serving process bounds the whole sweep, so lock contention yields to
-the ordinary worker instead of starving admitted Runs.
+`registry-platform-calendar`. `Store::admit_calendar_due` locks the workflow
+and trigger cursor with `SKIP LOCKED`, so a cursor another replica holds is
+left to that replica. It evaluates through PostgreSQL transaction time,
+selects the latest due occurrence, and counts every older due occurrence as
+skipped. Before a due check writes, it verifies custody and the active
+workflow digest and refuses either hold, writes its audit record, then takes
+the ordinary `admission_lock` and checks the active workflow digest and both
+holds again under it. The Run, first job and advanced cursor commit in the
+same transaction. The ordinary start identity binds the workflow, trigger and
+exact occurrence instant, so a rewound cursor recovers the existing Run
+instead of inserting another one. A new cursor starts at first observation
+and creates no historical Run. The cursor records the trigger's canonical
+cron and timezone: a new Workflow revision with the same schedule keeps the
+cursor, and a changed schedule moves the cursor monotonically to the check's
+database time before any evaluation under it, admits nothing, and stores and
+audits the previous schedule's skipped count. Calendar checks run in their
+own loop beside the ordinary worker, so lock contention delays only the
+calendar, never admitted Runs.
 
 **Refused.** Unsupported cron fields, another day of month, a non-IANA
 timezone, a Workflow input that does not accept the scheduledAt-only object,
-changed activation or key custody, any admission or restore hold, and a
-contended admission fence that exceeds the calendar lock bound.
+changed activation or key custody, any admission or restore hold, and
+unavailable durable audit.
 
 **Tests.** `src/calendar_trigger.rs`:
 `only_the_reviewed_monthly_cron_subset_is_accepted`,
 `a_fold_produces_one_earlier_instant_and_an_exclusive_successor`, and
 `catch_up_selects_only_the_latest_due_instant_and_counts_every_skipped_one`.
 `tests/calendar_trigger_authoring.rs`:
-`a_calendar_trigger_is_checked_explained_and_restored` and
-`calendar_admission_is_latest_only_atomic_and_fenced` (PostgreSQL).
+`a_calendar_trigger_is_checked_explained_and_restored`,
+`calendar_admission_is_latest_only_atomic_and_fenced`,
+`a_revision_keeps_due_occurrences_unless_its_schedule_changed` and
+`an_audit_outage_admits_and_reschedules_nothing` (PostgreSQL).
 
 ## 3. Operator obligations
 

@@ -213,13 +213,17 @@ rule.
 
 PostgreSQL holds one durable cursor per workflow and trigger. After downtime,
 Coordinator admits only the latest due occurrence and records the number of
-older occurrences skipped. Replicas serialize on the ordinary admission lock
-and cursor row. The same workflow and occurrence always derive the same start
-identity, so restart, replay, package replacement and a competing replica do
-not create a second Run. A new trigger starts from the first time the serving
-deployment observes it; it does not replay earlier institutional history. A
-changed Workflow revision also moves the cursor monotonically to that
-revision's first observation before evaluating its reviewed schedule.
+older occurrences skipped. Each check locks its cursor row and skips one
+another replica holds, and admits through the ordinary admission lock. The
+same workflow and occurrence always derive the same start identity, so
+restart, replay, package replacement and a competing replica do not create a
+second Run. A new trigger starts from the first time the serving deployment
+observes it; it does not replay earlier institutional history. A new Workflow
+revision keeps the cursor while the trigger's cron and timezone are
+unchanged, so an occurrence already due still runs. Changing the cron or
+timezone moves the cursor to the first check under the new schedule and runs
+nothing the previous schedule left due; Coordinator logs and audits how many
+occurrences it skipped.
 
 ## Waits and polling
 

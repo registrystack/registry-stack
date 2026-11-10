@@ -2,14 +2,22 @@
 
 ## Unreleased
 
-- BREAKING: protected state schema version 6 adds the durable calendar cursor
-  and the optional service-deadline instant on each Run. Version 5 namespaces
-  are refused; settle their Runs with the matching binary, then apply this
-  version to a fresh namespace and database identity.
+- BREAKING: protected state schema version 6 adds the durable calendar cursor,
+  which records each trigger's cron and timezone, and the optional
+  service-deadline instant on each Run. Version 5 namespaces are refused;
+  settle their Runs with the matching binary, then apply this version to a
+  fresh namespace and database identity. The fresh namespace seeds each
+  calendar cursor at the first check, so a calendar occurrence that falls due
+  while Coordinator is drained for this reset is not run after it.
 - Add reviewed monthly calendar starts using `MIN HOUR 1 * *` or
   `MIN HOUR L * *` in a named IANA timezone. Admission supplies only
   `scheduledAt`, catches up with the latest due occurrence, records the exact
-  skipped count, and uses the ordinary fenced Run admission transaction.
+  skipped count, and uses the ordinary fenced Run admission transaction. A new
+  Workflow revision keeps an occurrence already due unless the trigger's cron
+  or timezone changed; a changed schedule runs nothing the previous one left
+  due, and logs and audits (`calendar-reschedule`) how many it skipped. Each
+  admission is audited before it is written, and replicas skip a cursor
+  another replica is checking.
 - Add optional `onFailure` to read and evaluation call steps. It routes only
   after the ordinary retry limit is exhausted by a definite availability
   category, or when the next retry would not fit before the run deadline,
