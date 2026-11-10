@@ -97,11 +97,36 @@ pub struct CalendarNextExplanation {
 /// Check every calendar trigger of the served Workflows once, in order. Each
 /// check takes only its own cursor row and skips one another replica holds, so
 /// a slow or refused check delays nothing but itself. A refusal is logged and
-/// the sweep goes on; the result is true when any check was refused. Log lines
-/// carry fixed messages, counts and failure codes; the audit record of an
-/// admission or reschedule carries the Workflow and trigger references.
+/// the sweep goes on; the result is true when any check was refused. Cursors
+/// of triggers no longer served are deleted first, so a trigger added back
+/// starts fresh. Log lines carry fixed messages, counts and failure codes; the
+/// audit record of an admission or reschedule carries the Workflow and trigger
+/// references.
 pub async fn sweep(store: &Store, workflows: &Workflows, runtime: &RuntimeConfig) -> bool {
     let mut refused = false;
+    let active = workflows
+        .iter()
+        .flat_map(|(workflow, package)| {
+            package
+                .definition
+                .workflow
+                .calendar_triggers
+                .keys()
+                .map(|trigger_id| (workflow.clone(), trigger_id.clone()))
+        })
+        .collect::<Vec<_>>();
+    match store.retire_calendar_cursors(&active).await {
+        Ok(0) => {}
+        Ok(retired) => tracing::info!(retired, "cursors of removed calendar triggers deleted"),
+        Err(error) => {
+            refused = true;
+            tracing::warn!(
+                code = %error.code,
+                suggested_action = error.suggested_action.as_deref(),
+                "removed calendar triggers were not retired; it is retried at a later sweep"
+            );
+        }
+    }
     for (_, package) in workflows.iter() {
         let definition = &package.definition;
         for trigger_id in definition.workflow.calendar_triggers.keys() {

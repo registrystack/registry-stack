@@ -479,6 +479,9 @@ async fn calendar_admission_is_latest_only_atomic_and_fenced() {
     assert_eq!(skipped, CalendarCheck::Idle);
     held.rollback().await.unwrap();
 
+    // A due occurrence on hold is refused before any audit record is written.
+    let capture = Capture::default();
+    let audited_store = fixture.store_auditing_to(capture.clone()).await;
     sql.execute(
         &format!(
             "UPDATE {}.control SET restore_hold=true WHERE id",
@@ -489,7 +492,7 @@ async fn calendar_admission_is_latest_only_atomic_and_fenced() {
     .await
     .unwrap();
     assert_eq!(
-        first_store
+        audited_store
             .admit_calendar_due(&definition, "month-end", runtime)
             .await
             .unwrap_err()
@@ -506,12 +509,17 @@ async fn calendar_admission_is_latest_only_atomic_and_fenced() {
     .await
     .unwrap();
     assert_eq!(
-        first_store
+        audited_store
             .admit_calendar_due(&definition, "month-end", runtime)
             .await
             .unwrap_err()
             .code,
         "restore-admissions-held"
+    );
+    assert!(
+        capture.entries().is_empty(),
+        "a held check writes no audit record: {:?}",
+        capture.entries()
     );
     sql.execute(
         &format!(
@@ -726,6 +734,103 @@ impl std::io::Write for AuditOutage {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+/// A trigger that leaves the served set loses its cursor, so adding it back
+/// starts from the first check that observes it rather than resuming the old
+/// cursor and running an occurrence that fell due while it was absent.
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn a_removed_trigger_that_is_added_back_starts_from_its_first_check() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let runtime = &fixture.runtime;
+    let definition = fixture.definition(&project());
+    let workflow = definition.workflow.id.clone();
+    let active = vec![(workflow.clone(), "month-end".to_owned())];
+    let cursors = || async {
+        fixture
+            .sql
+            .query_one(
+                &format!(
+                    "SELECT count(*) FROM {}.calendar_cursors",
+                    fixture.namespace
+                ),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    assert_eq!(
+        store
+            .admit_calendar_due(&definition, "month-end", runtime)
+            .await
+            .unwrap(),
+        CalendarCheck::Idle
+    );
+    fixture
+        .set_cursor(&workflow, fixture.now().await - chrono::Duration::days(40))
+        .await;
+    assert_eq!(
+        store.retire_calendar_cursors(&active).await.unwrap(),
+        0,
+        "a trigger still served keeps its cursor"
+    );
+    assert_eq!(cursors().await, 1);
+
+    assert_eq!(store.retire_calendar_cursors(&[]).await.unwrap(), 1);
+    assert_eq!(cursors().await, 0, "a removed trigger leaves no cursor");
+
+    let readded_at = fixture.now().await;
+    assert_eq!(
+        store
+            .admit_calendar_due(&definition, "month-end", runtime)
+            .await
+            .unwrap(),
+        CalendarCheck::Idle,
+        "an occurrence that fell due while the trigger was absent is not run"
+    );
+    assert_eq!(fixture.runs().await, 0);
+    let cursor_at: chrono::DateTime<chrono::Utc> = fixture
+        .sql
+        .query_one(
+            &format!(
+                "SELECT cursor_at FROM {}.calendar_cursors WHERE workflow_id=$1 AND trigger_id='month-end'",
+                fixture.namespace
+            ),
+            &[&workflow],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        cursor_at >= readded_at,
+        "the cursor starts at the first check"
+    );
+
+    set_admissions_hold(&fixture, true).await;
+    assert_eq!(
+        store.retire_calendar_cursors(&[]).await.unwrap_err().code,
+        "restore-admissions-held",
+        "a held deployment retires nothing"
+    );
+    assert_eq!(cursors().await, 1);
+}
+
+#[cfg(feature = "postgres-test")]
+async fn set_admissions_hold(fixture: &Fixture, held: bool) {
+    fixture
+        .sql
+        .execute(
+            &format!(
+                "UPDATE {}.control SET admissions_hold=$1 WHERE id",
+                fixture.namespace
+            ),
+            &[&held],
+        )
+        .await
+        .unwrap();
 }
 
 /// Durable audit precedes a calendar admission or reschedule: without it the
