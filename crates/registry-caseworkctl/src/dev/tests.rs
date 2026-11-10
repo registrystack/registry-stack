@@ -2728,6 +2728,32 @@ fn invalid_service_journal_is_refused_before_the_child_starts() {
 }
 
 #[test]
+fn private_reads_keep_an_atomic_replace_after_the_open_and_check_what_they_opened() {
+    let root = crate::canonical_tempdir();
+    let dev = root.path().join("dev");
+    private::directory(&dev).unwrap();
+    let state = dev.join("state.json");
+    private::create(&state, b"earlier").unwrap();
+    // The supervisor saves state by renaming a successor over the path while
+    // `dev start` polls it. A read that has already opened the earlier file
+    // returns its complete bytes; the next read returns the successor.
+    private::AFTER_OPEN.set(Some(|path| private::replace(path, b"successor").unwrap()));
+    assert_eq!(private::read(&state, 20).unwrap(), b"earlier");
+    assert_eq!(private::read(&state, 20).unwrap(), b"successor");
+    // What was opened still has to be an owner-only, single-link file: a
+    // second link or a public mode that appears after the open is refused.
+    private::AFTER_OPEN.set(Some(|path| {
+        fs::hard_link(path, path.with_extension("alias")).unwrap()
+    }));
+    assert!(private::read(&state, 20).is_err());
+    fs::remove_file(state.with_extension("alias")).unwrap();
+    private::AFTER_OPEN.set(Some(|path| {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap()
+    }));
+    assert!(private::read(&state, 20).is_err());
+}
+
+#[test]
 fn service_guard_process_helper() {
     let Some(encoded) = std::env::var_os("CASEWORKCTL_TEST_SERVICE_GUARD_ARGV") else {
         return;
