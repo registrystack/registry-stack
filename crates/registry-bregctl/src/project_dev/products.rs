@@ -1696,9 +1696,8 @@ mod tests {
         let mut report = json!({
             "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
             "kind": "CaseworkReport", "command": "explain", "status": "complete", "ok": true,
-            "reviewPolicies": [{"dependencies": {"accessProfiles": [
-                {"id": "reviewer", "principalClaim": "sub"}
-            ]}}],
+            "reviewPolicies": [],
+            "accessProfiles": [{"id": "reviewer", "principalClaim": "sub"}],
             "trustedProducers": [{"id": "review-producer"}],
             "contextProviders": [{"id": "proposal-context"}]
         });
