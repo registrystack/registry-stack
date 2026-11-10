@@ -549,9 +549,12 @@ verdict on the issuer, not a failure of the file's integrity.
   that block offline, with `--signer-name` as the certificate's display name, and signs nothing.
 - Render embeds no revocation data (no B-LT or B-LTA) and does not pin the timestamp authority's
   identity; validators decide trust in both.
-- The seal key comes from a secret reference to a local JWK, and no HSM or managed-key custody
-  exists yet. A render worker that gained code execution runs as the serving user and can read a
-  `secret:file` key, so keep a production seal key off such a host until that custody lands.
+- A production seal key is never loaded into Render: Vault or OpenBao Transit holds it
+  non-exportable and signs for Render through the proxy, so a render worker that gained code
+  execution cannot read it. Transit is the only production signer. Render has no direct HSM,
+  PKCS#11, or cloud KMS signer, and it does not check how Transit stores the key. A test seal's
+  key is a local JWK file, which a worker running as the serving user can read, so never use a
+  test seal for production or copy its key off the development host.
 - A render worker starts from an empty environment but is not a sandbox. A worker that gained code
   execution could get arbitrary content sealed, because it renders the content, and could rewrite
   a `file` audit destination. For a deployment that seals, use `audit.destination: stdout` and
