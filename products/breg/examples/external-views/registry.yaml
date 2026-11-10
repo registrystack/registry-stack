@@ -1,0 +1,231 @@
+# yaml-language-server: $schema=../../generated/authoring/registry-project.schema.json
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: synthetic-licensing
+  version: "0.1.0"
+  defaultLanguage: en
+  canonicalBaseIri: https://licensing.example.test
+  display:
+    label: Synthetic licensing registry
+    description: Local licences and licensed businesses with separately granted external views.
+package:
+  sourceRevision: synthetic-licensing-0.1.0
+datasets:
+  - id: licensing
+    display: {label: Licensing}
+
+recordTypes:
+  - id: licence
+    route: licences
+    primaryDataset: licensing
+    mutationMode: mutable
+    classification: internal
+    display: {label: Licence}
+    fields:
+      - {id: licence-number, type: string, required: true, maximumLength: 40, classification: internal}
+      - {id: holder-key, type: string, required: true, maximumLength: 40, classification: restricted}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}
+  - id: licensed-business
+    route: licensed-businesses
+    primaryDataset: licensing
+    mutationMode: mutable
+    classification: internal
+    display: {label: Licensed business}
+    fields:
+      - {id: licence-number, type: string, required: true, maximumLength: 40, classification: internal}
+      - {id: business-key, type: string, required: true, maximumLength: 40, classification: restricted}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 40, classification: internal}
+
+externalRecordTypes:
+  - id: person
+    authority: urn:example:population-register
+    identifierScheme: urn:example:person-number
+    display: {label: Person}
+    fields:
+      - {id: given-name, type: string, classification: restricted}
+      - {id: family-name, type: string, classification: restricted}
+  - id: holding
+    authority: urn:example:business-register
+    identifierScheme: urn:example:holding-number
+    display: {label: Shareholding}
+    fields:
+      - {id: share-class, type: string, classification: internal}
+      - {id: share-count, type: integer, classification: internal}
+      - {id: shareholder-type, type: string, classification: internal}
+      - {id: shareholder-key, type: string, classification: restricted}
+      - {id: person-key, type: string, classification: restricted, nullable: true}
+
+externalProjections:
+  - id: person-live
+    recordType: person
+    operation: person-exact
+    operationVersion: "1"
+    purpose: licensing
+    scope: licensing-holders
+    selectorScheme: urn:example:person-number
+    mode: live
+    cardinality: one
+    fields: [given-name, family-name]
+  - id: person-indexed
+    recordType: person
+    operation: person-batch
+    operationVersion: "1"
+    purpose: licensing
+    scope: licensing-holders
+    selectorScheme: urn:example:person-number
+    mode: indexed
+    cardinality: one
+    cacheTtlSeconds: 300
+    fields: [given-name, family-name]
+  - id: holdings-live
+    recordType: holding
+    operation: holdings-by-business
+    operationVersion: "1"
+    purpose: licensing
+    scope: licensed-business-holdings
+    selectorScheme: urn:example:business-number
+    mode: live
+    cardinality: many
+    fields: [share-class, share-count, shareholder-type, shareholder-key]
+  - id: holdings-indexed
+    recordType: holding
+    operation: holdings-by-business
+    operationVersion: "1"
+    purpose: licensing
+    scope: licensed-business-holdings
+    selectorScheme: urn:example:business-number
+    mode: indexed
+    cardinality: many
+    cacheTtlSeconds: 300
+    fields: [share-class, share-count, shareholder-type, shareholder-key, person-key]
+
+externalViews:
+  - id: licence-holder-live
+    recordType: licence
+    links:
+      - id: holder
+        projection: person-live
+        fromField: holder-key
+        identifierScheme: urn:example:person-number
+        fields: [given-name, family-name]
+  - id: licence-holder-indexed
+    recordType: licence
+    links:
+      - id: holder
+        projection: person-indexed
+        fromField: holder-key
+        identifierScheme: urn:example:person-number
+        fields: [given-name, family-name]
+  - id: business-holdings-live
+    recordType: licensed-business
+    links:
+      - id: holdings
+        projection: holdings-live
+        fromField: business-key
+        identifierScheme: urn:example:business-number
+        fields: [share-class, share-count, shareholder-type, shareholder-key]
+  - id: business-holdings-indexed
+    recordType: licensed-business
+    links:
+      - id: holdings
+        projection: holdings-indexed
+        fromField: business-key
+        identifierScheme: urn:example:business-number
+        fields: [share-class, share-count, shareholder-type, shareholder-key]
+        label:
+          projection: person-indexed
+          fromField: person-key
+          identifierScheme: urn:example:person-number
+          fields: [given-name, family-name]
+
+accessProfiles:
+  - id: officer
+    actorKind: human
+    requesterClients: [officer]
+    principalClaim: registry_principal
+    requiredScopes: [registry:licensing:read]
+    requiredPurposes: [licensing]
+    permissions:
+      records:
+        - recordType: licence
+          operations: [get, list]
+          readableFields: [licence-number, jurisdiction]
+          allowCount: true
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+        - recordType: licensed-business
+          operations: [get, list]
+          readableFields: [licence-number, jurisdiction]
+          allowCount: true
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+      externalViews:
+        - view: licence-holder-live
+          links:
+            - {link: holder, readableFields: [given-name, family-name]}
+        - view: licence-holder-indexed
+          links:
+            - link: holder
+              readableFields: [given-name, family-name]
+              filterableFields: [family-name]
+              sortableFields: [family-name]
+              allowCount: true
+        - view: business-holdings-live
+          links:
+            - {link: holdings, readableFields: [share-class, share-count, shareholder-type, shareholder-key]}
+        - view: business-holdings-indexed
+          links:
+            - link: holdings
+              readableFields: [share-class, share-count, shareholder-type, shareholder-key]
+              filterableFields: [share-class]
+              sortableFields: [share-count]
+              allowCount: true
+              labelFields: [given-name, family-name]
+  - id: local-facts
+    actorKind: human
+    requesterClients: [restricted]
+    principalClaim: registry_principal
+    requiredScopes: [registry:licensing:read]
+    requiredPurposes: [licensing]
+    permissions:
+      records:
+        - recordType: licence
+          operations: [get, list]
+          readableFields: [licence-number, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+        - recordType: licensed-business
+          operations: [get, list]
+          readableFields: [licence-number, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+  - id: projection-refresh
+    actorKind: service
+    requesterClients: [licensing-refresh]
+    principalClaim: registry_principal
+    requiredScopes: [registry:licensing:refresh]
+    requiredPurposes: [licensing]
+    permissions:
+      records:
+        - recordType: licence
+          operations: [list]
+          readableFields: [holder-key, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+        - recordType: licensed-business
+          operations: [list]
+          readableFields: [business-key, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+      refreshExternalProjections: [person-indexed, holdings-indexed]
+  - id: fixture-editor
+    principalClaim: registry_principal
+    requiredScopes: [registry:licensing:write]
+    requiredPurposes: [licensing]
+    permissions:
+      records:
+        - recordType: licence
+          operations: [create, get, patch]
+          readableFields: [licence-number, holder-key, jurisdiction]
+          writableFields: [licence-number, holder-key, jurisdiction]
+          rowBoundaries: unrestricted
+        - recordType: licensed-business
+          operations: [create, get, patch]
+          readableFields: [licence-number, business-key, jurisdiction]
+          writableFields: [licence-number, business-key, jurisdiction]
+          rowBoundaries: unrestricted

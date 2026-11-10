@@ -238,6 +238,13 @@ pub async fn catalog_drift_objects(
     if !registry.actions().actions.is_empty() {
         expected_indexes.insert(IMMEDIATE_ACTION_RESULT_TARGET_INDEX.to_owned());
     }
+    if super::external_projection::enabled(registry) {
+        expected_indexes.extend(
+            super::external_projection::INDEXES
+                .iter()
+                .map(|name| (*name).to_owned()),
+        );
+    }
     let index_rows = client
         .query(
             "SELECT n.nspname || '.' || i.relname
@@ -569,6 +576,21 @@ impl ExpectedManagedCatalog {
             );
         }
         catalog.add_statistical_release_store();
+        if super::external_projection::enabled(registry) {
+            for table in super::external_projection::BACKUP_EXCLUDED_TABLES {
+                catalog.table(
+                    table,
+                    ["SELECT"],
+                    std::iter::empty::<&str>(),
+                    Some((false, false)),
+                );
+            }
+            for (identity, _, _, _, runtime_execute) in
+                super::external_projection::MANAGED_FUNCTIONS
+            {
+                catalog.function(identity, runtime_execute.then_some("EXECUTE"), None);
+            }
+        }
         for (table, privileges) in crate::import_authority::IMPORT_AUTHORITY_TABLES {
             let name = format!("registry_internal.{table}");
             catalog.table(
@@ -1385,7 +1407,7 @@ pub(crate) async fn verify_managed_catalog(
 ) -> Result<()> {
     verify_managed_owners_for_catalog(client, migration_role, runtime_role, expected_catalog)
         .await?;
-    verify_closed_ambient_catalog(client).await?;
+    verify_closed_ambient_catalog(client, expected_catalog).await?;
     verify_exact_acl(
         client,
         runtime_role,
@@ -1405,7 +1427,28 @@ pub(crate) async fn verify_managed_catalog(
     Ok(())
 }
 
-async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()> {
+async fn verify_closed_ambient_catalog(
+    client: &impl GenericClient,
+    expected_catalog: &ExpectedManagedCatalog,
+) -> Result<()> {
+    let mut projection_identities = Vec::<String>::new();
+    let mut projection_returns = Vec::<String>::new();
+    let mut projection_sets = Vec::<bool>::new();
+    let mut projection_definers = Vec::<bool>::new();
+    for (identity, result, returns_set, security_definer, _) in
+        super::external_projection::MANAGED_FUNCTIONS
+    {
+        if expected_catalog
+            .objects
+            .iter()
+            .any(|object| object.kind == ManagedObjectKind::Function && object.name == *identity)
+        {
+            projection_identities.push((*identity).to_owned());
+            projection_returns.push((*result).to_owned());
+            projection_sets.push(*returns_set);
+            projection_definers.push(*security_definer);
+        }
+    }
     let row = client
         .query_one(
             "SELECT
@@ -1486,6 +1529,16 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                                AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
                                AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
                            OR (n.nspname = 'registry_internal'
+                               AND p.prokind = 'f' AND p.provolatile = 'v'
+                               AND NOT p.proisstrict AND NOT p.proleakproof
+                               AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'plpgsql')
+                               AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal']
+                               AND EXISTS (SELECT 1 FROM unnest($2::text[],$3::text[],$4::boolean[],$5::boolean[])
+                                   AS allowed(identity,result_type,returns_set,security_definer)
+                                   WHERE allowed.identity=n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
+                                     AND p.prorettype=allowed.result_type::regtype
+                                     AND p.proretset=allowed.returns_set AND p.prosecdef=allowed.security_definer))
+                           OR (n.nspname = 'registry_internal'
                                AND p.proname = 'reserve_generated_identifier'
                                AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'text, text, jsonb, text'
                                AND p.prorettype = 'boolean'::regtype
@@ -1509,7 +1562,7 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                  ) OR EXISTS (
                      SELECT 1 FROM pg_catalog.pg_publication WHERE puballtables
                  )",
-            &[&MANAGED_SCHEMAS],
+            &[&MANAGED_SCHEMAS, &projection_identities, &projection_returns, &projection_sets, &projection_definers],
         )
         .await?;
     if (0..5).any(|index| row.get::<_, bool>(index)) {
@@ -1984,7 +2037,7 @@ pub async fn managed_schema_fingerprint(
     let migration_role = current_role(client).await?;
     verify_managed_owners_for_catalog(client, &migration_role, runtime_role, expected_catalog)
         .await?;
-    verify_closed_ambient_catalog(client).await?;
+    verify_closed_ambient_catalog(client, expected_catalog).await?;
     verify_exact_acl(
         client,
         runtime_role,

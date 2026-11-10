@@ -371,6 +371,13 @@ pub fn compile_project_with_assets(
             "statistical release compilation",
         )
     })?;
+    let external_views = crate::external_views::compile(project, &entities).map_err(|errors| {
+        stopped_compile_failure(
+            CompileFailure::from_errors(errors),
+            &findings,
+            "external view compilation",
+        )
+    })?;
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
     crate::event_record::compile(&sources, &mut entities);
@@ -512,6 +519,7 @@ pub fn compile_project_with_assets(
         &module_closure,
         &entities,
         &statistical_datasets,
+        &external_views,
         &physical_names,
         &action_inventory,
         &route_inventory,
@@ -551,6 +559,7 @@ pub fn compile_project_with_assets(
         module_closure,
         entities,
         statistical_datasets,
+        external_views,
         physical_names,
         action_inventory,
         route_inventory,

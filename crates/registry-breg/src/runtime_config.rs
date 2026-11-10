@@ -327,6 +327,8 @@ pub enum RuntimeConfigError {
     Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
+    #[error("runtime configuration contains an invalid external source binding")]
+    InvalidExternalSources,
     #[error(
         "runtime configuration taskGrantStatus must contain at most 32 unique absolute source issuers; configure safe service/token URLs, non-empty client and assertion audience, absolute resource identifiers, one status scope token, and a status path with one {{grantId}} segment"
     )]
@@ -410,6 +412,7 @@ impl RuntimeConfigError {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().code,
             Self::InvalidBinding => "breg.runtime.invalid-binding",
+            Self::InvalidExternalSources => "breg.runtime.invalid-external-sources",
             Self::InvalidTaskGrantStatus => "breg.runtime.invalid-task-grant-status",
             Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
             Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
@@ -450,6 +453,7 @@ impl RuntimeConfigError {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
             Self::InvalidBinding | Self::Secret => "",
+            Self::InvalidExternalSources => "/externalSources",
             Self::InvalidTaskGrantStatus => "/taskGrantStatus",
             Self::InvalidInstanceId => "/identity/instanceId",
             Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
@@ -491,6 +495,9 @@ impl RuntimeConfigError {
             Self::Reader(_) => "",
             Self::InvalidTaskGrantStatus => {
                 "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, absolute resource identifiers, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment."
+            }
+            Self::InvalidExternalSources => {
+                "Use distinct projection IDs, a bounded absolute packFile, approved fields and an explicit grant cutoff. Set a refresh interval shorter than the permitted retention window."
             }
             Self::InvalidBinding => {
                 "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, and review authority the package relies on."
@@ -924,6 +931,7 @@ pub struct RuntimeConfig {
     audit: AuditConfig,
     cursor: CursorConfig,
     event_destinations: EventDestinationConfigs,
+    external_sources: Vec<crate::external_source::ExternalSourceBinding>,
     evidence_providers:
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     review_authorities: BTreeMap<String, ReviewAuthorityConfig>,
@@ -971,6 +979,8 @@ fn validate_pool_acquisition_budget(
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
         validate_runtime_definition_ids(&raw)?;
+        crate::external_source::validate_bindings(&raw.external_sources)
+            .map_err(|_| RuntimeConfigError::InvalidExternalSources)?;
         let listener = ListenerConfig::from_raw(raw.listener)?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
@@ -1031,6 +1041,7 @@ impl RuntimeConfig {
             audit,
             cursor,
             event_destinations,
+            external_sources: raw.external_sources.into_vec(),
             evidence_providers: raw.evidence_providers,
             review_authorities,
             retention,
@@ -1357,6 +1368,11 @@ impl RuntimeConfig {
     /// The operator-private metrics listener binding, when one is configured.
     pub fn metrics_listener(&self) -> Option<&MetricsListenerConfig> {
         self.metrics_listener.as_ref()
+    }
+
+    /// Operator bindings for the registry's separately governed external reads.
+    pub fn external_sources(&self) -> &[crate::external_source::ExternalSourceBinding] {
+        &self.external_sources
     }
 
     pub fn secret_resolver(&self) -> Result<SecretResolver> {
@@ -2943,6 +2959,10 @@ struct RawRuntimeConfig {
     /// destination.
     #[serde(default)]
     destinations: RawDestinationsConfig,
+    /// Independent acquisition bindings. Omission permits no source calls.
+    #[serde(default)]
+    external_sources:
+        registry_platform_yaml::UniqueIdList<crate::external_source::ExternalSourceBinding>,
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",

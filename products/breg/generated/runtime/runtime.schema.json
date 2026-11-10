@@ -10,6 +10,41 @@
       ],
       "type": "string"
     },
+    "AdapterEndpointBindings": {
+      "additionalProperties": false,
+      "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares (`products/adapter/CONCEPT.md` sections 10.2 and 17).\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
+      "properties": {
+        "allowedPrivateCidrs": {
+          "default": [],
+          "description": "The private ranges egress may reach. Omission is a secure empty\nallowlist for a listener-free program with no network endpoints.\nThe facade's `AdapterRuntimeConfig` retains its nonempty requirement.",
+          "items": {
+            "$ref": "#/$defs/Cidr"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "endpoints": {
+          "description": "One binding per configured endpoint.",
+          "items": {
+            "$ref": "#/$defs/EndpointBinding"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The deployment this binding configures."
+        },
+        "outboundTls": {
+          "$ref": "#/$defs/OutboundTls",
+          "description": "The private CAs endpoints may trust beside the system roots;\nabsent, every endpoint trusts the system roots alone."
+        }
+      },
+      "required": [
+        "id",
+        "endpoints"
+      ],
+      "type": "object"
+    },
     "AllowedClients": {
       "anyOf": [
         {
@@ -33,6 +68,11 @@
       ],
       "description": "The OAuth clients whose tokens a runtime accepts: the keyword\n`unrestricted`, or a list of at least one client."
     },
+    "AnonymousHttpsAcknowledgement": {
+      "const": "operator-approved",
+      "description": "The operator reviewed and approved this fixed anonymous source.",
+      "type": "string"
+    },
     "AuditDestinationKind": {
       "description": "The configured audit destination kind, as written in product configuration.",
       "oneOf": [
@@ -48,6 +88,11 @@
         }
       ]
     },
+    "Cidr": {
+      "description": "A private network range in `addr/prefix` form, for example 10.0.0.0/8.",
+      "pattern": "^[0-9a-fA-F.:]+/[0-9]{1,3}$",
+      "type": "string"
+    },
     "ClaimName": {
       "description": "The name of one top-level claim of an access token. The reader accepts any\ntext; the runtime then refuses a name that is not a valid claim name, one\nthat repeats another contextual name, and one that is a registered or\nauthentication claim.",
       "type": "string"
@@ -60,10 +105,82 @@
       ],
       "type": "string"
     },
+    "CredentialPlacement": {
+      "description": "Where a shared client secret travels, Evidence's `CredentialPlacement`\nspelling.",
+      "oneOf": [
+        {
+          "const": "basic-header",
+          "description": "`Authorization: Basic` on the token request.",
+          "type": "string"
+        },
+        {
+          "const": "form-body",
+          "description": "A form parameter on the token request.",
+          "type": "string"
+        }
+      ]
+    },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
+    },
+    "EndpointBinding": {
+      "additionalProperties": false,
+      "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions (`products/adapter/CONCEPT.md` section 10.2).",
+      "properties": {
+        "anonymousHttps": {
+          "$ref": "#/$defs/AnonymousHttpsAcknowledgement",
+          "description": "The operator's explicit acknowledgement that a credential-free\nsource is intentionally served over verified HTTPS. Omission keeps\nthe credential-free policy closed outside numeric loopback and mTLS."
+        },
+        "attemptTimeoutMilliseconds": {
+          "description": "A finite attempt-timeout override in milliseconds. Evidence may raise\nor lower its pack default under the acquisition's remaining deadline;\nfacade and job admit only a lower value within their ten-second policy.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The upstream origin; a fixed destination the engine never derives\nfrom a response."
+        },
+        "credential": {
+          "$ref": "#/$defs/RuntimeCredential",
+          "description": "The credential; its kind must match the endpoint's declared kind."
+        },
+        "endpoint": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The pack endpoint this binding configures."
+        },
+        "maximumConcurrency": {
+          "default": 8,
+          "description": "The maximum simultaneous physical data operations admitted for this\nendpoint. Evidence programs selecting the same named connection share\none permit pool; token acquisition retains its own cache/single-flight\ncontrols.",
+          "format": "uint64",
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumResponseBytes": {
+          "description": "A lower response bound than the pack declares, in bytes (1 to\n16777216, the largest bound a pack endpoint may declare); absent, the\ndeclared one applies. A value above the declared one is refused when\nthe deployment loads.",
+          "format": "uint64",
+          "maximum": 16777216,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mtlsIdentity": {
+          "$ref": "#/$defs/MtlsIdentity",
+          "description": "The mTLS client identity, combinable with any authentication kind."
+        },
+        "tlsTrustProfile": {
+          "$ref": "#/$defs/LocalId",
+          "description": "A trust profile under `outboundTls.trustProfiles` whose CA bundle\nthe endpoint trusts beside the system roots; absent, the endpoint\ntrusts the system roots alone."
+        }
+      },
+      "required": [
+        "endpoint",
+        "baseUrl"
+      ],
+      "type": "object"
     },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
@@ -83,6 +200,171 @@
         "loopback-development-http"
       ],
       "type": "string"
+    },
+    "EvidenceAuthenticationPolicy": {
+      "description": "The non-secret authentication authority reviewed with an Evidence source\nconnection. Pack endpoints still own API-intrinsic fields such as an API\nkey header name or authorization scheme; runtime bindings own only secret\nreferences and operational cache bounds.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "none": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "none"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "basic": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "basic"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "static-authorization": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "static-authorization"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "static-api-key": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "static-api-key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "oauth2-client-credentials": {
+              "additionalProperties": false,
+              "properties": {
+                "audience": {
+                  "type": "string"
+                },
+                "credentialPlacement": {
+                  "$ref": "#/$defs/CredentialPlacement"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "tokenEndpoint": {
+                  "$ref": "#/$defs/Url"
+                }
+              },
+              "required": [
+                "tokenEndpoint",
+                "credentialPlacement"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "oauth2-client-credentials"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "oauth2-private-key-jwt": {
+              "additionalProperties": false,
+              "properties": {
+                "audience": {
+                  "type": "string"
+                },
+                "clientAssertionAudience": {
+                  "type": "string"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "tokenEndpoint": {
+                  "$ref": "#/$defs/Url"
+                }
+              },
+              "required": [
+                "tokenEndpoint"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "oauth2-private-key-jwt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EvidenceClientIdentityPolicy": {
+      "description": "The reviewed client-identity posture of one Evidence connection.",
+      "enum": [
+        "forbidden",
+        "required"
+      ],
+      "type": "string"
+    },
+    "EvidenceConnectionPolicy": {
+      "additionalProperties": false,
+      "description": "One reviewed Evidence connection policy from the governed bundle. Runtime\nbindings supply material and deployment values, but may not select a\ndifferent destination or trust posture from this policy.",
+      "properties": {
+        "authentication": {
+          "$ref": "#/$defs/EvidenceAuthenticationPolicy",
+          "description": "The reviewed non-secret authentication authority. Credential material\nand cache tuning stay in the runtime binding, but an OAuth token\ndestination or request audience cannot be selected there alone."
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The exact reviewed origin and base path."
+        },
+        "clientIdentity": {
+          "$ref": "#/$defs/EvidenceClientIdentityPolicy",
+          "description": "Whether the runtime must or must not supply an mTLS identity."
+        },
+        "endpoint": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The pack endpoint whose reviewed authentication kind applies."
+        },
+        "tlsTrustProfile": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The exact private trust profile selection; `None` means system roots."
+        }
+      },
+      "required": [
+        "endpoint",
+        "baseUrl",
+        "clientIdentity",
+        "authentication"
+      ],
+      "type": "object"
     },
     "EvidencePrivateKeyJwtConfig": {
       "additionalProperties": false,
@@ -176,6 +458,117 @@
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
+    "ExternalSourceAcquisition": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumDataOperations": {
+          "format": "uint64",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumResponseBytes": {
+          "format": "uint64",
+          "maximum": 16777216,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "timeoutMilliseconds": {
+          "format": "uint64",
+          "maximum": 60000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumDataOperations",
+        "timeoutMilliseconds",
+        "maximumResponseBytes"
+      ],
+      "type": "object"
+    },
+    "ExternalSourceBinding": {
+      "additionalProperties": false,
+      "description": "Operator binding for one already declared projection. The reviewed pack\nprovides the acquisition ceiling; runtime configuration can narrow it.",
+      "properties": {
+        "acquisition": {
+          "$ref": "#/$defs/ExternalSourceAcquisition"
+        },
+        "allowedFields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowedSelectors": {
+          "description": "An optional further restriction on locally authorized selectors.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "connection": {
+          "$ref": "#/$defs/AdapterEndpointBindings"
+        },
+        "endpointPolicies": {
+          "items": {
+            "$ref": "#/$defs/EvidenceConnectionPolicy"
+          },
+          "type": "array"
+        },
+        "grantValidUntil": {
+          "description": "The reviewed source grant cutoff, as an RFC 3339 timestamp.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "packDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "packFile": {
+          "type": "string"
+        },
+        "retention": {
+          "$ref": "#/$defs/ExternalSourceRetention"
+        }
+      },
+      "required": [
+        "id",
+        "packFile",
+        "packDigest",
+        "connection",
+        "endpointPolicies",
+        "allowedFields",
+        "grantValidUntil",
+        "acquisition"
+      ],
+      "type": "object"
+    },
+    "ExternalSourceRetention": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumRetentionSeconds": {
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "refreshIntervalSeconds": {
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumRetentionSeconds",
+        "refreshIntervalSeconds"
+      ],
+      "type": "object"
+    },
     "FileSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The file secret provider.",
@@ -265,6 +658,43 @@
         "info"
       ],
       "type": "string"
+    },
+    "MtlsIdentity": {
+      "additionalProperties": false,
+      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind (`products/adapter/CONCEPT.md` section 10.2). It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
+      "properties": {
+        "certificateRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The client certificate secret reference."
+        },
+        "keyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The client private key secret reference."
+        }
+      },
+      "required": [
+        "certificateRef",
+        "keyRef"
+      ],
+      "type": "object"
+    },
+    "OutboundTls": {
+      "additionalProperties": false,
+      "description": "The private certificate authorities endpoints may trust beside the\nsystem roots (`products/adapter/CONCEPT.md` section 10.2), in the shape\nEvidence ships: a named profile is a process-local PEM file. A CA\nbundle is not a secret, so the profile names a file, never a secret\nreference.",
+      "properties": {
+        "trustProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TrustProfile"
+          },
+          "default": {},
+          "description": "The named private CA bundles.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "RawAttachmentStorageConfig": {
       "oneOf": [
@@ -1375,6 +1805,223 @@
       },
       "type": "object"
     },
+    "RuntimeCredential": {
+      "description": "The credential binding of one endpoint in the runtime config\n(`products/adapter/CONCEPT.md` section 10.2): Evidence's\n`SourceAuthentication` variant field for field, minus the pack-side\n`headerName` and `scheme`. The kind must match the endpoint's declared\nkind; the checks refuse a mismatch.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No credential; matches a `none` endpoint.",
+          "properties": {
+            "none": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "none"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The Basic credential pair.",
+          "properties": {
+            "basic": {
+              "additionalProperties": false,
+              "properties": {
+                "passwordRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The password secret reference."
+                },
+                "usernameRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The username secret reference."
+                }
+              },
+              "required": [
+                "usernameRef",
+                "passwordRef"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "basic"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The static token, presented under the endpoint's declared `scheme`.",
+          "properties": {
+            "static-authorization": {
+              "additionalProperties": false,
+              "properties": {
+                "tokenRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The token secret reference."
+                }
+              },
+              "required": [
+                "tokenRef"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "static-authorization"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The static API key, sent in the endpoint's declared header.",
+          "properties": {
+            "static-api-key": {
+              "additionalProperties": false,
+              "properties": {
+                "valueRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The key secret reference."
+                }
+              },
+              "required": [
+                "valueRef"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "static-api-key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The client-credentials binding, Evidence's fields: the token\nendpoint, the client id, and the shared secret, all as references\nor fixed strings.",
+          "properties": {
+            "oauth2-client-credentials": {
+              "additionalProperties": false,
+              "properties": {
+                "assumedLifetimeSeconds": {
+                  "description": "Lifetime assumed when the provider omits `expires_in`.",
+                  "format": "uint64",
+                  "maximum": 86400,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "audience": {
+                  "description": "Fixed `audience` form parameter.",
+                  "type": "string"
+                },
+                "clientIdRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The client id secret reference."
+                },
+                "clientSecretRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The shared client secret reference."
+                },
+                "credentialPlacement": {
+                  "$ref": "#/$defs/CredentialPlacement",
+                  "description": "Where the shared client secret travels."
+                },
+                "maximumCacheSeconds": {
+                  "description": "The token cache ceiling, Evidence's bound.",
+                  "format": "uint64",
+                  "maximum": 86400,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "resource": {
+                  "description": "RFC 8707 resource indicator sent as a token-request form\nparameter.",
+                  "type": "string"
+                },
+                "scope": {
+                  "description": "The token-request scope parameter.",
+                  "type": "string"
+                },
+                "tokenEndpoint": {
+                  "$ref": "#/$defs/Url",
+                  "description": "The token endpoint, a fixed destination never derived from a\nresponse; an absolute `http`/`https` URL the origin check\nconfines like any other destination."
+                }
+              },
+              "required": [
+                "tokenEndpoint",
+                "clientIdRef",
+                "clientSecretRef",
+                "credentialPlacement",
+                "maximumCacheSeconds"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "oauth2-client-credentials"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The private-key-jwt binding, Evidence's fields. The signed\nassertion always travels in the form body; there is no placement\nparameter.",
+          "properties": {
+            "oauth2-private-key-jwt": {
+              "additionalProperties": false,
+              "properties": {
+                "assumedLifetimeSeconds": {
+                  "format": "uint64",
+                  "maximum": 86400,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "audience": {
+                  "type": "string"
+                },
+                "clientAssertionAudience": {
+                  "description": "Audience claim of the signed assertion, defaulting to the\ntoken endpoint.",
+                  "type": "string"
+                },
+                "clientAssertionKeyRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The private JWK the client assertion is signed with."
+                },
+                "clientIdRef": {
+                  "$ref": "#/$defs/SecretReference",
+                  "description": "The client id secret reference."
+                },
+                "maximumCacheSeconds": {
+                  "format": "uint64",
+                  "maximum": 86400,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "tokenEndpoint": {
+                  "$ref": "#/$defs/Url",
+                  "description": "The token endpoint, a fixed destination never derived from a\nresponse; an absolute `http`/`https` URL the origin check\nconfines like any other destination."
+                }
+              },
+              "required": [
+                "tokenEndpoint",
+                "clientIdRef",
+                "clientAssertionKeyRef",
+                "maximumCacheSeconds"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "oauth2-private-key-jwt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "SecretProvidersConfig": {
       "additionalProperties": false,
       "anyOf": [
@@ -1471,6 +2118,20 @@
       ],
       "type": "object"
     },
+    "TrustProfile": {
+      "additionalProperties": false,
+      "description": "One named private CA bundle: the absolute path of the process-local PEM\nfile the runtime reads.",
+      "properties": {
+        "caBundleFile": {
+          "description": "The absolute path of the PEM file holding the bundle's certificates.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "caBundleFile"
+      ],
+      "type": "object"
+    },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
       "format": "uri",
@@ -1526,6 +2187,14 @@
         "$ref": "#/$defs/LocalId"
       },
       "type": "object"
+    },
+    "externalSources": {
+      "default": [],
+      "description": "Independent acquisition bindings. Omission permits no source calls.",
+      "items": {
+        "$ref": "#/$defs/ExternalSourceBinding"
+      },
+      "type": "array"
     },
     "fieldEncryption": {
       "$ref": "#/$defs/RawFieldEncryptionConfig",

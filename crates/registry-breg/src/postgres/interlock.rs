@@ -2833,6 +2833,9 @@ async fn reconcile_runtime_acl_in(
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
     }
+    super::external_projection::reconcile(transaction, registry, runtime_role)
+        .await
+        .map_err(super::external_projection::kernel_error)?;
     super::timer::install_record_timer_schema(transaction, registry, runtime_role).await?;
     reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await
 }
@@ -3039,6 +3042,9 @@ async fn execute_initial_package_ddl_in(
         )
         .await?;
     }
+    super::external_projection::reconcile(transaction, registry, runtime_role)
+        .await
+        .map_err(super::external_projection::kernel_error)?;
     super::timer::install_record_timer_schema(transaction, registry, runtime_role).await?;
     reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await?;
     super::timer::initialize_record_timer_bindings(transaction, registry, package_revision).await?;

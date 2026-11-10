@@ -2451,3 +2451,61 @@ diagnostics carry no values, and its row below passes.
 | Hooks | A forged, duplicate, or lost hook changes only when a pass runs |
 | Queue | A message is acknowledged only after acceptance; a crash redelivers it with no duplicate effect; a refused message reaches the dead-letter path |
 | Diagnostics and retention | No payload in the item table; no credentials or personal values in logs |
+
+## 18. External projection acquisition
+
+A pack can declare a `sourceRoutes[].projection` for a host that reads a
+reviewed subset of records for a named purpose. This is a separate source
+entry point. The facade, ingestion jobs and Evidence cannot bind it as one
+of their own operations. The source authority's operation version, purpose,
+eligible scope, selector scheme and record-key scheme must agree with the
+host's governed project and operator binding. The host establishes the
+current grant and the requested keys and fields before acquisition and is
+responsible for terminal audit and any retained data. The operation must
+declare `localDisclosure: host-profiles` for the host to disclose under its
+local profiles when using the shared service identity. A route marked
+`acquisition-only` provides no such authority.
+
+The acquisition uses the listener-free engine, existing endpoint bindings,
+a reviewed connection policy, and a service credential. The operation is
+read-only: HTTP GET or a named, reviewed safe POST. The pack may map source
+protocols with its digest-pinned scripts. The host supplies a finite
+operation, response-byte and deadline budget that spans all pages and
+physical calls. The route declares limits on batch keys, collection pages
+and total collection rows.
+
+Every source invocation receives a JSON object with `type` and `fields`.
+An `exact` invocation supplies `key`; a `batch` supplies unique `keys`;
+a `by-parent` invocation supplies `parentKey` and, after the first page,
+the previous page's opaque `cursor`. Route results have the following
+closed shapes:
+
+| Type | Members |
+|---|---|
+| `exact` | `record`, one keyed outcome for the requested key |
+| `batch` | `records`, exactly one keyed outcome per requested key |
+| `by-parent` | `parentKey`, `snapshot`, `rows`, `complete` and optional `nextCursor` |
+| `unavailable` | No data members |
+
+An exact or batch record carries `key` and an `outcome`: `present`
+includes `fields` and optional `sourceRevision`; `authoritative-absent`
+may include `sourceRevision`; `unavailable` carries only the key.
+Authoritative absence requires a source contract that permits it and a
+successful source response explicitly confirming absence for that key.
+Ambiguous matches, protected existence, HTTP denial and transport faults
+cannot establish absence. The engine validates every returned field against
+the digest-pinned closed JSON Schema and refuses fields the host did not
+request.
+
+A collection row carries a stable unique `key`, the requested `parentKey`,
+`fields`, and an optional `sourceRevision`. A snapshot preserves one
+parent and snapshot identity across every page, terminates with explicit
+`complete: true`, and never repeats a cursor or row key. A completed empty
+snapshot is a result. An interruption yields no collection to the host.
+
+Live acquisitions have no storage in Adapter. Indexed acquisitions require
+an explicit `retention: retain` operation before any source call. The engine
+also checks the raw `Cache-Control` header on every data response before any
+pack mapping. A `no-store` response leaves the acquisition usable for live
+reads and unavailable for retention. That restriction survives mapping and
+paging. Consultation's protected response headers stay unchanged.

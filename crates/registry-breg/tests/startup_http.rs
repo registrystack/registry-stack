@@ -506,7 +506,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 38] {
+fn startup_errors() -> [StartupError; 40] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -549,6 +549,8 @@ fn startup_errors() -> [StartupError; 38] {
         StartupError::Audit,
         StartupError::AuditDestination(AUDIT_DESTINATION_REASON.to_owned()),
         StartupError::Cursor,
+        StartupError::ExternalSources,
+        StartupError::ExternalProjectionRoleMode,
         StartupError::Oidc,
         StartupError::Authentication,
         StartupError::AuthenticationClientsUnlisted,
@@ -803,6 +805,12 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Audit => "the Registry audit profile or destination was refused",
         StartupError::AuditDestination(_) => "the Registry audit destination was refused",
         StartupError::Cursor => "the Registry cursor profile was refused",
+        StartupError::ExternalSources => {
+            "an external source binding or its reviewed Adapter pack was refused"
+        }
+        StartupError::ExternalProjectionRoleMode => {
+            "indexed external projections require separate migration and runtime PostgreSQL roles"
+        }
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::AuthenticationClientsUnlisted => {
@@ -896,6 +904,12 @@ fn expected_background_task_stop_code(
         }
         (BackgroundTask::EvidenceRetention, BackgroundTaskStop::Returned) => {
             "evidence.retention.returned"
+        }
+        (BackgroundTask::ExternalProjectionRetention, BackgroundTaskStop::Panicked) => {
+            "external_projection.retention.panicked"
+        }
+        (BackgroundTask::ExternalProjectionRetention, BackgroundTaskStop::Returned) => {
+            "external_projection.retention.returned"
         }
         (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
             "metrics.listener.panicked"

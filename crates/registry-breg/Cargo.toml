@@ -268,6 +268,8 @@ runtime = [
     "dep:ipnet",
     "dep:jsonwebtoken",
     "dep:reqwest",
+    "dep:registry-adapter-core",
+    "dep:registry-adapter-engine",
     "dep:registry-platform-audit",
     "dep:registry-platform-authcommon",
     "dep:registry-platform-buildinfo",
@@ -295,6 +297,7 @@ postgres-test = ["runtime", "dep:tower", "registry-platform-httputil/test-suppor
 postgres-tls-test = ["runtime"]
 schema = [
     "dep:schemars",
+    "registry-adapter-core?/schema",
     "registry-platform-audit?/schema",
     "registry-platform-config/schema",
     "registry-platform-hooks/schema",
@@ -305,6 +308,8 @@ tooling = ["dep:tempfile", "dep:tower"]
 wasm = ["registry-platform-hooks/wasm", "registry-platform-script/wasm"]
 
 [dependencies]
+registry-adapter-core = { workspace = true, optional = true }
+registry-adapter-engine = { workspace = true, optional = true }
 chrono.workspace = true
 registry-evidence-client.workspace = true
 registry-evidence-verifier.workspace = true

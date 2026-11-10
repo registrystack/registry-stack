@@ -1291,6 +1291,110 @@
       ],
       "type": "object"
     },
+    "ProjectionAbsence": {
+      "enum": [
+        "protected",
+        "authoritative"
+      ],
+      "type": "string"
+    },
+    "ProjectionLocalDisclosure": {
+      "description": "Whether the source authorizes disclosure under the host's narrower\nprofiles when acquisition uses a shared service identity.",
+      "enum": [
+        "acquisition-only",
+        "host-profiles"
+      ],
+      "type": "string"
+    },
+    "ProjectionOperationKind": {
+      "enum": [
+        "exact",
+        "batch",
+        "by-parent"
+      ],
+      "type": "string"
+    },
+    "ProjectionRetention": {
+      "enum": [
+        "live-only",
+        "retain"
+      ],
+      "type": "string"
+    },
+    "ProjectionRouteContract": {
+      "additionalProperties": false,
+      "description": "A reviewed source operation's ceiling. The host still has to establish its\nown current project grant, connection and eligible selectors before I/O.",
+      "properties": {
+        "absence": {
+          "$ref": "#/$defs/ProjectionAbsence"
+        },
+        "authority": {
+          "type": "string"
+        },
+        "fieldsSchema": {
+          "$ref": "#/$defs/ScriptReference"
+        },
+        "localDisclosure": {
+          "$ref": "#/$defs/ProjectionLocalDisclosure"
+        },
+        "maximumBatchKeys": {
+          "format": "uint64",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumPages": {
+          "format": "uint64",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumRows": {
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "operation": {
+          "$ref": "#/$defs/ProjectionOperationKind"
+        },
+        "operationVersion": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "recordKeyScheme": {
+          "type": "string"
+        },
+        "retention": {
+          "$ref": "#/$defs/ProjectionRetention"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "selectorScheme": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "operationVersion",
+        "authority",
+        "purpose",
+        "scope",
+        "selectorScheme",
+        "recordKeyScheme",
+        "retention",
+        "absence",
+        "localDisclosure",
+        "fieldsSchema",
+        "maximumBatchKeys",
+        "maximumPages",
+        "maximumRows"
+      ],
+      "type": "object"
+    },
     "RedeliveryOptions": {
       "additionalProperties": false,
       "description": "The redelivery option set, shared by the error handler and an\n`onException` clause (`products/adapter/CONCEPT.md` section 8.7; the\nnesting under `redeliveryPolicy` follows Camel's own YAML DSL,\n`manual/exception-clause.html` and `manual/exception-redelivery.html`).\nOption spellings stay ours (CFG-NAME); only the nesting is Camel's.\nOnly the non-default members serialize.",
@@ -1643,7 +1747,7 @@
     },
     "SourceRouteDecl": {
       "additionalProperties": false,
-      "description": "One source route of the governed-ingestion mode\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2): a route\ndefinition's steps plus the item-contract declaration. A source route\nis an entry point of the job mode, never a subroutine: a facade\nbinding naming it, or a `direct:` send targeting it, refuses\n(`adapter.job.source-bound-refused`,\n`adapter.job.source-called-refused`). There is no `from`: the\n`from: file:` consumer form was rejected with the job's read step\n(section 17.2).",
+      "description": "One source entry point for an ingestion, Evidence or projection host.\nThe host's declaration supplies the operation contract alongside the\nsteps. A source route is never a subroutine: a facade binding naming it,\nor a `direct:` send targeting it, refuses\n(`adapter.job.source-bound-refused`,\n`adapter.job.source-called-refused`). There is no `from`: the\n`from: file:` consumer form was rejected with the job's read step\n(section 17.2).",
       "properties": {
         "edits": {
           "description": "How the source reports edits to items the scan has already read,\none of [`SOURCE_EDIT_VALUES`]: `ordered`, where an edit moves the\nitem past the read position or items never change so an ordinary\npass suffices, or `rescan`, where an edit can stay behind the\nposition and the declared `rescanDelaySeconds` starts an ordinary\npass from the first page. Mandatory; the checks refuse its absence\nunder `adapter.job.source-edits-required` and a value outside the\nclosed set under `adapter.job.source-edits-unknown`.",
@@ -1655,11 +1759,15 @@
         },
         "id": {
           "$ref": "#/$defs/LocalId",
-          "description": "The source route identifier the job definition names."
+          "description": "The identifier the embedding host names."
         },
         "nextRecovery": {
           "$ref": "#/$defs/SourceRecovery",
           "description": "The recovery semantics of `next`. Mandatory; the checks refuse its\nabsence under `adapter.job.source-recovery-required`."
+        },
+        "projection": {
+          "$ref": "#/$defs/ProjectionRouteContract",
+          "description": "Separately governed acquisition for a host that may retain a projection."
         },
         "readSupport": {
           "$ref": "#/$defs/SourceReadSupport",
@@ -2611,7 +2719,7 @@
     },
     "sourceRoutes": {
       "default": [],
-      "description": "The governed-ingestion source routes the job mode runs\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Entry\npoints of the job mode; a facade route never reaches one.",
+      "description": "The source routes of the ingestion, Evidence and projection hosts.\nA facade route never reaches one.",
       "items": {
         "$ref": "#/$defs/SourceRouteDecl"
       },

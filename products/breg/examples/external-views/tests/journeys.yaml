@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: fixture-record-custody
+    steps:
+      - id: create-licence
+        recordType: licence
+        accessProfile: fixture-editor
+        claims:
+          principal: synthetic-licensing-editor
+          scopes: [registry:licensing:write]
+          purpose: licensing
+        request:
+          type: create
+          data: {licenceNumber: L-REHEARSAL, holderKey: person-7, jurisdiction: zone-a}
+        expect:
+          outcome: success
+          status: 201
+          fields: {licenceNumber: L-REHEARSAL, holderKey: person-7, jurisdiction: zone-a}

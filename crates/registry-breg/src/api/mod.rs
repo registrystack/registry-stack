@@ -7,6 +7,7 @@ mod access_log;
 mod actions;
 mod attachments;
 mod context;
+pub(crate) mod external_views;
 mod gis;
 mod ingestion;
 mod metadata;
@@ -229,6 +230,7 @@ fn route_set(service: Arc<HttpService>) -> Router {
         .merge(attachments::routes(&service))
         .merge(gis::routes())
         .merge(statistics::routes(&service))
+        .merge(external_views::routes(&service.registry))
         .merge(ingestion::routes(&service))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&service),
@@ -516,6 +518,21 @@ async fn openapi(
         Some(&visible_proposals),
     );
     statistics::append_openapi(&service, &claims, &options, &mut paths, &mut schemas);
+    if service.external_views.is_some() {
+        crate::external_view_artifacts::append(
+            &mut paths,
+            service.registry.external_views(),
+            |profile, entity, purpose, operation| {
+                visible.iter().any(|surface| {
+                    surface.route.entity_id == entity
+                        && surface.route.operation == operation
+                        && surface.read_path.is_none()
+                        && surface.context.selected_profile() == profile
+                        && surface.context.purpose() == Some(purpose)
+                })
+            },
+        );
+    }
     if service.review_completions.is_some() {
         crate::artifacts::append_review_completion_openapi(&mut paths, &mut schemas);
     }

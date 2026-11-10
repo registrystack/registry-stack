@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: officer
+    allowHumanFixture: true
+    accessProfiles: [officer]
+    scopes: [registry:licensing:read]
+    claims:
+      registry_principal: synthetic-licensing-officer
+      registry_actor_kind: human
+      registry_purpose: licensing
+      jurisdiction: zone-a
+  - id: restricted
+    allowHumanFixture: true
+    accessProfiles: [local-facts]
+    scopes: [registry:licensing:read]
+    claims:
+      registry_principal: synthetic-licensing-restricted
+      registry_actor_kind: human
+      registry_purpose: licensing
+      jurisdiction: zone-a
+  - id: licensing-refresh
+    accessProfiles: [projection-refresh]
+    scopes: [registry:licensing:refresh]
+    claims:
+      registry_principal: synthetic-licensing-refresh
+      registry_purpose: licensing
+      jurisdiction: zone-a
+  - id: fixture-editor
+    accessProfiles: [fixture-editor]
+    scopes: [registry:licensing:write]
+    claims:
+      registry_principal: synthetic-licensing-editor
+      registry_purpose: licensing
+seed:
+  - {id: licence-first, client: fixture-editor, recordType: licence, accessProfile: fixture-editor, data: {licenceNumber: L-001, holderKey: person-7, jurisdiction: zone-a}}
+  - {id: licence-reuses-holder, client: fixture-editor, recordType: licence, accessProfile: fixture-editor, data: {licenceNumber: L-002, holderKey: person-7, jurisdiction: zone-a}}
+  - {id: licence-unopened, client: fixture-editor, recordType: licence, accessProfile: fixture-editor, data: {licenceNumber: L-003, holderKey: person-8, jurisdiction: zone-a}}
+  - {id: licence-absent-holder, client: fixture-editor, recordType: licence, accessProfile: fixture-editor, data: {licenceNumber: L-004, holderKey: person-9, jurisdiction: zone-a}}
+  - {id: licence-fault-holder, client: fixture-editor, recordType: licence, accessProfile: fixture-editor, data: {licenceNumber: L-005, holderKey: person-10, jurisdiction: zone-a}}
+  - {id: licence-other-zone, client: fixture-editor, recordType: licence, accessProfile: fixture-editor, data: {licenceNumber: L-006, holderKey: person-11, jurisdiction: zone-b}}
+  - {id: business-with-holdings, client: fixture-editor, recordType: licensed-business, accessProfile: fixture-editor, data: {licenceNumber: B-001, businessKey: business-1, jurisdiction: zone-a}}
+  - {id: business-without-holdings, client: fixture-editor, recordType: licensed-business, accessProfile: fixture-editor, data: {licenceNumber: B-002, businessKey: business-2, jurisdiction: zone-a}}
+  - {id: business-other-zone, client: fixture-editor, recordType: licensed-business, accessProfile: fixture-editor, data: {licenceNumber: B-003, businessKey: business-3, jurisdiction: zone-b}}

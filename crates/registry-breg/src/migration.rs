@@ -2622,6 +2622,7 @@ mod tests {
             registry_revision: "ignored-descriptor-revision".to_owned(),
             entities: BTreeMap::new(),
             statistical_datasets: BTreeMap::new(),
+            external_views: Default::default(),
             physical_names: PhysicalNameInventory {
                 entities: BTreeMap::new(),
             },

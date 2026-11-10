@@ -108,6 +108,12 @@ pub struct RegistryProject {
     /// Declared count tables computed from governed Registry records.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statistical_datasets: Vec<StatisticalDatasetSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_record_types: Vec<crate::external_views::ExternalRecordTypeSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_projections: Vec<crate::external_views::ExternalProjectionSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_views: Vec<crate::external_views::ExternalViewSource>,
     /// Named organizations and frozen groups that consent may be given to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipients: Option<RecipientsSource>,
@@ -4755,6 +4761,10 @@ pub struct PermissionsSource {
     /// What the profile may do with statistical datasets: one permission for each dataset it names.
     #[serde(default)]
     pub datasets: Vec<DatasetPermissionSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_views: Vec<crate::external_views::ExternalViewPermissionSource>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub refresh_external_projections: UniqueSet<LocalId>,
 }
 
 /// What a profile may do with one statistical dataset.

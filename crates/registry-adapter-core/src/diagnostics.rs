@@ -53,6 +53,7 @@ pub enum CheckCode {
     PackInvalidHeaderName,
     PackMapParameterMisplaced,
     PackReadSupportInvalid,
+    PackProjectionInvalid,
     PackReservedHeaderName,
     PackScriptUncompilable,
     PackSqliteExtractInvalid,
@@ -207,6 +208,7 @@ impl CheckCode {
         Self::PackGraphQlQueryRequired,
         Self::PackInvalidHeaderName,
         Self::PackMapParameterMisplaced,
+        Self::PackProjectionInvalid,
         Self::PackReadSupportInvalid,
         Self::PackReservedHeaderName,
         Self::PackScriptUncompilable,
@@ -363,6 +365,7 @@ impl CheckCode {
             Self::PackInvalidHeaderName => "adapter.pack.invalid-header-name",
             Self::PackMapParameterMisplaced => "adapter.pack.map-parameter-misplaced",
             Self::PackReadSupportInvalid => "adapter.pack.read-support-invalid",
+            Self::PackProjectionInvalid => "adapter.pack.projection-invalid",
             Self::PackWriteSupportInvalid => "adapter.pack.write-support-invalid",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
             Self::PackSqliteExtractInvalid => "adapter.pack.sqlite-extract-invalid",
@@ -583,6 +586,7 @@ impl CheckCode {
             | Self::PackInvalidHeaderName
             | Self::PackMapParameterMisplaced
             | Self::PackReadSupportInvalid
+            | Self::PackProjectionInvalid
             | Self::PackWriteSupportInvalid
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable

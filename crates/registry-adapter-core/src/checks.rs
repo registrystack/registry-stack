@@ -1713,11 +1713,24 @@ fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
         .collect();
     for (index, source) in pack.source_routes.iter().enumerate() {
         let prefix = format!("/sourceRoutes/{index}");
-        let ingestion = source.evidence.is_none()
-            || source.scan.is_some()
+        let job_declared = source.scan.is_some()
             || source.next_recovery.is_some()
             || source.edits.is_some()
             || source.rescan_delay_seconds.is_some();
+        let ingestion = (source.evidence.is_none() && source.projection.is_none()) || job_declared;
+        if source.projection.as_ref().is_some_and(|projection| {
+            source.evidence.is_some()
+                || job_declared
+                || source.read_support.is_some()
+                || !projection.identifiers_valid()
+        }) {
+            findings.push(finding(
+                CheckCode::PackProjectionInvalid,
+                &format!("{prefix}/projection"),
+                "the projection contract has incompatible route roles or identifiers",
+                "Use a separate projection route with valid authority and scheme identifiers.",
+            ));
+        }
         if ingestion && source.scan.is_none() {
             findings.push(job_finding(
                 JobCode::SourceScanRequired,
@@ -2857,11 +2870,11 @@ fn evidence_only_endpoint_ids(pack: &AdapterPack) -> HashSet<String> {
         if source.evidence.is_some() {
             collect_source_endpoint_ids(&source.steps, &bodies, &mut evidence);
         }
-        let ingestion = source.evidence.is_none()
-            || source.scan.is_some()
+        let job_declared = source.scan.is_some()
             || source.next_recovery.is_some()
             || source.edits.is_some()
             || source.rescan_delay_seconds.is_some();
+        let ingestion = (source.evidence.is_none() && source.projection.is_none()) || job_declared;
         if ingestion {
             collect_source_endpoint_ids(&source.steps, &bodies, &mut ordinary);
         }

@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schemas/pack.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: synthetic-licensing-projections
+version: "1"
+testedVersions: []
+endpoints:
+  - id: synthetic-registry
+    component: http
+    authentication:
+      type: static-api-key
+      headerName: x-registry-service-key
+    attemptTimeoutMilliseconds: 5000
+    maximumResponseBytes: 65536
+    operations:
+      - id: person-exact
+        safeUpstream: true
+      - id: person-batch
+        safeUpstream: true
+      - id: holdings-by-business
+        safeUpstream: true
+scripts:
+  - path: scripts/projection.rhai
+    digest: sha256:900698035e7268aeead23c1689542c11b16ad815c33acfb3183267b6ef632f36
+sourceRoutes:
+  - id: person-exact
+    projection:
+      operation: exact
+      operationVersion: "1"
+      authority: urn:example:population-register
+      purpose: licensing
+      scope: licensing-holders
+      selectorScheme: urn:example:person-number
+      recordKeyScheme: urn:example:person-number
+      retention: live-only
+      absence: authoritative
+      localDisclosure: host-profiles
+      fieldsSchema:
+        path: schemas/person.json
+        digest: sha256:1c1ad6f4c266d0470b8a28c054d360744c6a9f36ba61c379d6e75e0c791035b7
+      maximumBatchKeys: 1
+      maximumPages: 1
+      maximumRows: 1
+    steps:
+      - to:
+          uri: http:synthetic-registry
+          parameters:
+            httpMethod: POST
+            operation: person-exact
+            path: /people/exact
+            body:
+              jsonpath: "$"
+      - setBody:
+          rhai:
+            file: scripts/projection.rhai
+            entrypoint: exact
+  - id: person-batch
+    projection:
+      operation: batch
+      operationVersion: "1"
+      authority: urn:example:population-register
+      purpose: licensing
+      scope: licensing-holders
+      selectorScheme: urn:example:person-number
+      recordKeyScheme: urn:example:person-number
+      retention: retain
+      absence: authoritative
+      localDisclosure: host-profiles
+      fieldsSchema:
+        path: schemas/person.json
+        digest: sha256:1c1ad6f4c266d0470b8a28c054d360744c6a9f36ba61c379d6e75e0c791035b7
+      maximumBatchKeys: 64
+      maximumPages: 1
+      maximumRows: 1
+    steps:
+      - to:
+          uri: http:synthetic-registry
+          parameters:
+            httpMethod: POST
+            operation: person-batch
+            path: /people/batch
+            body:
+              jsonpath: "$"
+      - setBody:
+          rhai:
+            file: scripts/projection.rhai
+            entrypoint: batch
+  - id: holdings-by-business
+    projection:
+      operation: by-parent
+      operationVersion: "1"
+      authority: urn:example:business-register
+      purpose: licensing
+      scope: licensed-business-holdings
+      selectorScheme: urn:example:business-number
+      recordKeyScheme: urn:example:holding-number
+      retention: retain
+      absence: protected
+      localDisclosure: host-profiles
+      fieldsSchema:
+        path: schemas/holding.json
+        digest: sha256:9604300f5b394982df8f14c9336aa1bbc9de1dded4b0691e441637ae4bc9ca81
+      maximumBatchKeys: 1
+      maximumPages: 4
+      maximumRows: 128
+    steps:
+      - to:
+          uri: http:synthetic-registry
+          parameters:
+            httpMethod: POST
+            operation: holdings-by-business
+            path: /holdings/by-business
+            body:
+              jsonpath: "$"
+      - setBody:
+          rhai:
+            file: scripts/projection.rhai
+            entrypoint: holdings
