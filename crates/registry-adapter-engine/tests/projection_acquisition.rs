@@ -21,6 +21,14 @@ impl EvidenceHostHooks for Hooks {
 }
 
 fn operation(retention: &str) -> (AdapterPack, PackArtifactBytes) {
+    operation_with_authentication(retention, json!({"type":"none"}), 1)
+}
+
+fn operation_with_authentication(
+    retention: &str,
+    authentication: Value,
+    step_count: usize,
+) -> (AdapterPack, PackArtifactBytes) {
     let schema = serde_json::to_vec(&json!({
         "type":"object",
         "additionalProperties":false,
@@ -28,12 +36,13 @@ fn operation(retention: &str) -> (AdapterPack, PackArtifactBytes) {
     }))
     .unwrap();
     let digest = registry_platform_config::sha256_uri(&schema);
-    let steps = json!([{"to":{"uri":"http:source","parameters":{
+    let step = json!({"to":{"uri":"http:source","parameters":{
         "httpMethod":"GET", "path":"/people"
-    }}}]);
+    }}});
+    let steps = json!(vec![step; step_count]);
     let pack: AdapterPack = serde_json::from_value(json!({
         "id":"synthetic","version":"1","testedVersions":[],
-        "endpoints":[{"id":"source","component":"http","authentication":{"type":"none"},"attemptTimeoutMilliseconds":1000,"maximumResponseBytes":4096}],
+        "endpoints":[{"id":"source","component":"http","authentication":authentication,"attemptTimeoutMilliseconds":1000,"maximumResponseBytes":4096}],
         "sourceRoutes":[{"id":"lookup","projection":{
             "operation":"exact","operationVersion":"1","authority":"population-register","purpose":"licensing",
             "scope":"licensing-subjects","selectorScheme":"person-number","recordKeyScheme":"person-number",
@@ -504,4 +513,229 @@ async fn an_audit_delay_cannot_start_source_io_after_the_grant_deadline() {
         .await;
     assert!(matches!(result, Err(ProjectionError::Unavailable)));
     exchanges.finish().unwrap();
+}
+
+/// Serves `/token` and `/people` on loopback. Each `/people` request takes
+/// the next `(status, extra header lines)` entry; each `/token` request mints
+/// a numbered credential. Returns the origin and the count of token requests.
+#[cfg(unix)]
+async fn oauth_source(
+    data: Vec<(u16, &'static str)>,
+) -> (
+    String,
+    Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let tokens = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&tokens);
+    let task = tokio::spawn(async move {
+        let mut data = data.into_iter();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0; 1024];
+            let (header_end, content_length) = loop {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0 && buffer.len() < 16384);
+                buffer.extend_from_slice(&chunk[..count]);
+                if let Some(end) = buffer.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    let header = std::str::from_utf8(&buffer[..end]).unwrap();
+                    let length = header
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .map_or(0, |(_, value)| value.trim().parse::<usize>().unwrap());
+                    break (end + 4, length);
+                }
+            };
+            while buffer.len() < header_end + content_length {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                buffer.extend_from_slice(&chunk[..count]);
+            }
+            let path = std::str::from_utf8(&buffer[..header_end])
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap()
+                .to_owned();
+            let (status, extra, body) = if path == "/token" {
+                let number = observed.fetch_add(1, Ordering::SeqCst) + 1;
+                (
+                    200,
+                    "",
+                    json!({"access_token":format!("token-{number}"),"token_type":"Bearer","expires_in":300})
+                        .to_string(),
+                )
+            } else {
+                let (status, extra) = data.next().expect("an unexpected source request");
+                let body = if status == 200 {
+                    json!({"type":"exact","record":{"outcome":"present","key":"person-7","fields":{"familyName":"Lee"}}})
+                        .to_string()
+                } else {
+                    "{}".to_owned()
+                };
+                (status, extra, body)
+            };
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} Synthetic\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+    (origin, tokens, task)
+}
+
+#[cfg(unix)]
+async fn oauth_exact(
+    mode: ProjectionMode,
+    step_count: usize,
+    data: Vec<(u16, &'static str)>,
+) -> (Result<ProjectionResult, ProjectionError>, usize) {
+    use registry_adapter_core::{AdapterEndpointBindings, EvidenceConnectionPolicy};
+    use registry_adapter_engine::evidence::EvidenceRuntimeBindings;
+    use registry_platform_config::{SecretProvider, SecretResolver};
+    use std::os::unix::fs::PermissionsExt;
+
+    let (origin, tokens, source) = oauth_source(data).await;
+    let root = tempfile::tempdir().unwrap();
+    for (name, value) in [("client-id", "client"), ("client-secret", "secret")] {
+        let path = root.path().join(name);
+        std::fs::write(&path, value).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let runtime = EvidenceRuntimeBindings::new(
+        serde_json::from_value::<AdapterEndpointBindings>(json!({
+            "id":"synthetic-connection",
+            "endpoints":[{
+                "endpoint":"source","baseUrl":origin,
+                "credential":{
+                    "type":"oauth2-client-credentials",
+                    "tokenEndpoint":format!("{origin}/token"),
+                    "clientIdRef":"secret:file/client-id",
+                    "clientSecretRef":"secret:file/client-secret",
+                    "credentialPlacement":"form-body",
+                    "maximumCacheSeconds":300
+                }
+            }]
+        }))
+        .unwrap(),
+        SecretResolver::new([SecretProvider::File], root.path()).unwrap(),
+    );
+    let policy: EvidenceConnectionPolicy = serde_json::from_value(json!({
+        "endpoint":"source","baseUrl":origin,"clientIdentity":"forbidden",
+        "authentication":{
+            "type":"oauth2-client-credentials",
+            "tokenEndpoint":format!("{origin}/token"),
+            "credentialPlacement":"form-body"
+        }
+    }))
+    .unwrap();
+    let (pack, artifacts) = operation_with_authentication(
+        "retain",
+        json!({"type":"oauth2-client-credentials"}),
+        step_count,
+    );
+    let program = compile_projection_pack(&pack, "lookup", &artifacts, EvidenceLimits::default())
+        .unwrap()
+        .bind_live(&runtime, "synthetic-connection", &[policy])
+        .unwrap();
+    let result = program
+        .acquire(
+            Arc::new(Hooks),
+            mode,
+            ProjectionRequest::Exact {
+                key: "person-7".to_owned(),
+            },
+            &BTreeSet::from(["familyName".to_owned()]),
+        )
+        .await;
+    source.abort();
+    (result, tokens.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_credential_refresh_after_a_401_does_not_fail_the_acquisition() {
+    let (result, tokens) = oauth_exact(ProjectionMode::Live, 1, vec![(401, ""), (200, "")]).await;
+    assert!(
+        matches!(
+            result,
+            Ok(ProjectionResult::Exact {
+                record: ProjectionRecord::Present { .. }
+            })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(tokens, 2, "the 401 triggers exactly one refresh");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_401_that_survives_the_credential_refresh_still_fails() {
+    let (result, tokens) = oauth_exact(ProjectionMode::Live, 1, vec![(401, ""), (401, "")]).await;
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(tokens, 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_non_401_source_failure_still_fails_without_a_refresh() {
+    let (result, tokens) = oauth_exact(ProjectionMode::Live, 1, vec![(503, "")]).await;
+    assert!(
+        matches!(result, Err(ProjectionError::Unavailable)),
+        "{result:?}"
+    );
+    assert_eq!(tokens, 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn no_store_wins_over_an_unsuccessful_source_status() {
+    let (result, _) = oauth_exact(
+        ProjectionMode::Indexed,
+        1,
+        vec![(503, "Cache-Control: no-store\r\n")],
+    )
+    .await;
+    assert!(
+        matches!(result, Err(ProjectionError::NoStore)),
+        "{result:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn no_store_wins_over_a_route_failure_after_the_header_arrived() {
+    let (result, _) = oauth_exact(
+        ProjectionMode::Indexed,
+        2,
+        vec![(200, "Cache-Control: no-store\r\n"), (503, "")],
+    )
+    .await;
+    assert!(
+        matches!(result, Err(ProjectionError::NoStore)),
+        "{result:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unsuccessful_source_status_without_no_store_stays_unavailable() {
+    let (result, _) = oauth_exact(ProjectionMode::Indexed, 1, vec![(503, "")]).await;
+    assert!(
+        matches!(result, Err(ProjectionError::Unavailable)),
+        "{result:?}"
+    );
 }

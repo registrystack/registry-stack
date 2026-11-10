@@ -3535,14 +3535,6 @@ impl Run<'_, '_> {
                 )
             };
             self.ensure_deadline()?;
-            if let Some(projection) = self
-                .evidence
-                .and_then(|acquisition| acquisition.projection_http.as_ref())
-            {
-                let successful = matches!(&reply, PhysicalSendReply::Ordinary(Ok(reply))
-                    if (200..300).contains(&reply.status) && reply.status != 202);
-                projection.observe_response(successful);
-            }
             if let Some(acquisition) = self.evidence {
                 let response_bytes = reply.response_bytes();
                 if response_bytes != 0 {
@@ -3580,6 +3572,18 @@ impl Run<'_, '_> {
                     .is_some_and(|protocol| !protocol.allows_credential_refresh_retry())
             {
                 action = UpstreamStatusAction::CredentialRejected;
+            }
+            // A response that triggers a credential refresh is not terminal:
+            // the retry's response is the one the projection observes.
+            if action != UpstreamStatusAction::RetryWithFreshCredential {
+                if let Some(projection) = self
+                    .evidence
+                    .and_then(|acquisition| acquisition.projection_http.as_ref())
+                {
+                    let successful = matches!(&reply, PhysicalSendReply::Ordinary(Ok(reply))
+                        if (200..300).contains(&reply.status) && reply.status != 202);
+                    projection.observe_response(successful);
+                }
             }
             if action == UpstreamStatusAction::RetryWithFreshCredential {
                 let mut sent = json!({
