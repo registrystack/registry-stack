@@ -694,23 +694,26 @@ fn child_exited(child: &Child) -> Result<bool> {
     }
 }
 
-fn signal_group(pid: Pid, signal: Signal) -> Result<()> {
-    match kill_process_group(pid, signal) {
+fn signal_group(child: &Child, signal: Signal) -> Result<()> {
+    match kill_process_group(child_pid(child)?, signal) {
         Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        // Darwin excludes zombies from killpg and reports EPERM when there
+        // are no signalable members. An owned, same-user group with an
+        // exited leader can already be empty of live processes.
+        Err(rustix::io::Errno::PERM) if cfg!(target_os = "macos") && child_exited(child)? => Ok(()),
         Err(error) => Err(error.into()),
     }
 }
 
 fn stop_child(child: &mut Child) -> Result<ExitStatus> {
-    let pid = child_pid(child)?;
     if !child_exited(child)? {
-        signal_group(pid, Signal::TERM)?;
+        signal_group(child, Signal::TERM)?;
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline && !child_exited(child)? {
             thread::sleep(POLL);
         }
     }
-    signal_group(pid, Signal::KILL)?;
+    signal_group(child, Signal::KILL)?;
     Ok(child.wait()?)
 }
 
@@ -844,6 +847,24 @@ mod tests {
         closes_nested_tool_pipe(true);
     }
 
+    #[test]
+    fn completed_tool_without_descendants_keeps_its_exit_status() {
+        let mut child = child_command(Path::new("/bin/sh"))
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+        wait_for_leader(&child);
+        assert_eq!(stop_child(&mut child).unwrap().code(), Some(7));
+    }
+
+    fn wait_for_leader(child: &Child) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !child_exited(child).unwrap() {
+            assert!(Instant::now() < deadline, "the tool leader did not exit");
+            thread::sleep(POLL);
+        }
+    }
+
     fn closes_nested_tool_pipe(leader_exits: bool) {
         let leader_end = if leader_exits { "exit 0" } else { "wait" };
         let mut child = child_command(Path::new("/bin/sh"))
@@ -860,12 +881,8 @@ mod tests {
         let mut ready = String::new();
         pipe.read_line(&mut ready).unwrap();
         assert_eq!(ready, "ready\n");
-        let deadline = Instant::now() + Duration::from_secs(2);
         if leader_exits {
-            while !child_exited(&child).unwrap() {
-                assert!(Instant::now() < deadline, "the tool leader did not exit");
-                thread::sleep(POLL);
-            }
+            wait_for_leader(&child);
         }
         stop_child(&mut child).unwrap();
 
