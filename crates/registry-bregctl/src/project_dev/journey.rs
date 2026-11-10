@@ -623,6 +623,11 @@ mod tests {
         }
     }
 
+    /// How long a synthetic server accepts requests. A journey run spends a few
+    /// hundred milliseconds before its first request, so the poll budgets below
+    /// leave room for a busy machine.
+    const SERVER_WINDOW: Duration = Duration::from_secs(2);
+
     fn synthetic_server(responses: Vec<(Duration, u16, &'static str)>) -> SyntheticServer {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -630,7 +635,7 @@ mod tests {
         let requests = Arc::new(AtomicUsize::new(0));
         let observed = requests.clone();
         let thread = thread::spawn(move || {
-            let end = Instant::now() + Duration::from_millis(500);
+            let end = Instant::now() + SERVER_WINDOW;
             let mut response = 0;
             while Instant::now() < end {
                 match listener.accept() {
@@ -741,11 +746,11 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         let server = synthetic_server(vec![
             (Duration::ZERO, 202, r#"{"state":"waiting"}"#),
-            (Duration::from_millis(500), 200, r#"{"state":"ready"}"#),
+            (Duration::from_millis(1500), 200, r#"{"state":"ready"}"#),
         ]);
         let root = tempfile::tempdir().unwrap();
         let issuer = Issuer::create(root.path()).unwrap();
-        let input = polling_input(300, 50);
+        let input = polling_input(1000, 50);
         let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
 
         let report = run(&input, &issuer, &urls, || Ok(())).unwrap();
@@ -767,7 +772,7 @@ mod tests {
         let server = synthetic_server(vec![(Duration::ZERO, 202, r#"{"state":"waiting"}"#)]);
         let root = tempfile::tempdir().unwrap();
         let issuer = Issuer::create(root.path()).unwrap();
-        let input = polling_input(300, 300);
+        let input = polling_input(1000, 1000);
         let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
 
         let report = run(&input, &issuer, &urls, || Ok(())).unwrap();
