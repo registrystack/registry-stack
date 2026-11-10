@@ -610,11 +610,23 @@ impl PostgresExternalViewService {
             .transaction(&mut session, claims, request.deadline)
             .await?;
         // A root without a usable link key has no outside subject to fetch.
-        let key = RootKeys::new(plan)?
+        let stored = RootKeys::new(plan)?
             .for_root(&transaction, root)
             .await?
-            .ok_or(ExternalViewError::Concealed)?
-            .filter(|key| !key.is_empty() && crate::external_views::link_key_acceptable(key));
+            .ok_or(ExternalViewError::Concealed)?;
+        if stored
+            .as_deref()
+            .is_some_and(|key| !key.is_empty() && !crate::external_views::link_key_acceptable(key))
+        {
+            tracing::warn!(
+                view = request.view.as_str(),
+                reason = "invalid-key",
+                keys = 1,
+                "external view live read skipped a key it would not send to the source"
+            );
+        }
+        let key =
+            stored.filter(|key| !key.is_empty() && crate::external_views::link_key_acceptable(key));
         transaction
             .commit()
             .await
@@ -3670,6 +3682,16 @@ mod postgres_tests {
         transcript.finish().unwrap();
         let logs = captured.text();
         assert!(!logs.contains("live acquisition failed"), "{logs}");
+        // Only the malformed key is logged, once, with the view and a count.
+        let skipped = logs
+            .lines()
+            .filter(|line| line.contains(r#""reason":"invalid-key""#))
+            .collect::<Vec<_>>();
+        assert_eq!(skipped.len(), 1, "{logs}");
+        assert!(skipped[0].contains(r#""level":"WARN""#), "{logs}");
+        assert!(skipped[0].contains(r#""view":"view""#), "{logs}");
+        assert!(skipped[0].contains(r#""keys":1"#), "{logs}");
+        assert!(!logs.contains("bell"), "the key reached the log: {logs}");
         served.fixture.cleanup().await;
     }
 
