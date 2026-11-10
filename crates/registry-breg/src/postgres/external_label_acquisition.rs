@@ -488,7 +488,7 @@ mod postgres_tests {
         for subject in ["allowed-parent", "denied-parent", "expired-parent"] {
             let ticket: i64 = migration
                 .query_one(
-                    "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5)",
+                    "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5,120)",
                     &[
                         &parent.projection_id,
                         &parent.epoch,
@@ -554,7 +554,7 @@ mod postgres_tests {
             "floor(extract(epoch FROM clock_timestamp()))::bigint",
             "1000",
         );
-        let ticket:i64=runtime.query_one("SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'indirect-person')",&[&label.projection_id,&label.epoch,&label.binding_digest,&label.grant_digest]).await.unwrap().get(0);
+        let ticket:i64=runtime.query_one("SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'indirect-person',120)",&[&label.projection_id,&label.epoch,&label.binding_digest,&label.grant_digest]).await.unwrap().get(0);
         let rows = json!([{"source_key":"indirect-person","fields":{"name":"retained"}}]);
         let roots = vec![allowed];
         let outcome: String = runtime

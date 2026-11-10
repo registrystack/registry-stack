@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -25,7 +26,7 @@ pub(crate) const WITHDRAW_FUNCTION: &str =
 /// ACL/install signatures above remain type-only SQL call signatures.
 /// Entries are (identity, result type, returns set, security definer, runtime execute).
 pub(crate) const MANAGED_FUNCTIONS: &[(&str,&str,bool,bool,bool)] = &[
-    ("registry_internal.allocate_external_projection_refresh(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_subject text)","bigint",false,true,true),
+    ("registry_internal.allocate_external_projection_refresh(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_subject text, p_lease bigint)","bigint",false,true,true),
     ("registry_internal.publish_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_sequence bigint, p_subject text, p_snapshot text, p_observed bigint, p_expires bigint, p_kind text, p_rows jsonb)","text",false,true,true),
     ("registry_internal.fail_external_projection_refresh(p_projection text, p_epoch uuid, p_sequence bigint, p_subject text, p_reason text)","boolean",false,true,true),
     ("registry_internal.withdraw_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text)","boolean",false,true,false),
@@ -246,7 +247,7 @@ pub(crate) const SNAPSHOTS_TABLE: &str = BACKUP_EXCLUDED_TABLES[2];
 pub(crate) const VALUES_TABLE: &str = BACKUP_EXCLUDED_TABLES[3];
 
 pub(crate) const RUNTIME_FUNCTIONS: &[&str] = &[
-    "registry_internal.allocate_external_projection_refresh(text,uuid,text,text,text)",
+    "registry_internal.allocate_external_projection_refresh(text,uuid,text,text,text,bigint)",
     "registry_internal.publish_external_projection(text,uuid,text,text,bigint,text,text,bigint,bigint,text,jsonb)",
     "registry_internal.fail_external_projection_refresh(text,uuid,bigint,text,text)",
     "registry_internal.purge_external_projections(integer)",
@@ -649,12 +650,15 @@ pub(crate) async fn configure_scope(
     Ok(())
 }
 
+/// The lease must outlive the whole refresh page: acquisition and publication
+/// both finish by the caller's deadline, so pass the time left plus a margin.
 pub(crate) async fn allocate_refresh(
     transaction: &GuardedTransaction<'_>,
     scope: &ProjectionScope,
     subject_key: &str,
+    lease: Duration,
 ) -> Result<RefreshTicket, ProjectionError> {
-    allocate_inner(transaction.transaction(), scope, subject_key).await
+    allocate_with_lease(transaction.transaction(), scope, subject_key, lease).await
 }
 
 /// Read the operator-provisioned binding after the ordinary exact-package
@@ -760,23 +764,36 @@ WITH active_scope AS MATERIALIZED (
 SELECT EXISTS(SELECT 1 FROM active_scope),COALESCE((SELECT array_agg(subject_key ORDER BY subject_key COLLATE "C") FROM due),ARRAY[]::text[])
 "#;
 
+/// Tests allocate with the two-minute lease a short refresh page needs.
+#[cfg(all(test, feature = "postgres-test"))]
 async fn allocate_inner(
     client: &impl GenericClient,
     scope: &ProjectionScope,
     subject_key: &str,
 ) -> Result<RefreshTicket, ProjectionError> {
+    allocate_with_lease(client, scope, subject_key, Duration::from_secs(120)).await
+}
+
+async fn allocate_with_lease(
+    client: &impl GenericClient,
+    scope: &ProjectionScope,
+    subject_key: &str,
+    lease: Duration,
+) -> Result<RefreshTicket, ProjectionError> {
     if !valid_key(subject_key) {
         return Err(ProjectionError::InvalidSnapshot);
     }
+    let lease = i64::try_from(lease.as_secs()).map_err(|_| ProjectionError::StaleRefresh)?;
     let row = client
         .query_one(
-            "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5)",
+            "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5,$6)",
             &[
                 &scope.projection_id,
                 &scope.epoch,
                 &scope.binding_digest,
                 &scope.grant_digest,
                 &subject_key,
+                &lease,
             ],
         )
         .await
@@ -1063,7 +1080,7 @@ CREATE INDEX IF NOT EXISTS registry_external_projection_allocated_idx
     WHERE state='allocated';
 
 CREATE OR REPLACE FUNCTION registry_internal.allocate_external_projection_refresh(
-    p_projection text,p_epoch uuid,p_binding text,p_grant text,p_subject text
+    p_projection text,p_epoch uuid,p_binding text,p_grant text,p_subject text,p_lease bigint
 ) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, registry_internal AS $body$
 DECLARE scope registry_internal.registry_external_projection_scopes; projection_now bigint; allocated bigint;
@@ -1073,14 +1090,15 @@ BEGIN
         WHERE projection_id=p_projection FOR UPDATE;
     IF NOT FOUND OR p_epoch IS NULL OR p_binding IS NULL OR p_grant IS NULL OR NOT scope.active OR scope.epoch<>p_epoch
         OR scope.binding_digest<>p_binding OR scope.grant_digest<>p_grant
-        OR p_subject IS NULL OR octet_length(p_subject) NOT BETWEEN 1 AND 1024 THEN RETURN NULL; END IF;
+        OR p_subject IS NULL OR octet_length(p_subject) NOT BETWEEN 1 AND 1024
+        OR p_lease IS NULL OR p_lease NOT BETWEEN 1 AND 3600 THEN RETURN NULL; END IF;
     IF (SELECT count(*) FROM registry_internal.registry_external_projection_refreshes
         WHERE projection_id=p_projection AND state='allocated' AND lease_expires_at>projection_now) >= 1024 THEN RETURN NULL; END IF;
     UPDATE registry_internal.registry_external_projection_scopes SET next_sequence=next_sequence+1
         WHERE projection_id=p_projection RETURNING next_sequence INTO allocated;
     INSERT INTO registry_internal.registry_external_projection_refreshes
         (projection_id,sequence,epoch,subject_key,started_at,lease_expires_at,state)
-        VALUES (p_projection,allocated,p_epoch,p_subject,projection_now,projection_now+120,'allocated');
+        VALUES (p_projection,allocated,p_epoch,p_subject,projection_now,projection_now+p_lease,'allocated');
     RETURN allocated;
 END $body$;
 
@@ -1599,7 +1617,7 @@ pub(crate) mod postgres_tests {
         let transaction = super::super::begin_registry_transaction(
             &mut runtime,
             RegistryLockKey::derive(registry.registry_id()).unwrap(),
-            std::time::Duration::from_secs(2),
+            Duration::from_secs(2),
             &expected,
         )
         .await
@@ -1634,7 +1652,7 @@ pub(crate) mod postgres_tests {
                 .unwrap()
                 .contains("subject")
         );
-        let ticket = allocate_refresh(&transaction, &bound, "subject")
+        let ticket = allocate_refresh(&transaction, &bound, "subject", Duration::from_secs(120))
             .await
             .unwrap();
         let accepted = AcceptedSnapshot::one(
@@ -1743,7 +1761,7 @@ pub(crate) mod postgres_tests {
         let transaction = super::super::begin_registry_transaction(
             &mut runtime,
             RegistryLockKey::derive(registry.registry_id()).unwrap(),
-            std::time::Duration::from_secs(2),
+            Duration::from_secs(2),
             &expected,
         )
         .await
@@ -1777,7 +1795,7 @@ pub(crate) mod postgres_tests {
         let transaction = super::super::begin_registry_transaction(
             &mut runtime,
             RegistryLockKey::derive(registry.registry_id()).unwrap(),
-            std::time::Duration::from_secs(2),
+            Duration::from_secs(2),
             &expected,
         )
         .await
@@ -2181,6 +2199,57 @@ pub(crate) mod postgres_tests {
     }
 
     #[tokio::test]
+    async fn a_refresh_lease_covers_the_acquisition_deadline() {
+        let database = harness::TestDatabase::create(2).await;
+        let (migration, migration_task) = database.connect_migration().await;
+        install(&migration, &database.runtime_role).await.unwrap();
+        clock(&migration, 1000).await;
+        let scope = scope(Uuid::new_v4());
+        configure_scope(&migration, &scope).await.unwrap();
+        let allocate = |lease: i64| {
+            let migration = &migration;
+            let scope = &scope;
+            async move {
+                migration
+                    .query_one(
+                        "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'subject',$5)",
+                        &[
+                            &scope.projection_id,
+                            &scope.epoch,
+                            &scope.binding_digest,
+                            &scope.grant_digest,
+                            &lease,
+                        ],
+                    )
+                    .await
+                    .unwrap()
+                    .get::<_, Option<i64>>(0)
+            }
+        };
+        for refused in [0, -1, 3601] {
+            assert_eq!(allocate(refused).await, None, "lease {refused}");
+        }
+        let sequence = allocate(300).await.unwrap();
+        // The page outlives the previous fixed two-minute lease but stays
+        // inside its own deadline, so its result is still accepted.
+        clock(&migration, 1150).await;
+        let ticket = RefreshTicket {
+            scope: scope.clone(),
+            subject_key: "subject".to_owned(),
+            sequence,
+        };
+        assert_eq!(
+            publish_without_eligibility(&migration, &ticket, &snapshot("slow", 1149, "accepted"))
+                .await
+                .unwrap(),
+            Publication::Published
+        );
+        migration_task.abort();
+        drop(migration);
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
     async fn terminal_receipts_fence_older_results_after_snapshot_removal() {
         let database = harness::TestDatabase::create(2).await;
         let (migration, migration_task) = database.connect_migration().await;
@@ -2417,7 +2486,7 @@ pub(crate) mod postgres_tests {
             let transaction = super::super::begin_registry_transaction(
                 &mut runtime,
                 super::super::RegistryLockKey::derive(registry.registry_id()).unwrap(),
-                std::time::Duration::from_secs(2),
+                Duration::from_secs(2),
                 &self.expected,
             )
             .await
@@ -2439,7 +2508,7 @@ pub(crate) mod postgres_tests {
             let transaction = super::super::begin_registry_transaction(
                 &mut runtime,
                 super::super::RegistryLockKey::derive(registry.registry_id()).unwrap(),
-                std::time::Duration::from_secs(2),
+                Duration::from_secs(2),
                 &self.expected,
             )
             .await
