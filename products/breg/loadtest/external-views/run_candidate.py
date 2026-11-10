@@ -22,7 +22,9 @@ from urllib.error import URLError
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-import fixture_path  # noqa: F401
+import fixture_path
+fixture_path.ensure_importable()
+from recovery import ScopeRecovery
 from journey import HTTP, Journey, JourneyError, expect, request
 from synthetic_source import Fixture, handler, runtime_fragment
 
@@ -288,8 +290,6 @@ def run(options):
                "the scale exercise requires an existing PostgreSQL plan log")
     else:
         scale = None
-    if options.recovery:
-        from recovery import ScopeRecovery
     work = options.work_dir.resolve()
     work.mkdir(mode=0o700)
     os.umask(0o077)
@@ -328,6 +328,7 @@ def run(options):
     source_key = (keys / "source-key").read_text(encoding="ascii")
     control_key = (keys / "control-key").read_text(encoding="ascii")
     fixture = scale.ScaleFixture() if scale else Fixture()
+    recovery = None
     with ThreadingHTTPServer(("127.0.0.1", 0), handler(fixture, source_key, control_key)) as source:
         thread = Thread(target=source.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
@@ -374,6 +375,7 @@ def run(options):
                     recovery = ScopeRecovery(journey, fixture, work, facts, ctl, runtime, write_json)
                     recovery.withdraw_and_rotate()
             if options.recovery:
+                expect(recovery is not None, "scope recovery did not run before the restart")
                 print("Restarting and rebuilding the rotated holdings scope", flush=True)
                 with serving(breg, runtime, work, "breg-restarted.log", origin):
                     recovery.verify_rebuild()

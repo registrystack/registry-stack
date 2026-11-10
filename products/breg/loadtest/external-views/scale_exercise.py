@@ -13,7 +13,8 @@ import subprocess
 import time
 from urllib.parse import unquote, urlsplit
 
-import fixture_path  # noqa: F401
+import fixture_path
+fixture_path.ensure_importable()
 from journey import JourneyError, expect, fixture_credential, records, request
 from synthetic_source import Fixture, digest, require
 

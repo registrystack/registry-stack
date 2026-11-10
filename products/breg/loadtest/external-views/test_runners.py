@@ -7,7 +7,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import fixture_path  # noqa: F401
+import fixture_path
+fixture_path.ensure_importable()
 from journey import JourneyError
 from recovery import operator_report
 from run_candidate import URL_FILES, database_urls, stage_project, verify_source_facts
