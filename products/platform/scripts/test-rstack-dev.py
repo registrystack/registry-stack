@@ -161,6 +161,18 @@ def inventory(pg, env):
     return set(databases.splitlines()), set(roles.splitlines())
 
 
+def administrator_locks(pg, env):
+    locks = psql(
+        pg,
+        env,
+        """SELECT classid::text || ':' || objid::text || ':' || objsubid::text
+        FROM pg_locks
+        WHERE locktype = 'advisory' AND granted
+        AND database = (SELECT oid FROM pg_database WHERE datname = current_database());""",
+    )
+    return set(locks.splitlines())
+
+
 def files(root):
     return {
         path.relative_to(root): hashlib.sha256(path.read_bytes()).digest()
@@ -314,6 +326,7 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     }
     try:
         exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env)
+        verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env)
         if spatial:
             verify_spatial(root, bin_dir, pg, env, pg_env)
         assert files(checkout) == before
@@ -325,6 +338,7 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
 
 def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     baseline = inventory(pg, pg_env)
+    baseline_locks = administrator_locks(pg, pg_env)
     with concurrent.futures.ThreadPoolExecutor(2) as pool:
         runs = list(
             pool.map(lambda _: dev(bin_dir, env, checkout, "start", "."), range(2))
@@ -332,6 +346,7 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     a, b = runs
     assert all(run["journey"]["result"] == "passed" for run in runs)
     assert a["run_id"] != b["run_id"]
+    assert len(administrator_locks(pg, pg_env) - baseline_locks) == 2
     assert len({url for run in runs for url in run["products"].values()}) == 4
     databases, roles = inventory(pg, pg_env)
     assert all(sum(run["run_id"] in item for item in databases) == 3 for run in runs)
@@ -404,10 +419,65 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     assert list(state.iterdir()) == [], report
     verify_native_handoff(root, bin_dir, env)
     assert inventory(pg, pg_env) == baseline
+    assert administrator_locks(pg, pg_env) == baseline_locks
     assert list(state.iterdir()) == []
     print(
         "Stop, TTL expiry and failed startup cleaned up; authored product files stayed byte-identical"
     )
+
+
+def verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env):
+    baseline = inventory(pg, pg_env)
+    baseline_locks = administrator_locks(pg, pg_env)
+    lock = subprocess.Popen(
+        [pg / "psql", "-XAtq", "-v", "ON_ERROR_STOP=1"],
+        env={**pg_env, "PGAPPNAME": "rstack-dev-provisioning-lock"},
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    lock_query = """
+        SELECT EXISTS (
+            SELECT 1 FROM pg_locks locks JOIN pg_stat_activity sessions USING (pid)
+            WHERE sessions.application_name = 'rstack-dev-provisioning-lock'
+            AND locks.relation = 'pg_catalog.pg_database'::regclass
+            AND locks.mode = 'ShareLock' AND locks.granted
+        );
+    """
+    try:
+        # A SHARE lock allows new connections and reads but blocks CREATE DATABASE.
+        # The idle deadline releases the lock even if the runner stalls.
+        lock.stdin.write(
+            "SET lock_timeout = '5s';\n"
+            "SET idle_in_transaction_session_timeout = '45s';\n"
+            "BEGIN;\n"
+            "LOCK TABLE pg_catalog.pg_database IN SHARE MODE;\n"
+        )
+        lock.stdin.flush()
+        deadline = time.monotonic() + 10
+        while psql(pg, pg_env, lock_query).strip() != "t":
+            assert lock.poll() is None, "the PostgreSQL lock fixture exited"
+            assert time.monotonic() < deadline, "the PostgreSQL lock was not acquired"
+            time.sleep(0.1)
+
+        report = dev(bin_dir, env, checkout, "start", ".", expected=1)
+        error = report["error"]
+        assert "cannot create an isolated PostgreSQL database" in error, report
+        assert "statement deadline" in error, report
+        assert psql(pg, pg_env, lock_query).strip() == "t"
+        assert inventory(pg, pg_env) == baseline
+        assert administrator_locks(pg, pg_env) == baseline_locks
+        assert list(state.iterdir()) == []
+    finally:
+        lock.stdin.close()
+        try:
+            lock.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            lock.kill()
+            lock.wait(timeout=5)
+            raise RuntimeError("the PostgreSQL lock fixture did not exit") from None
+    print("A blocked PostgreSQL operation timed out and released earlier resources")
 
 
 def verify_native_handoff(root, bin_dir, env):

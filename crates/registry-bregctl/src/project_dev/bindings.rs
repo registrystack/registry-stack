@@ -83,30 +83,38 @@ pub(super) struct CaseworkContextProvider {
 }
 
 impl Bindings {
-    pub(super) fn validate(&self, plan: &Plan) -> Result<()> {
+    pub(super) fn validate(&self, plan: &Plan) -> plan::SemanticResult<()> {
         if self.breg_review_authority.is_none() && self.casework_context_provider.is_none() {
             return Ok(());
         }
         let breg = product_position(plan, Product::Breg);
         let casework = product_position(plan, Product::Casework);
-        ensure!(
+        plan::require(
             breg.is_some() && casework.is_some(),
-            "dev.yaml /bindings requires both BReg and Casework products"
-        );
-        ensure!(
+            "/bindings",
+            "Run-local bindings require both BReg and Casework products.",
+            "Add both products to products, or remove bindings.",
+        )?;
+        plan::require(
             breg < casework,
-            "dev.yaml /products must place BReg before Casework when /bindings is configured"
-        );
+            "/products",
+            "Products must place BReg before Casework when bindings are configured.",
+            "Move the BReg product before the Casework product.",
+        )?;
 
         if let Some(binding) = &self.breg_review_authority {
-            ensure!(
+            plan::require(
                 plan::identifier(&binding.id),
-                "dev.yaml /bindings/bregReviewAuthority/id must be a local identifier"
-            );
-            ensure!(
+                "/bindings/bregReviewAuthority/id",
+                "The BReg review authority ID must be a local identifier.",
+                "Set id to a lowercase local identifier of at most 64 characters.",
+            )?;
+            plan::require(
                 plan::identifier(&binding.producer),
-                "dev.yaml /bindings/bregReviewAuthority/producer must be a local identifier"
-            );
+                "/bindings/bregReviewAuthority/producer",
+                "The BReg review producer must be a local identifier.",
+                "Set producer to a lowercase local identifier of at most 64 characters.",
+            )?;
             require_machine_person(
                 plan,
                 &binding.identity,
@@ -115,14 +123,18 @@ impl Bindings {
             )?;
         }
         if let Some(binding) = &self.casework_context_provider {
-            ensure!(
+            plan::require(
                 plan::identifier(&binding.id),
-                "dev.yaml /bindings/caseworkContextProvider/id must be a local identifier"
-            );
-            ensure!(
+                "/bindings/caseworkContextProvider/id",
+                "The Casework context provider ID must be a local identifier.",
+                "Set id to a lowercase local identifier of at most 64 characters.",
+            )?;
+            plan::require(
                 plan::identifier(&binding.action),
-                "dev.yaml /bindings/caseworkContextProvider/action must be a local identifier"
-            );
+                "/bindings/caseworkContextProvider/action",
+                "The Casework context provider action must be a local identifier.",
+                "Set action to a lowercase local identifier of at most 64 characters.",
+            )?;
             require_machine_person(
                 plan,
                 &binding.identity,
@@ -145,26 +157,45 @@ fn require_machine_person<'a>(
     alias: &str,
     product: Product,
     field: &str,
-) -> Result<&'a TestPerson> {
-    ensure!(
+) -> plan::SemanticResult<&'a TestPerson> {
+    plan::require(
         plan::identifier(alias),
-        "dev.yaml {field} must be a test person alias"
-    );
-    let person = plan
-        .people
-        .get(alias)
-        .with_context(|| format!("dev.yaml {field} must name a test person"))?;
-    let grant = person.grants.get(&product).with_context(|| {
+        field,
+        "The binding identity must be a test person alias.",
+        "Set identity to a lowercase local identifier naming a test person.",
+    )?;
+    plan::require(
+        plan.people.contains_key(alias),
+        field,
+        "The binding identity does not name a test person.",
+        "Set identity to the alias of a test person in people.",
+    )?;
+    let person = &plan.people[alias];
+    plan::require(
+        person.grants.contains_key(&product),
+        field,
         format!(
-            "dev.yaml {field} must name a person with a {} grant",
+            "The binding identity must name a person with a {} grant.",
             product.name()
-        )
-    })?;
-    ensure!(
+        ),
+        format!(
+            "Add a {} grant to the named test person or choose another identity.",
+            product.name()
+        ),
+    )?;
+    let grant = &person.grants[&product];
+    plan::require(
         !grant.scopes.is_empty(),
-        "dev.yaml {field} must name a person whose {} grant has a scope",
-        product.name()
-    );
+        field,
+        format!(
+            "The binding identity must name a person whose {} grant has a scope.",
+            product.name()
+        ),
+        format!(
+            "Add a scope to the named person's {} grant or choose another identity.",
+            product.name()
+        ),
+    )?;
     Ok(person)
 }
 

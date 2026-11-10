@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{future::Future, str::FromStr, time::Duration};
+use std::{
+    future::Future,
+    str::FromStr,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -22,6 +26,9 @@ const BREG_SCHEMAS: [&str; 5] = [
     "registry_context",
 ];
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
+const STATEMENT_TIMEOUT: Duration = Duration::from_secs(10);
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const CLEANUP_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn bounded_connection<T>(
     connection: impl Future<Output = std::result::Result<T, tokio_postgres::Error>>,
@@ -31,6 +38,117 @@ async fn bounded_connection<T>(
         .await
         .map_err(|_| anyhow!("the PostgreSQL connection handshake timed out"))?
         .context("the PostgreSQL connection handshake failed")
+}
+
+#[derive(Debug, thiserror::Error)]
+enum OperationFailure {
+    #[error("the PostgreSQL {operation} operation exceeded its I/O deadline")]
+    IoDeadline { operation: &'static str },
+    #[error(
+        "the PostgreSQL {operation} operation was canceled or exceeded its statement deadline"
+    )]
+    StatementDeadline { operation: &'static str },
+    #[error("the PostgreSQL {operation} operation failed")]
+    PostgreSql {
+        operation: &'static str,
+        #[source]
+        source: tokio_postgres::Error,
+    },
+}
+
+impl OperationFailure {
+    fn postgres(operation: &'static str, source: tokio_postgres::Error) -> Self {
+        if source.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) {
+            Self::StatementDeadline { operation }
+        } else {
+            Self::PostgreSql { operation, source }
+        }
+    }
+
+    fn effect_is_unconfirmed(&self) -> bool {
+        matches!(self, Self::IoDeadline { .. })
+            || matches!(self, Self::PostgreSql { source, .. } if source.as_db_error().is_none())
+    }
+}
+
+async fn bounded_operation<T>(
+    operation: &'static str,
+    future: impl Future<Output = std::result::Result<T, tokio_postgres::Error>>,
+    timeout: Duration,
+) -> std::result::Result<T, OperationFailure> {
+    match tokio::time::timeout(timeout, future).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(OperationFailure::postgres(operation, error)),
+        Err(_) => Err(OperationFailure::IoDeadline { operation }),
+    }
+}
+
+fn retain_create_acquisition<T>(
+    acquisitions: &mut Vec<Acquisition>,
+    acquisition: Acquisition,
+    created: &std::result::Result<T, OperationFailure>,
+) {
+    if created.is_ok()
+        || created
+            .as_ref()
+            .is_err_and(OperationFailure::effect_is_unconfirmed)
+    {
+        acquisitions.push(acquisition);
+    }
+}
+
+fn apply_statement_deadline(config: &mut Config) {
+    let deadline = format!("-c statement_timeout={}", STATEMENT_TIMEOUT.as_millis());
+    if let Some(existing) = config.get_options().filter(|value| !value.is_empty()) {
+        config.options(format!("{existing} {deadline}"));
+    } else {
+        config.options(deadline);
+    }
+}
+
+fn remaining_timeout(deadline: Instant, maximum: Duration) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        bail!("the PostgreSQL operation deadline expired");
+    }
+    Ok(remaining.min(maximum))
+}
+
+fn ownership_lock_statement(run_id: &str) -> Result<String> {
+    let prefix = run_id
+        .get(..16)
+        .context("the database run id cannot form an ownership lock")?;
+    let key = u64::from_str_radix(prefix, 16)
+        .context("the validated database run id cannot form an ownership lock")?
+        as i64;
+    Ok(format!("SELECT pg_advisory_lock({key})"))
+}
+
+fn open_admin_session(
+    runtime: &Runtime,
+    config: &Config,
+    tls: &MakeRustlsConnect,
+    ownership_lock: &str,
+    deadline: Instant,
+) -> Result<(
+    Client,
+    tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+)> {
+    let (client, connection) = runtime.block_on(bounded_connection(
+        config.connect(tls.clone()),
+        remaining_timeout(deadline, CONNECTION_TIMEOUT)?,
+    ))?;
+    let connection_task = runtime.spawn(connection);
+    let locked = runtime.block_on(bounded_operation(
+        "run ownership lock acquisition",
+        client.batch_execute(ownership_lock),
+        remaining_timeout(deadline, OPERATION_TIMEOUT)?,
+    ));
+    if let Err(error) = locked {
+        connection_task.abort();
+        return Err(error).context("cannot acquire the PostgreSQL run ownership lock");
+    }
+    Ok((client, connection_task))
 }
 
 pub(super) struct DatabaseUrls {
@@ -47,8 +165,10 @@ enum Acquisition {
 pub(super) struct Database {
     client: Client,
     _connection_task: tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+    admin_session_failed: bool,
     tls: MakeRustlsConnect,
     admin_config: Config,
+    ownership_lock: String,
     endpoint: Endpoint,
     run_id: String,
     acquisitions: Vec<Acquisition>,
@@ -94,23 +214,29 @@ impl Database {
         validate_run_id(run_id)?;
         let (mut admin_config, endpoint) = admin_config(admin_url)?;
         admin_config.ssl_mode(SslMode::Require);
+        apply_statement_deadline(&mut admin_config);
         let tls = tls_connector(ca_pem)?;
         let runtime = Builder::new_current_thread()
             .enable_all()
             .build()
             .context("cannot initialize the PostgreSQL executor")?;
-        let (client, connection) = runtime
-            .block_on(bounded_connection(
-                admin_config.connect(tls.clone()),
-                CONNECTION_TIMEOUT,
-            ))
-            .context("cannot connect to the PostgreSQL administrator database over verified TLS")?;
-        let connection_task = runtime.spawn(connection);
+        let ownership_lock = ownership_lock_statement(run_id)?;
+        let session_deadline = Instant::now() + CONNECTION_TIMEOUT + OPERATION_TIMEOUT;
+        let (client, connection_task) = open_admin_session(
+            &runtime,
+            &admin_config,
+            &tls,
+            &ownership_lock,
+            session_deadline,
+        )
+        .context("cannot establish the PostgreSQL administrator session over verified TLS")?;
         Ok(Self {
             client,
             _connection_task: connection_task,
+            admin_session_failed: false,
             tls,
             admin_config,
+            ownership_lock,
             endpoint,
             run_id: run_id.to_owned(),
             acquisitions: Vec::new(),
@@ -156,18 +282,23 @@ impl Database {
     }
 
     pub(super) fn cleanup(&mut self) -> Result<()> {
+        let deadline = Instant::now() + CLEANUP_ATTEMPT_TIMEOUT;
         let mut failures = Vec::new();
         let mut retained = Vec::new();
         let acquisitions = self.acquisitions.clone();
         for acquisition in acquisitions.into_iter().rev() {
             let result = match &acquisition {
-                Acquisition::Database(name) => self.execute_cleanup(&format!(
-                    "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-                    quote_identifier(name)
-                )),
-                Acquisition::Role(name) => {
-                    self.execute_cleanup(&format!("DROP ROLE IF EXISTS {}", quote_identifier(name)))
-                }
+                Acquisition::Database(name) => self.execute_cleanup(
+                    &format!(
+                        "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+                        quote_identifier(name)
+                    ),
+                    deadline,
+                ),
+                Acquisition::Role(name) => self.execute_cleanup(
+                    &format!("DROP ROLE IF EXISTS {}", quote_identifier(name)),
+                    deadline,
+                ),
             };
             if let Err(error) = result {
                 failures.push(match &acquisition {
@@ -190,40 +321,56 @@ impl Database {
         }
     }
 
-    fn reconnect_admin(&mut self) -> Result<()> {
-        let (client, connection) = self
-            .runtime
-            .block_on(bounded_connection(
-                self.admin_config.connect(self.tls.clone()),
-                CONNECTION_TIMEOUT,
-            ))
-            .context("cannot reconnect to the PostgreSQL administrator database")?;
-        self._connection_task.abort();
+    fn reconnect_admin(&mut self, deadline: Instant) -> Result<()> {
+        // The old server backend can outlive the client-side I/O timeout. Its
+        // session lock orders this replacement session after an unconfirmed
+        // CREATE has committed or rolled back, so cleanup cannot run too early.
+        self.retire_admin_session();
+        let (client, connection_task) = open_admin_session(
+            &self.runtime,
+            &self.admin_config,
+            &self.tls,
+            &self.ownership_lock,
+            deadline,
+        )
+        .context("cannot reconnect to the PostgreSQL administrator database")?;
         self.client = client;
-        self._connection_task = self.runtime.spawn(connection);
+        self._connection_task = connection_task;
+        self.admin_session_failed = false;
         Ok(())
     }
 
-    fn ensure_admin_connection(&mut self) -> Result<()> {
-        if self.client.is_closed() {
-            self.reconnect_admin()?;
+    fn retire_admin_session(&mut self) {
+        self._connection_task.abort();
+        self.admin_session_failed = true;
+    }
+
+    fn ensure_admin_connection(&mut self, deadline: Instant) -> Result<()> {
+        if self.admin_session_failed || self.client.is_closed() {
+            self.reconnect_admin(deadline)?;
         }
         Ok(())
     }
 
-    fn execute_cleanup(&mut self, statement: &str) -> Result<()> {
-        self.ensure_admin_connection()?;
-        match self.runtime.block_on(self.client.batch_execute(statement)) {
+    fn execute_cleanup(&mut self, statement: &str, deadline: Instant) -> Result<()> {
+        self.ensure_admin_connection(deadline)?;
+        let first = self.execute_admin_operation(
+            statement,
+            "cleanup",
+            remaining_timeout(deadline, OPERATION_TIMEOUT)?,
+        );
+        match first {
             Ok(()) => Ok(()),
-            Err(first) if self.client.is_closed() => {
-                self.reconnect_admin()?;
-                self.runtime
-                    .block_on(self.client.batch_execute(statement))
-                    .with_context(|| {
-                        format!(
-                            "the PostgreSQL cleanup operation failed after reconnecting ({first})"
-                        )
-                    })
+            Err(first) if first.effect_is_unconfirmed() => {
+                self.reconnect_admin(deadline)?;
+                self.execute_admin_operation(
+                    statement,
+                    "cleanup",
+                    remaining_timeout(deadline, OPERATION_TIMEOUT)?,
+                )
+                .with_context(|| {
+                    format!("the PostgreSQL cleanup operation failed after reconnecting ({first})")
+                })
             }
             Err(error) => Err(error).context("the PostgreSQL cleanup operation failed"),
         }
@@ -257,26 +404,33 @@ impl Database {
         statement: &str,
         context: &'static str,
     ) -> Result<()> {
-        let created = self.runtime.block_on(self.client.batch_execute(statement));
-        if created.is_ok() || created.as_ref().is_err_and(|error| error.is_closed()) {
-            // A closed connection cannot tell us whether PostgreSQL committed
-            // the statement. Retaining the exact run-owned name lets cleanup's
-            // idempotent DROP cover both outcomes without replaying CREATE.
-            self.acquisitions.push(Acquisition::Role(role.to_owned()));
-        }
-        created.context(context)
+        let created = self.execute_admin_operation(statement, "role creation", OPERATION_TIMEOUT);
+        // A transport/protocol failure or I/O deadline cannot tell us whether
+        // PostgreSQL committed the statement. Retaining the exact run-owned name
+        // lets cleanup's idempotent DROP cover both outcomes without replaying CREATE.
+        retain_create_acquisition(
+            &mut self.acquisitions,
+            Acquisition::Role(role.to_owned()),
+            &created,
+        );
+        created.map_err(anyhow::Error::new).context(context)
     }
 
     fn create_database(&mut self, names: &Names) -> Result<()> {
-        let created = self.runtime.block_on(self.client.batch_execute(&format!(
+        let statement = format!(
             "CREATE DATABASE {} WITH ALLOW_CONNECTIONS false",
             quote_identifier(&names.database)
-        )));
-        if created.is_ok() || created.as_ref().is_err_and(|error| error.is_closed()) {
-            self.acquisitions
-                .push(Acquisition::Database(names.database.clone()));
-        }
-        created.context("cannot create an isolated PostgreSQL database")?;
+        );
+        let created =
+            self.execute_admin_operation(&statement, "database creation", OPERATION_TIMEOUT);
+        retain_create_acquisition(
+            &mut self.acquisitions,
+            Acquisition::Database(names.database.clone()),
+            &created,
+        );
+        created
+            .map_err(anyhow::Error::new)
+            .context("cannot create an isolated PostgreSQL database")?;
 
         self.execute_admin(&database_access_sql(names))
             .context("cannot restrict the PostgreSQL database to this run's roles")
@@ -304,10 +458,14 @@ impl Database {
                         .await
                         .context("cannot connect to the provisioned PostgreSQL database")?;
                 let connection_task = tokio::spawn(connection);
-                let executed = async {
+                let executed = tokio::time::timeout(OPERATION_TIMEOUT, async {
                     client
                         .batch_execute(&statement)
                         .await
+                        .map_err(|error| {
+                            OperationFailure::postgres("database configuration", error)
+                        })
+                        .map_err(anyhow::Error::new)
                         .context("cannot configure the provisioned PostgreSQL database")?;
                     if let Some((migration, runtime)) = &spatial_roles {
                         registry_breg::postgres::provision_postgis_prerequisites(
@@ -317,23 +475,44 @@ impl Database {
                         .context("cannot provision BReg PostGIS prerequisites")?;
                     }
                     Result::<()>::Ok(())
-                }
-                .await;
-                drop(client);
-                let closed = connection_task
-                    .await
-                    .context("the PostgreSQL connection task stopped unexpectedly")?;
-                executed?;
-                closed.context("the PostgreSQL configuration connection failed")?;
-                Result::<()>::Ok(())
+                })
+                .await
+                .map_err(|_| {
+                    anyhow!(
+                        "the PostgreSQL database configuration operation exceeded its I/O deadline"
+                    )
+                })
+                .and_then(|result| result);
+                connection_task.abort();
+                executed
             })
             .context("cannot finish PostgreSQL database provisioning")
     }
 
-    fn execute_admin(&self, statement: &str) -> Result<()> {
-        self.runtime
-            .block_on(self.client.batch_execute(statement))
+    fn execute_admin(&mut self, statement: &str) -> Result<()> {
+        self.execute_admin_operation(statement, "administrator", OPERATION_TIMEOUT)
+            .map_err(anyhow::Error::new)
             .context("the PostgreSQL administrator operation failed")
+    }
+
+    fn execute_admin_operation(
+        &mut self,
+        statement: &str,
+        operation: &'static str,
+        timeout: Duration,
+    ) -> std::result::Result<(), OperationFailure> {
+        let executed = self.runtime.block_on(bounded_operation(
+            operation,
+            self.client.batch_execute(statement),
+            timeout,
+        ));
+        if executed
+            .as_ref()
+            .is_err_and(OperationFailure::effect_is_unconfirmed)
+        {
+            self.retire_admin_session();
+        }
+        executed
     }
 
     fn product_url(&self, database: &str, user: &str, password: &str) -> Result<String> {
@@ -597,6 +776,85 @@ mod tests {
                 .unwrap(),
             7
         );
+    }
+
+    #[test]
+    fn post_handshake_operation_deadline_marks_the_effect_unconfirmed() {
+        let runtime = Builder::new_current_thread().enable_time().build().unwrap();
+        let started = Instant::now();
+        let result: std::result::Result<(), OperationFailure> =
+            runtime.block_on(bounded_operation(
+                "role creation",
+                pending::<std::result::Result<(), tokio_postgres::Error>>(),
+                Duration::from_millis(20),
+            ));
+        let failure = result.unwrap_err();
+        assert!(failure.effect_is_unconfirmed());
+        assert_eq!(
+            failure.to_string(),
+            "the PostgreSQL role creation operation exceeded its I/O deadline"
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn unconfirmed_create_retains_its_exact_acquisition_once() {
+        let mut acquisitions = Vec::new();
+        let created = Err::<(), _>(OperationFailure::IoDeadline {
+            operation: "role creation",
+        });
+        retain_create_acquisition(
+            &mut acquisitions,
+            Acquisition::Role("rstack_exact_role".to_owned()),
+            &created,
+        );
+
+        assert_eq!(acquisitions.len(), 1);
+        assert!(matches!(
+            &acquisitions[0],
+            Acquisition::Role(role) if role == "rstack_exact_role"
+        ));
+    }
+
+    #[test]
+    fn confirmed_statement_cancellation_is_not_tracked_as_a_creation() {
+        let mut acquisitions = Vec::new();
+        let created = Err::<(), _>(OperationFailure::StatementDeadline {
+            operation: "database creation",
+        });
+        retain_create_acquisition(
+            &mut acquisitions,
+            Acquisition::Database("rstack_refused_database".to_owned()),
+            &created,
+        );
+        assert!(acquisitions.is_empty());
+    }
+
+    #[test]
+    fn operation_deadlines_fit_the_worker_stop_budget() {
+        let mut config = Config::new();
+        config.options("-c application_name=rstack-dev");
+        apply_statement_deadline(&mut config);
+        assert_eq!(
+            config.get_options(),
+            Some("-c application_name=rstack-dev -c statement_timeout=10000")
+        );
+        assert!(STATEMENT_TIMEOUT < OPERATION_TIMEOUT);
+        assert!(OPERATION_TIMEOUT < CLEANUP_ATTEMPT_TIMEOUT);
+        assert!(CLEANUP_ATTEMPT_TIMEOUT < Duration::from_secs(60));
+    }
+
+    #[test]
+    fn run_ownership_lock_uses_the_first_64_id_bits_as_a_session_key() {
+        assert_eq!(
+            ownership_lock_statement(RUN_ID).unwrap(),
+            "SELECT pg_advisory_lock(81985529216486895)"
+        );
+        assert_eq!(
+            ownership_lock_statement("fedcba98765432100123456789abcdef").unwrap(),
+            "SELECT pg_advisory_lock(-81985529216486896)"
+        );
+        assert!(ownership_lock_statement("short").is_err());
     }
 
     #[test]

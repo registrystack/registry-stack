@@ -21,6 +21,22 @@ journey:\n  id: smoke\n  steps:\n    - {{id: read, product: breg, as: operator, 
     .unwrap();
 }
 
+fn semantic_project(root: &std::path::Path, grant: &str, step_extra: &str) {
+    fs::write(root.join("registry.yaml"), "fixture\n").unwrap();
+    fs::write(
+        root.join("dev.yaml"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
+kind: BRegProjectDev\n\
+issuer: https://issuer.example.invalid\n\
+products:\n  - {{product: breg, project: ., audience: private-audience-marker}}\n\
+people:\n  operator:\n    subject: private-subject-marker\n    client: private-client-marker\n    grants:\n      {grant}: {{profile: private-profile-marker, scopes: []}}\n\
+journey:\n  id: smoke\n  steps:\n    - id: read\n      product: breg\n      as: operator\n      method: GET\n      path: /v1/records\n      expect: {{status: 200}}\n{step_extra}"
+        ),
+    )
+    .unwrap();
+}
+
 fn check(root: &std::path::Path, state: &std::path::Path, json: bool) -> std::process::Output {
     let request = serde_json::json!({
         "action": "check", "project": root, "deny_warnings": true, "json": json,
@@ -104,6 +120,128 @@ fn check_distinguishes_unavailable_input_from_an_invalid_plan() {
         report["diagnostics"][0]["code"],
         "breg.project-dev.check-unavailable"
     );
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_reports_an_actionable_value_free_poll_relationship() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    semantic_project(
+        scratch.path(),
+        "breg",
+        "      poll: {maximumWaitMilliseconds: 173, pollIntervalMilliseconds: 211}\n",
+    );
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "rstack.dev.invalid-plan");
+    assert_eq!(
+        diagnostic["path"],
+        "/journey/steps/0/poll/pollIntervalMilliseconds"
+    );
+    assert_eq!(
+        diagnostic["message"],
+        "The poll interval must not exceed the maximum wait."
+    );
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Set pollIntervalMilliseconds to no more than maximumWaitMilliseconds."
+    );
+    let output = String::from_utf8(result.stdout).unwrap();
+    for supplied in [
+        "173",
+        "211",
+        "private-audience-marker",
+        "private-client-marker",
+    ] {
+        assert!(!output.contains(supplied), "leaked {supplied}: {output}");
+    }
+    assert!(!state.exists());
+}
+
+#[test]
+fn semantic_diagnostic_escapes_authored_mapping_keys_only_in_its_pointer() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    project(
+        scratch.path(),
+        "schemaTestPeople:\n  \"private/journey~marker\":\n    \"private/step~marker\": private-person-marker\n",
+    );
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(
+        diagnostic["path"],
+        "/schemaTestPeople/private~1journey~0marker/private~1step~0marker"
+    );
+    assert_eq!(
+        diagnostic["message"],
+        "The schema test assignment must name a person with a BReg grant."
+    );
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Set this assignment to a test person that has a BReg grant."
+    );
+    for member in ["message", "suggestedAction"] {
+        let text = diagnostic[member].as_str().unwrap();
+        for supplied in [
+            "private/journey~marker",
+            "private/step~marker",
+            "private-person-marker",
+        ] {
+            assert!(!text.contains(supplied), "leaked {supplied}: {text}");
+        }
+    }
+    assert!(!state.exists());
+}
+
+#[test]
+fn start_reports_an_actionable_value_free_unstarted_grant() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    semantic_project(scratch.path(), "casework", "");
+    let request = serde_json::json!({
+        "action": "start", "project": scratch.path(), "json": true,
+    });
+
+    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("project-dev")
+        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
+        .env("RSTACK_DEV_STATE_DIR", &state)
+        .env_remove("RSTACK_DEV_DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert_eq!(result.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let error = report["error"].as_str().unwrap();
+    assert!(
+        error.contains("/people/operator/grants/casework"),
+        "{error}"
+    );
+    assert!(
+        error.contains("The grant names a product that is not started."),
+        "{error}"
+    );
+    assert!(
+        error.contains("Add the grant's product to products, or remove this grant."),
+        "{error}"
+    );
+    for supplied in [
+        "private-audience-marker",
+        "private-subject-marker",
+        "private-client-marker",
+        "private-profile-marker",
+    ] {
+        assert!(!error.contains(supplied), "leaked {supplied}: {error}");
+    }
     assert!(!state.exists());
 }
 
