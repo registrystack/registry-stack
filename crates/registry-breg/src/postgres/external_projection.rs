@@ -842,8 +842,11 @@ pub(super) fn publication_statement(eligibility_sql: &str) -> String {
     format!("SELECT CASE WHEN EXISTS ({eligibility_sql}) THEN registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ELSE 'ineligible' END")
 }
 
+/// Publishes straight through the store function, skipping the root
+/// eligibility statement that `publish_for_roots` wraps around it. Tests use
+/// it to exercise the store's own fences in isolation.
 #[cfg(all(test, feature = "postgres-test"))]
-async fn publish_inner(
+async fn publish_without_eligibility(
     client: &impl GenericClient,
     ticket: &RefreshTicket,
     snapshot: &AcceptedSnapshot,
@@ -1987,24 +1990,28 @@ pub(crate) mod postgres_tests {
         let newer = allocate_inner(&runtime, &scope, "subject").await.unwrap();
         let fresh = snapshot("newer", 999, "fresh");
         assert_eq!(
-            publish_inner(&runtime, &newer, &fresh).await.unwrap(),
+            publish_without_eligibility(&runtime, &newer, &fresh)
+                .await
+                .unwrap(),
             Publication::Published
         );
         assert_eq!(
-            publish_inner(&runtime, &older, &snapshot("older", 998, "stale"))
+            publish_without_eligibility(&runtime, &older, &snapshot("older", 998, "stale"))
                 .await
                 .unwrap_err(),
             ProjectionError::StaleRefresh
         );
         let expiry_before: i64 = runtime.query_one("SELECT expires_at FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='subject'", &[]).await.unwrap().get(0);
         assert_eq!(
-            publish_inner(&runtime, &newer, &fresh).await.unwrap(),
+            publish_without_eligibility(&runtime, &newer, &fresh)
+                .await
+                .unwrap(),
             Publication::Replay
         );
         let expiry_after: i64 = runtime.query_one("SELECT expires_at FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='subject'", &[]).await.unwrap().get(0);
         assert_eq!(expiry_before, expiry_after);
         let substitution = snapshot("newer", 999, "substitution");
-        assert!(publish_inner(&runtime, &newer, &substitution)
+        assert!(publish_without_eligibility(&runtime, &newer, &substitution)
             .await
             .is_err());
         assert!(runtime.query_one("SELECT registry_internal.fail_external_projection_refresh($1,$2,$3,$4,'retention-refused')",&[&scope.projection_id,&scope.epoch,&older.sequence,&older.subject_key]).await.unwrap().get::<_,bool>(0));
@@ -2014,7 +2021,9 @@ pub(crate) mod postgres_tests {
         // A transient failure keeps the snapshot until its own expiry.
         assert_eq!(runtime.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='subject'",&[]).await.unwrap().get::<_,i64>(0),1);
         let restore = allocate_inner(&runtime, &scope, "subject").await.unwrap();
-        publish_inner(&runtime, &restore, &fresh).await.unwrap();
+        publish_without_eligibility(&runtime, &restore, &fresh)
+            .await
+            .unwrap();
         let no_store = allocate_inner(&runtime, &scope, "subject").await.unwrap();
         assert!(runtime.query_one("SELECT registry_internal.fail_external_projection_refresh($1,$2,$3,$4,'retention-refused')",&[&scope.projection_id,&scope.epoch,&no_store.sequence,&no_store.subject_key]).await.unwrap().get::<_,bool>(0));
         assert_eq!(runtime.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='subject'",&[]).await.unwrap().get::<_,i64>(0),0);
@@ -2029,7 +2038,9 @@ pub(crate) mod postgres_tests {
             vec![record("a", "first"), record("b", "second")],
         )
         .unwrap();
-        publish_inner(&runtime, &first, &collection).await.unwrap();
+        publish_without_eligibility(&runtime, &first, &collection)
+            .await
+            .unwrap();
         let count = || async {
             runtime.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_values WHERE subject_key='parent'", &[]).await.unwrap().get::<_,i64>(0)
         };
@@ -2047,7 +2058,9 @@ pub(crate) mod postgres_tests {
             vec![],
         )
         .unwrap();
-        publish_inner(&runtime, &next, &empty).await.unwrap();
+        publish_without_eligibility(&runtime, &next, &empty)
+            .await
+            .unwrap();
         assert_eq!(count().await, 0);
         assert_eq!(runtime.query_one("SELECT kind FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='parent'", &[]).await.unwrap().get::<_,String>(0), "complete-collection");
 
@@ -2073,7 +2086,7 @@ pub(crate) mod postgres_tests {
         assert!(migration.query_one("SELECT active FROM registry_internal.registry_external_projection_scopes WHERE projection_id=$1",&[&scope.projection_id]).await.unwrap().get::<_,bool>(0));
         withdraw_scope(&migration, &scope).await.unwrap();
         assert_eq!(
-            publish_inner(
+            publish_without_eligibility(
                 &runtime,
                 &pending,
                 &snapshot("after-withdrawal", 1000, "forbidden")
@@ -2086,7 +2099,9 @@ pub(crate) mod postgres_tests {
         let replacement = super::postgres_tests::scope(Uuid::new_v4());
         configure_scope(&migration, &replacement).await.unwrap();
         assert_eq!(
-            publish_inner(&runtime, &pending, &fresh).await.unwrap_err(),
+            publish_without_eligibility(&runtime, &pending, &fresh)
+                .await
+                .unwrap_err(),
             ProjectionError::ScopeChanged
         );
 
@@ -2106,7 +2121,7 @@ pub(crate) mod postgres_tests {
         let scope = scope(Uuid::new_v4());
         configure_scope(&migration, &scope).await.unwrap();
         let initial = allocate_inner(&migration, &scope, "subject").await.unwrap();
-        publish_inner(&migration, &initial, &snapshot("initial", 999, "retained"))
+        publish_without_eligibility(&migration, &initial, &snapshot("initial", 999, "retained"))
             .await
             .unwrap();
         let older = allocate_inner(&migration, &scope, "subject").await.unwrap();
@@ -2142,7 +2157,7 @@ pub(crate) mod postgres_tests {
             .get::<_, bool>(0));
         assert_eq!(migration.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_refreshes WHERE projection_id=$1 AND sequence=$2",&[&scope.projection_id,&abandoned.sequence]).await.unwrap().get::<_,i64>(0),0);
         assert_eq!(migration.query_one("SELECT snapshot_id,expires_at FROM registry_internal.registry_external_projection_snapshots WHERE projection_id=$1 AND subject_key='subject'",&[&scope.projection_id]).await.unwrap().get::<_,String>(0),"initial");
-        publish_inner(&migration, &older, &snapshot("older", 999, "accepted"))
+        publish_without_eligibility(&migration, &older, &snapshot("older", 999, "accepted"))
             .await
             .unwrap();
         assert!(migration
@@ -2182,7 +2197,7 @@ pub(crate) mod postgres_tests {
         ] {
             let initial = allocate_inner(&migration, &scope, "subject").await.unwrap();
             let accepted = snapshot(reason, 999, "retained");
-            publish_inner(&migration, &initial, &accepted)
+            publish_without_eligibility(&migration, &initial, &accepted)
                 .await
                 .unwrap();
             let older = allocate_inner(&migration, &scope, "subject").await.unwrap();
@@ -2203,13 +2218,17 @@ pub(crate) mod postgres_tests {
                 .get::<_, bool>(0));
             assert!(migration.query_one("SELECT registry_internal.fail_external_projection_refresh($1,$2,$3,$4,'abandoned')",&[&scope.projection_id,&scope.epoch,&newer.sequence,&newer.subject_key]).await.unwrap().get::<_,bool>(0));
             assert_eq!(
-                publish_inner(&migration, &older, &snapshot("older", 999, "forbidden"))
-                    .await
-                    .unwrap_err(),
+                publish_without_eligibility(
+                    &migration,
+                    &older,
+                    &snapshot("older", 999, "forbidden")
+                )
+                .await
+                .unwrap_err(),
                 ProjectionError::StaleRefresh
             );
             assert_eq!(
-                publish_inner(&migration, &initial, &accepted)
+                publish_without_eligibility(&migration, &initial, &accepted)
                     .await
                     .unwrap_err(),
                 ProjectionError::StaleRefresh
@@ -2225,13 +2244,15 @@ pub(crate) mod postgres_tests {
                 .await
                 .unwrap();
             assert_eq!(
-                publish_inner(&migration, &older, &accepted)
+                publish_without_eligibility(&migration, &older, &accepted)
                     .await
                     .unwrap_err(),
                 ProjectionError::StaleRefresh
             );
             let later = allocate_inner(&migration, &scope, "subject").await.unwrap();
-            publish_inner(&migration, &later, &accepted).await.unwrap();
+            publish_without_eligibility(&migration, &later, &accepted)
+                .await
+                .unwrap();
             migration.query_one("SELECT registry_internal.fail_external_projection_refresh($1,$2,$3,$4,'retention-refused')",&[&scope.projection_id,&scope.epoch,&older.sequence,&older.subject_key]).await.unwrap();
             assert_eq!(migration.query_one("SELECT refresh_sequence FROM registry_internal.registry_external_projection_snapshots WHERE projection_id=$1 AND subject_key='subject'",&[&scope.projection_id]).await.unwrap().get::<_,i64>(0),later.sequence);
         }
@@ -2256,11 +2277,15 @@ pub(crate) mod postgres_tests {
         configure_scope(&migration, &scope).await.unwrap();
         let ticket = allocate_inner(&migration, &scope, "subject").await.unwrap();
         let observed = snapshot("original", 990, "retained");
-        publish_inner(&migration, &ticket, &observed).await.unwrap();
+        publish_without_eligibility(&migration, &ticket, &observed)
+            .await
+            .unwrap();
         clock(&migration, 1050).await;
         let visible: i64 = migration.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_snapshots WHERE expires_at>1050", &[]).await.unwrap().get(0);
         assert_eq!(visible, 0);
-        assert!(publish_inner(&migration, &ticket, &observed).await.is_err());
+        assert!(publish_without_eligibility(&migration, &ticket, &observed)
+            .await
+            .is_err());
         // Purge removes a value once its one cache lifetime expires.
         let pruned = migration
             .query_one(
@@ -2438,9 +2463,13 @@ pub(crate) mod postgres_tests {
                 .await
                 .unwrap();
             assert_eq!(
-                publish_inner(&self.migration, &ticket, &snapshot("cached", now, "cached"))
-                    .await
-                    .unwrap(),
+                publish_without_eligibility(
+                    &self.migration,
+                    &ticket,
+                    &snapshot("cached", now, "cached")
+                )
+                .await
+                .unwrap(),
                 Publication::Published
             );
         }
@@ -2468,7 +2497,7 @@ pub(crate) mod postgres_tests {
             )
             .unwrap();
             assert_eq!(
-                publish_inner(&self.migration, &ticket, &snapshot)
+                publish_without_eligibility(&self.migration, &ticket, &snapshot)
                     .await
                     .unwrap(),
                 Publication::Published
