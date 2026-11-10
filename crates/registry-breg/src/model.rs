@@ -1039,6 +1039,11 @@ pub struct CompiledEntity {
     /// identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_record: Option<CompiledEventRecord>,
+    /// The stored fields an external view links from. A value written to one
+    /// is a link key sent to a source, so it must satisfy the same rule as at
+    /// send time.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub external_link_fields: BTreeSet<String>,
     pub definition_revision: String,
 }
 

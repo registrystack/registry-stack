@@ -832,6 +832,7 @@ mod tests {
             display: Default::default(),
             grouping: None,
             event_record: None,
+            external_link_fields: BTreeSet::new(),
             definition_revision:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             relationships: Default::default(),

@@ -609,12 +609,12 @@ impl PostgresExternalViewService {
         let transaction = self
             .transaction(&mut session, claims, request.deadline)
             .await?;
-        // A root without a link key has no outside subject to fetch.
+        // A root without a usable link key has no outside subject to fetch.
         let key = RootKeys::new(plan)?
             .for_root(&transaction, root)
             .await?
             .ok_or(ExternalViewError::Concealed)?
-            .filter(|key| !key.is_empty());
+            .filter(|key| !key.is_empty() && crate::external_views::link_key_acceptable(key));
         transaction
             .commit()
             .await
@@ -652,7 +652,7 @@ impl PostgresExternalViewService {
             .for_root(&transaction, root)
             .await?
             .ok_or(ExternalViewError::Concealed)?
-            .filter(|key| !key.is_empty());
+            .filter(|key| !key.is_empty() && crate::external_views::link_key_acceptable(key));
         let (status, records) = if current != key {
             ("unavailable", Vec::new())
         } else if key.is_none() {
@@ -3480,9 +3480,71 @@ mod postgres_tests {
     }
 
     #[tokio::test]
-    async fn a_live_read_of_a_root_without_a_link_key_answers_absent_without_a_source_call() {
+    async fn a_malformed_link_key_reads_as_no_outside_value_and_the_view_keeps_serving() {
+        const PADDED: &str = "00000000-0000-4000-8000-000000000011";
+        const BELL: &str = "00000000-0000-4000-8000-000000000012";
+        const IDEOGRAPHIC_SPACE: &str = "00000000-0000-4000-8000-000000000014";
+        let served = Served::new(Duration::from_secs(2)).await;
+        served.publish_all().await;
+        insert_roots(
+            &served,
+            &[
+                (PADDED, Some(" padded-key"), "allowed"),
+                (BELL, Some("bell\u{7}key"), "allowed"),
+                (IDEOGRAPHIC_SPACE, Some("trailing\u{3000}"), "allowed"),
+            ],
+        )
+        .await;
+        let caller = reader("reader-principal", &["allowed"]);
+        let mut expected = BTreeMap::new();
+        for (id, key, _) in &ROOTS[..3] {
+            expected.insert(
+                (*id).to_owned(),
+                ("available".to_owned(), json!({ "label": key })),
+            );
+        }
+        for id in [PADDED, BELL, IDEOGRAPHIC_SPACE] {
+            expected.insert(id.to_owned(), ("absent".to_owned(), json!({})));
+        }
+
+        let (status, page) = served.get("&$count=true", caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(page["status"], "available", "{page}");
+        assert_eq!(page["count"], 6, "{page}");
+        assert_eq!(availabilities(&page), expected);
+        let (status, page) = served
+            .get("&$orderby=label%20asc&$count=true", caller.clone())
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(availabilities(&page), expected);
+        // A filter on an outside field leaves the malformed records out.
+        let (status, page) = served
+            .get("&$filter=label%20eq%20'second'&$count=true", caller.clone())
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(page["count"], 1, "{page}");
+        assert_eq!(labels(&page), ["second"]);
+        let (status, _, body) = served
+            .send(
+                &format!("/v1/external-views/view/link/records/{BELL}?accessProfile=reader"),
+                caller,
+            )
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "available", "{body}");
+        assert_eq!(
+            availabilities(&body),
+            BTreeMap::from([(BELL.to_owned(), ("absent".to_owned(), json!({})))])
+        );
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_live_read_of_a_root_without_a_usable_link_key_answers_absent_without_a_source_call()
+    {
         const UNLINKED: &str = "00000000-0000-4000-8000-000000000011";
         const EMPTY: &str = "00000000-0000-4000-8000-000000000012";
+        const MALFORMED: &str = "00000000-0000-4000-8000-000000000013";
         let transcript = Arc::new(
             registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
                 serde_json::from_value(
@@ -3503,12 +3565,16 @@ mod postgres_tests {
             Served::with(&live_and_indexed_project(), sources, Duration::from_secs(2)).await;
         insert_roots(
             &served,
-            &[(UNLINKED, None, "allowed"), (EMPTY, Some(""), "allowed")],
+            &[
+                (UNLINKED, None, "allowed"),
+                (EMPTY, Some(""), "allowed"),
+                (MALFORMED, Some("bell\u{7}key"), "allowed"),
+            ],
         )
         .await;
         let caller = reader("reader-principal", &["allowed"]);
         let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
-        for root in [UNLINKED, EMPTY] {
+        for root in [UNLINKED, EMPTY, MALFORMED] {
             use tracing::instrument::WithSubscriber;
             let (status, _, body) = served
                 .send(

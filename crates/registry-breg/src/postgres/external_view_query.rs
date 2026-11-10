@@ -322,7 +322,10 @@ fn compile(
     // the snapshot and value keys' own collation lets their primary keys serve
     // the lookup for each root; both collations are deterministic, so
     // equality is unchanged.
-    let root_sql = format!("SELECT {} AS root_id,({})::text COLLATE \"default\" AS subject_key FROM {} WHERE current_setting('registry.access_profile',true)={profile_param} AND ({root_param}::uuid IS NULL OR {}={root_param}::uuid)",relations.id_expression,key.sql,relations.from_sql,relations.id_expression);
+    // A link key the write path would refuse reads as no outside value, like
+    // an empty one.
+    let subject_key = crate::external_views::acceptable_link_key_sql("raw_key");
+    let root_sql = format!("SELECT root_id,{subject_key} AS subject_key FROM (SELECT {} AS root_id,({})::text COLLATE \"default\" AS raw_key FROM {} WHERE current_setting('registry.access_profile',true)={profile_param} AND ({root_param}::uuid IS NULL OR {}={root_param}::uuid)) AS linked",relations.id_expression,key.sql,relations.from_sql,relations.id_expression);
     let many = projection.cardinality == ExternalCardinality::Many;
     let expected_kind = if many {
         "o.kind='complete-collection'"
@@ -1197,6 +1200,77 @@ mod postgres_tests {
         migration_task.abort();
         drop(runtime);
         drop(migration);
+        database.cleanup().await;
+    }
+
+    /// The SQL form of the link-key rule agrees with the Rust predicate on
+    /// every boundary: byte length, control characters, and the leading and
+    /// trailing white space `str::trim` removes.
+    #[tokio::test]
+    async fn the_sql_link_key_rule_agrees_with_the_rust_predicate() {
+        let database = harness::TestDatabase::create(2).await;
+        let sql = format!(
+            "SELECT {} FROM (SELECT $1::text AS raw_key) AS linked",
+            crate::external_views::acceptable_link_key_sql("raw_key")
+        );
+        let max = "a".repeat(512);
+        let over = "a".repeat(513);
+        let wide_max = "\u{E9}".repeat(256);
+        let wide_over = "\u{E9}".repeat(257);
+        let mut keys = vec![
+            "plain".to_owned(),
+            "inner space".to_owned(),
+            "dash-and_dot.9".to_owned(),
+            max,
+            over,
+            wide_max,
+            wide_over,
+            "\u{1D518}key".to_owned(),
+        ];
+        for edge in [
+            '\u{1}', '\u{7}', '\u{1f}', '\u{7f}', '\u{80}', '\u{9f}', '\u{a0}', '\u{a1}', '\u{85}',
+            '\u{1680}', '\u{2000}', '\u{200a}', '\u{200b}', '\u{2028}', '\u{2029}', '\u{202f}',
+            '\u{205f}', '\u{3000}', ' ', '\t', '\n', '\r', '\u{b}', '\u{c}', '\u{e000}',
+            '\u{feff}',
+        ] {
+            for key in [
+                format!("{edge}key"),
+                format!("key{edge}"),
+                format!("ke{edge}y"),
+            ] {
+                keys.push(key);
+            }
+        }
+        for key in keys {
+            let accepted: Option<String> = database
+                .admin
+                .query_one(&sql, &[&key])
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(
+                accepted.is_some(),
+                crate::external_views::link_key_acceptable(&key),
+                "{:?}",
+                key.chars().take(8).collect::<String>()
+            );
+        }
+        for key in ["", "ok"] {
+            let accepted: Option<String> = database
+                .admin
+                .query_one(&sql, &[&key])
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(accepted.as_deref(), Some(key));
+        }
+        let none: Option<String> = database
+            .admin
+            .query_one(&sql, &[&Option::<String>::None])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(none, None);
         database.cleanup().await;
     }
 

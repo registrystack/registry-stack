@@ -168,3 +168,18 @@ fn external_openapi_uses_named_view_and_field_grants() {
     assert!(schema["properties"].get("count").is_none());
     assert!(document["paths"]["/v1/external-views/local-with-subject/subject/refresh"].is_null());
 }
+
+#[test]
+fn the_field_a_view_links_from_is_marked_on_its_root_entity() {
+    let registry = compile(PROJECT).expect("an explicitly granted external view compiles");
+    let entity = &registry.entities()["local-record"];
+    assert_eq!(
+        entity
+            .external_link_fields
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["subject-key"],
+        "only the linked field carries the link-key rule"
+    );
+}
