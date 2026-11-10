@@ -73,7 +73,7 @@ digest pins and the GraphQL query-file checks). Route findings report
 once at the authored position: `/routeTemplates/N` when the defect sits
 in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
-finding per code. The corpus holds 181 members.
+finding per code. The corpus holds 191 members.
 
 `base-job/` is the clean governed-ingestion control (CONCEPT section 17):
 a pack whose source route polls a bounded `file` endpoint through
@@ -183,6 +183,7 @@ and deployment custody aligned. Each refuses with its directory's exact code.
 | `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
 | `adapter.pack.map-parameter-misplaced` | The `map` parameter `{{labels}}` sits inside longer text (`look up {{labels}}`), where an object cannot be rendered | `adapter.pack.map-parameter-misplaced` | checks |
 | `adapter.pack.read-support-invalid` | A `read-one` route declares no native identity input | `adapter.pack.read-support-invalid` | checks |
+| `adapter.pack.projection-invalid` | An `exact` projection selects by `urn:example:person-number` but keys its records by `urn:example:tax-number` | `adapter.pack.projection-invalid` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
 | `adapter.pack.script-uncompilable` | A pinned script does not parse (missing closing brace; its pin matches the broken bytes) | `adapter.pack.script-uncompilable` | tool |
 | `adapter.pack.entrypoint-parameter` | A pinned script's entrypoint takes `record`, not the `exchange` the slot passes (CONCEPT 8.11.3); the script parses and hashes to its pin | `adapter.pack.entrypoint-parameter` | tool |

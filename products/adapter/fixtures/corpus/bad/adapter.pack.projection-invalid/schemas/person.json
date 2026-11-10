@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "given-name": {"type": "string"},
+    "family-name": {"type": "string"}
+  }
+}
