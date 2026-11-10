@@ -70,8 +70,8 @@ Do these tasks in order. Each one links to the section with the details.
 ## Install and package
 
 Starting with v0.44.0, release packaging includes `coordinator` and
-`coordinatorctl` for Linux amd64, Linux arm64 and macOS arm64. Once that release
-is published, install both using its checksum-verifying installer:
+`coordinatorctl` for Linux amd64, Linux arm64 and macOS arm64. Install both using
+the checksum-verifying installer of the release you deploy:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/download/v0.44.0/coordinator-v0.44.0-install.sh | bash
@@ -972,8 +972,8 @@ permissions. The order is admission time and run ID, newest first. Keep the run 
 start returns for direct lookup with `GET /v1/runs/{run}`. Use the
 authenticated HTTP API for application integration, through the maintained
 Coordinator client where one fits: the `registry-coordinator-client` Rust
-crate, or its Node.js and Python bindings built from source. The unified
-Registry Stack clients do not yet carry the Coordinator. The client resends an admission whose outcome is unknown only
+crate, or the `coordinator` namespace of the unified Node.js and Python clients
+from v0.44.0. The client resends an admission whose outcome is unknown only
 under its original key; retain that key through recovery, as with the key file.
 
 Settled terminal history remains inspectable with its recorded binding identity

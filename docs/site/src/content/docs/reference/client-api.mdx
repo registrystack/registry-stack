@@ -36,9 +36,9 @@ package per product instead. The `casework` namespace is present in those same u
 beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
 beginning with Registry Stack v0.38.0</DocsetProduct>; the `scheduling` namespace is present
 beginning with Registry Stack v0.40.0. The `coordinator` namespace is selected
-from v0.44.0. Published v0.43.0 packages have no Coordinator namespace; use a
-Coordinator-enabled candidate until its matching package is published. Runtime
-binary and image availability are separate release prerequisites.
+from v0.44.0. Published v0.43.0 packages have no Coordinator namespace. Runtime
+binary and image availability are separate release prerequisites: the binaries ship from v0.44.0
+and the image is held.
 Python requires version 3.11 or later and the wheels use the
 Python 3.11 stable ABI (`abi3-py311`), so a later Python imports the same file. Node requires version 24.11
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
@@ -99,7 +99,7 @@ registry-stack-client = { git = "https://github.com/registrystack/registry-stack
 
 ## One import, one namespace per product
 
-The seven-product imports below target Coordinator-enabled v0.44.0 packages.
+The seven-product imports below target v0.44.0 and later packages, which carry Coordinator.
 For published v0.43.0, omit `coordinator`; do not infer availability from source.
 
 <DocsetProduct product="registry-messaging">

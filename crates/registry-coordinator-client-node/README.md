@@ -1,7 +1,7 @@
 # Registry Coordinator Node binding
 
-This internal napi-rs binding is built from source. Registry Coordinator is
-not yet part of the released `@registrystack/client` facade.
+This internal napi-rs binding is not published separately. Registry Coordinator
+is part of the released `@registrystack/client` facade from v0.44.0.
 
 Each operation accepts the bearer token for that call. `workflow(token, workflow)` discovers
 the active permitted contract and computed `workflowRevision` under current start authority.

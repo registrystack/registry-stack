@@ -690,8 +690,8 @@ none. Cursors carry these filters, and a cursor from an earlier version is refus
 same filters and cursor; each page
 reapplies the caller's current authority. Applications use
 the authenticated HTTP API, through the maintained Coordinator client where one
-fits. The Rust client and its Node.js and Python bindings are built from source;
-they are not part of the unified client packages.
+fits. The Rust client crate is built from source; the Node.js and Python unified
+client packages carry the `coordinator` namespace from v0.44.0.
 Refusals of that API, the request edge and the Casework wake-up route
 use an RFC 9457 problem document whose `code` comes from one closed
 `family.reason` vocabulary with one status each. A refusal names no submitted
