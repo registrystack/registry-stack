@@ -197,6 +197,8 @@ The state directory holds one directory per run. It defaults to
 `rstack-dev-UID` in the system temporary directory. Set `RSTACK_DEV_STATE_DIR`
 to use another location.
 
+## When a run fails
+
 ### Logs
 
 During a run, `<run>/logs/supervisor.log` holds the supervisor's log and
@@ -215,7 +217,7 @@ run directory, the process groups, and the exact database and role names.
 
 Release the listed resources by hand, in this order:
 
-1. Stop each listed process group.
+1. Stop each listed process group, for example `kill -TERM -PGID`.
 2. As the administrator, run `DROP DATABASE IF EXISTS "NAME" WITH (FORCE)` for
    each listed database.
 3. As the administrator, run `DROP ROLE IF EXISTS "NAME"` for each listed role,
@@ -228,7 +230,7 @@ With `--json`, a failed `rstack dev` command prints one JSON error object with
 `schema_version` (`registry.rstack.dev.v1`), `status` set to `error`, and
 `error`. It adds `run_id` when the run needs cleanup and `recovery` with the
 resources listed above. Failures that occur before the helper starts, such as a
-missing component, print an `registry.rstack.error.v1` object with `status` set
+missing component, print a `registry.rstack.error.v1` object with `status` set
 to `refused` and an `error` object holding `class` and `message`. The reports of
 `rstack dev check` use `BRegCtlReport` instead.
 
