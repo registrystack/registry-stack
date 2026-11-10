@@ -18,6 +18,9 @@ machine can vary.
 | Holdings source requests | Six reads for the two allowed parents, no request to a denied parent |
 | Indexed query source requests | Zero, including reads with missing coverage |
 
+The freshness target covers reads made after the refresh sweep completes. The
+exercise does not measure reads while refresh is still running continuously.
+
 The reviewed Adapter pack permits at most 64 Person keys per request and
 128 rows per complete related snapshot. The fixture orders the first
 50,000 local roots so that their keys are distinct. At 100 local roots per
@@ -42,7 +45,7 @@ role after refresh. The plans must contain the candidate's actual
 coverage and page nodes with buffers.
 
 ```sh
-python3 -B products/breg/examples/external-views/run_candidate.py \
+python3 -B products/breg/loadtest/external-views/run_candidate.py \
   --breg-bin "$BREG_BIN" \
   --bregctl-bin "$BREGCTL_BIN" \
   --database-url-dir "$FIXTURE_DATABASE_URL_DIR" \
@@ -83,5 +86,5 @@ Test the deterministic corpus, source bounds and oracle without starting a
 candidate or PostgreSQL:
 
 ```sh
-python3 -B products/breg/examples/external-views/test_scale.py
+python3 -B products/breg/loadtest/external-views/test_scale.py
 ```

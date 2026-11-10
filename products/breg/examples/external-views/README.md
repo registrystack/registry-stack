@@ -74,8 +74,9 @@ scope changes and backup recovery.
 
 Indexed projections require separate PostgreSQL migration and runtime roles
 for activation and serving. The candidate development configuration selects
-those roles when the project declares an indexed projection. Use the fixture
-runner to supply the synthetic source bindings and run the HTTP checks.
+those roles when the project declares an indexed projection. Use the
+[candidate runner](../../loadtest/external-views/run_candidate.py) to supply the
+synthetic source bindings and run the HTTP checks.
 
 Prepare two fresh databases on the same disposable loopback PostgreSQL TLS
 server. Use names such as `breg_ext_rehearsal` and `breg_ext_runtime`.
@@ -95,7 +96,7 @@ needs an explicit loopback host, port, database and `?sslmode=require`.
 Supply the local PostgreSQL CA PEM separately.
 
 ```sh
-python3 -B products/breg/examples/external-views/run_candidate.py \
+python3 -B products/breg/loadtest/external-views/run_candidate.py \
   --breg-bin "$BREG_BIN" \
   --bregctl-bin "$BREGCTL_BIN" \
   --database-url-dir "$FIXTURE_DATABASE_URL_DIR" \
@@ -163,7 +164,7 @@ purges and scale have separate acceptance checks.
 
 ## Run the million-record fixture
 
-The scale exercise uses the same candidate binaries, split roles and TLS
+The scale exercise is load-test tooling and lives beside the other BReg load tests. It uses the same candidate binaries, split roles and TLS
 setup with a larger synthetic corpus. It sets an explicit freshness and
 request budget and records the actual native timings and PostgreSQL plans.
-[Scale fixture instructions](SCALE.md)
+[Scale fixture instructions](../../loadtest/external-views/SCALE.md)
