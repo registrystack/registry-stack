@@ -11,8 +11,8 @@ import json
 import os
 import re
 import secrets
-import signal
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -242,10 +242,25 @@ def wait_for_stop(bin_dir, env, cwd, run):
 
 
 def live_runs(state):
-    """Runs that may still be alive; `failed/` only holds kept logs."""
+    """Runs that may still be alive; `failed/` only holds kept logs and a
+    `.RUN_ID.removing` directory is a stopped run whose files are being deleted."""
     if not state.exists():
         return []
-    return [path for path in state.iterdir() if path.name != "failed"]
+    return [
+        path
+        for path in state.iterdir()
+        if path.name != "failed" and not path.name.startswith(".")
+    ]
+
+
+def nothing_left_behind(state):
+    """Every stopped run's files are eventually deleted."""
+    eventually(
+        lambda: (
+            not state.exists() or all(path.name == "failed" for path in state.iterdir())
+        ),
+        "a stopped run's files were not deleted",
+    )
 
 
 def kept_logs(state, error):
@@ -284,7 +299,9 @@ def product_pids(bin_dir):
 def assert_nothing_listening(bin_dir, urls=()):
     """No product URL accepts a connection and no product process remains."""
     for url in urls:
-        eventually(lambda: not accepts_connections(url), f"{url} is still listening")
+        eventually(
+            lambda url=url: not accepts_connections(url), f"{url} is still listening"
+        )
     eventually(lambda: not product_pids(bin_dir), "a product process is still alive")
 
 
@@ -399,6 +416,7 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
                 root, bin_dir, pg, {**env, "RSTACK_DEV_DATABASE_URL": url}, pg_env
             )
         assert files(checkout) == before
+        nothing_left_behind(state)
     finally:
         for run_root in live_runs(state):
             dev(bin_dir, env, checkout, "stop", run_root.name)
