@@ -46,9 +46,9 @@ use super::external_view_query::{
 use super::read::{strict_claim_context, ReadRelations};
 use super::{
     begin_record_transaction, begin_registry_transaction, begin_registry_transaction_with_reason,
-    ClaimContext, ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey, RuntimePool,
+    ClaimContext, ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey,
+    RetentionFailureReason, RuntimePool,
 };
-use crate::hooks::RetentionFailureReason;
 
 type Result<T> = std::result::Result<T, ExternalViewError>;
 /// Rows one retention tick committed, as (snapshots, receipts) by projection
