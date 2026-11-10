@@ -6152,11 +6152,6 @@ async fn a_malformed_external_link_key_is_refused_on_write_to_the_linked_field_o
         assert_eq!(after.revisions, before.revisions, "no revision is written");
     }
 
-    let long = "k".repeat(513);
-    // maximumLength is 32, so the length rule is exercised by the unit
-    // tests; here the character rule alone decides.
-    assert!(long.len() > 32);
-
     // The same malformed value in an unlinked field is accepted.
     let accepted = coordinator
         .execute(
