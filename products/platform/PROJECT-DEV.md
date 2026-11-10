@@ -19,11 +19,11 @@ rstack dev token RUN_ID --as applicant --json
 rstack dev stop RUN_ID
 ```
 
-Run `rstack dev check PROJECT [--deny-warnings] [--json]` to validate the plan,
-the product directories it names, and BReg schema-test assignments offline.
-With `--json`, the check writes a `BRegCtlReport` with `command` set to
-`dev-check`. Use `--deny-warnings` to refuse any unaccepted warning.
-`start` also validates the authored products with their own tooling.
+Run `rstack dev check PROJECT [--deny-warnings] [--json]` to validate the plan
+and resolve its fixture, grant, and binding references with the installed
+product authoring tools. The check works with the database offline. With
+`--json`, it writes a `BRegCtlReport` with `command` set to `dev-check`.
+Use `--deny-warnings` to refuse any unaccepted warning.
 
 You can also pass `--database-url`. Use the environment variable when the URL
 includes a password. Start reports the product URLs and the journey result.

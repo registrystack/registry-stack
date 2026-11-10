@@ -568,24 +568,121 @@ fn copy_project(source: &Path, target: &Path) -> Result<()> {
     copy_dir(source, target, 0, &mut 0, &mut 0)
 }
 
-pub(super) fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
-    let Some(entry) = plan
+pub(super) struct ProductInspection {
+    pub(super) breg_authority: Option<BregAuthority>,
+    pub(super) casework_principals: BTreeMap<String, String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{reason}")]
+pub(super) struct InspectionUnavailable {
+    field: String,
+    reason: String,
+    remedy: String,
+}
+
+impl InspectionUnavailable {
+    fn new(field: &str, reason: &str, remedy: &str) -> Self {
+        Self {
+            field: field.to_owned(),
+            reason: reason.to_owned(),
+            remedy: remedy.to_owned(),
+        }
+    }
+
+    pub(super) fn field(&self) -> &str {
+        &self.field
+    }
+
+    pub(super) fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    pub(super) fn remedy(&self) -> &str {
+        &self.remedy
+    }
+}
+
+struct SelectedProduct {
+    field: String,
+    root: PathBuf,
+}
+
+pub(super) fn inspect(
+    root: &Path,
+    plan: &Plan,
+    terminate: &AtomicBool,
+) -> Result<ProductInspection> {
+    let breg_authority = breg_authority(root, plan)?;
+    let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
+    Ok(ProductInspection {
+        breg_authority,
+        casework_principals,
+    })
+}
+
+fn product_root(
+    root: &Path,
+    plan: &Plan,
+    product: Product,
+) -> plan::SemanticResult<Option<SelectedProduct>> {
+    let Some((index, entry)) = plan
         .products
         .iter()
-        .find(|entry| entry.product == Product::Breg)
+        .enumerate()
+        .find(|(_, entry)| entry.product == product)
     else {
         return Ok(None);
     };
-    let registry = crate::compile(
-        &root.join(&entry.project),
-        crate::ProfileArg::Production,
-        "project-dev",
-    )
-    .map_err(|_| {
-        anyhow::anyhow!(
-            "BReg project check failed; run rstack breg check for the authored diagnostics"
+    let field = format!("/products/{index}/project");
+    let project = root.join(&entry.project).canonicalize().map_err(|_| {
+        plan::SemanticRefusal::new(
+            &field,
+            "The selected product project directory cannot be resolved.",
+            "Restore the product project directory inside the development project.",
         )
     })?;
+    plan::require(
+        project.starts_with(root) && project.is_dir(),
+        &field,
+        "The selected product project directory is outside the development project.",
+        "Select a product project directory inside the development project.",
+    )?;
+    let manifest_name = match product {
+        Product::Breg => "registry.yaml",
+        Product::Casework => "casework.yaml",
+    };
+    let manifest = project.join(manifest_name).canonicalize().map_err(|_| {
+        plan::SemanticRefusal::new(
+            &field,
+            "The selected product manifest cannot be resolved.",
+            format!("Restore {manifest_name} inside the selected product project."),
+        )
+    })?;
+    plan::require(
+        manifest.starts_with(&project) && manifest.is_file(),
+        &field,
+        "The selected product manifest is outside the selected product project.",
+        format!("Place {manifest_name} inside the selected product project."),
+    )?;
+    Ok(Some(SelectedProduct {
+        field,
+        root: project,
+    }))
+}
+
+fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
+    let Some(project) = product_root(root, plan, Product::Breg)? else {
+        return Ok(None);
+    };
+    let registry = crate::compile(&project.root, crate::ProfileArg::Production, "project-dev")
+        .map_err(|_| {
+            plan::SemanticRefusal::new(
+                &project.field,
+                "The BReg project did not pass its owning validation.",
+                "Run `rstack breg check` for authored diagnostics, then correct the BReg project.",
+            )
+        })?;
     let review_authorities = registry
         .review_authorities()
         .iter()
@@ -617,26 +714,45 @@ pub(super) fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuth
         }
     }
     let inventory = registry_breg::authority::authority_inventory(&registry)?;
-    ensure!(
-        inventory.principal_claims.len() <= 1,
-        "the BReg project's access profiles must select one principal claim"
-    );
-    let principal = inventory
-        .principal_claims
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| "sub".to_owned());
-    for (name, person) in &plan.people {
-        if let Some(grant) = person.grants.get(&Product::Breg) {
-            ensure!(!grant.claims.contains_key(&principal), "dev.yaml /people/{name}/grants/breg/claims cannot replace the BReg principal claim");
-        }
-    }
+    let principal = breg_principal(plan, &project.field, &inventory.principal_claims)?;
     Ok(Some(BregAuthority {
         principal,
         purpose: inventory.purpose_required,
         named_clients: crate::identity_facts::named_requester_clients(&registry),
         requires_postgis: breg_requires_postgis(&registry),
     }))
+}
+
+fn breg_principal(
+    plan: &Plan,
+    product_field: &str,
+    principal_claims: &BTreeSet<String>,
+) -> plan::SemanticResult<String> {
+    plan::require(
+        principal_claims.len() <= 1,
+        product_field,
+        "The BReg access profiles select more than one principal claim.",
+        "Use one principal claim across the BReg project's access profiles.",
+    )?;
+    let principal = principal_claims
+        .iter()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| "sub".to_owned());
+    for (name, person) in &plan.people {
+        if let Some(grant) = person.grants.get(&Product::Breg) {
+            plan::require(
+                !grant.claims.contains_key(&principal),
+                &format!(
+                    "/people/{}/grants/breg/claims",
+                    registry_platform_yaml::escape_pointer_segment(name)
+                ),
+                "The BReg grant claims cannot replace the principal claim selected by the BReg project.",
+                "Remove the selected principal claim from this grant's additional claims.",
+            )?;
+        }
+    }
+    Ok(principal)
 }
 
 fn validate_breg_binding_ids(
@@ -667,44 +783,82 @@ fn breg_requires_postgis(registry: &registry_breg::CompiledRegistry) -> bool {
     registry.ddl().requires_postgis
 }
 
-pub(super) fn casework_principals(
+fn casework_principals(
     root: &Path,
     plan: &Plan,
     breg: Option<&BregAuthority>,
     terminate: &AtomicBool,
 ) -> Result<BTreeMap<String, String>> {
-    let Some(entry) = plan
-        .products
-        .iter()
-        .find(|entry| entry.product == Product::Casework)
-    else {
+    let Some(project) = product_root(root, plan, Product::Casework)? else {
         return Ok(BTreeMap::new());
     };
-    let tool = super::binaries(Product::Casework)?.tool;
-    let facts = explain_casework_facts(&tool, &root.join(&entry.project), terminate)?;
+    let tool = super::product_tool(Product::Casework).map_err(|_| {
+        InspectionUnavailable::new(
+            &project.field,
+            "The Casework project cannot be inspected because its owning tool is unavailable.",
+            "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
+        )
+    })?;
+    let facts = match explain_casework_facts(&tool, &project.root, terminate) {
+        Ok(facts) => facts,
+        Err(error) if error.is::<InvalidCaseworkProject>() => {
+            return Err(plan::SemanticRefusal::new(
+                &project.field,
+                "The Casework project did not pass validation by its owning tool.",
+                "Run `rstack casework check` for authored diagnostics, then correct the Casework project.",
+            ).into());
+        }
+        Err(_) => {
+            return Err(InspectionUnavailable::new(
+                &project.field,
+                "The selected `caseworkctl` helper could not inspect the Casework project.",
+                "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
+            ).into());
+        }
+    };
     validate_casework_binding_ids(&plan.bindings, &facts)?;
+    Ok(casework_principals_from_facts(plan, breg, &facts)?)
+}
+
+fn casework_principals_from_facts(
+    plan: &Plan,
+    breg: Option<&BregAuthority>,
+    facts: &CaseworkFacts,
+) -> plan::SemanticResult<BTreeMap<String, String>> {
     let mut principals = BTreeMap::new();
     for (name, person) in &plan.people {
         let Some(grant) = person.grants.get(&Product::Casework) else {
             continue;
         };
-        let claim = facts.profiles.get(&grant.profile).map(String::as_str)
-            .with_context(|| format!("dev.yaml /people/{name}/grants/casework/profile must name a Casework access profile"))?;
-        ensure!(
+        let escaped = registry_platform_yaml::escape_pointer_segment(name);
+        let claim = facts.profiles.get(&grant.profile).map(String::as_str).ok_or_else(|| {
+            plan::SemanticRefusal::new(
+                format!("/people/{escaped}/grants/casework/profile"),
+                "The Casework grant profile does not name an access profile in the Casework project.",
+                "Set profile to an access profile defined by the Casework project.",
+            )
+        })?;
+        plan::require(
             matches!(claim, "sub" | "registry_principal")
                 || (!plan::reserved_claim(claim)
                     && !matches!(claim, "registry_actor_kind" | "registry_purpose")),
-            "dev.yaml /people/{name}/grants/casework/profile names an incompatible principal claim"
-        );
-        ensure!(
+            &format!("/people/{escaped}/grants/casework/profile"),
+            "The Casework access profile selects an incompatible principal claim.",
+            "Choose a Casework access profile whose principal claim is `sub`, `registry_principal`, or a non-reserved custom claim.",
+        )?;
+        plan::require(
             !grant.claims.contains_key(claim),
-            "dev.yaml /people/{name}/grants/casework/claims cannot replace the Casework principal claim"
-        );
+            &format!("/people/{escaped}/grants/casework/claims"),
+            "The Casework grant claims cannot replace the principal claim selected by its access profile.",
+            "Remove the selected principal claim from this grant's additional claims.",
+        )?;
         if person.casework_context {
-            ensure!(
+            plan::require(
                 claim == "sub" || breg.is_some_and(|authority| authority.principal == claim),
-                "dev.yaml /people/{name}/caseworkContext requires Casework to read sub or the BReg principal claim"
-            );
+                &format!("/people/{escaped}/caseworkContext"),
+                "Casework context forwarding requires Casework to read `sub` or the BReg principal claim.",
+                "Choose a compatible Casework access profile or remove caseworkContext.",
+            )?;
         }
         principals.insert(grant.profile.clone(), claim.to_owned());
     }
@@ -734,7 +888,7 @@ fn explain_casework_facts(
     let status = wait_for_tool(&mut child, || {
         ensure!(
             !terminate.load(Ordering::Relaxed),
-            "development start was interrupted"
+            "development product inspection was interrupted"
         );
         ensure!(Instant::now() < deadline, "caseworkctl explain timed out");
         Ok(())
@@ -746,14 +900,43 @@ fn explain_casework_facts(
         bytes.len() as u64 <= MAX_REPORT,
         "the Casework authoring report exceeds the size limit"
     );
-    ensure!(
-        status.success(),
-        "Casework project check failed. Run rstack casework check for the authored diagnostics"
-    );
     let report: Value = serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("caseworkctl explain did not emit a JSON report"))?;
-    casework_report_facts(&report)
+    if status.success() {
+        return casework_report_facts(&report);
+    }
+    if status.code() == Some(1) && casework_domain_refusal(&report) {
+        return Err(InvalidCaseworkProject.into());
+    }
+    anyhow::bail!("caseworkctl explain did not complete successfully")
 }
+
+fn casework_domain_refusal(report: &Value) -> bool {
+    report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
+        && report["kind"] == "CaseworkReport"
+        && report["command"] == "explain"
+        && report["status"] == "domain-refusal"
+        && report["ok"] == false
+        && report["diagnostics"].as_array().is_some_and(|diagnostics| {
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic["severity"] == "error"
+                    && diagnostic["code"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                    && diagnostic["path"].is_string()
+                    && diagnostic["message"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+                    && diagnostic["suggestedAction"]
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty())
+            })
+        })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the Casework project did not pass its owning validation")]
+struct InvalidCaseworkProject;
 
 #[derive(Debug, Eq, PartialEq)]
 struct CaseworkFacts {
@@ -1186,6 +1369,121 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("incompatible report"));
+    }
+
+    fn authority_plan(breg_claims: Value, casework_claims: Value, context: bool) -> Plan {
+        serde_json::from_value(json!({
+            "issuer": "https://issuer.example.invalid",
+            "products": [
+                {"product": "breg", "project": "breg", "audience": "registry"},
+                {"product": "casework", "project": "casework", "audience": "review"}
+            ],
+            "people": {"operator": {
+                "subject": "operator", "client": "operator-client",
+                "grants": {
+                    "breg": {"profile": "operator", "scopes": [], "claims": breg_claims},
+                    "casework": {"profile": "reviewer", "scopes": [], "claims": casework_claims}
+                },
+                "caseworkContext": context
+            }},
+            "journey": {"id": "smoke", "steps": []}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn breg_authority_restrictions_are_typed_and_located() {
+        let plan = authority_plan(json!({}), json!({}), false);
+        let error = breg_principal(
+            &plan,
+            "/products/0/project",
+            &BTreeSet::from(["registry_principal".to_owned(), "sub".to_owned()]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("/products/0/project"), "{error}");
+        assert!(
+            error.contains("The BReg access profiles select more than one principal claim."),
+            "{error}"
+        );
+        assert!(
+            error.contains("Use one principal claim across the BReg project's access profiles."),
+            "{error}"
+        );
+
+        let plan = authority_plan(
+            json!({"registry_principal": "private-claim-marker"}),
+            json!({}),
+            false,
+        );
+        let error = breg_principal(
+            &plan,
+            "/products/0/project",
+            &BTreeSet::from(["registry_principal".to_owned()]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("/people/operator/grants/breg/claims"),
+            "{error}"
+        );
+        assert!(
+            error.contains("cannot replace the principal claim"),
+            "{error}"
+        );
+        assert!(!error.contains("private-claim-marker"), "{error}");
+    }
+
+    #[test]
+    fn casework_authority_restrictions_are_typed_and_located() {
+        let facts = |principal: &str| CaseworkFacts {
+            profiles: BTreeMap::from([("reviewer".to_owned(), principal.to_owned())]),
+            trusted_producers: BTreeSet::new(),
+            context_providers: BTreeSet::new(),
+        };
+
+        let plan = authority_plan(json!({}), json!({}), false);
+        let error = casework_principals_from_facts(&plan, None, &facts("registry_actor_kind"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("/people/operator/grants/casework/profile"),
+            "{error}"
+        );
+        assert!(error.contains("incompatible principal claim"), "{error}");
+
+        let plan = authority_plan(json!({}), json!({"sub": "private-claim-marker"}), false);
+        let error = casework_principals_from_facts(&plan, None, &facts("sub"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("/people/operator/grants/casework/claims"),
+            "{error}"
+        );
+        assert!(
+            error.contains("cannot replace the principal claim"),
+            "{error}"
+        );
+        assert!(!error.contains("private-claim-marker"), "{error}");
+
+        let plan = authority_plan(json!({}), json!({}), true);
+        let breg = BregAuthority {
+            principal: "registry_principal".to_owned(),
+            purpose: false,
+            requires_postgis: false,
+            named_clients: BTreeSet::new(),
+        };
+        let error = casework_principals_from_facts(&plan, Some(&breg), &facts("custom_principal"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("/people/operator/caseworkContext"),
+            "{error}"
+        );
+        assert!(
+            error.contains("requires Casework to read `sub` or the BReg principal claim"),
+            "{error}"
+        );
     }
 
     fn product_bindings() -> Bindings {

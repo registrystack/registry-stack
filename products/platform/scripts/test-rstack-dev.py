@@ -620,6 +620,45 @@ def verify_spatial(root, bin_dir, pg, env, pg_env):
     print("Spatial BReg bbox journey passed with distinct, cleaned-up spatial roles")
 
 
+def verify_offline_plan(root, bin_dir, project):
+    state = root / "offline-check-runs"
+    check_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "RSTACK_DEV_DATABASE_URL",
+            "RSTACK_DEV_DATABASE_CA",
+            "RSTACK_BREG_BIN",
+            "RSTACK_CASEWORK_BIN",
+        }
+    }
+    check_env["RSTACK_BREGCTL_BIN"] = str(bin_dir / "bregctl")
+    check_env["RSTACK_CASEWORKCTL_BIN"] = str(bin_dir / "caseworkctl")
+    check_env["RSTACK_DEV_STATE_DIR"] = str(state)
+    report = dev(bin_dir, check_env, project, "check", ".")
+    assert report["ok"] and report["status"] == "complete"
+    assert report["diagnostics"] == []
+    assert not state.exists()
+
+    invalid = root / "offline-invalid"
+    shutil.copytree(project, invalid)
+    plan = invalid / "dev.yaml"
+    authored = plan.read_text()
+    profile = "profile: intake"
+    unknown = "missing-check-profile"
+    assert authored.count(profile) == 1
+    plan.write_text(authored.replace(profile, f"profile: {unknown}"))
+    refused = dev(bin_dir, check_env, invalid, "check", ".", expected=1)
+    [diagnostic] = refused["diagnostics"]
+    assert refused["status"] == "domain-refusal"
+    assert diagnostic["path"] == "/people/intake/grants/casework/profile"
+    assert diagnostic["suggestedAction"]
+    assert unknown not in diagnostic["message"] + diagnostic["suggestedAction"]
+    assert not state.exists()
+    print("Offline checks resolve product profiles with only the authoring tools")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
@@ -633,20 +672,7 @@ def main():
         root = Path(directory)
         bin_dir = args.bin_dir.resolve()
         project = STACK / "products/platform/examples/licensing"
-        check_env = {
-            key: value
-            for key, value in os.environ.items()
-            if key not in {"RSTACK_DEV_DATABASE_URL", "RSTACK_DEV_DATABASE_CA"}
-        }
-        check_env["RSTACK_BREGCTL_BIN"] = str(bin_dir / "bregctl")
-        check_env["RSTACK_DEV_STATE_DIR"] = str(root / "offline-check-runs")
-        report = dev(bin_dir, check_env, project, "check", ".")
-        assert (
-            report["ok"]
-            and report["status"] == "complete"
-            and report["diagnostics"] == []
-        )
-        assert not (root / "offline-check-runs").exists()
+        verify_offline_plan(root, bin_dir, project)
         pg = args.postgres_bin_dir.resolve()
         cluster, ca, url, pg_env = prepare_postgres(root, pg)
         checked(
