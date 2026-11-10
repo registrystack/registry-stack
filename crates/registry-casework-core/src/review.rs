@@ -290,7 +290,12 @@ impl ReviewStagePolicy {
             .is_none_or(|outcomes| outcomes.iter().any(|outcome| outcome == id))
     }
 
-    fn outcome_findings(&self, at: &str, declared: &[ReviewOutcomePolicy]) -> Findings {
+    fn outcome_findings(
+        &self,
+        at: &str,
+        purpose: ReviewPurpose,
+        declared: &[ReviewOutcomePolicy],
+    ) -> Findings {
         let mut findings = Findings::default();
         let Some(outcomes) = &self.outcomes else {
             return findings;
@@ -321,6 +326,24 @@ impl ReviewStagePolicy {
                     "Choose an identifier from the policy's outcomes.",
                 );
             }
+        }
+        // Approval reviews move on by approving; answer reviews settle by
+        // answering. Every stage needs that choice, or the review strands.
+        let advancing = match purpose {
+            ReviewPurpose::Approval => ReviewOutcomeSettlement::Approved,
+            ReviewPurpose::Answer => ReviewOutcomeSettlement::Answered,
+        };
+        if !outcomes.is_empty()
+            && !declared.iter().any(|outcome| {
+                outcome.settlement == advancing && outcomes.iter().any(|id| *id == outcome.id)
+            })
+        {
+            findings.push(
+                "casework.review-policy.stage-without-advancing-outcome",
+                at.to_owned(),
+                "the stage offers no outcome that advances or settles the review",
+                "List an outcome whose settlement lets the review move on: approved for an approval policy, answered for an answer policy.",
+            );
         }
         findings
     }
@@ -796,7 +819,11 @@ impl ReviewPolicy {
         for (index, stage) in self.stages.iter().enumerate() {
             tag(
                 ReviewPolicyError::Outcomes,
-                stage.outcome_findings(&format!("/stages/{index}/outcomes"), &self.outcomes),
+                stage.outcome_findings(
+                    &format!("/stages/{index}/outcomes"),
+                    self.purpose,
+                    &self.outcomes,
+                ),
             );
         }
         out
@@ -4299,6 +4326,50 @@ mod tests {
                 next_stage: "authority".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn stage_outcomes_require_an_advancing_choice() {
+        let finding_at = |policy: &ReviewPolicy| {
+            policy
+                .findings()
+                .into_iter()
+                .find(|finding| {
+                    finding.code == "casework.review-policy.stage-without-advancing-outcome"
+                })
+                .map(|finding| finding.pointer)
+        };
+
+        let mut middle = stage("technical", 1);
+        middle.outcomes = Some(vec!["rejected".to_owned()]);
+        middle.negative_decisions = ReviewNegativeDecisionMode::Advise;
+        let policy = approval_policy(vec![middle, stage("authority", 1)]);
+        assert_eq!(policy.check(), Err(ReviewPolicyError::Outcomes));
+        assert_eq!(finding_at(&policy).as_deref(), Some("/stages/0/outcomes"));
+
+        let mut last = stage("authority", 1);
+        last.outcomes = Some(vec!["rejected".to_owned(), "changes-requested".to_owned()]);
+        let policy = approval_policy(vec![stage("technical", 1), last]);
+        assert_eq!(policy.check(), Err(ReviewPolicyError::Outcomes));
+        assert_eq!(finding_at(&policy).as_deref(), Some("/stages/1/outcomes"));
+
+        let mut answer = answer_policy();
+        answer.outcomes.push(ReviewOutcomePolicy {
+            id: "not-answered".to_owned(),
+            label: "Not answered".to_owned(),
+            settlement: ReviewOutcomeSettlement::Answered,
+            reason_required: false,
+            public_reason: ReviewPublicReasonRule::Optional,
+            result_required: true,
+        });
+        answer.stages[0].outcomes = Some(vec!["approved".to_owned()]);
+        assert_eq!(finding_at(&answer), None);
+
+        let mut advancing = stage("technical", 1);
+        advancing.outcomes = Some(vec!["approved".to_owned(), "rejected".to_owned()]);
+        let policy = approval_policy(vec![advancing, stage("authority", 1)]);
+        assert_eq!(policy.check(), Ok(()));
+        assert_eq!(finding_at(&policy), None);
     }
 
     #[test]

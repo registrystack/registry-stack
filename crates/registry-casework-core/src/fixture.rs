@@ -433,4 +433,29 @@ mod tests {
             .iter()
             .any(|diagnostic| diagnostic.code == "casework.fixture.unknown-outcome"));
     }
+
+    #[test]
+    fn a_later_stage_without_an_advancing_outcome_fails_the_fixture_check() {
+        let mut project = crate::CaseworkProject::read(
+            "casework.yaml",
+            include_bytes!("../../../products/casework/examples/stage-outcomes/casework.yaml"),
+        )
+        .unwrap()
+        .value;
+        let fixture = include_bytes!(
+            "../../../products/casework/examples/stage-outcomes/fixtures/grant-review.yaml"
+        );
+        CaseworkFixture::read_against("grant-review.yaml", fixture, &project).unwrap();
+        project.review_policies[0].stages[1]
+            .outcomes
+            .as_mut()
+            .unwrap()
+            .retain(|id| id != "approved");
+        let refusal =
+            CaseworkFixture::read_against("grant-review.yaml", fixture, &project).unwrap_err();
+        assert!(refusal
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "casework.fixture.policy-invalid"));
+    }
 }
