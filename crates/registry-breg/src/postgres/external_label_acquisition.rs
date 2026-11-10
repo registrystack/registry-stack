@@ -289,6 +289,12 @@ fn literal(value: &str) -> String {
 //   the whole scope, which makes sorting every eligible member look cheap.
 //   One nullable selector tested with IS NOT NULL keeps the estimate near the
 //   real member count.
+// Any string selector is returned. The refresh page validates each one with
+// the store and source token rules, so a selector either rule refuses is
+// counted and logged rather than dropped here. Cutting a selector to 513
+// characters bounds the page and keeps an overlong selector invalid: 513
+// characters are at least 513 bytes, over the source token bound, and a valid
+// selector is never cut.
 const ELIGIBLE_SQL: &str = r#"
 SELECT roots.root_id,members.source_key AS member_key,checked.selector,
     snapshot.subject_key AS parent_key,snapshot.snapshot_id AS parent_snapshot,snapshot.expires_at AS parent_expires_at
@@ -302,9 +308,7 @@ JOIN registry_internal.registry_external_projection_values AS members
     ON members.projection_id=snapshot.projection_id AND members.epoch=snapshot.epoch AND members.subject_key=snapshot.subject_key
 CROSS JOIN LATERAL (
     SELECT CASE WHEN jsonb_typeof(members.fields->__SELECTOR_FIELD__)='string'
-        AND octet_length(members.fields->>__SELECTOR_FIELD__) BETWEEN 1 AND 1024
-        AND (members.fields->>__SELECTOR_FIELD__) !~ '[[:cntrl:]]'
-        THEN members.fields->>__SELECTOR_FIELD__ END AS selector
+        THEN left(members.fields->>__SELECTOR_FIELD__,513) END AS selector
 ) AS checked
 WHERE checked.selector IS NOT NULL
 "#;

@@ -3681,6 +3681,240 @@ mod postgres_tests {
         served.fixture.cleanup().await;
     }
 
+    /// The person projection fixture plus a by-parent member projection whose
+    /// link labels each member through the person projection, and a service
+    /// profile that may refresh both.
+    fn labelled_members_project() -> Value {
+        let mut project = indexed_person_project();
+        project["externalRecordTypes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"member","authority":"urn:test:authority","identifierScheme":"urn:test:members",
+                "fields":[{"id":"holder","type":"string","classification":"internal","nullable":true}]
+            }));
+        project["externalProjections"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"members","recordType":"member","operation":"members","operationVersion":"1",
+                "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+                "mode":"indexed","cardinality":"many","cacheTtlSeconds":60,"fields":["holder"]
+            }));
+        project["externalViews"][0]["links"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"members-link","projection":"members","fromField":"subject-key",
+                "identifierScheme":"urn:test:keys","fields":["holder"],
+                "label":{"projection":"people","fromField":"holder","identifierScheme":"urn:test:keys","fields":["family-name"]}
+            }));
+        project["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"refresh","principalClaim":"registry_principal","actorKind":"service",
+                "requesterClients":["worker"],"requiredScopes":["registry.refresh"],"requiredPurposes":["consultation"],
+                "permissions":{
+                    "records":[{"recordType":"local-record","operations":["list"],"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
+                    "refreshExternalProjections":["members","people"]
+                }
+            }));
+        project
+    }
+
+    #[tokio::test]
+    async fn invalid_label_selectors_are_unavailable_without_failing_the_rest_of_the_label_batch() {
+        use tracing::instrument::WithSubscriber;
+        let long = "q".repeat(513); // one byte over the source token bound
+        let oversized = "\u{1D518}".repeat(300); // 1200 bytes: over the store key bound
+        let endpoints = || {
+            serde_json::from_value(json!([{"type":"endpoint","endpoint":"synthetic-registry"}]))
+                .unwrap()
+        };
+        let batch = |keys: &[&str]| {
+            json!({
+                "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                    "type":"batch","keys":keys,"fields":["family-name"]
+                }},
+                "response":{"status":200,"body":{"records":keys.iter().map(|key| json!({
+                    "subject":key,"state":"found","properties":{"family-name":format!("family-{key}")}
+                })).collect::<Vec<_>>()}}
+            })
+        };
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                endpoints(),
+                serde_json::from_value(json!([batch(&["alpha", "beta"]), batch(&["delta"])]))
+                    .unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        // A label refresh never calls the parent's source.
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "members",
+            "holder",
+            Arc::new(
+                registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                    endpoints(),
+                    serde_json::from_value(json!([])).unwrap(),
+                ),
+            ),
+        );
+        let served =
+            Served::with(&labelled_members_project(), sources, Duration::from_secs(2)).await;
+        let members = bound_scope(&served.fixture, "members").await;
+        served
+            .fixture
+            .publish_collection(
+                &members,
+                "first",
+                &[
+                    ("m1", json!({"holder":"alpha"})),
+                    ("m2", json!({"holder":long})),
+                    ("m3", json!({"holder":"beta"})),
+                    ("m4", json!({"holder":"gamma "})),
+                    ("m5", json!({"holder":"bell\u{7}key"})),
+                    ("m6", json!({"holder":oversized})),
+                ],
+            )
+            .await;
+        served
+            .fixture
+            .publish_collection(&members, "second", &[("m1", json!({"holder":"delta"}))])
+            .await;
+
+        let worker = crate::api::VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            "worker-principal",
+            BTreeSet::from(["registry.refresh".to_owned()]),
+            Some("consultation".to_owned()),
+            BTreeMap::new(),
+        )
+        .unwrap()
+        .with_contextual_authority(
+            Some(registry_platform_oidc::ActorKind::Service),
+            Some("worker".to_owned()),
+            None,
+            None,
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let mut refresh = ExternalViewRequest {
+            context: crate::api::AuthorizedRequestContext::new(
+                Some("worker-principal".to_owned()),
+                Some("consultation".to_owned()),
+                "refresh".to_owned(),
+                Vec::new(),
+            )
+            .with_grant_audit(&worker),
+            correlation: RequestCorrelation::breg_created(),
+            view: "view".to_owned(),
+            link: "members-link".to_owned(),
+            root: None,
+            query: ExternalQueryMode::First(ExternalQuery {
+                page_size: 6,
+                ..ExternalQuery::default()
+            }),
+            deadline: Instant::now() + Duration::from_secs(5),
+        };
+        let plan = served
+            .service
+            .plan(&refresh, Some(RefreshMode::Labels))
+            .ok()
+            .unwrap();
+        let claims = ClaimContext::for_compiled(
+            &served.service.registry,
+            &plan.root.id,
+            Some("worker-principal".to_owned()),
+            "refresh",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::context::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "allowed".to_owned(),
+            }],
+        )
+        .unwrap();
+
+        // The first page holds the first parent's six members: two valid
+        // selectors and four the source contract or the store would refuse.
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let first = served
+            .service
+            .refresh_page(&refresh, &plan, &claims)
+            .with_subscriber(captured.subscriber())
+            .await
+            .ok()
+            .unwrap()
+            .body;
+        assert_eq!(first["processed"], 6, "{first}");
+        assert_eq!(first["published"], 2, "{first}");
+        assert_eq!(first["unavailable"], 4, "{first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+        let logs = captured.text();
+        let line = log_line(&logs, "people", "invalid-key");
+        assert!(line.contains(r#""level":"WARN""#), "{line}");
+        assert!(line.contains(r#""keys":4"#), "{line}");
+        assert_value_free(&logs);
+        for value in [
+            "alpha",
+            "beta",
+            "gamma",
+            "bell",
+            "qqq",
+            "\u{1D518}",
+            "family-",
+        ] {
+            assert!(!logs.contains(value), "{value} reached the log: {logs}");
+        }
+
+        // The acquisition moves past the page.
+        refresh.query = ExternalQueryMode::Continue(cursor);
+        let second = served
+            .service
+            .refresh_page(&refresh, &plan, &claims)
+            .await
+            .ok()
+            .unwrap()
+            .body;
+        assert_eq!(second["processed"], 1, "{second}");
+        assert_eq!(second["published"], 1, "{second}");
+        assert_eq!(second["unavailable"], 0, "{second}");
+        assert!(second.get("nextCursor").is_none(), "{second}");
+        // Only the valid selectors reached the source, in the two recorded
+        // batches, and each of them now has its label.
+        transcript.finish().unwrap();
+        let stored: Vec<(String, Value)> = served
+            .fixture
+            .database
+            .admin
+            .query(
+                "SELECT subject_key,fields FROM registry_internal.registry_external_projection_values
+                 WHERE projection_id='people' ORDER BY subject_key COLLATE \"C\"",
+                &[],
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect();
+        assert_eq!(
+            stored,
+            ["alpha", "beta", "delta"].map(|key| (
+                key.to_owned(),
+                json!({"family-name": format!("family-{key}")})
+            ))
+        );
+        served.fixture.cleanup().await;
+    }
+
     /// Source keys, labels and snapshot identities the fixtures below store.
     /// None of them may reach an operational log line.
     const FIXTURE_VALUES: [&str; 7] = [

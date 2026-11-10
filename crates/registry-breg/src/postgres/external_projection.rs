@@ -2640,6 +2640,44 @@ pub(crate) mod postgres_tests {
             );
         }
 
+        /// Publish one parent's complete member collection under migration
+        /// authority at the database clock, as (member key, fields) rows.
+        pub(crate) async fn publish_collection(
+            &self,
+            scope: &ProjectionScope,
+            key: &str,
+            members: &[(&str, Value)],
+        ) {
+            let now: i64 = self
+                .migration
+                .query_one(
+                    "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            let ticket = allocate_inner(&self.migration, scope, key).await.unwrap();
+            let snapshot = AcceptedSnapshot::complete_collection(
+                key,
+                &format!("{key}-members"),
+                now,
+                now + scope.cache_ttl_seconds,
+                RetentionPermission::PermittedUntil(now + scope.cache_ttl_seconds),
+                members
+                    .iter()
+                    .map(|(member, fields)| ProjectionRow::new(member, fields.clone()).unwrap())
+                    .collect(),
+            )
+            .unwrap();
+            assert_eq!(
+                publish_without_eligibility(&self.migration, &ticket, &snapshot)
+                    .await
+                    .unwrap(),
+                Publication::Published
+            );
+        }
+
         /// Allocate a refresh for one key and the accepted label snapshot a
         /// source would return for it, stamped at the database clock.
         pub(crate) async fn label_refresh(
