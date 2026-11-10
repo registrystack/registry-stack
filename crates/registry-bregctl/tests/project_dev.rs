@@ -142,6 +142,7 @@ fn fake_casework_tool(root: &std::path::Path) -> std::path::PathBuf {
             "printf '%s\\n' '",
             "{\"apiVersion\":\"id.registrystack.org/formats/casework/report/v1alpha2\",",
             "\"kind\":\"CaseworkReport\",\"command\":\"explain\",\"status\":\"complete\",\"ok\":true,",
+            "\"accessProfiles\":[{\"id\":\"reviewer\",\"principalClaim\":\"sub\"}],",
             "\"reviewPolicies\":[{\"dependencies\":{\"accessProfiles\":[{\"id\":\"reviewer\",\"principalClaim\":\"sub\"}]}}],",
             "\"trustedProducers\":[{\"id\":\"review-producer\"}],",
             "\"contextProviders\":[{\"id\":\"proposal-context\"}]}",

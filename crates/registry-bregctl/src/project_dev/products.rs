@@ -9,9 +9,9 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{Read, Seek},
+    io::{Read, Seek, SeekFrom},
     net::{Ipv4Addr, TcpListener},
-    os::unix::process::CommandExt,
+    os::unix::{fs::OpenOptionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
@@ -28,7 +28,7 @@ use super::{
     database::{Database, DatabaseUrls},
     issuer::Issuer,
     plan::{self, Plan, Product},
-    stopping, write_private, BregAuthority, RunInput, POLL,
+    private_directory, stopping, write_private, BregAuthority, RunInput, POLL,
 };
 
 pub(super) struct ProductRunner<'a> {
@@ -139,14 +139,18 @@ impl<'a> ProductRunner<'a> {
             if product == Product::Casework {
                 command.arg("serve");
             }
-            // Released runtimes own their listeners. If a competing process
-            // takes this port in the handoff, startup fails and is cleaned up.
+            let log = open_log(self.root, &format!("{}-runtime", product.name()))?;
+            command.stdout(log.try_clone()?).stderr(log);
+            // Released runtimes own their listeners, so the reservation is
+            // released before the spawn. A competing process can take the port
+            // in that gap; the runtime then fails to bind and exits, which the
+            // readiness wait reports along with the end of its log.
             drop(reservation);
             let child = command
-                .stdout(Stdio::null())
                 .spawn()
                 .with_context(|| format!("cannot start {}", product.name()))?;
             self.children.push((product, child));
+            self.record_processes()?;
             self.ready(product, url)?;
         }
         Ok(urls)
@@ -422,20 +426,27 @@ impl<'a> ProductRunner<'a> {
 
     fn tool(&self, product: Product, stage: &str, args: &[&std::ffi::OsStr]) -> Result<()> {
         self.ensure_active()?;
-        let mut output = tempfile::tempfile_in(self.root)?;
-        let mut child = child_command(&self.input.binaries[&product].tool)
-            .arg(stage)
-            .args(args)
-            .args(["--format", "json"])
-            .stdout(output.try_clone()?)
-            .spawn()
-            .with_context(|| format!("cannot start {} {stage}", product.name()))?;
-        if wait_for_tool(&mut child, || self.ensure_active())?.success() {
-            return Ok(());
-        }
-        output.rewind()?;
-        let codes = report_codes(output)?;
-        bail!("{} {stage} failed{codes}", product.name());
+        let mut arguments = vec![std::ffi::OsStr::new(stage)];
+        arguments.extend_from_slice(args);
+        arguments.extend(["--format", "json"].map(std::ffi::OsStr::new));
+        run_logged_tool(
+            &self.input.binaries[&product].tool,
+            &arguments,
+            self.root,
+            (product.name(), stage),
+            || self.ensure_active(),
+        )
+    }
+
+    /// Record every live child's process group so a later `stop` can reach
+    /// processes whose supervisor died.
+    fn record_processes(&self) -> Result<()> {
+        let entries: Vec<_> = self
+            .children
+            .iter()
+            .map(|(product, child)| (*product, child.id()))
+            .collect();
+        write_processes(self.root, &entries)
     }
 
     fn ready(&mut self, product: Product, base: &str) -> Result<()> {
@@ -443,30 +454,45 @@ impl<'a> ProductRunner<'a> {
         let url = format!("{base}/ready");
         loop {
             self.ensure_active()?;
-            ensure!(
-                self.services_alive()?,
-                "{} exited before readiness",
-                product.name()
-            );
+            self.ensure_alive(product)?;
             if self
                 .runtime
                 .block_on(async { self.http.get(&url).send().await })
                 .is_ok_and(|response| response.status().is_success())
             {
-                ensure!(
-                    self.services_alive()?,
-                    "{} exited before readiness",
-                    product.name()
-                );
+                self.ensure_alive(product)?;
                 return Ok(());
             }
             ensure!(
                 Instant::now() < end,
-                "{} did not become ready",
-                product.name()
+                "{} did not become ready{}",
+                product.name(),
+                self.runtime_log_tail(product)
             );
             thread::sleep(POLL);
         }
+    }
+
+    /// Fail while waiting on `waiting`, naming whichever child exited.
+    fn ensure_alive(&self, waiting: Product) -> Result<()> {
+        for (product, child) in &self.children {
+            if child_exited(child)? {
+                let detail = self.runtime_log_tail(*product);
+                if *product == waiting {
+                    bail!("{} exited before readiness{detail}", product.name());
+                }
+                bail!(
+                    "{} exited while {} was starting{detail}",
+                    product.name(),
+                    waiting.name()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn runtime_log_tail(&self, product: Product) -> String {
+        failure_detail(&log_path(self.root, &format!("{}-runtime", product.name())))
     }
 
     pub(super) fn services_alive(&self) -> Result<bool> {
@@ -500,6 +526,9 @@ impl<'a> ProductRunner<'a> {
                 false
             }
         });
+        // Drop reaped groups from the record so a later recovery cannot signal
+        // a reused process group ID.
+        self.record_processes()?;
         ensure!(failures.is_empty(), "cannot stop {}", failures.join(", "));
         drop(self.bindings.take());
         Ok(())
@@ -512,6 +541,100 @@ impl<'a> ProductRunner<'a> {
     ) -> Result<super::journey::JourneyReport> {
         super::journey::run(&self.input, issuer, urls, || self.ensure_active())
     }
+}
+
+fn log_path(root: &Path, name: &str) -> PathBuf {
+    root.join("logs").join(format!("{name}.log"))
+}
+
+/// Open the owner-only log for one product stage, appending to earlier output.
+fn open_log(root: &Path, name: &str) -> Result<fs::File> {
+    let directory = root.join("logs");
+    match private_directory(&directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("cannot create the development log directory"),
+    }
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(log_path(root, name))
+        .with_context(|| format!("cannot open the {name} log"))
+}
+
+const LOG_TAIL_LINES: usize = 20;
+const LOG_TAIL_BYTES: u64 = 4096;
+
+/// The last lines of a log, at most 4 KiB, decoded lossily. An unreadable
+/// log yields an empty tail; the caller reports the path either way.
+fn log_tail(path: &Path) -> String {
+    let Ok(mut file) = fs::File::open(path) else {
+        return String::new();
+    };
+    let mut bytes = Vec::new();
+    let read = file
+        .metadata()
+        .map(|meta| meta.len())
+        .and_then(|length| file.seek(SeekFrom::Start(length.saturating_sub(LOG_TAIL_BYTES))))
+        .and_then(|_| file.take(LOG_TAIL_BYTES).read_to_end(&mut bytes));
+    if read.is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<_> = text.lines().collect();
+    lines[lines.len().saturating_sub(LOG_TAIL_LINES)..]
+        .join("\n")
+        .trim()
+        .to_owned()
+}
+
+/// The suffix appended to a stage failure: the log path and its last lines.
+fn failure_detail(path: &Path) -> String {
+    let tail = log_tail(path);
+    if tail.is_empty() {
+        format!(" (log: {})", path.display())
+    } else {
+        format!(" (log: {}); last lines:\n{tail}", path.display())
+    }
+}
+
+/// Run a product tool with its stderr in `<root>/logs/<name>.log`. Stdout is
+/// the JSON report, which supplies the diagnostic codes of a failure.
+fn run_logged_tool(
+    binary: &Path,
+    args: &[&std::ffi::OsStr],
+    root: &Path,
+    (product, stage): (&str, &str),
+    active: impl Fn() -> Result<()>,
+) -> Result<()> {
+    let name = format!("{product}-{stage}");
+    let mut output = tempfile::tempfile_in(root)?;
+    let mut child = child_command(binary)
+        .args(args)
+        .stdout(output.try_clone()?)
+        .stderr(open_log(root, &name)?)
+        .spawn()
+        .with_context(|| format!("cannot start {product} {stage}"))?;
+    if wait_for_tool(&mut child, active)?.success() {
+        return Ok(());
+    }
+    output.rewind()?;
+    let codes = report_codes(output)?;
+    bail!(
+        "{product} {stage} failed{codes}{}",
+        failure_detail(&log_path(root, &name))
+    );
+}
+
+/// Record each child's process group. Children start as group leaders, so the
+/// group ID is the PID.
+fn write_processes(root: &Path, children: &[(Product, u32)]) -> Result<()> {
+    let entries: Vec<_> = children
+        .iter()
+        .map(|(product, pid)| json!({"product": product.name(), "pid": pid, "pgid": pid}))
+        .collect();
+    write_private(&root.join("processes.json"), &serde_json::to_vec(&entries)?)
 }
 
 fn random_secret() -> Result<zeroize::Zeroizing<String>> {
@@ -683,6 +806,7 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
                 "Run `rstack breg check` for authored diagnostics, then correct the BReg project.",
             )
         })?;
+    refuse_encrypted_fields(&registry)?;
     let review_authorities = registry
         .review_authorities()
         .iter()
@@ -695,24 +819,7 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
         .map(|action| action.id.as_str())
         .collect();
     validate_breg_binding_ids(&plan.bindings, &review_authorities, &actions)?;
-    let profiles: BTreeSet<_> = registry
-        .access_profile_displays()
-        .iter()
-        .map(|profile| profile.id.as_str())
-        .collect();
-    for (name, person) in &plan.people {
-        if let Some(grant) = person.grants.get(&Product::Breg) {
-            plan::require(
-                profiles.contains(grant.profile.as_str()),
-                &format!(
-                    "/people/{}/grants/breg/profile",
-                    registry_platform_yaml::escape_pointer_segment(name)
-                ),
-                "The BReg grant profile does not name an access profile in the BReg project.",
-                "Set profile to an access profile defined by the BReg project.",
-            )?;
-        }
-    }
+    check_breg_grants(&registry, &plan.people)?;
     let inventory = registry_breg::authority::authority_inventory(&registry)?;
     let principal = breg_principal(plan, &project.field, &inventory.principal_claims)?;
     Ok(Some(BregAuthority {
@@ -775,6 +882,55 @@ fn validate_breg_binding_ids(
             "The Casework context provider action does not name an action in the BReg project.",
             "Set action to an action defined by the BReg project.",
         )?;
+    }
+    Ok(())
+}
+
+/// The generated runtime configuration has no field-encryption provider, so a
+/// project with encrypted fields would only fail late and obscurely.
+fn refuse_encrypted_fields(registry: &registry_breg::CompiledRegistry) -> Result<()> {
+    for entity in registry.entities().values() {
+        for field in entity.fields.values() {
+            ensure!(
+                field.encryption.is_none(),
+                "rstack dev does not configure field encryption yet; {}.{} is encrypted",
+                entity.id,
+                field.id
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Every BReg grant must name an access profile the project declares,
+/// including profiles that carry only proposal permissions and so belong to no
+/// entity. Scopes are not checked here: a profile's required scopes are a
+/// per-entity rule the runtime applies, and a mismatch surfaces when the
+/// journey runs.
+fn check_breg_grants(
+    registry: &registry_breg::CompiledRegistry,
+    people: &BTreeMap<String, plan::TestPerson>,
+) -> plan::SemanticResult<()> {
+    let profiles: BTreeSet<_> = registry
+        .access_profile_displays()
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect();
+    for (name, person) in people {
+        if let Some(grant) = person.grants.get(&Product::Breg) {
+            plan::require(
+                profiles.contains(grant.profile.as_str()),
+                &format!(
+                    "/people/{}/grants/breg/profile",
+                    registry_platform_yaml::escape_pointer_segment(name)
+                ),
+                "The BReg grant profile does not name an access profile in the BReg project.",
+                format!(
+                    "Set profile to an access profile defined by the BReg project. It declares: {}.",
+                    profiles.iter().copied().collect::<Vec<_>>().join(", ")
+                ),
+            )?;
+        }
     }
     Ok(())
 }
@@ -954,9 +1110,8 @@ fn casework_report_facts(report: &Value) -> Result<CaseworkFacts> {
             && report["ok"] == true,
         "caseworkctl explain returned an incompatible report"
     );
-    // Each explained policy includes the whole project's access profiles.
     let profiles = report
-        .pointer("/reviewPolicies/0/dependencies/accessProfiles")
+        .pointer("/accessProfiles")
         .and_then(Value::as_array)
         .context("caseworkctl explain did not report access profiles")?;
     let mut principals = BTreeMap::new();
@@ -1315,6 +1470,7 @@ mod tests {
     use crate::project_dev::bindings::{Bindings, BregReviewAuthority, CaseworkContextProvider};
     use std::{
         io::{BufRead, BufReader},
+        os::unix::fs::PermissionsExt,
         sync::mpsc,
     };
 
@@ -1340,10 +1496,11 @@ mod tests {
         let mut report = json!({
             "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
             "kind": "CaseworkReport", "command": "explain", "status": "complete", "ok": true,
-            "reviewPolicies": [{"dependencies": {"accessProfiles": [
-                {"id": "reviewer", "principalClaim": "sub", "requiredScopes": ["casework:staff"]},
-                {"id": "producer", "principalClaim": "producer_identity"}
-            ]}}],
+            "reviewPolicies": [],
+            "accessProfiles": [
+                {"id": "producer", "principalClaim": "producer_identity"},
+                {"id": "reviewer", "principalClaim": "sub"}
+            ],
             "trustedProducers": [],
             "contextProviders": []
         });
@@ -1354,12 +1511,10 @@ mod tests {
                 ("reviewer".to_owned(), "sub".to_owned()),
             ])
         );
-        let profiles = report
-            .pointer_mut("/reviewPolicies/0/dependencies/accessProfiles")
-            .unwrap()
+        report["accessProfiles"]
             .as_array_mut()
-            .unwrap();
-        profiles.push(json!({"id": "reviewer", "principalClaim": "different"}));
+            .unwrap()
+            .push(json!({"id": "reviewer", "principalClaim": "different"}));
         assert!(casework_report_facts(&report)
             .unwrap_err()
             .to_string()
@@ -1580,6 +1735,163 @@ mod tests {
                 _ => unreachable!(),
             };
         }
+    }
+
+    #[test]
+    fn a_report_without_the_access_profile_list_is_refused() {
+        let report = json!({
+            "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
+            "kind": "CaseworkReport", "command": "explain", "status": "complete", "ok": true,
+            "reviewPolicies": [{"dependencies": {"accessProfiles": [
+                {"id": "reviewer", "principalClaim": "sub"}
+            ]}}]
+        });
+        assert!(casework_report_facts(&report)
+            .unwrap_err()
+            .to_string()
+            .contains("did not report access profiles"));
+    }
+
+    #[test]
+    fn a_failed_tool_leaves_its_stderr_in_an_owner_only_log_and_the_error() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        let error = run_logged_tool(
+            Path::new("/bin/sh"),
+            &["-c".as_ref(), "echo boom >&2; exit 3".as_ref()],
+            root,
+            ("breg", "test"),
+            || Ok(()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("breg test failed"), "{error}");
+        assert!(error.contains("boom"), "{error}");
+        let logs = root.join("logs");
+        let log = logs.join("breg-test.log");
+        assert_eq!(fs::read_to_string(&log).unwrap(), "boom\n");
+        assert!(error.contains(&log.display().to_string()), "{error}");
+        assert_eq!(
+            fs::metadata(&logs).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn a_successful_tool_leaves_no_failure_text() {
+        let scratch = tempfile::tempdir().unwrap();
+        run_logged_tool(
+            Path::new("/bin/sh"),
+            &["-c".as_ref(), "echo fine >&2".as_ref()],
+            scratch.path(),
+            ("breg", "test"),
+            || Ok(()),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_log_tail_keeps_the_last_twenty_lines_within_four_kib() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("log");
+        let lines: Vec<_> = (1..=30).map(|number| format!("line {number}")).collect();
+        fs::write(&path, lines.join("\n")).unwrap();
+        let tail = log_tail(&path);
+        assert_eq!(tail.lines().count(), 20);
+        assert!(tail.starts_with("line 11") && tail.ends_with("line 30"));
+
+        fs::write(&path, format!("{}\nlast", "x".repeat(10_000))).unwrap();
+        let tail = log_tail(&path);
+        assert!(tail.len() <= 4096 && tail.ends_with("last"));
+
+        fs::write(&path, [b'a', 0xff, b'\n', b'b']).unwrap();
+        assert_eq!(log_tail(&path), "a\u{fffd}\nb");
+    }
+
+    #[test]
+    fn spawned_processes_are_recorded_as_product_pid_and_group() {
+        let scratch = tempfile::tempdir().unwrap();
+        write_processes(
+            scratch.path(),
+            &[(Product::Breg, 4242), (Product::Casework, 4343)],
+        )
+        .unwrap();
+        let path = scratch.path().join("processes.json");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
+            json!([
+                {"product": "breg", "pid": 4242, "pgid": 4242},
+                {"product": "casework", "pid": 4343, "pgid": 4343}
+            ])
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    fn minimal_registry(edit: impl FnOnce(&str) -> String) -> registry_breg::CompiledRegistry {
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
+        let scratch = tempfile::tempdir().unwrap();
+        let project = scratch.path().join("project");
+        copy_project(&source, &project).unwrap();
+        let registry = project.join("registry.yaml");
+        fs::write(&registry, edit(&fs::read_to_string(&registry).unwrap())).unwrap();
+        crate::compile(&project, crate::ProfileArg::Production, "project-dev-test")
+            .unwrap_or_else(|_| panic!("the edited project must compile"))
+    }
+
+    fn breg_person(profile: &str) -> plan::TestPerson {
+        serde_json::from_value(json!({
+            "subject": "someone", "client": "client",
+            "grants": {"breg": {"profile": profile, "scopes": []}}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_breg_grant_naming_an_unknown_profile_is_refused_at_its_pointer() {
+        let registry = minimal_registry(str::to_owned);
+        let people = BTreeMap::from([
+            ("editor".to_owned(), breg_person("directory-editor")),
+            ("typo".to_owned(), breg_person("directory-edtor")),
+        ]);
+        let error = check_breg_grants(&registry, &people)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("/people/typo/grants/breg/profile"),
+            "{error}"
+        );
+        assert!(error.contains("directory-editor"), "{error}");
+        let valid = BTreeMap::from([("editor".to_owned(), breg_person("directory-editor"))]);
+        check_breg_grants(&registry, &valid).unwrap();
+    }
+
+    #[test]
+    fn encrypted_fields_are_refused_before_provisioning() {
+        let registry = minimal_registry(|source| {
+            let source = source.replacen(
+                "mutationMode: mutable\n    display: {label: Contact",
+                "mutationMode: mutable\n    classification: restricted\n    display: {label: Contact",
+                1,
+            );
+            source.replacen(
+                "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}\n      - {id: jurisdiction",
+                "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: restricted, encrypted: true}\n      - {id: jurisdiction",
+                1,
+            )
+        });
+        assert_eq!(
+            refuse_encrypted_fields(&registry).unwrap_err().to_string(),
+            "rstack dev does not configure field encryption yet; contact.email is encrypted"
+        );
+        refuse_encrypted_fields(&minimal_registry(str::to_owned)).unwrap();
     }
 
     #[test]
