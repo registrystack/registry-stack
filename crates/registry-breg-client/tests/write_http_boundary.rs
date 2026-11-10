@@ -2134,6 +2134,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::ActionHandlerFailed => "The action handler could not produce an accepted result.",
         Code::ActionRefused => REFUSAL_LABEL,
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
+        Code::ExternalViewIncomplete => {
+            "The external view's indexed coverage is incomplete for this request."
+        }
         Code::IdempotencyConflict => "The idempotency key is bound to another request.",
         Code::IdempotencyExpired => {
             "The held response of the idempotency key expired; the key stays spent."
