@@ -1364,8 +1364,10 @@ mod tests {
 
     #[test]
     fn a_missing_binary_names_the_install_command() {
-        let error = binaries(Product::Casework).err().unwrap().to_string();
+        let error = binary(Product::Casework, "RSTACK_DEV_TEST_UNSET_BIN")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("rstack install casework"), "{error}");
-        assert!(error.contains("RSTACK_CASEWORK_BIN"), "{error}");
+        assert!(error.contains("RSTACK_DEV_TEST_UNSET_BIN"), "{error}");
     }
 }
