@@ -194,7 +194,7 @@ fn casework_reference_project(
             "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
 kind: BRegProjectDev\n\
 issuer: https://issuer.example.invalid\n\
-products:\n  - {{product: breg, project: ., audience: registry}}\n  - {{product: casework, project: casework, audience: review}}\n\
+products:\n  - {{product: breg, project: ., audience: \"urn:example:registry\"}}\n  - {{product: casework, project: casework, audience: \"urn:example:review\"}}\n\
 people:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: [registry:read]}}\n  reviewer:\n    subject: reviewer\n    client: reviewer-client\n    grants:\n      casework: {{profile: {casework_profile}, scopes: [casework:review]}}\n\
 journey:\n  id: smoke\n  steps:\n    - {{id: read, product: breg, as: operator, method: GET, path: /v1/records, expect: {{status: 200}}}}\n\
 {bindings}"
