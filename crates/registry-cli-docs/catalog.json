@@ -25860,6 +25860,420 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "dev",
+          "invocation": "rstack dev",
+          "about": "Run and inspect a local Registry Stack development environment",
+          "long_about": null,
+          "usage": "rstack dev [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "start",
+              "invocation": "rstack dev start",
+              "about": "Start a development environment for a registry project",
+              "long_about": null,
+              "usage": "rstack dev start [OPTIONS] <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Project directory containing dev.yaml",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--database-url <URL>",
+                  "description": "TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ttl <DURATION>",
+                  "description": "Lifetime after readiness, from 1s to 24h. Defaults to 30m",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--json",
+                  "description": "Emit the runner's JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "status",
+              "invocation": "rstack dev status",
+              "about": "Report the state of a development environment",
+              "long_about": null,
+              "usage": "rstack dev status [OPTIONS] <RUN_ID>",
+              "arguments": [
+                {
+                  "display": "<RUN_ID>",
+                  "description": "Run ID returned by rstack dev start",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--json",
+                  "description": "Emit the runner's JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "token",
+              "invocation": "rstack dev token",
+              "about": "Issue a development token for one named synthetic person",
+              "long_about": null,
+              "usage": "rstack dev token [OPTIONS] --as <NAME> <RUN_ID>",
+              "arguments": [
+                {
+                  "display": "<RUN_ID>",
+                  "description": "Run ID returned by rstack dev start",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--as <NAME>",
+                  "description": "Synthetic person configured by the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--json",
+                  "description": "Emit the runner's JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "stop",
+              "invocation": "rstack dev stop",
+              "about": "Stop a development environment",
+              "long_about": null,
+              "usage": "rstack dev stop [OPTIONS] <RUN_ID>",
+              "arguments": [
+                {
+                  "display": "<RUN_ID>",
+                  "description": "Run ID returned by rstack dev start",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--json",
+                  "description": "Emit the runner's JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },

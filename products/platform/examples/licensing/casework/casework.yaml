@@ -1,0 +1,59 @@
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
+kind: CaseworkProject
+project: {id: licensing-review, version: "1"}
+accessProfiles:
+  administrator:
+    principalClaim: registry_principal
+    requiredScopes: ["casework:admin"]
+    actsAs: administrator
+  reviewer:
+    principalClaim: sub
+    requiredScopes: ["casework:review"]
+    actsAs: staff
+  supervisor:
+    principalClaim: sub
+    requiredScopes: ["casework:supervise"]
+    actsAs: supervisor
+  intake:
+    principalClaim: producer_identity
+    requiredScopes: ["casework:intake"]
+    actsAs: requester
+queues:
+  applications:
+    label: Applications awaiting review
+reviewPolicies:
+  licensing-approval:
+    version: "1"
+    purpose: approval
+    context: {mode: submitted}
+    stages:
+      - id: review
+        queue: applications
+        decidingProfiles: [reviewer]
+        requiredApprovals: 1
+        excludeInitiator: true
+    retention:
+      terminalRetentionDays: 30
+      accountabilityRetentionDays: 90
+    displaySchema:
+      type: object
+      additionalProperties: false
+      required: [reference, profession]
+      properties:
+        reference: {type: string, maxLength: 80}
+        profession: {type: string, maxLength: 80}
+    outcomes:
+      approved:
+        label: Approve application
+        settlement: approved
+        reasonRequired: false
+        publicReason: optional
+trustedProducers:
+  licensing-intake:
+    profile: intake
+    issuer: https://identity.licensing.example.test
+    subject: intake
+    trustedInitiatorIssuer: https://identity.licensing.example.test
+    sourceNamespaces: [licensing]
+    reviewPolicies: [licensing-approval]
+    retention: {receiptRetentionDays: 7}

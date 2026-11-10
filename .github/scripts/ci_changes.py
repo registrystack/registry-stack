@@ -382,6 +382,9 @@ CASEWORK_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/configure/casework.mdx",
     "docs/site/src/content/docs/operate/change-a-casework-package.mdx",
     "docs/site/src/content/docs/tutorials/first-casework.mdx",
+    "products/breg/acceptance/reviewed-evidence-journey/**",
+    "products/platform/examples/licensing/**",
+    "products/platform/scripts/test-rstack-dev.py",
 )
 
 # Every input the Registry Messaging tutorial gate replays or is built from.
@@ -573,7 +576,7 @@ BREG_TUTORIAL_PACKAGES = frozenset(
 # reader makes carries a token that session issued. The clients in the Casework
 # shard are not on the replayed path.
 CASEWORK_TUTORIAL_PACKAGES = frozenset(
-    {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
+    {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl", "registry-rstack", "registry-thunderid-tooling"}
 )
 
 # The gate builds and runs exactly messagingctl, which links the Messaging

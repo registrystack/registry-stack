@@ -13,7 +13,7 @@ use registry_breg::{fixtures, migration_plan};
 use registry_platform_yaml::{EnvelopeRule, FormatSpec, VersionStatus};
 use serde_json::{json, Map, Value};
 
-use crate::{dev, init_from_model, test_lifecycle};
+use crate::{dev, init_from_model, project_dev, test_lifecycle};
 
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const SCHEMA_ID_BASE: &str = "https://id.registrystack.org/schemas/";
@@ -27,7 +27,7 @@ struct Tool {
     members: fn() -> schemars::Schema,
 }
 
-fn tools() -> [Tool; 7] {
+fn tools() -> [Tool; 8] {
     [
         Tool {
             format: "journeys",
@@ -52,6 +52,12 @@ fn tools() -> [Tool; 7] {
             title: "Base Registry Engine development clients",
             spec: dev::config::DEV_CLIENTS_FORMAT,
             members: dev::config::clients_schema,
+        },
+        Tool {
+            format: "project-dev",
+            title: "Registry Stack project development plan",
+            spec: project_dev::plan::FORMAT,
+            members: project_dev::plan::schema,
         },
         Tool {
             format: "example-scenarios",

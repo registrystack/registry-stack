@@ -1,0 +1,19 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: submit-application
+    steps:
+      - id: submit
+        recordType: application
+        accessProfile: applicant
+        claims:
+          principal: applicant
+          scopes: ["licensing:apply"]
+          directClaims: {application_reference: application-001}
+        request:
+          type: create
+          data: {reference: application-001, profession: Surveyor}
+        expect:
+          outcome: success
+          status: 201
+          fields: {reference: application-001, profession: Surveyor}

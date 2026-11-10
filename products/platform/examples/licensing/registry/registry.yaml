@@ -1,0 +1,47 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: licensing
+  canonicalBaseIri: https://licensing.example.test
+  version: 0.1.0
+  defaultLanguage: en
+  display: {label: Licensing registry, description: Synthetic professional licence applications.}
+package:
+  sourceRevision: licensing-example-0.1.0
+datasets:
+  - id: licensing
+    display: {label: Licensing, description: Applications awaiting an independent review.}
+recordTypes:
+  - id: application
+    route: applications
+    primaryDataset: licensing
+    mutationMode: mutable
+    display: {label: Application, description: One licence application.}
+    fields:
+      - {id: reference, type: string, required: true, minimumLength: 1, maximumLength: 80, classification: internal}
+      - {id: profession, type: string, required: true, minimumLength: 1, maximumLength: 80, classification: internal}
+accessProfiles:
+  - id: applicant
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: ["licensing:apply"]
+    permissions:
+      records:
+        - recordType: application
+          operations: [create, get, list]
+          readableFields: [reference, profession]
+          writableFields: [reference, profession]
+          rowBoundaries:
+            - {field: reference, claim: application_reference, operator: equals}
+  - id: auditor
+    principalClaim: registry_principal
+    actorKind: human
+    requesterClients: [licensing-auditor]
+    requiredScopes: ["licensing:audit"]
+    permissions:
+      records:
+        - recordType: application
+          operations: [get]
+          readableFields: [reference]
+          rowBoundaries:
+            - {field: reference, claim: application_reference, operator: equals}
