@@ -73,8 +73,6 @@ class CandidateFixtureTests(unittest.TestCase):
                 "bindingDigest": "sha256:" + "1" * 64, "grantDigest": "sha256:" + "2" * 64,
                 "grantValidUntil": "2030-01-01T00:00:00+00:00",
                 "cacheTtlSeconds": 300 if indexed else None,
-                "maximumRetentionSeconds": 300 if indexed else None,
-                "refreshIntervalSeconds": 60 if indexed else None,
             })
         facts = {
             "apiVersion": "id.registrystack.org/formats/breg/external-source-facts/v1alpha1",

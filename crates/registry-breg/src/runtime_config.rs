@@ -497,7 +497,7 @@ impl RuntimeConfigError {
                 "Configure at most 32 distinct taskGrantStatus source issuers, safe service/token URLs, a client and assertion audience, absolute resource identifiers, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment."
             }
             Self::InvalidExternalSources => {
-                "Use distinct projection IDs, a bounded absolute packFile, approved fields and an explicit grant cutoff. Set a refresh interval shorter than the permitted retention window."
+                "Use distinct projection IDs, a bounded absolute packFile, approved fields and an explicit grant cutoff. A deployment cacheTtlSeconds may only shorten an indexed projection's cache lifetime."
             }
             Self::InvalidBinding => {
                 "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, and review authority the package relies on."

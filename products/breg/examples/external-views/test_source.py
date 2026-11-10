@@ -132,8 +132,10 @@ class HttpFixtureTests(unittest.TestCase):
         config = runtime_fragment("http://127.0.0.1:8001", "projection-source-key", "2030-01-01T00:00:00Z")
         bindings = {entry["id"]: entry for entry in config["externalSources"]}
         self.assertEqual(set(bindings), {"person-live", "person-indexed", "holdings-live", "holdings-indexed"})
-        self.assertNotIn("retention", bindings["person-live"])
-        self.assertIn("retention", bindings["person-indexed"])
+        for entry in bindings.values():
+            self.assertNotIn("retention", entry)
+            self.assertNotIn("allowedSelectors", entry)
+            self.assertNotIn("cacheTtlSeconds", entry)
         self.assertIn("person-key", bindings["holdings-indexed"]["allowedFields"])
         self.assertNotIn("person-key", bindings["holdings-live"]["allowedFields"])
         self.assertTrue(bindings["person-indexed"]["packDigest"].startswith("sha256:"))

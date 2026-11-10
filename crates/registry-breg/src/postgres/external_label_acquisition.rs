@@ -173,7 +173,7 @@ impl LabelAcquisition {
         }
     }
 
-    /// Use with publish_for_roots: $6 is the label selector, $13 the admitted
+    /// Use with publish_for_roots: $6 is the label selector, $12 the admitted
     /// root IDs. Current parent generation and member association are checked
     /// in that same statement, without interpolating source keys into SQL.
     pub(crate) fn publication_eligibility(&self) -> &str {
@@ -263,7 +263,7 @@ SELECT EXISTS(SELECT 1 FROM parent_state),COALESCE((SELECT jsonb_agg(jsonb_build
 const PUBLICATION_SQL: &str = r#"
 WITH parent_state AS MATERIALIZED (__STATE_SQL__)
 SELECT 1 FROM (__ELIGIBLE_SQL__) AS selected
-WHERE selected.root_id=ANY($13::uuid[]) AND selected.selector=$6::text
+WHERE selected.root_id=ANY($12::uuid[]) AND selected.selector=$6::text
 "#;
 
 #[cfg(test)]
@@ -306,8 +306,7 @@ mod tests {
 
     #[test]
     fn separate_machine_grants_and_same_purpose_are_required() {
-        let scope =
-            ProjectionScope::new("parent", Uuid::new_v4(), "binding", "grant", 60, 120).unwrap();
+        let scope = ProjectionScope::new("parent", Uuid::new_v4(), "binding", "grant", 60).unwrap();
         let generation = ProjectionGeneration {
             epoch: scope.epoch,
             generation: 1,
@@ -346,7 +345,7 @@ mod tests {
         )
         .unwrap();
         assert!(plan.publication_eligibility().contains("$6::text"));
-        assert!(plan.publication_eligibility().contains("$13::uuid[]"));
+        assert!(plan.publication_eligibility().contains("$12::uuid[]"));
         assert!(plan
             .publication_eligibility()
             .contains("complete-collection"));
@@ -422,16 +421,10 @@ mod postgres_tests {
             .await
             .unwrap();
         let parent =
-            ProjectionScope::new("parent", Uuid::new_v4(), "binding", "grant", 60, 120).unwrap();
-        let label = ProjectionScope::new(
-            "label",
-            Uuid::new_v4(),
-            "label-binding",
-            "label-grant",
-            60,
-            120,
-        )
-        .unwrap();
+            ProjectionScope::new("parent", Uuid::new_v4(), "binding", "grant", 60).unwrap();
+        let label =
+            ProjectionScope::new("label", Uuid::new_v4(), "label-binding", "label-grant", 60)
+                .unwrap();
         configure_scope(&migration, &parent).await.unwrap();
         configure_scope(&migration, &label).await.unwrap();
         let entity = &registry.entities()["local-record"];
@@ -464,7 +457,7 @@ mod postgres_tests {
                 .unwrap()
                 .get(0);
             let rows = json!([{"source_key":"a","fields":{"holder":"indirect-person"}},{"source_key":"b","fields":{"holder":null}},{"source_key":"c","fields":{}},{"source_key":"d","fields":{"holder":"second-person"}}]);
-            let answer:String=migration.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,'members',990,1050,1110,'complete-collection',$7)",&[&parent.projection_id,&parent.epoch,&parent.binding_digest,&parent.grant_digest,&ticket,&subject,&rows]).await.unwrap().get(0);
+            let answer:String=migration.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,'members',990,1050,'complete-collection',$7)",&[&parent.projection_id,&parent.epoch,&parent.binding_digest,&parent.grant_digest,&ticket,&subject,&rows]).await.unwrap().get(0);
             assert_eq!(answer, "published");
         }
         migration.execute("UPDATE registry_internal.registry_external_projection_snapshots SET expires_at=999 WHERE projection_id='parent' AND subject_key='expired-parent'",&[]).await.unwrap();
@@ -530,7 +523,6 @@ mod postgres_tests {
                     &"label",
                     &999_i64,
                     &1059_i64,
-                    &1119_i64,
                     &"one",
                     &rows,
                     &roots,
@@ -554,7 +546,6 @@ mod postgres_tests {
                     &"label",
                     &999_i64,
                     &1059_i64,
-                    &1119_i64,
                     &"one",
                     &rows,
                     &roots,

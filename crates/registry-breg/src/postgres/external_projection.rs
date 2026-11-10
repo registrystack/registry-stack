@@ -12,8 +12,9 @@ use uuid::Uuid;
 
 use super::{ExpectedRegistryIdentity, GuardedTransaction, RuntimeRevoke, SqlIdentifier};
 
-pub(crate) const BIND_ONCE_FUNCTION: &str = "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,bigint,text,text,uuid)";
-pub(crate) const MAINTENANCE_FUNCTION:&str="registry_internal.maintain_external_projection_scope(text,text,uuid,text,uuid,text,text,bigint,bigint)";
+pub(crate) const BIND_ONCE_FUNCTION: &str =
+    "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,text,text,uuid)";
+pub(crate) const MAINTENANCE_FUNCTION:&str="registry_internal.maintain_external_projection_scope(text,text,uuid,text,uuid,text,text,bigint)";
 /// Withdrawal stays with migration authority: the runtime role holds no
 /// EXECUTE grant on it, so a compromised runtime cannot purge a scope.
 pub(crate) const WITHDRAW_FUNCTION: &str =
@@ -23,13 +24,13 @@ pub(crate) const WITHDRAW_FUNCTION: &str =
 /// Entries are (identity, result type, returns set, security definer, runtime execute).
 pub(crate) const MANAGED_FUNCTIONS: &[(&str,&str,bool,bool,bool)] = &[
     ("registry_internal.allocate_external_projection_refresh(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_subject text)","bigint",false,true,true),
-    ("registry_internal.publish_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_sequence bigint, p_subject text, p_snapshot text, p_observed bigint, p_expires bigint, p_purge bigint, p_kind text, p_rows jsonb)","text",false,true,true),
+    ("registry_internal.publish_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_sequence bigint, p_subject text, p_snapshot text, p_observed bigint, p_expires bigint, p_kind text, p_rows jsonb)","text",false,true,true),
     ("registry_internal.fail_external_projection_refresh(p_projection text, p_epoch uuid, p_sequence bigint, p_subject text, p_reason text)","boolean",false,true,true),
     ("registry_internal.withdraw_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text)","boolean",false,true,false),
     ("registry_internal.purge_external_projections(p_limit integer)","record",true,true,true),
     ("registry_internal.lock_external_projection_generation(p_projection text, p_epoch uuid, p_binding text, p_grant text)","bigint",false,true,true),
-    ("registry_internal.bind_external_projection_once(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_ttl bigint, p_retention bigint, p_contract text, p_package text, p_activation uuid)","uuid",false,true,true),
-    ("registry_internal.maintain_external_projection_scope(p_action text, p_projection text, p_epoch uuid, p_package text, p_activation uuid, p_binding text, p_grant text, p_ttl bigint, p_retention bigint)","jsonb",false,false,false),
+    ("registry_internal.bind_external_projection_once(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_ttl bigint, p_contract text, p_package text, p_activation uuid)","uuid",false,true,true),
+    ("registry_internal.maintain_external_projection_scope(p_action text, p_projection text, p_epoch uuid, p_package text, p_activation uuid, p_binding text, p_grant text, p_ttl bigint)","jsonb",false,false,false),
 ];
 
 pub(crate) const INDEXES: &[&str] = &[
@@ -187,14 +188,13 @@ pub(crate) async fn bind_initial_scope(
     let row = transaction
         .transaction()
         .query_one(
-            "SELECT registry_internal.bind_external_projection_once($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            "SELECT registry_internal.bind_external_projection_once($1,$2,$3,$4,$5,$6,$7,$8)",
             &[
                 &requested.projection_id,
                 &requested.epoch,
                 &requested.binding_digest,
                 &requested.grant_digest,
                 &requested.cache_ttl_seconds,
-                &requested.retention_seconds,
                 &contract,
                 &expected.package_digest,
                 &activation,
@@ -232,7 +232,7 @@ pub(crate) const VALUES_TABLE: &str = BACKUP_EXCLUDED_TABLES[3];
 
 pub(crate) const RUNTIME_FUNCTIONS: &[&str] = &[
     "registry_internal.allocate_external_projection_refresh(text,uuid,text,text,text)",
-    "registry_internal.publish_external_projection(text,uuid,text,text,bigint,text,text,bigint,bigint,bigint,text,jsonb)",
+    "registry_internal.publish_external_projection(text,uuid,text,text,bigint,text,text,bigint,bigint,text,jsonb)",
     "registry_internal.fail_external_projection_refresh(text,uuid,bigint,text,text)",
     "registry_internal.purge_external_projections(integer)",
     "registry_internal.lock_external_projection_generation(text,uuid,text,text)",
@@ -267,16 +267,16 @@ pub(crate) fn kernel_error(error: ProjectionError) -> super::PostgresKernelError
 }
 
 /// Current deployment authority. An epoch is never reused after withdrawal or
-/// a changed source grant, binding, acquisition scope, or retention policy.
+/// a changed source grant or binding.
 #[derive(Clone)]
 pub(crate) struct ProjectionScope {
     pub(crate) projection_id: String,
     pub(crate) epoch: Uuid,
     pub(crate) binding_digest: String,
     pub(crate) grant_digest: String,
+    /// The one cache lifetime from snapshot time. A value is purged when it
+    /// expires; there is no retention window after expiry.
     pub(crate) cache_ttl_seconds: i64,
-    /// Maximum retention from snapshot time, not extra time after expiry.
-    pub(crate) retention_seconds: i64,
 }
 
 impl fmt::Debug for ProjectionScope {
@@ -292,14 +292,11 @@ impl ProjectionScope {
         binding_digest: &str,
         grant_digest: &str,
         cache_ttl_seconds: i64,
-        retention_seconds: i64,
     ) -> Result<Self, ProjectionError> {
         if !valid_key(projection_id)
             || !valid_key(binding_digest)
             || !valid_key(grant_digest)
-            || cache_ttl_seconds < 1
-            || retention_seconds < cache_ttl_seconds
-            || retention_seconds > 31_536_000
+            || !(1..=31_536_000).contains(&cache_ttl_seconds)
         {
             return Err(ProjectionError::InvalidScope);
         }
@@ -309,7 +306,6 @@ impl ProjectionScope {
             binding_digest: binding_digest.to_owned(),
             grant_digest: grant_digest.to_owned(),
             cache_ttl_seconds,
-            retention_seconds,
         })
     }
 }
@@ -373,7 +369,6 @@ pub(crate) struct AcceptedSnapshot {
     snapshot_id: String,
     observed_at: i64,
     source_expires_at: i64,
-    retain_until: i64,
     kind: SnapshotKind,
     rows: Vec<ProjectionRow>,
 }
@@ -458,6 +453,8 @@ impl AcceptedSnapshot {
         kind: SnapshotKind,
         mut rows: Vec<ProjectionRow>,
     ) -> Result<Self, ProjectionError> {
+        // The source must permit storage until its own expiry. The cache
+        // never keeps a value past that expiry, so no later deadline is held.
         let RetentionPermission::PermittedUntil(retain_until) = retention else {
             return Err(ProjectionError::RetentionRefused);
         };
@@ -491,24 +488,18 @@ impl AcceptedSnapshot {
             snapshot_id: snapshot_id.to_owned(),
             observed_at,
             source_expires_at,
-            retain_until,
             kind,
             rows,
         })
     }
 
-    fn bounds(&self, scope: &ProjectionScope) -> Result<(i64, i64), ProjectionError> {
-        let expires_at = self
+    /// Expiry is also the purge deadline.
+    fn expiry(&self, scope: &ProjectionScope) -> Result<i64, ProjectionError> {
+        Ok(self
             .observed_at
             .checked_add(scope.cache_ttl_seconds)
             .ok_or(ProjectionError::InvalidSnapshot)?
-            .min(self.source_expires_at);
-        let purge_at = self
-            .observed_at
-            .checked_add(scope.retention_seconds)
-            .ok_or(ProjectionError::InvalidSnapshot)?
-            .min(self.retain_until);
-        Ok((expires_at, purge_at))
+            .min(self.source_expires_at))
     }
 }
 
@@ -623,20 +614,19 @@ pub(crate) async fn configure_scope(
 ) -> Result<(), ProjectionError> {
     let changed = migration.execute(
         "INSERT INTO registry_internal.registry_external_projection_scopes
-            (projection_id,epoch,binding_digest,grant_digest,cache_ttl_seconds,retention_seconds)
-         VALUES ($1,$2,$3,$4,$5,$6)
+            (projection_id,epoch,binding_digest,grant_digest,cache_ttl_seconds)
+         VALUES ($1,$2,$3,$4,$5)
          ON CONFLICT (projection_id) DO UPDATE SET
             epoch=EXCLUDED.epoch,binding_digest=EXCLUDED.binding_digest,grant_digest=EXCLUDED.grant_digest,
-            cache_ttl_seconds=EXCLUDED.cache_ttl_seconds,retention_seconds=EXCLUDED.retention_seconds,
+            cache_ttl_seconds=EXCLUDED.cache_ttl_seconds,
             active=true,generation=registry_internal.registry_external_projection_scopes.generation +
                 CASE WHEN registry_internal.registry_external_projection_scopes.epoch=EXCLUDED.epoch THEN 0 ELSE 1 END
          WHERE registry_internal.registry_external_projection_scopes.epoch <> EXCLUDED.epoch
             OR (registry_internal.registry_external_projection_scopes.active
                 AND registry_internal.registry_external_projection_scopes.binding_digest=EXCLUDED.binding_digest
                 AND registry_internal.registry_external_projection_scopes.grant_digest=EXCLUDED.grant_digest
-                AND registry_internal.registry_external_projection_scopes.cache_ttl_seconds=EXCLUDED.cache_ttl_seconds
-                AND registry_internal.registry_external_projection_scopes.retention_seconds=EXCLUDED.retention_seconds)",
-        &[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&scope.cache_ttl_seconds,&scope.retention_seconds],
+                AND registry_internal.registry_external_projection_scopes.cache_ttl_seconds=EXCLUDED.cache_ttl_seconds)",
+        &[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&scope.cache_ttl_seconds],
     ).await.map_err(|_| ProjectionError::Unavailable)?;
     if changed != 1 {
         return Err(ProjectionError::ScopeChanged);
@@ -663,7 +653,7 @@ pub(crate) async fn load_active_scope(
     let row = transaction
         .transaction()
         .query_opt(
-            "SELECT epoch,cache_ttl_seconds,retention_seconds
+            "SELECT epoch,cache_ttl_seconds
          FROM registry_internal.registry_external_projection_scopes
          WHERE projection_id=$1 AND binding_digest=$2 AND grant_digest=$3 AND active",
             &[&projection_id, &binding_digest, &grant_digest],
@@ -677,7 +667,6 @@ pub(crate) async fn load_active_scope(
         binding_digest,
         grant_digest,
         row.get(1),
-        row.get(2),
     )
 }
 
@@ -786,7 +775,7 @@ async fn allocate_inner(
 }
 
 /// Evaluate only a trusted compiled root-read query in the publication statement.
-/// Its parameters are $13::uuid[] for local roots and $6::text for the source key.
+/// Its parameters are $12::uuid[] for local roots and $6::text for the source key.
 /// Ineligibility does not invalidate values shared by other authorized roots.
 pub(crate) async fn publish_for_roots(
     transaction: &GuardedTransaction<'_>,
@@ -799,7 +788,7 @@ pub(crate) async fn publish_for_roots(
         return Err(ProjectionError::InvalidSnapshot);
     }
     let scope = &ticket.scope;
-    let (expires_at, purge_at) = snapshot.bounds(scope)?;
+    let expires_at = snapshot.expiry(scope)?;
     let rows =
         serde_json::to_value(&snapshot.rows).map_err(|_| ProjectionError::InvalidSnapshot)?;
     let kind = snapshot.kind.as_str();
@@ -818,7 +807,6 @@ pub(crate) async fn publish_for_roots(
                 &snapshot.snapshot_id,
                 &snapshot.observed_at,
                 &expires_at,
-                &purge_at,
                 &kind,
                 &rows,
                 &root_ids,
@@ -836,7 +824,7 @@ pub(crate) async fn publish_for_roots(
 }
 
 pub(super) fn publication_statement(eligibility_sql: &str) -> String {
-    format!("SELECT CASE WHEN EXISTS ({eligibility_sql}) THEN registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ELSE 'ineligible' END")
+    format!("SELECT CASE WHEN EXISTS ({eligibility_sql}) THEN registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ELSE 'ineligible' END")
 }
 
 #[cfg(all(test, feature = "postgres-test"))]
@@ -849,11 +837,11 @@ async fn publish_inner(
         return Err(ProjectionError::InvalidSnapshot);
     }
     let scope = &ticket.scope;
-    let (expires_at, purge_at) = snapshot.bounds(scope)?;
+    let expires_at = snapshot.expiry(scope)?;
     let rows =
         serde_json::to_value(&snapshot.rows).map_err(|_| ProjectionError::InvalidSnapshot)?;
     let kind = snapshot.kind.as_str();
-    let row = client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)", &[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&ticket.sequence,&ticket.subject_key,&snapshot.snapshot_id,&snapshot.observed_at,&expires_at,&purge_at,&kind,&rows]).await.map_err(|_| ProjectionError::Unavailable)?;
+    let row = client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", &[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&ticket.sequence,&ticket.subject_key,&snapshot.snapshot_id,&snapshot.observed_at,&expires_at,&kind,&rows]).await.map_err(|_| ProjectionError::Unavailable)?;
     match row.get::<_, String>(0).as_str() {
         "published" => Ok(Publication::Published),
         "replay" => Ok(Publication::Replay),
@@ -975,7 +963,6 @@ CREATE TABLE IF NOT EXISTS registry_internal.registry_external_projection_scopes
     binding_digest text NOT NULL,
     grant_digest text NOT NULL,
     cache_ttl_seconds bigint NOT NULL CHECK (cache_ttl_seconds BETWEEN 1 AND 31536000),
-    retention_seconds bigint NOT NULL CHECK (retention_seconds BETWEEN cache_ttl_seconds AND 31536000),
     active boolean NOT NULL DEFAULT true,
     next_sequence bigint NOT NULL DEFAULT 0 CHECK (next_sequence >= 0),
     generation bigint NOT NULL DEFAULT 0 CHECK (generation >= 0)
@@ -997,7 +984,6 @@ CREATE TABLE IF NOT EXISTS registry_internal.registry_external_projection_snapsh
     snapshot_id text NOT NULL CHECK (octet_length(snapshot_id) BETWEEN 1 AND 1024),
     observed_at bigint NOT NULL CHECK (observed_at >= 0),
     expires_at bigint NOT NULL CHECK (expires_at > observed_at),
-    purge_at bigint NOT NULL CHECK (purge_at >= expires_at),
     refresh_sequence bigint NOT NULL CHECK (refresh_sequence > 0),
     kind text NOT NULL CHECK (kind IN ('one','absent','complete-collection')),
     PRIMARY KEY (projection_id,epoch,subject_key)
@@ -1047,7 +1033,7 @@ END $body$;
 
 CREATE OR REPLACE FUNCTION registry_internal.publish_external_projection(
     p_projection text,p_epoch uuid,p_binding text,p_grant text,p_sequence bigint,p_subject text,
-    p_snapshot text,p_observed bigint,p_expires bigint,p_purge bigint,p_kind text,p_rows jsonb
+    p_snapshot text,p_observed bigint,p_expires bigint,p_kind text,p_rows jsonb
 ) RETURNS text LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, registry_internal AS $body$
 DECLARE scope registry_internal.registry_external_projection_scopes;
@@ -1072,7 +1058,6 @@ BEGIN
         OR p_observed IS NULL OR p_observed<0 OR p_observed>projection_now
         OR p_expires IS NULL OR p_expires<=projection_now OR p_expires<=p_observed
         OR p_expires-p_observed>scope.cache_ttl_seconds
-        OR p_purge IS NULL OR p_purge<p_expires OR p_purge-p_observed>scope.retention_seconds
         OR p_kind IS NULL OR p_kind NOT IN ('one','absent','complete-collection')
         OR p_rows IS NULL OR jsonb_typeof(p_rows)<>'array'
         OR octet_length(p_rows::text)>2097152 THEN RETURN 'invalid'; END IF;
@@ -1106,11 +1091,11 @@ BEGIN
     IF attempt.state<>'allocated' OR (has_previous AND
         (previous.refresh_sequence>=p_sequence OR previous.observed_at>p_observed)) THEN RETURN 'stale'; END IF;
     INSERT INTO registry_internal.registry_external_projection_snapshots
-        (projection_id,epoch,subject_key,snapshot_id,observed_at,expires_at,purge_at,refresh_sequence,kind)
-        VALUES (p_projection,p_epoch,p_subject,p_snapshot,p_observed,p_expires,p_purge,p_sequence,p_kind)
+        (projection_id,epoch,subject_key,snapshot_id,observed_at,expires_at,refresh_sequence,kind)
+        VALUES (p_projection,p_epoch,p_subject,p_snapshot,p_observed,p_expires,p_sequence,p_kind)
         ON CONFLICT (projection_id,epoch,subject_key) DO UPDATE SET
             snapshot_id=EXCLUDED.snapshot_id,observed_at=EXCLUDED.observed_at,
-            expires_at=EXCLUDED.expires_at,purge_at=EXCLUDED.purge_at,
+            expires_at=EXCLUDED.expires_at,
             refresh_sequence=EXCLUDED.refresh_sequence,kind=EXCLUDED.kind;
     DELETE FROM registry_internal.registry_external_projection_values
         WHERE projection_id=p_projection AND epoch=p_epoch AND subject_key=p_subject;
@@ -1219,7 +1204,7 @@ END $body$;
 const MAINTENANCE_SQL: &str = r#"
 CREATE OR REPLACE FUNCTION registry_internal.maintain_external_projection_scope(
     p_action text,p_projection text,p_epoch uuid,p_package text,p_activation uuid,
-    p_binding text,p_grant text,p_ttl bigint,p_retention bigint
+    p_binding text,p_grant text,p_ttl bigint
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, registry_internal AS $body$
 DECLARE allowed jsonb := __COMPILED_EXTERNAL_ALLOWLIST__;
@@ -1259,16 +1244,15 @@ BEGIN
         ELSE
             IF p_binding IS NULL OR octet_length(p_binding) NOT BETWEEN 1 AND 1024
                 OR p_grant IS NULL OR octet_length(p_grant) NOT BETWEEN 1 AND 1024
-                OR p_ttl IS NULL OR p_ttl NOT BETWEEN 1 AND (expected->>'ttl')::bigint
-                OR p_retention IS NULL OR p_retention NOT BETWEEN p_ttl AND 31536000 THEN
+                OR p_ttl IS NULL OR p_ttl NOT BETWEEN 1 AND (expected->>'ttl')::bigint THEN
                 RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='external projection maintenance binding is invalid';
             END IF;
             INSERT INTO registry_internal.registry_external_projection_scopes AS current
-                (projection_id,contract_digest,epoch,binding_digest,grant_digest,cache_ttl_seconds,retention_seconds)
-                VALUES (p_projection,expected->>'contract',gen_random_uuid(),p_binding,p_grant,p_ttl,p_retention)
+                (projection_id,contract_digest,epoch,binding_digest,grant_digest,cache_ttl_seconds)
+                VALUES (p_projection,expected->>'contract',gen_random_uuid(),p_binding,p_grant,p_ttl)
                 ON CONFLICT (projection_id) DO UPDATE SET contract_digest=EXCLUDED.contract_digest,
                     epoch=EXCLUDED.epoch,binding_digest=EXCLUDED.binding_digest,grant_digest=EXCLUDED.grant_digest,
-                    cache_ttl_seconds=EXCLUDED.cache_ttl_seconds,retention_seconds=EXCLUDED.retention_seconds,
+                    cache_ttl_seconds=EXCLUDED.cache_ttl_seconds,
                     active=true,generation=current.generation+1
                 RETURNING * INTO scope;
         END IF;
@@ -1291,13 +1275,13 @@ BEGIN
     END IF;
     RETURN jsonb_build_object('projection',p_projection,'epoch',scope.epoch,'active',COALESCE(scope.active,false),
         'bindingDigest',scope.binding_digest,'grantDigest',scope.grant_digest,'cacheTtlSeconds',scope.cache_ttl_seconds,
-        'retentionSeconds',scope.retention_seconds,'packageDigest',package_digest,'activationId',activation_id) || counters;
+        'packageDigest',package_digest,'activationId',activation_id) || counters;
 END $body$;
 "#;
 
 const BIND_ONCE_SQL: &str = r#"
 CREATE OR REPLACE FUNCTION registry_internal.bind_external_projection_once(
-    p_projection text,p_epoch uuid,p_binding text,p_grant text,p_ttl bigint,p_retention bigint,
+    p_projection text,p_epoch uuid,p_binding text,p_grant text,p_ttl bigint,
     p_contract text,p_package text,p_activation uuid
 ) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, registry_internal AS $body$
@@ -1310,21 +1294,20 @@ BEGIN
         OR p_binding IS NULL OR octet_length(p_binding) NOT BETWEEN 1 AND 1024
         OR p_grant IS NULL OR octet_length(p_grant) NOT BETWEEN 1 AND 1024
         OR p_ttl IS NULL OR p_ttl NOT BETWEEN 1 AND (expected->>'ttl')::bigint
-        OR p_retention IS NULL OR p_retention NOT BETWEEN p_ttl AND 31536000
         OR p_package IS NULL OR p_activation IS NULL THEN RETURN NULL; END IF;
     IF NOT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
         AND active_package_digest=p_package AND active_activation_id=p_activation AND maintenance_status='ready') THEN RETURN NULL; END IF;
     INSERT INTO registry_internal.registry_external_projection_scopes
-        (projection_id,contract_digest,epoch,binding_digest,grant_digest,cache_ttl_seconds,retention_seconds)
-        VALUES (p_projection,p_contract,p_epoch,p_binding,p_grant,p_ttl,p_retention)
+        (projection_id,contract_digest,epoch,binding_digest,grant_digest,cache_ttl_seconds)
+        VALUES (p_projection,p_contract,p_epoch,p_binding,p_grant,p_ttl)
         ON CONFLICT (projection_id) DO NOTHING;
     SELECT * INTO scope FROM registry_internal.registry_external_projection_scopes WHERE projection_id=p_projection FOR UPDATE;
     IF scope.active AND scope.contract_digest=p_contract AND scope.binding_digest=p_binding AND scope.grant_digest=p_grant
-        AND scope.cache_ttl_seconds=p_ttl AND scope.retention_seconds=p_retention THEN RETURN scope.epoch; END IF;
+        AND scope.cache_ttl_seconds=p_ttl THEN RETURN scope.epoch; END IF;
     IF NOT scope.active AND scope.epoch='00000000-0000-0000-0000-000000000000'::uuid
         AND scope.binding_digest='' AND scope.grant_digest='' AND scope.contract_digest=p_contract THEN
         UPDATE registry_internal.registry_external_projection_scopes
-            SET epoch=p_epoch,binding_digest=p_binding,grant_digest=p_grant,cache_ttl_seconds=p_ttl,retention_seconds=p_retention,active=true,generation=generation+1
+            SET epoch=p_epoch,binding_digest=p_binding,grant_digest=p_grant,cache_ttl_seconds=p_ttl,active=true,generation=generation+1
             WHERE projection_id=p_projection;
         RETURN p_epoch;
     END IF;
@@ -1338,15 +1321,7 @@ mod tests {
     use serde_json::json;
 
     fn scope() -> ProjectionScope {
-        ProjectionScope::new(
-            "people",
-            Uuid::nil(),
-            "sha256:binding",
-            "sha256:grant",
-            60,
-            120,
-        )
-        .unwrap()
+        ProjectionScope::new("people", Uuid::nil(), "sha256:binding", "sha256:grant", 60).unwrap()
     }
 
     fn row(key: &str) -> ProjectionRow {
@@ -1367,7 +1342,10 @@ mod tests {
             .unwrap_err(),
             ProjectionError::RetentionRefused
         );
-        assert!(ProjectionScope::new("people", Uuid::nil(), "binding", "grant", 60, 59).is_err());
+        assert!(ProjectionScope::new("people", Uuid::nil(), "binding", "grant", 0).is_err());
+        assert!(
+            ProjectionScope::new("people", Uuid::nil(), "binding", "grant", 31_536_001).is_err()
+        );
         let snapshot = AcceptedSnapshot::one(
             "key",
             "snapshot",
@@ -1424,7 +1402,7 @@ mod tests {
     }
 
     #[test]
-    fn original_snapshot_bounds_expiry_and_purge() {
+    fn one_cache_lifetime_bounds_expiry_and_purge() {
         let accepted = AcceptedSnapshot::one(
             "key",
             "snapshot",
@@ -1434,7 +1412,7 @@ mod tests {
             row("key"),
         )
         .unwrap();
-        assert_eq!(accepted.bounds(&scope()).unwrap(), (160, 220));
+        assert_eq!(accepted.expiry(&scope()).unwrap(), 160);
         let accepted = AcceptedSnapshot::one(
             "key",
             "snapshot",
@@ -1444,7 +1422,7 @@ mod tests {
             row("key"),
         )
         .unwrap();
-        assert_eq!(accepted.bounds(&scope()).unwrap(), (150, 180));
+        assert_eq!(accepted.expiry(&scope()).unwrap(), 150);
     }
 
     #[test]
@@ -1497,7 +1475,7 @@ mod postgres_tests {
     }
 
     fn scope(epoch: Uuid) -> ProjectionScope {
-        ProjectionScope::new("projection", epoch, "binding", "grant", 60, 120).unwrap()
+        ProjectionScope::new("projection", epoch, "binding", "grant", 60).unwrap()
     }
 
     fn record(key: &str, value: &str) -> ProjectionRow {
@@ -1625,7 +1603,7 @@ mod postgres_tests {
             record("subject", "fresh"),
         )
         .unwrap();
-        let eligibility = "SELECT 1 WHERE $6::text='subject' AND cardinality($13::uuid[])>0";
+        let eligibility = "SELECT 1 WHERE $6::text='subject' AND cardinality($12::uuid[])>0";
         assert_eq!(
             publish_for_roots(&transaction, &ticket, &accepted, eligibility, &[])
                 .await
@@ -1778,7 +1756,8 @@ mod postgres_tests {
         )
         .await
         .unwrap();
-        let maintenance="SELECT registry_internal.maintain_external_projection_scope($1,$2,$3,$4,$5,$6,$7,$8,$9)";
+        let maintenance =
+            "SELECT registry_internal.maintain_external_projection_scope($1,$2,$3,$4,$5,$6,$7,$8)";
         let activation = Uuid::parse_str(&expected.activation_id).unwrap();
         let package = expected.package_digest.as_str();
         let runtime = pool.get().await.unwrap();
@@ -1794,7 +1773,6 @@ mod postgres_tests {
                     &"renewed-binding",
                     &"renewed-grant",
                     &20_i64,
-                    &120_i64
                 ]
             )
             .await
@@ -1812,7 +1790,6 @@ mod postgres_tests {
                     &"renewed-binding",
                     &"renewed-grant",
                     &20_i64,
-                    &120_i64,
                 ],
             )
             .await
@@ -1821,6 +1798,7 @@ mod postgres_tests {
         let new_epoch = Uuid::parse_str(rotated["epoch"].as_str().unwrap()).unwrap();
         assert_ne!(bound.epoch, new_epoch);
         assert_eq!(rotated["active"], true);
+        assert!(rotated.get("retentionSeconds").is_none());
         let inspected: Value = migration
             .query_one(
                 maintenance,
@@ -1833,7 +1811,6 @@ mod postgres_tests {
                     &"",
                     &"",
                     &20_i64,
-                    &120_i64,
                 ],
             )
             .await
@@ -1861,7 +1838,6 @@ mod postgres_tests {
                     &"",
                     &"",
                     &20_i64,
-                    &120_i64
                 ]
             )
             .await
@@ -1878,7 +1854,6 @@ mod postgres_tests {
                     &"",
                     &"",
                     &20_i64,
-                    &120_i64,
                 ],
             )
             .await
@@ -2216,7 +2191,7 @@ mod postgres_tests {
         let visible: i64 = migration.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_snapshots WHERE expires_at>1050", &[]).await.unwrap().get(0);
         assert_eq!(visible, 0);
         assert!(publish_inner(&migration, &ticket, &observed).await.is_err());
-        // Purge at freshness expiry leaves retention headroom.
+        // Purge removes a value once its one cache lifetime expires.
         let pruned = migration
             .query_one(
                 "SELECT * FROM registry_internal.purge_external_projections(100)",

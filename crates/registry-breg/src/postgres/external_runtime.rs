@@ -196,16 +196,12 @@ impl PostgresExternalViewService {
             .await
             .map_err(|_| ExternalViewError::Unavailable)?;
         for (projection, bound, ttl) in configured {
-            let retention = bound
-                .maximum_retention_seconds()
-                .ok_or(ExternalViewError::Unavailable)?;
             let scope = ProjectionScope::new(
                 projection.id.as_str(),
                 Uuid::new_v4(),
                 bound.binding_fingerprint(),
                 bound.grant_fingerprint(),
                 i64::from(ttl),
-                i64::from(retention),
             )
             .map_err(|_| ExternalViewError::Unavailable)?;
             store::bind_initial_scope(&transaction, &self.registry, &self.expected, &scope)
@@ -1106,7 +1102,7 @@ impl RootKeys {
                 relations.id_expression, key.sql, relations.from_sql
             ),
             publication_eligibility: format!(
-                "SELECT 1 FROM {} WHERE {} = ANY($13::uuid[]) AND ({})::text = $6::text",
+                "SELECT 1 FROM {} WHERE {} = ANY($12::uuid[]) AND ({})::text = $6::text",
                 relations.from_sql, relations.id_expression, key.sql,
             ),
             id: relations.id_expression,
@@ -1174,9 +1170,7 @@ async fn active_scope(
     )
     .await
     .map_err(|_| ExternalViewError::Unavailable)?;
-    if Some(scope.cache_ttl_seconds) != source.effective_cache_ttl_seconds().map(i64::from)
-        || Some(scope.retention_seconds) != source.maximum_retention_seconds().map(i64::from)
-    {
+    if Some(scope.cache_ttl_seconds) != source.effective_cache_ttl_seconds().map(i64::from) {
         return Err(ExternalViewError::Unavailable);
     }
     Ok(scope)

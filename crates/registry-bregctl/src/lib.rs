@@ -8627,8 +8627,6 @@ fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, 
             "grantDigest": bound.grant_fingerprint(),
             "grantValidUntil": bound.grant_valid_until().to_rfc3339(),
             "cacheTtlSeconds": bound.effective_cache_ttl_seconds(),
-            "maximumRetentionSeconds": bound.maximum_retention_seconds(),
-            "refreshIntervalSeconds": bound.refresh_interval_seconds(),
         }));
     }
     let facts = json!({

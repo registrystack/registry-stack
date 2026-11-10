@@ -700,8 +700,8 @@ pub(crate) mod tests {
     #[test]
     fn query_kernel_refuses_hidden_fields_in_selection_filter_and_order() {
         let registry = registry();
-        let scope = ProjectionScope::new("projection", Uuid::new_v4(), "binding", "grant", 60, 120)
-            .unwrap();
+        let scope =
+            ProjectionScope::new("projection", Uuid::new_v4(), "binding", "grant", 60).unwrap();
         let mut query = request(&scope, 0);
         query.fields = BTreeSet::from(["hidden".to_owned()]);
         assert!(matches!(
@@ -853,7 +853,7 @@ mod postgres_tests {
         let rows = label
             .map(|label| serde_json::json!([{"source_key":key,"fields":{"label":label}}]))
             .unwrap_or_else(|| serde_json::json!([]));
-        let result:String=client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,999,1059,1119,$8,$9)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&sequence,&key,&id,&kind,&rows]).await.unwrap().get(0);
+        let result:String=client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,999,1059,$8,$9)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&sequence,&key,&id,&kind,&rows]).await.unwrap().get(0);
         assert_eq!(result, "published");
     }
 
@@ -873,8 +873,8 @@ mod postgres_tests {
             ))
             .await
             .unwrap();
-        let scope = ProjectionScope::new("projection", Uuid::new_v4(), "binding", "grant", 60, 120)
-            .unwrap();
+        let scope =
+            ProjectionScope::new("projection", Uuid::new_v4(), "binding", "grant", 60).unwrap();
         configure_scope(&migration, &scope).await.unwrap();
         let entity = &registry.entities()["local-record"];
         let key = &entity
@@ -1034,7 +1034,7 @@ mod postgres_tests {
         // real generated source relation, including its forced root RLS.
         let relations = ReadRelations::statistics(entity, &["subject-key".to_owned()]).unwrap();
         let subject = relations.field_expression(entity, "subject-key").unwrap();
-        let eligibility=format!("SELECT 1 FROM {} WHERE {}=ANY($13::uuid[]) AND ({})::text=$6::text AND current_setting('registry.access_profile',true)='reader'",relations.from_sql,relations.id_expression,subject.sql);
+        let eligibility=format!("SELECT 1 FROM {} WHERE {}=ANY($12::uuid[]) AND ({})::text=$6::text AND current_setting('registry.access_profile',true)='reader'",relations.from_sql,relations.id_expression,subject.sql);
         let sql = super::super::external_projection::publication_statement(&eligibility);
         let ticket:i64=runtime.query_one("SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'first')",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest]).await.unwrap().get(0);
         let fields = serde_json::json!([{"source_key":"first","fields":{"label":"retained"}}]);
@@ -1052,7 +1052,6 @@ mod postgres_tests {
                     &"association",
                     &1000_i64,
                     &1060_i64,
-                    &1120_i64,
                     &"one",
                     &fields,
                     &roots,
@@ -1082,7 +1081,6 @@ mod postgres_tests {
                         &"rejected",
                         &1000_i64,
                         &1060_i64,
-                        &1120_i64,
                         &"one",
                         &fields,
                         &roots,

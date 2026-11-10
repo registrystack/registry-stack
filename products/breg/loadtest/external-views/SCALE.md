@@ -13,7 +13,7 @@ machine can vary.
 | Holder reuse | 50,000 source keys, 20 roots per key, including 2,500 authorized absent keys |
 | Related records | 120 rows for each of two allowed parents and two denied parents |
 | Candidate HTTP | Each measured indexed read, including refusal, finishes within 5 seconds |
-| Freshness and retention | Complete the sweep and the measured reads within 600 seconds from the first refresh. Retention ceiling is 900 seconds |
+| Freshness | Complete the sweep and the measured reads within 600 seconds from the first refresh. The cache lifetime is 600 seconds, and values are purged when it ends |
 | Person source requests | At most 1,100 batch reads and no exact reads during the sweep |
 | Holdings source requests | Six reads for the two allowed parents, no request to a denied parent |
 | Indexed query source requests | Zero, including reads with missing coverage |

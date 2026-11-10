@@ -14,10 +14,9 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use registry_adapter_core::{
-    projection_token_valid, AdapterEndpointBindings, AdapterPack, EvidenceConnectionPolicy,
-    ProjectionLocalDisclosure, ProjectionMode, ProjectionOperationKind, ProjectionRecord,
-    ProjectionRequest, ProjectionResult, ProjectionRetention, ADAPTER_PACK_API_VERSION,
-    ADAPTER_PACK_KIND,
+    AdapterEndpointBindings, AdapterPack, EvidenceConnectionPolicy, ProjectionLocalDisclosure,
+    ProjectionMode, ProjectionOperationKind, ProjectionRecord, ProjectionRequest, ProjectionResult,
+    ProjectionRetention, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
 };
 use registry_adapter_engine::{
     artifacts::PackArtifactBytes,
@@ -51,7 +50,7 @@ const MAXIMUM_CLOSURE_BYTES: usize = 16 * 1_048_576;
 const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1_048_576;
 const MAXIMUM_CA_BYTES: usize =
     registry_platform_httputil::destination::MAX_DESTINATION_CA_BUNDLE_BYTES;
-const MAXIMUM_RETENTION_SECONDS: u64 = 31_536_000;
+const MAXIMUM_CACHE_TTL_SECONDS: u64 = 31_536_000;
 
 /// Operator binding for one already declared projection. The reviewed pack
 /// provides the acquisition ceiling; runtime configuration can narrow it.
@@ -67,11 +66,11 @@ pub struct ExternalSourceBinding {
     pub allowed_fields: UniqueList<LocalId>,
     /// The reviewed source grant cutoff, as an RFC 3339 timestamp.
     pub grant_valid_until: String,
-    /// An optional further restriction on locally authorized selectors.
+    /// An optional shorter cache lifetime for an indexed projection. The
+    /// cache keeps a value for the shorter of this and the authored
+    /// cacheTtlSeconds, then purges it. A live projection refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_selectors: Option<UniqueList<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retention: Option<ExternalSourceRetention>,
+    pub cache_ttl_seconds: Option<BoundedU64<1, MAXIMUM_CACHE_TTL_SECONDS>>,
     pub acquisition: ExternalSourceAcquisition,
 }
 
@@ -79,14 +78,6 @@ impl Identified for ExternalSourceBinding {
     fn id(&self) -> &str {
         self.id.as_str()
     }
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExternalSourceRetention {
-    pub maximum_retention_seconds: BoundedU64<1, MAXIMUM_RETENTION_SECONDS>,
-    pub refresh_interval_seconds: BoundedU64<1, MAXIMUM_RETENTION_SECONDS>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -124,13 +115,11 @@ pub struct ExternalSourceService {
 pub struct BoundExternalSource {
     program: ProjectionProgram,
     fields: BTreeSet<String>,
-    allowed_selectors: Option<BTreeSet<String>>,
     mode: ExternalProjectionMode,
     grant_valid_until: DateTime<Utc>,
     binding_fingerprint: String,
     grant_fingerprint: String,
     cache_ttl_seconds: Option<u32>,
-    retention: Option<ExternalSourceRetention>,
     field_types: BTreeMap<String, (ExternalFieldType, bool)>,
 }
 
@@ -153,16 +142,6 @@ impl BoundExternalSource {
 
     pub fn effective_cache_ttl_seconds(&self) -> Option<u32> {
         self.cache_ttl_seconds
-    }
-
-    pub fn maximum_retention_seconds(&self) -> Option<u32> {
-        self.retention
-            .map(|retention| retention.maximum_retention_seconds.get() as u32)
-    }
-
-    pub fn refresh_interval_seconds(&self) -> Option<u32> {
-        self.retention
-            .map(|retention| retention.refresh_interval_seconds.get() as u32)
     }
 
     pub fn maximum_batch_keys(&self) -> usize {
@@ -208,12 +187,9 @@ impl ExternalSourceService {
                     .map_err(|_| ExternalSourceError::Contract)?;
             check_pack_contract(projection, record, &program)?;
             let (fields, field_types) = project_fields(projection, record, binding)?;
-            let cache_ttl_seconds = effective_ttl(projection, binding.retention)?;
+            let cache_ttl_seconds =
+                effective_ttl(projection, binding.cache_ttl_seconds.map(|ttl| ttl.get()))?;
             let grant_valid_until = parse_grant_cutoff(&binding.grant_valid_until)?;
-            let allowed_selectors = binding
-                .allowed_selectors
-                .as_ref()
-                .map(|list| list.iter().cloned().collect::<BTreeSet<_>>());
 
             let ca_bundles = capture_ca_bundles(&binding.connection)?;
             let ca_digests: BTreeMap<_, _> = ca_bundles
@@ -261,22 +237,18 @@ impl ExternalSourceService {
                 "externalType":record,
                 "sourceGrant":program.contract(),
                 "allowedFields":fields,
-                "allowedSelectors":allowed_selectors,
-                "grantValidUntil":grant_valid_until.to_rfc3339(),
-                "retention":binding.retention
+                "grantValidUntil":grant_valid_until.to_rfc3339()
             }))?;
             result.bindings.insert(
                 id.to_owned(),
                 BoundExternalSource {
                     program,
                     fields,
-                    allowed_selectors,
                     mode: projection.mode,
                     grant_valid_until,
                     binding_fingerprint,
                     grant_fingerprint,
                     cache_ttl_seconds,
-                    retention: binding.retention,
                     field_types,
                 },
             );
@@ -302,11 +274,7 @@ impl ExternalSourceService {
             .binding(projection)
             .ok_or(ExternalSourceError::Unbound)?;
         let now = clock();
-        if now >= bound.grant_valid_until
-            || fields.is_empty()
-            || !fields.is_subset(&bound.fields)
-            || !selectors_allowed(&request, bound.allowed_selectors.as_ref())
-        {
+        if now >= bound.grant_valid_until || fields.is_empty() || !fields.is_subset(&bound.fields) {
             return Err(ExternalSourceError::Grant);
         }
         let mode = match bound.mode {
@@ -351,13 +319,6 @@ pub(crate) fn validate_bindings(
             || binding.allowed_fields.is_empty()
             || binding.allowed_fields.len() > 256
             || binding.endpoint_policies.is_empty()
-            || binding.allowed_selectors.as_ref().is_some_and(|selectors| {
-                selectors.len() > 10_000 || selectors.iter().any(|key| !projection_token_valid(key))
-            })
-            || binding.retention.is_some_and(|retention| {
-                retention.refresh_interval_seconds.get()
-                    >= retention.maximum_retention_seconds.get()
-            })
         {
             return Err(ExternalSourceError::Configuration);
         }
@@ -472,31 +433,24 @@ fn project_fields(
     Ok((fields, types))
 }
 
+/// One cache lifetime: the authored cacheTtlSeconds, which a deployment may
+/// only shorten. A cached value is purged when it expires.
 fn effective_ttl(
     projection: &ExternalProjectionSource,
-    retention: Option<ExternalSourceRetention>,
+    deployment: Option<u64>,
 ) -> Result<Option<u32>, ExternalSourceError> {
-    match (projection.mode, projection.cache_ttl_seconds, retention) {
+    match (projection.mode, projection.cache_ttl_seconds, deployment) {
         (ExternalProjectionMode::Live, None, None) => Ok(None),
-        (ExternalProjectionMode::Indexed, Some(ttl), Some(retention)) => {
-            let effective = ttl.min(retention.maximum_retention_seconds.get() as u32);
-            if u64::from(effective) <= retention.refresh_interval_seconds.get() {
+        (ExternalProjectionMode::Indexed, Some(authored), deployment) => {
+            let shortened = deployment.map_or(authored, |ttl| {
+                u32::try_from(ttl).map_or(authored, |ttl| authored.min(ttl))
+            });
+            if shortened == 0 || u64::from(shortened) > MAXIMUM_CACHE_TTL_SECONDS {
                 return Err(ExternalSourceError::Configuration);
             }
-            Ok(Some(effective))
+            Ok(Some(shortened))
         }
         _ => Err(ExternalSourceError::Configuration),
-    }
-}
-
-fn selectors_allowed(request: &ProjectionRequest, allowed: Option<&BTreeSet<String>>) -> bool {
-    let Some(allowed) = allowed else {
-        return true;
-    };
-    match request {
-        ProjectionRequest::Exact { key } => allowed.contains(key),
-        ProjectionRequest::Batch { keys } => keys.iter().all(|key| allowed.contains(key)),
-        ProjectionRequest::ByParent { parent_key } => allowed.contains(parent_key),
     }
 }
 
@@ -846,13 +800,11 @@ mod tests {
                 BoundExternalSource {
                     program,
                     fields: fields.clone(),
-                    allowed_selectors: None,
                     mode: ExternalProjectionMode::Live,
                     grant_valid_until: cutoff,
                     binding_fingerprint: "binding".to_owned(),
                     grant_fingerprint: "grant".to_owned(),
                     cache_ttl_seconds: None,
-                    retention: None,
                     field_types: BTreeMap::from([(
                         "family-name".to_owned(),
                         (ExternalFieldType::String, false),
@@ -880,5 +832,50 @@ mod tests {
             .await;
         assert!(matches!(result, Err(ExternalSourceError::Grant)));
         transcript.finish().unwrap();
+    }
+
+    #[test]
+    fn a_deployment_cache_lifetime_only_shortens_the_authored_one() {
+        let (live, _) = project_contracts();
+        assert!(matches!(effective_ttl(&live, None), Ok(None)));
+        assert!(matches!(
+            effective_ttl(&live, Some(60)),
+            Err(ExternalSourceError::Configuration)
+        ));
+        let mut indexed = live;
+        indexed.mode = ExternalProjectionMode::Indexed;
+        indexed.cache_ttl_seconds = Some(300);
+        assert!(matches!(effective_ttl(&indexed, None), Ok(Some(300))));
+        assert!(matches!(effective_ttl(&indexed, Some(60)), Ok(Some(60))));
+        assert!(matches!(effective_ttl(&indexed, Some(900)), Ok(Some(300))));
+    }
+
+    #[test]
+    fn retired_retention_and_selector_members_are_refused() {
+        let binding = json!({
+            "id":"holder","packFile":"/packs/pack.yaml",
+            "packDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "connection":{"id":"source","endpoints":[{"endpoint":"synthetic-registry",
+                "baseUrl":"https://source.example.test",
+                "credential":{"type":"static-api-key","valueRef":"secret:file/source-key"}}]},
+            "endpointPolicies":[{"endpoint":"synthetic-registry","baseUrl":"https://source.example.test",
+                "clientIdentity":"forbidden","authentication":{"type":"static-api-key"}}],
+            "allowedFields":["family-name"],"grantValidUntil":"2030-01-01T00:00:00Z",
+            "cacheTtlSeconds":60,
+            "acquisition":{"maximumDataOperations":8,"timeoutMilliseconds":8000,"maximumResponseBytes":262144}
+        });
+        let parsed: ExternalSourceBinding = serde_json::from_value(binding.clone()).unwrap();
+        assert_eq!(parsed.cache_ttl_seconds.map(|ttl| ttl.get()), Some(60));
+        for (member, value) in [
+            ("allowedSelectors", json!(["person-7"])),
+            (
+                "retention",
+                json!({"maximumRetentionSeconds":300,"refreshIntervalSeconds":60}),
+            ),
+        ] {
+            let mut retired = binding.clone();
+            retired[member] = value;
+            assert!(serde_json::from_value::<ExternalSourceBinding>(retired).is_err());
+        }
     }
 }
