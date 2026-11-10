@@ -21,7 +21,7 @@ use crate::api::external_views::{
     ExternalQuery, ExternalQueryMode, ExternalViewError, ExternalViewRequest, ExternalViewService,
     RefreshMode,
 };
-use crate::api::ServiceFuture;
+use crate::api::{RowBoundaryOperator, ServiceFuture};
 use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, PreIoAudit, PreIoAuditKind,
     ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
@@ -931,11 +931,11 @@ impl PostgresExternalViewService {
             .row_boundaries()
             .iter()
             .map(|boundary| {
-                json!([
-                    boundary.field(),
-                    format!("{:?}", boundary.operator()),
-                    boundary.values()
-                ])
+                let operator = match boundary.operator() {
+                    RowBoundaryOperator::Equals => "equals",
+                    RowBoundaryOperator::In => "in",
+                };
+                json!([boundary.field(), operator, boundary.values()])
             })
             .collect::<Vec<_>>();
         self.cursors
