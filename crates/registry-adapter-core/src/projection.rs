@@ -59,6 +59,9 @@ pub struct ProjectionRouteContract {
     pub retention: ProjectionRetention,
     pub absence: ProjectionAbsence,
     pub local_disclosure: ProjectionLocalDisclosure,
+    /// Closed JSON Schema describing each field a view may request. Each view
+    /// requests its own fields and every requested field must be returned, so
+    /// the schema must not require fields at the top level.
     pub fields_schema: ScriptReference,
     pub maximum_batch_keys: BoundedU64<1, 1000>,
     pub maximum_pages: BoundedU64<1, 100>,

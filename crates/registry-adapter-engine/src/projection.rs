@@ -35,6 +35,25 @@ use crate::{
     replay::ReplayTranscript,
 };
 
+/// Top-level keywords a `fieldsSchema` may use. Each view requests its own
+/// fields and every requested field must be returned, so the schema describes
+/// each field and must not constrain which fields are present (`required`,
+/// `minProperties`, `dependentRequired`, and composition keywords would make a
+/// narrower view always fail).
+const DESCRIPTIVE_FIELDS_SCHEMA_KEYWORDS: &[&str] = &[
+    "$schema",
+    "$id",
+    "$comment",
+    "$defs",
+    "title",
+    "description",
+    "type",
+    "properties",
+    "additionalProperties",
+    "patternProperties",
+    "propertyNames",
+];
+
 #[derive(Debug, Error)]
 pub enum ProjectionError {
     #[error("the reviewed projection operation is missing or incompatible")]
@@ -167,6 +186,11 @@ pub fn compile_projection_pack(
         .as_value()
         .get("properties")
         .is_some_and(Value::is_object)
+        || !fields_schema.as_value().as_object().is_some_and(|schema| {
+            schema
+                .keys()
+                .all(|k| DESCRIPTIVE_FIELDS_SCHEMA_KEYWORDS.contains(&k.as_str()))
+        })
     {
         return Err(ProjectionError::Contract);
     }
