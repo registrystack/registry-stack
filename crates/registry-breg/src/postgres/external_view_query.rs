@@ -356,6 +356,13 @@ fn compile(
         (Some(order), Some(kind)) => field_expression("data", &order.field, kind),
         _ => "NULL::text".to_owned(),
     };
+    // A date's text output follows the session's DateStyle. The cursor
+    // carries ISO 8601, which the continuation parses under any style.
+    let sort_value = if order_type == Some(ExternalFieldType::Date) {
+        "to_char(matched.sort_key,'YYYY-MM-DD')"
+    } else {
+        "matched.sort_key::text"
+    };
     let direction = request
         .order
         .as_ref()
@@ -475,7 +482,7 @@ fn compile(
         ), displayed AS (
             SELECT matched.ordinal,{label_expiry} AS label_expires_at,
                 jsonb_build_object('root_id',matched.root_id,'source_key',matched.source_key,
-                    'availability',matched.availability,'fields',{selected},'label',{label_value},'sort_value',matched.sort_key::text) AS payload
+                    'availability',matched.availability,'fields',{selected},'label',{label_value},'sort_value',{sort_value}) AS payload
             FROM page AS matched {label_join}
         ) SELECT EXISTS (SELECT 1 FROM projection_state){label_valid},coverage.complete,coverage.root_found,
             LEAST(coverage.expires_at,(SELECT min(label_expires_at) FROM displayed)),{count},
@@ -844,6 +851,17 @@ mod postgres_tests {
         label: Option<&str>,
         id: &str,
     ) {
+        let fields = label.map(|label| serde_json::json!({"label": label}));
+        publish_fields(client, scope, key, fields, id).await;
+    }
+
+    async fn publish_fields(
+        client: &Client,
+        scope: &ProjectionScope,
+        key: &str,
+        fields: Option<Value>,
+        id: &str,
+    ) {
         let sequence: i64 = client
             .query_one(
                 "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5,120)",
@@ -858,9 +876,9 @@ mod postgres_tests {
             .await
             .unwrap()
             .get(0);
-        let kind = if label.is_some() { "one" } else { "absent" };
-        let rows = label
-            .map(|label| serde_json::json!([{"source_key":key,"fields":{"label":label}}]))
+        let kind = if fields.is_some() { "one" } else { "absent" };
+        let rows = fields
+            .map(|fields| serde_json::json!([{"source_key":key,"fields":fields}]))
             .unwrap_or_else(|| serde_json::json!([]));
         let result:String=client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,999,1059,$8,$9)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&sequence,&key,&id,&kind,&rows]).await.unwrap().get(0);
         assert_eq!(result, "published");
@@ -1101,6 +1119,97 @@ mod postgres_tests {
             assert_eq!(result, "ineligible");
         }
         assert_eq!(runtime.query_one("SELECT fields->>'label' FROM registry_internal.registry_external_projection_values WHERE projection_id='projection' AND subject_key='first'",&[]).await.unwrap().get::<_,String>(0),"retained");
+        runtime_task.abort();
+        migration_task.abort();
+        drop(runtime);
+        drop(migration);
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_date_cursor_reads_the_same_under_any_date_style() {
+        let database = harness::TestDatabase::create(2).await;
+        let (migration, migration_task) = database.connect_migration().await;
+        let mut project = super::tests::project();
+        project["externalRecordTypes"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"id":"issued","type":"date","classification":"internal"}));
+        for path in [
+            "/externalProjections/0/fields",
+            "/externalViews/0/links/0/fields",
+            "/accessProfiles/0/permissions/externalViews/0/links/0/readableFields",
+            "/accessProfiles/0/permissions/externalViews/0/links/0/sortableFields",
+        ] {
+            project
+                .pointer_mut(path)
+                .and_then(Value::as_array_mut)
+                .unwrap()
+                .push(Value::from("issued"));
+        }
+        let registry = super::tests::compile_project(&project);
+        super::super::install_compiled_schema(&migration, &registry, &database.runtime_role)
+            .await
+            .unwrap();
+        install(&migration, &database.runtime_role).await.unwrap();
+        migration
+            .batch_execute(&INSTALL_SQL.replace(
+                "floor(extract(epoch FROM clock_timestamp()))::bigint",
+                "1000",
+            ))
+            .await
+            .unwrap();
+        let scope =
+            ProjectionScope::new("projection", Uuid::new_v4(), "binding", "grant", 60).unwrap();
+        configure_scope(&migration, &scope).await.unwrap();
+        let entity = &registry.entities()["local-record"];
+        let column = |id: &str| {
+            entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == id)
+                .unwrap()
+                .physical_name
+                .clone()
+        };
+        database.admin.batch_execute(&format!("INSERT INTO registry_data.\"{}\" (record_id,active_package_revision,\"{}\",\"{}\") VALUES ('00000000-0000-4000-8000-000000000001','fixture','first','allowed'),('00000000-0000-4000-8000-000000000002','fixture','second','allowed')",entity.physical_table,column("subject-key"),column("tenant"))).await.unwrap();
+        for (key, label, issued) in [("first", "A", "2026-01-02"), ("second", "B", "2026-02-01")] {
+            let fields = serde_json::json!({"label": label, "issued": issued});
+            publish_fields(&migration, &scope, key, Some(fields), key).await;
+        }
+        let (runtime, connection) = database
+            .runtime_config
+            .postgres()
+            .connect(NoTls)
+            .await
+            .unwrap();
+        let runtime_task = tokio::spawn(async move {
+            connection.await.expect("query fixture connection");
+        });
+        runtime.batch_execute("SET registry.access_profile='reader'; SET registry.principal='staff'; SET registry.purpose='consultation'; SET registry.row_boundaries='[{\"field\":\"tenant\",\"operator\":\"equals\",\"values\":[\"allowed\"]}]';").await.unwrap();
+        // A database default can choose any date output style.
+        runtime
+            .batch_execute("SET DateStyle='SQL, DMY'")
+            .await
+            .unwrap();
+        let mut request = super::tests::request(&scope, 0);
+        request.order = Some(ExternalOrder {
+            field: "issued".to_owned(),
+            direction: SortDirection::Ascending,
+        });
+        request.page_size = 1;
+        let first = run(&runtime, &registry, &request).await;
+        let rows: Vec<ExternalViewRow> = serde_json::from_value(first.get(5)).unwrap();
+        assert_eq!(rows[0].fields["label"], "A");
+        assert_eq!(rows[0].sort_value.as_deref(), Some("2026-01-02"));
+        request.after = Some(PageAfter {
+            root_id: rows[0].root_id,
+            source_key: rows[0].source_key.clone(),
+            sort_value: rows[0].sort_value.clone(),
+        });
+        let second = run(&runtime, &registry, &request).await;
+        let rows: Vec<ExternalViewRow> = serde_json::from_value(second.get(5)).unwrap();
+        assert_eq!(rows[0].fields["label"], "B");
         runtime_task.abort();
         migration_task.abort();
         drop(runtime);
