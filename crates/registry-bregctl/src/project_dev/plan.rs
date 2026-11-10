@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_platform_yaml::{
-    ApiVersion, BoundedU32, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, LocalId, Reader,
-    Report, Severity, UniqueIdList, UniqueList,
+    escape_pointer_segment, ApiVersion, BoundedU32, Decoded, EnvelopeRule, Expect, FormatSpec,
+    Identified, LocalId, Reader, Report, Severity, UniqueIdList, UniqueList,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{ExternalId, Url as PlatformUrl};
@@ -466,11 +466,58 @@ pub(super) fn reserved_claim(claim: &str) -> bool {
     ) || claim.starts_with("registry_grant_")
 }
 
-fn require(condition: bool, field: &str, message: &str) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+#[error("dev.yaml {field} {reason}")]
+pub(super) struct SemanticRefusal {
+    field: String,
+    reason: String,
+    remedy: String,
+}
+
+pub(super) type SemanticResult<T> = std::result::Result<T, SemanticRefusal>;
+
+pub(super) fn require(
+    condition: bool,
+    field: &str,
+    reason: impl Into<String>,
+    remedy: impl Into<String>,
+) -> SemanticResult<()> {
     if !condition {
-        bail!("dev.yaml {field} {message}");
+        return Err(SemanticRefusal {
+            field: field.to_owned(),
+            reason: reason.into(),
+            remedy: remedy.into(),
+        });
     }
     Ok(())
+}
+
+fn refuse<T>(field: &str, reason: &str, remedy: &str) -> SemanticResult<T> {
+    Err(SemanticRefusal {
+        field: field.to_owned(),
+        reason: reason.to_owned(),
+        remedy: remedy.to_owned(),
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("capture reference must name an earlier capture")]
+struct EarlierCapture;
+
+fn validate_expansion<T>(result: Result<T>, field: &str) -> SemanticResult<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) if error.downcast_ref::<EarlierCapture>().is_some() => refuse(
+            field,
+            "The capture reference must name an earlier capture.",
+            "Move the referenced capture to an earlier step or correct the capture name.",
+        ),
+        Err(_) => refuse(
+            field,
+            "The field has an unclosed capture reference.",
+            "Close the capture reference with `}}`.",
+        ),
+    }
 }
 
 pub(super) fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
@@ -497,18 +544,13 @@ fn read_plan(root: &Path) -> Result<Decoded<Plan>> {
 }
 
 fn validate_plan(root: &Path, decoded: &Decoded<Plan>) -> Result<()> {
-    if let Err(error) = decoded.value.validate(root) {
-        let rendered = error.to_string();
-        let path = rendered
-            .strip_prefix("dev.yaml ")
-            .and_then(|detail| detail.split_once(' '))
-            .map_or("", |(path, _)| path);
+    if let Err(refusal) = decoded.value.validate(root) {
         let diagnostic = decoded.document.diagnostic_at_value(
             Severity::Error,
             "rstack.dev.invalid-plan",
-            path,
-            "The development plan is inconsistent.",
-            "Correct the named development plan field, then run the check again.",
+            &refusal.field,
+            &refusal.reason,
+            &refusal.remedy,
         );
         return Err(decoded.document.report_with([diagnostic]).into());
     }
@@ -535,7 +577,7 @@ impl Plan {
             .expect("validated product")
     }
 
-    fn validate(&self, root: &Path) -> Result<()> {
+    fn validate(&self, root: &Path) -> SemanticResult<()> {
         require(
             ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
                 url.scheme() == "https"
@@ -547,12 +589,14 @@ impl Plan {
                     && self.issuer.len() <= 512
             }),
             "/issuer",
-            "must be the project's HTTPS issuer URL",
+            "The issuer must be the project's bounded HTTPS URL without credentials, query, or fragment.",
+            "Set issuer to an HTTPS URL with a host and no credentials, query, or fragment.",
         )?;
         require(
             !self.products.is_empty(),
             "/products",
-            "must name at least one product",
+            "The plan must name at least one product.",
+            "Add a BReg or Casework product to products.",
         )?;
         let mut products = BTreeSet::new();
         let mut audiences = BTreeSet::new();
@@ -561,12 +605,14 @@ impl Plan {
             require(
                 products.insert(entry.product),
                 &format!("{field}/product"),
-                "is repeated",
+                "The product is repeated.",
+                "Remove the duplicate product entry.",
             )?;
             require(
                 bounded_atom(&entry.audience) && audiences.insert(&entry.audience),
                 &format!("{field}/audience"),
-                "must be a distinct, bounded audience",
+                "The audience must be distinct, bounded text without whitespace or control characters.",
+                "Set audience to a distinct identifier of at most 256 characters without whitespace or control characters.",
             )?;
             require(
                 entry.project == Path::new(".")
@@ -576,7 +622,8 @@ impl Plan {
                             .components()
                             .all(|part| matches!(part, Component::Normal(_)))),
                 &format!("{field}/project"),
-                "must be a path inside the project directory",
+                "The product project must be a relative path inside the development project directory.",
+                "Set project to `.` or a relative path made only of normal path components.",
             )?;
             let manifest = match entry.product {
                 Product::Breg => "registry.yaml",
@@ -588,47 +635,55 @@ impl Plan {
                     .canonicalize()
                     .is_ok_and(|path| path.starts_with(root) && path.is_file()),
                 &format!("{field}/project"),
-                &format!("must contain {manifest} inside the project directory"),
+                format!("The product project must contain {manifest} inside the development project directory."),
+                format!("Create {manifest} at this project path inside the development project directory."),
             )?;
         }
         require(
             (1..=32).contains(&self.people.len()),
             "/people",
-            "must define 1 to 32 people",
+            "The plan must define 1 to 32 test people.",
+            "Add or remove test people until people contains between 1 and 32 entries.",
         )?;
         for (name, person) in &self.people {
             require(
                 identifier(name),
                 "/people",
-                "contains an invalid person name",
+                "A test person name is not a local identifier.",
+                "Rename the test person with a lowercase local identifier of at most 64 characters.",
             )?;
             let field = format!("/people/{name}");
             require(
                 bounded_atom(&person.subject),
                 &format!("{field}/subject"),
-                "must be a bounded subject",
+                "The test person's subject must be bounded text without whitespace or control characters.",
+                "Set subject to at most 256 characters without whitespace or control characters.",
             )?;
             require(
                 bounded_atom(&person.client),
                 &format!("{field}/client"),
-                "must be a bounded client ID",
+                "The test person's client must be a bounded client identifier.",
+                "Set client to at most 256 characters without whitespace or control characters.",
             )?;
             require(
                 !person.grants.is_empty(),
                 &format!("{field}/grants"),
-                "must name a product grant",
+                "The test person must have at least one product grant.",
+                "Add a BReg or Casework grant for this test person.",
             )?;
             for (product, grant) in &person.grants {
                 let field = format!("{field}/grants/{}", product.name());
                 require(
                     products.contains(product),
                     &field,
-                    "must name a started product",
+                    "The grant names a product that is not started.",
+                    "Add the grant's product to products, or remove this grant.",
                 )?;
                 require(
                     identifier(&grant.profile),
                     &format!("{field}/profile"),
-                    "must name a profile",
+                    "The grant profile must be a local identifier.",
+                    "Set profile to a lowercase local identifier of at most 64 characters.",
                 )?;
                 let scopes = grant.scopes.iter().collect::<BTreeSet<_>>();
                 require(
@@ -636,13 +691,15 @@ impl Plan {
                         && scopes.len() <= 32
                         && scopes.iter().all(|scope| bounded_atom(scope)),
                     &format!("{field}/scopes"),
-                    "must contain up to 32 distinct scopes",
+                    "The grant must contain at most 32 distinct bounded scopes.",
+                    "Remove duplicate or excess scopes, and keep each scope within 256 characters without whitespace or control characters.",
                 )?;
                 for claim in grant.claims.keys() {
                     require(
                         bounded_atom(claim) && !reserved_claim(claim),
                         &format!("{field}/claims"),
-                        "contains a reserved or invalid claim",
+                        "The grant contains a reserved or invalid additional claim name.",
+                        "Remove the claim or rename it to bounded text that is not reserved by the token contract.",
                     )?;
                 }
             }
@@ -650,14 +707,16 @@ impl Plan {
                 require(
                     self.bindings.casework_context_provider.is_some(),
                     &format!("{field}/caseworkContext"),
-                    "requires /bindings/caseworkContextProvider",
+                    "Casework context forwarding requires /bindings/caseworkContextProvider.",
+                    "Configure bindings.caseworkContextProvider or remove caseworkContext from this person.",
                 )?;
                 let breg = person.grants.get(&Product::Breg);
                 let casework = person.grants.get(&Product::Casework);
                 require(
                     breg.is_some() && casework.is_some(),
                     &format!("{field}/caseworkContext"),
-                    "requires both BReg and Casework grants",
+                    "Casework context forwarding requires both BReg and Casework grants.",
+                    "Add both product grants to this person or remove caseworkContext.",
                 )?;
                 let (breg, casework) = (
                     breg.expect("checked grant"),
@@ -668,18 +727,25 @@ impl Plan {
                         && breg.scopes.iter().collect::<BTreeSet<_>>()
                             == casework.scopes.iter().collect(),
                     &format!("{field}/caseworkContext"),
-                    "requires the same scopes and additional claims in both grants",
+                    "Casework context forwarding requires the same scopes and additional claims in both grants.",
+                    "Make the BReg and Casework grant scopes and additional claims identical.",
                 )?;
             }
         }
         for (journey, steps) in &self.schema_test_people {
             for (step, person) in steps {
+                let field = format!(
+                    "/schemaTestPeople/{}/{}",
+                    escape_pointer_segment(journey),
+                    escape_pointer_segment(step)
+                );
                 require(
                     self.people
                         .get(person)
                         .is_some_and(|person| person.grants.contains_key(&Product::Breg)),
-                    &format!("/schemaTestPeople/{journey}/{step}"),
-                    "must name a person with a BReg grant",
+                    &field,
+                    "The schema test assignment must name a person with a BReg grant.",
+                    "Set this assignment to a test person that has a BReg grant.",
                 )?;
             }
         }
@@ -689,7 +755,14 @@ impl Plan {
                     .values()
                     .any(|person| person.grants.contains_key(&product)),
                 "/people",
-                &format!("must define at least one grant for {}", product.name()),
+                format!(
+                    "The plan must define at least one grant for {}.",
+                    product.name()
+                ),
+                format!(
+                    "Add a {} grant to at least one test person.",
+                    product.name()
+                ),
             )?;
         }
         self.bindings.validate(self)?;
@@ -698,16 +771,18 @@ impl Plan {
 }
 
 impl Journey {
-    fn validate(&self, plan: &Plan) -> Result<()> {
+    fn validate(&self, plan: &Plan) -> SemanticResult<()> {
         require(
             identifier(&self.id),
             "/journey/id",
-            "must be a local identifier",
+            "The journey ID must be a local identifier.",
+            "Set id to a lowercase local identifier of at most 64 characters.",
         )?;
         require(
             (1..=32).contains(&self.steps.len()),
             "/journey/steps",
-            "must contain 1 to 32 steps",
+            "The journey must contain 1 to 32 steps.",
+            "Add or remove steps until the journey contains between 1 and 32 steps.",
         )?;
         let mut ids = BTreeSet::new();
         let mut captures = BTreeSet::new();
@@ -716,19 +791,22 @@ impl Journey {
             require(
                 step_identifier(&step.id) && ids.insert(&step.id),
                 &format!("{field}/id"),
-                "must be a unique local identifier",
+                "The step ID must be a unique local or dotted derived identifier.",
+                "Set id to a unique lowercase local identifier or dotted sequence of local identifiers.",
             )?;
             require(
                 plan.people
                     .get(&step.person)
                     .is_some_and(|person| person.grants.contains_key(&step.product)),
                 &format!("{field}/as"),
-                "must name a person with a grant for the step's product",
+                "The step must name a test person with a grant for its product.",
+                "Set as to a test person that has a grant for this step's product.",
             )?;
             require(
                 valid_path(&step.path),
                 &format!("{field}/path"),
-                "must be a relative product API path starting with /v1/",
+                "The request path must be a relative product API path starting with /v1/.",
+                "Set path to a bounded /v1/ path without whitespace, control characters, backslashes, or fragments.",
             )?;
             let statuses = step.expect.status.values();
             require(
@@ -736,23 +814,27 @@ impl Journey {
                     && statuses.iter().all(|status| (200..=599).contains(status))
                     && statuses.iter().collect::<BTreeSet<_>>().len() == statuses.len(),
                 &format!("{field}/expect/status"),
-                "must contain 1 to 16 distinct HTTP statuses from 200 to 599",
+                "Expected status must contain 1 to 16 distinct HTTP statuses from 200 to 599.",
+                "List between 1 and 16 distinct HTTP status numbers from 200 to 599.",
             )?;
             require(
                 step.body.is_none() || step.raw.is_none(),
                 &field,
-                "must not contain both body and raw",
+                "A journey step must not contain both body and raw.",
+                "Remove body or raw so the step declares only one request body form.",
             )?;
             require(
                 step.raw.is_none() || !matches!(step.method, Method::Get),
                 &format!("{field}/raw"),
-                "is supported only for non-GET requests",
+                "A raw request body is supported only for non-GET requests.",
+                "Remove raw or change method to a non-GET request method.",
             )?;
             if let Some(body) = &step.body {
                 require(
                     serde_json::to_vec(body).is_ok_and(|bytes| bytes.len() <= 1024 * 1024),
                     &format!("{field}/body"),
-                    "must encode to at most 1 MiB",
+                    "The JSON request body must encode to at most 1 MiB.",
+                    "Reduce body until its encoded JSON is at most 1 MiB.",
                 )?;
             }
             if let Some(raw) = &step.raw {
@@ -764,7 +846,8 @@ impl Journey {
                             .bytes()
                             .all(|byte| byte.is_ascii() && byte != b'\r' && byte != b'\n'),
                     &format!("{field}/raw/contentType"),
-                    "must be a bounded HTTP media type",
+                    "The raw content type must be a bounded ASCII HTTP media type.",
+                    "Set contentType to an ASCII media type with a slash and at most 256 characters.",
                 )?;
                 require(
                     raw.base64.len() <= 1_398_104
@@ -772,22 +855,30 @@ impl Journey {
                             .decode(&raw.base64)
                             .is_ok_and(|bytes| bytes.len() <= 1024 * 1024),
                     &format!("{field}/raw/base64"),
-                    "must be valid base64 encoding at most 1 MiB",
+                    "The raw body must be valid base64 encoding of at most 1 MiB.",
+                    "Encode at most 1 MiB of raw request data as base64.",
                 )?;
             }
             if let Some(poll) = &step.poll {
                 require(
                     matches!(step.method, Method::Get),
                     &format!("{field}/poll"),
-                    "is supported only for GET requests",
+                    "Polling is supported only for GET requests.",
+                    "Remove poll or change method to GET.",
                 )?;
                 require(
                     (1..=60_000).contains(&poll.timeout_ms)
                         && (50..=5_000).contains(&poll.interval_ms)
-                        && poll.interval_ms <= poll.timeout_ms
                         && poll.timeout_ms.div_ceil(poll.interval_ms) < 250,
                     &format!("{field}/poll"),
-                    "must use a 1 to 60000 ms timeout, a 50 to 5000 ms interval, and at most 250 attempts",
+                    "Polling must use a 1 to 60000 ms maximum wait, a 50 to 5000 ms interval, and at most 250 attempts.",
+                    "Set maximumWaitMilliseconds and pollIntervalMilliseconds within those bounds and limit the resulting attempts to at most 250.",
+                )?;
+                require(
+                    poll.interval_ms <= poll.timeout_ms,
+                    &format!("{field}/poll/pollIntervalMilliseconds"),
+                    "The poll interval must not exceed the maximum wait.",
+                    "Set pollIntervalMilliseconds to no more than maximumWaitMilliseconds.",
                 )?;
             }
             for header in step.headers.keys() {
@@ -797,44 +888,53 @@ impl Journey {
                         "If-Match" | "Idempotency-Key" | "Registry-Source-Profile"
                     ),
                     &format!("{field}/headers"),
-                    "contains a header outside the supported list",
+                    "The request contains a header outside the supported list.",
+                    "Remove the header or use only If-Match, Idempotency-Key, or Registry-Source-Profile.",
                 )?;
             }
             let verify_reference = |value: &str| {
                 captures
                     .contains(value)
                     .then(|| value.to_owned())
-                    .context("must refer to an earlier capture")
+                    .ok_or_else(|| EarlierCapture.into())
             };
-            expand(&step.path, verify_reference)
-                .with_context(|| format!("dev.yaml {field}/path"))?;
+            validate_expansion(
+                expand(&step.path, verify_reference),
+                &format!("{field}/path"),
+            )?;
             for value in step.headers.values() {
-                expand(value, verify_reference)
-                    .with_context(|| format!("dev.yaml {field}/headers"))?;
+                validate_expansion(expand(value, verify_reference), &format!("{field}/headers"))?;
             }
             if let Some(body) = &step.body {
-                expand_json(body, verify_reference)
-                    .with_context(|| format!("dev.yaml {field}/body"))?;
+                validate_expansion(
+                    expand_json(body, verify_reference),
+                    &format!("{field}/body"),
+                )?;
             }
             require(
                 step.expect.json.keys().all(|value| pointer(value)),
                 &format!("{field}/expect/json"),
-                "must use JSON pointers",
+                "Expected JSON keys must be JSON pointers.",
+                "Replace each expected JSON key with an empty pointer or one starting with `/`.",
             )?;
             for value in step.expect.json.values() {
-                expand_json(value, verify_reference)
-                    .with_context(|| format!("dev.yaml {field}/expect/json"))?;
+                validate_expansion(
+                    expand_json(value, verify_reference),
+                    &format!("{field}/expect/json"),
+                )?;
             }
             require(
                 step.expect.checks.len() <= 32,
                 &format!("{field}/expect/checks"),
-                "must contain at most 32 checks",
+                "Expected checks must contain at most 32 entries.",
+                "Remove checks until at most 32 remain.",
             )?;
             for check in &step.expect.checks {
                 require(
                     pointer(&check.pointer),
                     &format!("{field}/expect/checks"),
-                    "must use JSON pointers",
+                    "Each expected check must use a JSON pointer.",
+                    "Set each check pointer to an empty pointer or one starting with `/`.",
                 )?;
                 require(
                     usize::from(check.equals.is_some())
@@ -842,32 +942,40 @@ impl Journey {
                         + usize::from(check.contains.is_some())
                         == 1,
                     &format!("{field}/expect/checks"),
-                    "must contain exactly one of equals, length, or contains",
+                    "Each expected check must contain exactly one of equals, length, or contains.",
+                    "Keep exactly one assertion member in each expected check.",
                 )?;
                 require(
                     check.length.is_none_or(|length| length <= 1024 * 1024),
                     &format!("{field}/expect/checks"),
-                    "contains an excessive length",
+                    "An expected length exceeds 1 MiB.",
+                    "Set length to at most 1048576.",
                 )?;
                 for value in check.equals.iter().chain(&check.contains) {
-                    expand_json(value, verify_reference)
-                        .with_context(|| format!("dev.yaml {field}/expect/checks"))?;
+                    validate_expansion(
+                        expand_json(value, verify_reference),
+                        &format!("{field}/expect/checks"),
+                    )?;
                 }
             }
             if let Some(code) = &step.expect.code {
                 require(
                     bounded_atom(code),
                     &format!("{field}/expect/code"),
-                    "must be a bounded problem code",
+                    "The expected problem code must be bounded text without whitespace or control characters.",
+                    "Set code to at most 256 characters without whitespace or control characters.",
                 )?;
-                expand(code, verify_reference)
-                    .with_context(|| format!("dev.yaml {field}/expect/code"))?;
+                validate_expansion(
+                    expand(code, verify_reference),
+                    &format!("{field}/expect/code"),
+                )?;
             }
             for (name, capture) in &step.capture {
                 require(
                     capture_identifier(name) && !captures.contains(name.as_str()),
                     &format!("{field}/capture"),
-                    "must use unique bounded capture names",
+                    "Capture names must be unique bounded ASCII identifiers.",
+                    "Rename the capture with a unique identifier of at most 64 ASCII letters, digits, or hyphens, starting with a letter.",
                 )?;
                 match capture {
                     Capture::Pointer {
@@ -875,20 +983,23 @@ impl Journey {
                     } => require(
                         pointer(pointer_value),
                         &format!("{field}/capture/{name}"),
-                        "must use a JSON pointer",
+                        "The capture must use a JSON pointer.",
+                        "Set pointer to an empty pointer or one starting with `/`.",
                     )?,
                     Capture::Header { .. } => {}
                     Capture::Value { pointer, query } => {
                         require(
                             self::pointer(pointer),
                             &format!("{field}/capture/{name}/pointer"),
-                            "must be a JSON pointer",
+                            "The value capture pointer must be a JSON pointer.",
+                            "Set pointer to an empty pointer or one starting with `/`.",
                         )?;
                         if let Some(query) = query {
                             require(
                                 bounded_atom(query),
                                 &format!("{field}/capture/{name}/query"),
-                                "must name a bounded query parameter",
+                                "The value capture query must name a bounded query parameter.",
+                                "Set query to at most 256 characters without whitespace or control characters.",
                             )?;
                         }
                     }
@@ -900,15 +1011,18 @@ impl Journey {
                         require(
                             pointer(find) && pointer(&r#where.pointer) && pointer(selected),
                             &format!("{field}/capture/{name}"),
-                            "must use JSON pointers",
+                            "The find capture must use JSON pointers.",
+                            "Set find, where.pointer, and pointer to empty pointers or pointers starting with `/`.",
                         )?;
-                        expand_json(&r#where.equals, |value| {
-                            captures
-                                .contains(value)
-                                .then(|| value.to_owned())
-                                .context("must refer to an earlier capture")
-                        })
-                        .with_context(|| format!("dev.yaml {field}/capture/{name}/find"))?;
+                        validate_expansion(
+                            expand_json(&r#where.equals, |value| {
+                                captures
+                                    .contains(value)
+                                    .then(|| value.to_owned())
+                                    .ok_or_else(|| EarlierCapture.into())
+                            }),
+                            &format!("{field}/capture/{name}/find"),
+                        )?;
                     }
                 }
                 captures.insert(name.clone());
