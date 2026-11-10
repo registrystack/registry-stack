@@ -345,8 +345,14 @@ payload!(ExplainStaffing {
     routing: String,
     clock_recompute: String
 });
+payload!(ExplainAccessProfile {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    id: String,
+    principal_claim: String
+});
 payload!(ExplainData {
     project: ProjectIdentity,
+    access_profiles: Vec<ExplainAccessProfile>,
     review_policies: Vec<ExplainPolicy>,
     context_providers: Vec<ReviewContextProviderPolicy>,
     clocks: Vec<ClockPolicy>,
