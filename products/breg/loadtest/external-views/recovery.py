@@ -136,13 +136,12 @@ class ScopeRecovery:
     def rotate(self, inactive):
         rotated = self.operator("rotate", "rotation", inactive, (
             self.fact["bindingDigest"], self.fact["grantDigest"],
-            str(self.fact["cacheTtlSeconds"]), str(self.fact["maximumRetentionSeconds"]),
+            str(self.fact["cacheTtlSeconds"]),
         ))
         expect(rotated["active"] and rotated["epoch"] != inactive["epoch"]
                and rotated["bindingDigest"] == self.fact["bindingDigest"]
                and rotated["grantDigest"] == self.fact["grantDigest"]
-               and rotated["cacheTtlSeconds"] == self.fact["cacheTtlSeconds"]
-               and rotated["retentionSeconds"] == self.fact["maximumRetentionSeconds"],
+               and rotated["cacheTtlSeconds"] == self.fact["cacheTtlSeconds"],
                "rotation did not install a fresh epoch for the current reviewed binding")
         self.calls_at_rotation = self.journey.source_calls()
         self.epoch = rotated["epoch"]

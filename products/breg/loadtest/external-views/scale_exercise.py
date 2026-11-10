@@ -29,7 +29,6 @@ RELATED_REQUEST_BUDGET = 6
 RELATED_PAGE_ROWS = 40
 RELATED_ROWS = 120
 FRESHNESS_SECONDS = 600
-RETENTION_SECONDS = 900
 QUERY_SECONDS = 5
 READ_PAGE_SIZE = 50
 MAX_PLAN_BYTES = 16 * 1024 * 1024
@@ -164,14 +163,6 @@ def scale_project(project, work):
     )
     shutil.copyfile(project / "tests/journeys.yaml", target / "tests/journeys.yaml")
     return target
-
-
-def scale_bindings(fragment):
-    for binding in fragment["externalSources"]:
-        binding.pop("allowedSelectors", None)
-        if "retention" in binding:
-            binding["retention"]["maximumRetentionSeconds"] = RETENTION_SECONDS
-    return fragment
 
 
 def quoted(identifier):
@@ -333,7 +324,7 @@ def run_scale(work, package, origin, tokens, source, plan_log, binaries):
         "corpus": {"eligibleRoots": ELIGIBLE_ROOTS, "deniedRoots": DENIED_ROOTS,
                    "distinctHolderKeys": HOLDER_KEYS, "authorizedAbsentKeys": ABSENT_KEYS,
                    "authorizedRelatedRows": RELATED_ROWS * 2, "deniedRelatedRows": RELATED_ROWS * 2},
-        "budgets": {"freshnessSeconds": FRESHNESS_SECONDS, "retentionSeconds": RETENTION_SECONDS,
+        "budgets": {"freshnessSeconds": FRESHNESS_SECONDS,
                     "querySeconds": QUERY_SECONDS, "personSourceRequests": PERSON_REQUEST_BUDGET,
                     "relatedSourceRequests": RELATED_REQUEST_BUDGET, "adapterBatchKeys": BATCH_KEYS},
         "personRefresh": sweep_counts(), "holdingsRefresh": sweep_counts(), "queries": [],

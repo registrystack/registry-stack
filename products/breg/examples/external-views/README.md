@@ -49,9 +49,9 @@ prints its origin. The fragment pins the exact [Adapter pack](../../../adapter/e
 binds its endpoint and scope for each projection, and names the service
 key by secret reference. Merge the `externalSources` member into an
 operator-owned runtime file before starting the candidate BReg. The
-fragment grants an hour of synthetic source access and uses a five minute
-indexed retention ceiling. Schedule refresh every minute for a continued
-demo, or run the fixture refresh requests below.
+fragment grants an hour of synthetic source access. Indexed values keep the
+authored five minute cache lifetime and are purged when it ends, so refresh
+again for a continued demo, or run the fixture refresh requests below.
 
 The fixture control identity can reset or rename the Person, replace or
 empty holdings, interrupt the next page, apply `no-store` to a data

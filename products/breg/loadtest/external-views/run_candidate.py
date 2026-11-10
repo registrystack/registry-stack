@@ -183,7 +183,6 @@ def verify_source_facts(facts, bindings, indexed_ttl):
         binding = expected[projection]
         indexed = projection.endswith("-indexed")
         person = projection.startswith("person-")
-        retention = binding.get("retention", {})
         checked = {
             "id": projection, "mode": "indexed" if indexed else "live",
             "recordType": "person" if person else "holding",
@@ -194,8 +193,6 @@ def verify_source_facts(facts, bindings, indexed_ttl):
             "purpose": "licensing", "scope": "licensing-holders" if person else "licensed-business-holdings",
             "fields": binding["allowedFields"], "connection": "synthetic-licensing",
             "cacheTtlSeconds": indexed_ttl if indexed else None,
-            "maximumRetentionSeconds": retention.get("maximumRetentionSeconds"),
-            "refreshIntervalSeconds": retention.get("refreshIntervalSeconds"),
         }
         expect(set(fact) == {*checked, "bindingDigest", "grantDigest", "grantValidUntil"}
                and all(fact[key] == value for key, value in checked.items())
@@ -344,8 +341,6 @@ def run(options):
             runtime = work / "runtime.json"
             package = work / "build/package"
             bindings = runtime_fragment(source_origin, "source-key", cutoff)
-            if scale:
-                bindings = scale.scale_bindings(bindings)
             write_json(runtime, runtime_config(work, roles, package, address, **bindings))
             facts_path = work / "external-source-facts.json"
             before_facts = fixture.status()

@@ -501,13 +501,12 @@
           "type": "array",
           "uniqueItems": true
         },
-        "allowedSelectors": {
-          "description": "An optional further restriction on locally authorized selectors.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
+        "cacheTtlSeconds": {
+          "description": "An optional shorter cache lifetime for an indexed projection. The\ncache keeps a value for the shorter of this and the authored\ncacheTtlSeconds, then purges it. A live projection refuses it.",
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
         },
         "connection": {
           "$ref": "#/$defs/AdapterEndpointBindings"
@@ -530,9 +529,6 @@
         },
         "packFile": {
           "type": "string"
-        },
-        "retention": {
-          "$ref": "#/$defs/ExternalSourceRetention"
         }
       },
       "required": [
@@ -544,28 +540,6 @@
         "allowedFields",
         "grantValidUntil",
         "acquisition"
-      ],
-      "type": "object"
-    },
-    "ExternalSourceRetention": {
-      "additionalProperties": false,
-      "properties": {
-        "maximumRetentionSeconds": {
-          "format": "uint64",
-          "maximum": 31536000,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "refreshIntervalSeconds": {
-          "format": "uint64",
-          "maximum": 31536000,
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "maximumRetentionSeconds",
-        "refreshIntervalSeconds"
       ],
       "type": "object"
     },

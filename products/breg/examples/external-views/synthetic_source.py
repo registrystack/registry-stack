@@ -352,22 +352,20 @@ def runtime_fragment(origin, key_file_name, grant_cutoff):
         "authentication": {"type": "static-api-key"},
     }]
     bindings = []
-    for binding, fields, selectors in (
-        ("person-live", PERSON_FIELDS, ALLOWED_PEOPLE),
-        ("person-indexed", PERSON_FIELDS, ALLOWED_PEOPLE),
-        ("holdings-live", HOLDING_FIELDS - {"person-key"}, ALLOWED_BUSINESSES),
-        ("holdings-indexed", HOLDING_FIELDS, ALLOWED_BUSINESSES),
+    for binding, fields in (
+        ("person-live", PERSON_FIELDS),
+        ("person-indexed", PERSON_FIELDS),
+        ("holdings-live", HOLDING_FIELDS - {"person-key"}),
+        ("holdings-indexed", HOLDING_FIELDS),
     ):
         entry = {
             "id": binding, "packFile": str(pack), "packDigest": pack_digest,
             "connection": connection, "endpointPolicies": policy,
-            "allowedFields": sorted(fields), "allowedSelectors": sorted(selectors),
+            "allowedFields": sorted(fields),
             "grantValidUntil": grant_cutoff,
             "acquisition": {"maximumDataOperations": 8, "timeoutMilliseconds": 8000,
                             "maximumResponseBytes": 262144},
         }
-        if binding.endswith("-indexed"):
-            entry["retention"] = {"maximumRetentionSeconds": 300, "refreshIntervalSeconds": 60}
         bindings.append(entry)
     return {"externalSources": bindings}
 
