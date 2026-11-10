@@ -557,6 +557,8 @@ fn sql_type(kind: ExternalFieldType) -> &'static str {
 
 /// Largest string a request filter may carry.
 const MAXIMUM_FILTER_STRING_BYTES: usize = 4096;
+/// Largest decimal a request filter may carry.
+const MAXIMUM_FILTER_DECIMAL_BYTES: usize = 128;
 /// Largest sort value a continuation resumes from. Only a cursor BReg sealed
 /// carries one, and the cursor's own payload bound (8 KiB, shared with the
 /// request's key, query and binding) is the effective limit above this.
@@ -570,13 +572,21 @@ pub(crate) fn sort_value_resumable(value: &str) -> bool {
 }
 
 fn scalar(value: &Value, kind: ExternalFieldType) -> Result<Option<String>, ExternalQueryError> {
-    bounded_scalar(value, kind, MAXIMUM_FILTER_STRING_BYTES)
+    bounded_scalar(
+        value,
+        kind,
+        MAXIMUM_FILTER_STRING_BYTES,
+        MAXIMUM_FILTER_DECIMAL_BYTES,
+    )
 }
 
+/// Decimal sort values are plain decimal strings, so a tiny or huge exponent
+/// makes them long; a continuation therefore bounds decimals like strings.
 fn bounded_scalar(
     value: &Value,
     kind: ExternalFieldType,
     maximum_string_bytes: usize,
+    maximum_decimal_bytes: usize,
 ) -> Result<Option<String>, ExternalQueryError> {
     if value.is_null() {
         return Ok(None);
@@ -596,7 +606,7 @@ fn bounded_scalar(
             let mut parts = digits.split('.');
             let integer = parts.next().unwrap_or("");
             let fraction = parts.next();
-            if value.len() > 128
+            if value.len() > maximum_decimal_bytes
                 || integer.is_empty()
                 || !integer.bytes().all(|b| b.is_ascii_digit())
                 || fraction.is_some_and(|v| v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()))
@@ -658,8 +668,13 @@ fn continuation_sql(
                     .map_err(|_| ExternalQueryError::InvalidQuery)?,
                 _ => Value::String(value.clone()),
             };
-            let value = bounded_scalar(&parsed, kind, MAXIMUM_CURSOR_SORT_VALUE_BYTES)?
-                .ok_or(ExternalQueryError::InvalidQuery)?;
+            let value = bounded_scalar(
+                &parsed,
+                kind,
+                MAXIMUM_CURSOR_SORT_VALUE_BYTES,
+                MAXIMUM_CURSOR_SORT_VALUE_BYTES,
+            )?
+            .ok_or(ExternalQueryError::InvalidQuery)?;
             let value = parameter(parameters, Some(value));
             let cast = sql_type(kind);
             Ok(format!("({column} {} {value}::{cast} OR {column} IS NULL OR ({column}={value}::{cast} AND {tie}))",direction.comparison()))
@@ -825,6 +840,34 @@ pub(crate) mod tests {
         ));
         // A request filter keeps its own, smaller bound.
         assert!(scalar(&json!("a".repeat(5000)), ExternalFieldType::String).is_err());
+    }
+
+    #[test]
+    fn a_plain_decimal_sort_value_past_the_filter_bound_resumes() {
+        // 1e-200 is stored as a plain decimal string of about 202 bytes.
+        let wide = format!("0.{}1", "0".repeat(199));
+        assert!(wide.len() > 128);
+        let after = PageAfter {
+            root_id: Uuid::nil(),
+            source_key: "row".into(),
+            sort_value: Some(wide.clone()),
+        };
+        let mut params = vec![];
+        continuation_sql(
+            Some((
+                &after,
+                Some((
+                    "sort_key",
+                    ExternalFieldType::Decimal,
+                    SortDirection::Ascending,
+                )),
+            )),
+            &mut params,
+        )
+        .unwrap();
+        assert!(params.contains(&Some(wide.clone())));
+        // A request filter keeps its own, smaller decimal bound.
+        assert!(scalar(&json!(wide), ExternalFieldType::Decimal).is_err());
     }
 
     #[test]
