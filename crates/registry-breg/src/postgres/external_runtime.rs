@@ -3635,7 +3635,7 @@ mod postgres_tests {
     }
 
     #[tokio::test]
-    async fn invalid_link_keys_are_unavailable_without_failing_the_rest_of_the_refresh_page() {
+    async fn invalid_link_keys_are_counted_without_failing_the_rest_of_the_refresh_page() {
         use tracing::instrument::WithSubscriber;
         let oversized = "\u{1D518}".repeat(300); // 1200 bytes in 300 characters
         let wide = "\u{E9}".repeat(300); // 600 bytes: over the source token bound
@@ -3764,20 +3764,23 @@ mod postgres_tests {
             .collect();
         assert_eq!(stored, ["fifth", "first", "second", "third"]);
 
-        // A root whose key cannot be acquired stays uncovered, so its view
-        // keeps refusing lists and counts until the key is corrected.
-        let (status, _, problem) = served
+        // A root whose key cannot be acquired reads as having no outside
+        // value, so its view keeps serving the other records.
+        let (status, _, body) = served
             .send(
                 "/v1/external-views/view/people-link/records?accessProfile=reader&$count=true",
                 reader("reader-principal", &["allowed"]),
             )
             .await;
-        assert_eq!(
-            status,
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "{problem}"
-        );
-        assert_eq!(problem["code"], "external_view.incomplete", "{problem}");
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["count"], 10, "{body}");
+        let available = body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|record| record["availability"] == "available")
+            .count();
+        assert_eq!(available, 4, "{body}");
         served.fixture.cleanup().await;
     }
 
