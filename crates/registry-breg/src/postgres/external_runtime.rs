@@ -2120,6 +2120,40 @@ fn snapshot_identity(
 mod tests {
     use super::*;
 
+    /// A sort value past the 4096-byte filter bound travels inside the
+    /// sealed continuation and opens unchanged.
+    #[test]
+    fn a_continuation_carries_a_long_sort_value() {
+        let codec = CursorCodec::new(
+            zeroize::Zeroizing::new(vec![42; 32]),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        let sort_value = "s".repeat(5000);
+        let token = codec
+            .seal_external(&Continuation {
+                binding: "binding".to_owned(),
+                expires_at: Utc::now().timestamp() + 60,
+                query: ExternalQuery::default(),
+                position: Position::Read {
+                    root_id: Uuid::nil(),
+                    source_key: "row".to_owned(),
+                    sort_value: Some(sort_value.clone()),
+                },
+            })
+            .unwrap();
+        assert!(token.len() <= crate::query::MAX_CURSOR_TOKEN_BYTES);
+        let opened: Continuation = codec.open_external(&token).unwrap();
+        let Position::Read {
+            sort_value: Some(opened),
+            ..
+        } = opened.position
+        else {
+            panic!("position changed");
+        };
+        assert_eq!(opened, sort_value);
+    }
+
     #[test]
     fn a_new_capture_preserves_a_scoped_source_revision_reference() {
         let codec = CursorCodec::new(
