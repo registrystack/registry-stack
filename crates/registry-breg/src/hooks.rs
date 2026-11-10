@@ -368,7 +368,7 @@ struct ProposalCompletionBarrier {
 const MAX_RETENTION_BATCHES_PER_TICK: usize = 100;
 
 #[derive(Clone, Copy)]
-enum RetentionFailureReason {
+pub(crate) enum RetentionFailureReason {
     RegistryNotReady,
     LockTimeout,
     QueryCancelled,
@@ -376,7 +376,7 @@ enum RetentionFailureReason {
 }
 
 impl RetentionFailureReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::RegistryNotReady => "registry-not-ready",
             Self::LockTimeout => "lock-timeout",
@@ -385,7 +385,7 @@ impl RetentionFailureReason {
         }
     }
 
-    fn sqlstate(code: Option<&str>) -> Self {
+    pub(crate) fn sqlstate(code: Option<&str>) -> Self {
         match code {
             Some("55P03") => Self::LockTimeout,
             Some("57014") => Self::QueryCancelled,
@@ -393,7 +393,7 @@ impl RetentionFailureReason {
         }
     }
 
-    fn admission(error: crate::postgres::RegistryTransactionError) -> Self {
+    pub(crate) fn admission(error: crate::postgres::RegistryTransactionError) -> Self {
         use crate::postgres::{PostgresKernelError, RegistryLockFailure, RegistryTransactionError};
         match error {
             RegistryTransactionError::Kernel(PostgresKernelError::RegistryUnavailable) => {
