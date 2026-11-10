@@ -74,13 +74,18 @@ fn registry_today(
     now: time::OffsetDateTime,
     offset_days: i32,
 ) -> Option<chrono::NaiveDate> {
-    let shifted = registry.local_date_at(now).ok().and_then(|date| {
-        if offset_days >= 0 {
-            date.checked_add_days(chrono::Days::new(offset_days as u64))
-        } else {
-            date.checked_sub_days(chrono::Days::new(u64::from(offset_days.unsigned_abs())))
-        }
-    });
+    // The same years 1 through 9999 the Rhai date helpers allow.
+    let shifted = registry
+        .local_date_at(now)
+        .ok()
+        .and_then(|date| {
+            if offset_days >= 0 {
+                date.checked_add_days(chrono::Days::new(offset_days as u64))
+            } else {
+                date.checked_sub_days(chrono::Days::new(u64::from(offset_days.unsigned_abs())))
+            }
+        })
+        .filter(|date| (1..=9999).contains(&chrono::Datelike::year(date)));
     match shifted {
         Some(date) => Some(date),
         None => {
@@ -201,6 +206,22 @@ mod tests {
             at_least_input: None,
             at_most_input: None,
         }
+    }
+
+    #[test]
+    fn the_offset_date_stays_within_years_1_to_9999() {
+        let registry = registry(Some("UTC"));
+        let date = |now, offset| registry_today(&registry, now, offset);
+        assert_eq!(
+            date(datetime!(9999-12-30 12:00 UTC), 1),
+            chrono::NaiveDate::from_ymd_opt(9999, 12, 31)
+        );
+        assert_eq!(date(datetime!(9999-12-31 12:00 UTC), 1), None);
+        assert_eq!(
+            date(datetime!(0001-01-02 12:00 UTC), -1),
+            chrono::NaiveDate::from_ymd_opt(1, 1, 1)
+        );
+        assert_eq!(date(datetime!(0001-01-01 12:00 UTC), -1), None);
     }
 
     #[test]
@@ -378,6 +399,15 @@ mod tests {
         ));
         guard.current_date_offset_days = 1;
         assert!(guard_matches(
+            &guard,
+            &inputs,
+            json!({"value":"9999-12-31"}).as_object().unwrap(),
+            &registry(Some("UTC")),
+            datetime!(9999-12-30 12:00 UTC),
+            false
+        ));
+        // An offset past year 9999 fails closed.
+        assert!(!guard_matches(
             &guard,
             &inputs,
             json!({"value":"9999-12-31"}).as_object().unwrap(),
