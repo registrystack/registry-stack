@@ -40,12 +40,25 @@ fn operation_with_steps(
     authentication: Value,
     steps: Value,
 ) -> (AdapterPack, PackArtifactBytes) {
-    let schema = serde_json::to_vec(&json!({
-        "type":"object",
-        "additionalProperties":false,
-        "properties":{"familyName":{"type":"string"}}
-    }))
-    .unwrap();
+    operation_with_fields_schema(
+        retention,
+        authentication,
+        steps,
+        json!({
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{"familyName":{"type":"string"}}
+        }),
+    )
+}
+
+fn operation_with_fields_schema(
+    retention: &str,
+    authentication: Value,
+    steps: Value,
+    fields_schema: Value,
+) -> (AdapterPack, PackArtifactBytes) {
+    let schema = serde_json::to_vec(&fields_schema).unwrap();
     let digest = registry_platform_config::sha256_uri(&schema);
     let pack: AdapterPack = serde_json::from_value(json!({
         "id":"synthetic","version":"1","testedVersions":[],
@@ -140,6 +153,57 @@ async fn a_present_record_must_include_every_requested_field() {
         Err(ProjectionError::InvalidResult)
     ));
     response.finish().unwrap();
+}
+
+#[test]
+fn a_fields_schema_cannot_constrain_which_fields_are_present() {
+    let step =
+        json!({"to":{"uri":"http:source","parameters":{"httpMethod":"GET","path":"/people"}}});
+    let properties = json!({"familyName":{"type":"string"},"givenName":{"type":"string"}});
+    for constraint in [
+        json!({"required":["givenName"]}),
+        json!({"minProperties":2}),
+        json!({"maxProperties":1}),
+        json!({"dependentRequired":{"familyName":["givenName"]}}),
+        json!({"dependentSchemas":{"familyName":{"required":["givenName"]}}}),
+        json!({"allOf":[{"required":["givenName"]}]}),
+    ] {
+        let mut schema =
+            json!({"type":"object","additionalProperties":false,"properties":properties});
+        schema
+            .as_object_mut()
+            .unwrap()
+            .extend(constraint.as_object().unwrap().clone());
+        let (pack, artifacts) =
+            operation_with_fields_schema("retain", json!({"type":"none"}), json!([step]), schema);
+        let result =
+            compile_projection_pack(&pack, "lookup", &artifacts, EvidenceLimits::default());
+        assert!(
+            matches!(result, Err(ProjectionError::Contract)),
+            "{constraint} must be refused as a contract error, got {:?}",
+            result.err()
+        );
+    }
+}
+
+#[test]
+fn a_fields_schema_that_only_describes_each_field_compiles() {
+    let step =
+        json!({"to":{"uri":"http:source","parameters":{"httpMethod":"GET","path":"/people"}}});
+    let (pack, artifacts) = operation_with_fields_schema(
+        "retain",
+        json!({"type":"none"}),
+        json!([step]),
+        json!({
+            "$schema":"https://json-schema.org/draft/2020-12/schema",
+            "title":"Person",
+            "description":"Fields a view may request.",
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{"familyName":{"type":"string","minLength":1}}
+        }),
+    );
+    compile_projection_pack(&pack, "lookup", &artifacts, EvidenceLimits::default()).unwrap();
 }
 
 #[tokio::test]

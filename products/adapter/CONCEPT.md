@@ -2495,7 +2495,11 @@ successful source response explicitly confirming absence for that key.
 Ambiguous matches, protected existence, HTTP denial and transport faults
 cannot establish absence. The engine validates every returned field against
 the digest-pinned closed JSON Schema and refuses fields the host did not
-request.
+request. Each view requests its own fields and every requested field must be
+returned, so the schema describes each field and must not require fields at
+the top level: a pack whose `fieldsSchema` uses `required`, `minProperties`,
+`maxProperties`, `dependentRequired`, `dependentSchemas` or a composition
+keyword at the top level is refused when the projection compiles.
 
 A collection row carries a stable unique `key`, the requested `parentKey`,
 `fields`, and an optional `sourceRevision`. A snapshot preserves one

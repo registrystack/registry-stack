@@ -1332,7 +1332,8 @@
           "type": "string"
         },
         "fieldsSchema": {
-          "$ref": "#/$defs/ScriptReference"
+          "$ref": "#/$defs/ScriptReference",
+          "description": "Closed JSON Schema describing each field a view may request. Each view\nrequests its own fields and every requested field must be returned, so\nthe schema must not require fields at the top level."
         },
         "localDisclosure": {
           "$ref": "#/$defs/ProjectionLocalDisclosure"
