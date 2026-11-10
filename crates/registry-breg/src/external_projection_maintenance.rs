@@ -26,9 +26,11 @@ use crate::model::CompiledRegistry;
 use crate::package::PackageError;
 use crate::postgres::{
     lock_wait_ended, verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresKernelError, RegistryLockKey,
+    SqlIdentifier,
 };
-use crate::runtime_config::{load_runtime_config, RuntimeConfig};
+use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
+use crate::startup::StartupError;
 
 /// Schema of the request and response entries of one external projection
 /// withdrawal or rotation.
@@ -38,11 +40,27 @@ const MAINTENANCE: &str =
     "SELECT registry_internal.maintain_external_projection_scope($1,$2,$3,$4,$5,$6,$7,$8)";
 
 /// Value-free failures. Projection IDs come from the reviewed package and a
-/// binding reason names the failed check, never a configured value.
+/// binding reason names the failed check, never a configured value. Each
+/// prerequisite failure has its own variant so the command reports it with
+/// the code other operator commands use for the same failure.
 #[derive(Debug, Error)]
 pub enum ExternalProjectionMaintenanceError {
-    #[error("the external projection maintenance request is invalid")]
-    InvalidRequest,
+    #[error("the runtime configuration path must be absolute")]
+    RuntimeConfigPath,
+    #[error("the runtime configuration was refused")]
+    RuntimeConfig(RuntimeConfigError),
+    #[error("the active package was refused")]
+    PackageRefused(PackageError),
+    #[error("the database connection configuration was refused")]
+    DatabaseConfiguration,
+    #[error("the registry database is unavailable")]
+    DatabaseUnavailable,
+    #[error("the migration connection does not hold the configured migration authority")]
+    MigrationAuthority,
+    #[error("the registry database is not ready for the active package")]
+    NotReady,
+    #[error("the external projection audit record is unavailable")]
+    AuditUnavailable,
     #[error("external projection `{0}` is not an indexed projection of the active package")]
     UnknownProjection(String),
     #[error("external projection `{projection}` has no usable binding: {reason}")]
@@ -53,8 +71,6 @@ pub enum ExternalProjectionMaintenanceError {
     MigrationLockHeld,
     #[error("the active package does not match its configured pin")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
-    #[error("external projection maintenance is unavailable")]
-    Unavailable,
 }
 
 type Result<T> = std::result::Result<T, ExternalProjectionMaintenanceError>;
@@ -99,7 +115,7 @@ pub fn configured_scope(
     config: &RuntimeConfig,
     projection: &str,
 ) -> Result<ConfiguredScope> {
-    let resolver = config.secret_resolver().map_err(|_| Error::Unavailable)?;
+    let resolver = config.secret_resolver().map_err(Error::RuntimeConfig)?;
     let sources =
         ExternalSourceService::load(registry, config.external_sources(), Arc::new(resolver))
             .map_err(|error| Error::BindingUnavailable {
@@ -138,7 +154,7 @@ async fn scope_mark(
             &[&projection],
         )
         .await
-        .map_err(|_| Error::Unavailable)?
+        .map_err(|_| Error::DatabaseUnavailable)?
         .map(|row| ScopeMark {
             epoch: row.get(0),
             generation: row.get(1),
@@ -201,19 +217,19 @@ impl ExternalProjectionOperatorService {
     /// The service, its configuration and the active package's registry.
     async fn open(path: &Path) -> Result<(Self, RuntimeConfig, CompiledRegistry)> {
         if !path.is_absolute() {
-            return Err(Error::InvalidRequest);
+            return Err(Error::RuntimeConfigPath);
         }
-        let config = load_runtime_config(path).map_err(|_| Error::Unavailable)?;
+        let config = load_runtime_config(path).map_err(Error::RuntimeConfig)?;
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => Error::PackagePinMismatch(mismatch),
-            _ => Error::Unavailable,
+            error => Error::PackageRefused(error),
         })?;
         let pool = config
             .runtime_database_connection_config()
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|_| Error::DatabaseConfiguration)?
             .build_pool()
-            .map_err(|_| Error::Unavailable)?;
-        let mut client = pool.get().await.map_err(|_| Error::Unavailable)?;
+            .map_err(|_| Error::DatabaseUnavailable)?;
+        let mut client = pool.get().await.map_err(|_| Error::DatabaseUnavailable)?;
         let startup = crate::startup::prepare_loaded_startup(
             package,
             config.identity().database_id(),
@@ -222,7 +238,15 @@ impl ExternalProjectionOperatorService {
             config.database().roles().runtime(),
         )
         .await
-        .map_err(|_| Error::Unavailable)?;
+        .map_err(|error| match error {
+            StartupError::RuntimeConfig(error) => Error::RuntimeConfig(error),
+            StartupError::PackageRefused(error) => Error::PackageRefused(error),
+            StartupError::PackageEnvelopeRefused(_) => {
+                Error::PackageRefused(PackageError::Envelope)
+            }
+            StartupError::DatabaseConnection(_) => Error::DatabaseUnavailable,
+            _ => Error::NotReady,
+        })?;
         let registry = startup.package().registry().clone();
         let service = Self {
             indexed: indexed_projections(&registry),
@@ -231,14 +255,14 @@ impl ExternalProjectionOperatorService {
             lock_key: startup.lock_key(),
             migration_connection: config
                 .migration_database_connection_config()
-                .map_err(|_| Error::Unavailable)?,
+                .map_err(|_| Error::DatabaseConfiguration)?,
             migration_role: config.database().roles().migration().clone(),
             runtime_role: config.database().roles().runtime().clone(),
             lock_timeout: config.operational_timeouts().migration_lock,
             statement_timeout: config.operational_timeouts().migration_statement,
             audit: RegistryAudit::open_companion(&config)
                 .await
-                .map_err(|_| Error::Unavailable)?,
+                .map_err(|_| Error::AuditUnavailable)?,
         };
         Ok((service, config, registry))
     }
@@ -283,8 +307,8 @@ impl ExternalProjectionOperatorService {
         let pool = self
             .migration_connection
             .build_pool()
-            .map_err(|_| Error::Unavailable)?;
-        let mut client = pool.get().await.map_err(|_| Error::Unavailable)?;
+            .map_err(|_| Error::DatabaseUnavailable)?;
+        let mut client = pool.get().await.map_err(|_| Error::DatabaseUnavailable)?;
         let client: &mut tokio_postgres::Client = &mut client;
         let transaction = self.open_transaction(client).await?;
         transaction
@@ -301,7 +325,7 @@ impl ExternalProjectionOperatorService {
         transaction
             .rollback()
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|_| Error::DatabaseUnavailable)?;
         Ok(scope)
     }
 
@@ -355,7 +379,7 @@ impl ExternalProjectionOperatorService {
                 record("terminal", "unfinished"),
             )
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|_| Error::AuditUnavailable)?;
         let changed = match self
             .change_in_transaction(action, projection, configured)
             .await
@@ -381,7 +405,7 @@ impl ExternalProjectionOperatorService {
                             "the unacknowledged external projection maintenance's response audit entry was not recorded"
                         );
                     }
-                    return Err(Error::Unavailable);
+                    return Err(Error::DatabaseUnavailable);
                 }
             },
             Err(error) => Err(error),
@@ -390,12 +414,12 @@ impl ExternalProjectionOperatorService {
             Ok(scope) => {
                 let mut response = record("terminal", action.outcome());
                 response["epoch"] = scope["epoch"].clone();
-                // The change committed; a refused entry reports the command
+                // The change committed; a refused entry reports the audit
                 // unavailable, and the writer then refuses every later entry.
                 attempt
                     .respond(response)
                     .await
-                    .map_err(|_| Error::Unavailable)?;
+                    .map_err(|_| Error::AuditUnavailable)?;
                 Ok(scope)
             }
             Err(error) => {
@@ -427,15 +451,16 @@ impl ExternalProjectionOperatorService {
         let pool = self
             .migration_connection
             .build_pool()
-            .map_err(|_| Error::Unavailable)?;
-        let mut client = pool.get().await.map_err(|_| Error::Unavailable)?;
+            .map_err(|_| Error::DatabaseUnavailable)?;
+        let mut client = pool.get().await.map_err(|_| Error::DatabaseUnavailable)?;
         let client: &mut tokio_postgres::Client = &mut client;
         let transaction = self.open_transaction(client).await?;
         lock_registry(&transaction, self.lock_key)
             .await
             .map_err(|error| match error {
                 HistoryMaintenanceError::MigrationLockHeld => Error::MigrationLockHeld,
-                _ => Error::Unavailable,
+                HistoryMaintenanceError::MigrationAuthority => Error::MigrationAuthority,
+                _ => Error::DatabaseUnavailable,
             })?;
         self.verify_catalog(&transaction).await?;
         let before = scope_mark(&transaction, projection).await?;
@@ -468,8 +493,14 @@ impl ExternalProjectionOperatorService {
     ) -> Result<tokio_postgres::Transaction<'a>> {
         verify_migration_role(client, &self.migration_role)
             .await
-            .map_err(|_| Error::Unavailable)?;
-        let transaction = client.transaction().await.map_err(|_| Error::Unavailable)?;
+            .map_err(|error| match error {
+                PostgresKernelError::RoleInvariant(_) => Error::MigrationAuthority,
+                _ => Error::DatabaseUnavailable,
+            })?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| Error::DatabaseUnavailable)?;
         transaction
             .query_one(
                 "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
@@ -479,7 +510,7 @@ impl ExternalProjectionOperatorService {
                 ],
             )
             .await
-            .map_err(|_| Error::Unavailable)?;
+            .map_err(|_| Error::DatabaseUnavailable)?;
         Ok(transaction)
     }
 
@@ -493,7 +524,7 @@ impl ExternalProjectionOperatorService {
         )
         .await
         .map(|_| ())
-        .map_err(|_| Error::Unavailable)
+        .map_err(catalog_failure)
     }
 
     /// One call to the migration-only maintenance function, bound to the
@@ -508,7 +539,7 @@ impl ExternalProjectionOperatorService {
         configured: Option<&ConfiguredScope>,
     ) -> Result<Value> {
         let activation =
-            Uuid::parse_str(&self.expected.activation_id).map_err(|_| Error::Unavailable)?;
+            Uuid::parse_str(&self.expected.activation_id).map_err(|_| Error::NotReady)?;
         Ok(transaction
             .query_one(
                 MAINTENANCE,
@@ -533,7 +564,22 @@ fn lock_failure(error: tokio_postgres::Error) -> Error {
     if lock_wait_ended(&error) {
         Error::MigrationLockHeld
     } else {
-        Error::Unavailable
+        Error::DatabaseUnavailable
+    }
+}
+
+/// A catalog that no longer records the package and activation this command
+/// opened against, or whose managed objects drifted, is not ready for it; only
+/// a connection or statement failure is a database outage.
+fn catalog_failure(error: PostgresKernelError) -> Error {
+    match error {
+        PostgresKernelError::MigrationLockHeld => Error::MigrationLockHeld,
+        PostgresKernelError::Configuration(_)
+        | PostgresKernelError::RoleInvariant(_)
+        | PostgresKernelError::CatalogInvariant(_)
+        | PostgresKernelError::SchemaFingerprintMismatch { .. }
+        | PostgresKernelError::RegistryUnavailable => Error::NotReady,
+        _ => Error::DatabaseUnavailable,
     }
 }
 
@@ -742,11 +788,11 @@ mod postgres_tests {
         );
         assert!(matches!(
             runtime.withdraw("projection").await,
-            Err(Error::Unavailable)
+            Err(Error::MigrationAuthority)
         ));
         assert!(matches!(
             runtime.inspect("projection").await,
-            Err(Error::Unavailable)
+            Err(Error::MigrationAuthority)
         ));
         assert!(
             fixture
@@ -759,6 +805,42 @@ mod postgres_tests {
                 .await
                 .unwrap()["epoch"],
             bound.epoch.to_string()
+        );
+        fixture.cleanup().await;
+    }
+
+    /// A database whose activation moved since the command opened is not
+    /// ready for it; that is neither an outage nor a refused binding.
+    #[tokio::test]
+    async fn a_moved_activation_is_reported_as_not_ready() {
+        let registry = compile_project(&two_projection_project());
+        let fixture = Activated::new(&registry).await;
+        fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let mut moved = fixture.expected.clone();
+        moved.activation_id = Uuid::new_v4().to_string();
+        let stale = ExternalProjectionOperatorService::new_for_test(
+            &registry,
+            moved,
+            fixture.database.migration_config.clone(),
+            fixture.database.migration_role.clone(),
+            fixture.database.runtime_role.clone(),
+            audit(&fixture),
+        );
+        assert!(matches!(
+            stale.inspect("projection").await,
+            Err(Error::NotReady)
+        ));
+        assert!(matches!(
+            stale.withdraw("projection").await,
+            Err(Error::NotReady)
+        ));
+        assert!(
+            fixture
+                .serves(&registry, "projection", "binding", "grant")
+                .await
         );
         fixture.cleanup().await;
     }

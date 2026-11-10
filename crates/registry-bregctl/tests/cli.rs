@@ -9345,6 +9345,74 @@ fn external_projection_operations_name_both_digests_when_the_active_package_miss
     }
 }
 
+/// The database prerequisites of `bregctl external-projection` carry the
+/// codes `status` and `apply` use for the same failures, never the doctor's
+/// unusable-binding warning.
+#[test]
+fn external_projection_operations_report_database_prerequisites_with_the_shared_codes() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    for command in ["inspect", "withdraw", "rotate"] {
+        let arguments = [
+            "--format",
+            "json",
+            "external-projection",
+            command,
+            "--runtime-config",
+            path(&fixture.runtime_config),
+            "--projection",
+            "holdings-indexed",
+        ];
+        // The runtime file names connection secrets nothing provides.
+        let refused = bregctl(&arguments);
+        // The secrets name an address nothing listens on.
+        let unreachable = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env(
+                VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+                "postgresql://registry_runtime@127.0.0.1:1/breg",
+            )
+            .env(
+                VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+                "postgresql://registry_migration@127.0.0.1:1/breg",
+            )
+            .args(arguments)
+            .output()
+            .expect("bregctl starts");
+        for (output, exit, code) in [
+            (
+                &refused,
+                1,
+                "external-projection.database-configuration.refused",
+            ),
+            (&unreachable, 3, "external-projection.database.unavailable"),
+        ] {
+            assert_eq!(output.status.code(), Some(exit), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let report = json_stdout(output);
+            assert_eq!(report["ok"], false);
+            assert_eq!(report["command"], format!("external-projection {command}"));
+            assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(diagnostic["code"], code);
+            assert_eq!(diagnostic["path"], "database");
+            assert_tool_diagnostic(
+                diagnostic,
+                "database-migration",
+                "verify-migration-authority",
+            );
+            let rendered = String::from_utf8_lossy(&output.stdout);
+            for forbidden in [
+                path(&fixture.runtime_config),
+                path(&fixture.package),
+                VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+                VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+                "127.0.0.1",
+            ] {
+                assert!(!rendered.contains(forbidden), "{rendered}");
+            }
+        }
+    }
+}
+
 #[test]
 fn canonical_package_tampering_is_refused_without_rendering_package_values() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());

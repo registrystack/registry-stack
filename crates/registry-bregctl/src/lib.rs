@@ -3283,25 +3283,39 @@ where
             };
             let path = target.runtime_config.as_path();
             let projection = target.projection.as_str();
-            let outcome = tokio::runtime::Builder::new_current_thread()
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| maintenance::ExternalProjectionMaintenanceError::Unavailable)
-                .and_then(|runtime| {
-                    runtime.block_on(async {
-                        match &args.command {
-                            ExternalProjectionCommand::Inspect(_) => {
-                                maintenance::inspect(path, projection).await
-                            }
-                            ExternalProjectionCommand::Withdraw(_) => {
-                                maintenance::withdraw(path, projection).await
-                            }
-                            ExternalProjectionCommand::Rotate(_) => {
-                                maintenance::rotate(path, projection).await
-                            }
-                        }
-                    })
-                });
+            else {
+                return write_failure(
+                    &source_failure(
+                        command,
+                        diagnostic(
+                            "external-projection.runtime.unavailable",
+                            "runtime",
+                            "the external projection maintenance runtime is unavailable",
+                        ),
+                        DiagnosticArtifact::DatabaseMigration,
+                        SuggestedAction::VerifyMigrationAuthority,
+                    ),
+                    format,
+                    stdout,
+                    stderr,
+                );
+            };
+            let outcome = runtime.block_on(async {
+                match &args.command {
+                    ExternalProjectionCommand::Inspect(_) => {
+                        maintenance::inspect(path, projection).await
+                    }
+                    ExternalProjectionCommand::Withdraw(_) => {
+                        maintenance::withdraw(path, projection).await
+                    }
+                    ExternalProjectionCommand::Rotate(_) => {
+                        maintenance::rotate(path, projection).await
+                    }
+                }
+            });
             return match outcome {
                 Ok(scope) => {
                     let result = if format == OutputFormat::Json {
@@ -3852,7 +3866,62 @@ fn external_projection_failure(
             SuggestedAction::VerifyExternalProjectionOperation,
         )
     };
+    let migration = |code: &str, message: &str| {
+        source_failure(
+            command,
+            diagnostic(code, "database", message),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+        )
+    };
     match error {
+        Error::RuntimeConfigPath => source_failure(
+            command,
+            diagnostic(
+                "external-projection.runtime-config.path-invalid",
+                "runtimeConfig",
+                "the runtime configuration path must be absolute",
+            ),
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        Error::RuntimeConfig(error) => runtime_config_failure(command, error),
+        Error::PackageRefused(error) => source_failure(
+            command,
+            diagnostic(
+                "external-projection.package.refused",
+                "package",
+                package_refusal_message(&error, "the active runtime package was refused"),
+            ),
+            DiagnosticArtifact::VerifiedPackage,
+            package_refusal_action(&error),
+        ),
+        Error::DatabaseConfiguration => migration(
+            "external-projection.database-configuration.refused",
+            "the database connection configuration was refused: database.runtimeUrlRef or database.migrationUrlRef did not resolve to a PostgreSQL URL that names its configured role under database.roles. Nothing was changed",
+        ),
+        Error::DatabaseUnavailable => migration(
+            "external-projection.database.unavailable",
+            "the database could not be reached or did not complete a statement or the commit. A withdrawal or rotation whose commit was not acknowledged may have taken effect: run `bregctl external-projection inspect` before rerunning it",
+        ),
+        Error::MigrationAuthority => migration(
+            "external-projection.migration-authority.refused",
+            "external projection maintenance requires the configured migration authority: database.migrationUrlRef must connect as database.roles.migration, without administrative authority, owning the registry schemas",
+        ),
+        Error::NotReady => migration(
+            "external-projection.not-ready",
+            "the database is not ready for the active package, or its activation changed after the command opened it. Nothing was changed. Run `bregctl doctor` to name the cause, then rerun the command",
+        ),
+        Error::AuditUnavailable => source_failure(
+            command,
+            diagnostic(
+                "external-projection.audit.unavailable",
+                "audit",
+                "the audit destination could not be opened or refused an entry; check the audit path and its directory permissions. When it refused the outcome entry the change committed: run `bregctl external-projection inspect` before retrying",
+            ),
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         Error::MigrationLockHeld => source_failure(
             command,
             diagnostic(
@@ -3888,10 +3957,6 @@ fn external_projection_failure(
         Error::NotBound(_) => operation(
             "external-projection.not-bound",
             &format!("{error}; nothing was changed"),
-        ),
-        Error::InvalidRequest | Error::Unavailable => operation(
-            "external-projection.unavailable",
-            "Verify the absolute runtime configuration, migration authority and that the active package is ready.",
         ),
     }
 }
@@ -19797,4 +19862,95 @@ fn plan_timer_preview_is_value_free_in_text_and_json() {
     for forbidden in ["UPDATE ", "preview-secret-value", "registry_internal"] {
         assert!(!serialized.contains(forbidden), "{serialized}");
     }
+}
+
+/// Each `bregctl external-projection` failure carries its own code, the one
+/// other commands use for the same failure where one exists; none of them is
+/// the doctor's unusable-binding warning.
+#[cfg(test)]
+#[test]
+fn external_projection_failures_each_carry_one_code() {
+    use registry_breg::external_projection_maintenance::ExternalProjectionMaintenanceError as Error;
+    let cases = [
+        (
+            Error::RuntimeConfigPath,
+            "external-projection.runtime-config.path-invalid",
+            "runtimeConfig",
+        ),
+        (
+            Error::PackageRefused(PackageError::Integrity),
+            "external-projection.package.refused",
+            "package",
+        ),
+        (
+            Error::DatabaseConfiguration,
+            "external-projection.database-configuration.refused",
+            "database",
+        ),
+        (
+            Error::DatabaseUnavailable,
+            "external-projection.database.unavailable",
+            "database",
+        ),
+        (
+            Error::MigrationAuthority,
+            "external-projection.migration-authority.refused",
+            "database",
+        ),
+        (Error::NotReady, "external-projection.not-ready", "database"),
+        (
+            Error::AuditUnavailable,
+            "external-projection.audit.unavailable",
+            "audit",
+        ),
+        (
+            Error::MigrationLockHeld,
+            "external-projection.in-progress",
+            "database",
+        ),
+        (
+            Error::UnknownProjection("projection".to_owned()),
+            "external-projection.unknown",
+            "externalProjection",
+        ),
+        (
+            Error::BindingUnavailable {
+                projection: "projection".to_owned(),
+                reason: "no external source is bound to this projection".to_owned(),
+            },
+            "external-projection.binding.unavailable",
+            "externalSources",
+        ),
+        (
+            Error::NotBound("projection".to_owned()),
+            "external-projection.not-bound",
+            "externalProjection",
+        ),
+    ];
+    let mut codes = BTreeSet::new();
+    for (error, code, path) in cases {
+        let report = external_projection_failure("external-projection inspect", error);
+        assert!(!report.ok);
+        assert_eq!(report.command, "external-projection inspect");
+        let [diagnostic] = report.diagnostics.as_slice() else {
+            panic!("one diagnostic for {code}");
+        };
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, path, "{code}");
+        assert!(codes.insert(code), "{code} names one failure");
+    }
+    assert!(!codes.contains("external-projection.unavailable"));
+
+    let package = external_projection_failure(
+        "external-projection rotate",
+        Error::PackageRefused(PackageError::Permissions),
+    );
+    assert_eq!(
+        package.diagnostics[0].suggested_action,
+        SuggestedAction::VerifyPackagePermissions
+    );
+    assert_eq!(
+        package.diagnostics[0].artifact,
+        DiagnosticArtifact::VerifiedPackage
+    );
 }
