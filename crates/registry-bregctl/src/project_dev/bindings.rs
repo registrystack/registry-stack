@@ -45,6 +45,8 @@ const FORM_LIMIT: usize = 16 * 1024;
 const ASSERTION_LIMIT: usize = 12 * 1024;
 const ASSERTION_LIFETIME_SECONDS: u64 = 300;
 const TOKEN_LIFETIME_SECONDS: u64 = 300;
+/// How long stop lets the token endpoint finish requests already in progress.
+const TOKEN_SERVER_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const CLOCK_LEEWAY_SECONDS: u64 = 5;
 const MAXIMUM_REPLAY_ENTRIES: usize = 256;
 
@@ -522,12 +524,25 @@ fn start_token_server(
                 let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
                     return;
                 };
-                let _ = axum::serve(listener, app)
-                    .with_graceful_shutdown(async move {
-                        let _ = shutdown_rx.await;
-                    })
-                    .await;
+                let (drain_tx, drain_rx) = tokio::sync::oneshot::channel::<()>();
+                let server = async move {
+                    let _ = axum::serve(listener, app)
+                        .with_graceful_shutdown(async move {
+                            let _ = drain_rx.await;
+                        })
+                        .await;
+                };
+                tokio::pin!(server);
+                tokio::select! {
+                    () = &mut server => return,
+                    _ = shutdown_rx => {}
+                }
+                let _ = drain_tx.send(());
+                // A client that never finishes its request must not hold up
+                // stop; whatever is still open after the grace is dropped.
+                let _ = tokio::time::timeout(TOKEN_SERVER_SHUTDOWN_GRACE, server).await;
             });
+            runtime.shutdown_timeout(TOKEN_SERVER_SHUTDOWN_GRACE);
         })?;
     Ok(TokenServer {
         endpoint,
@@ -847,6 +862,46 @@ mod tests {
         value.bindings.casework_context_provider = None;
         value.products[0].audience = "registry".to_owned();
         value.bindings.validate(&value).unwrap();
+    }
+
+    #[test]
+    fn stopping_the_token_server_does_not_wait_for_an_unfinished_request() {
+        use std::io::Write;
+
+        let root = tempfile::tempdir().unwrap();
+        let issuer = Arc::new(Issuer::create(root.path()).unwrap());
+        let origins = BTreeMap::from([
+            (Product::Breg, "http://127.0.0.1:31001".to_owned()),
+            (Product::Casework, "http://127.0.0.1:31002".to_owned()),
+        ]);
+        let runtime =
+            RuntimeBindings::prepare(root.path(), Arc::new(input(plan())), issuer, &origins)
+                .unwrap();
+        let endpoint = runtime.server.as_ref().unwrap().endpoint.clone();
+        let address = endpoint
+            .trim_start_matches("http://")
+            .trim_end_matches("/oauth2/token")
+            .to_owned();
+        let mut client = std::net::TcpStream::connect(address).unwrap();
+        client
+            .write_all(
+                b"POST /oauth2/token HTTP/1.1\r\nHost: localhost\r\n\
+                  Content-Type: application/x-www-form-urlencoded\r\n\
+                  Content-Length: 100\r\n\r\ngrant_type=",
+            )
+            .unwrap();
+        thread::sleep(Duration::from_millis(200));
+
+        let (stopped, wait) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            drop(runtime);
+            let _ = stopped.send(());
+        });
+        assert!(
+            wait.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the token server waited for a client that never finished its request"
+        );
+        drop(client);
     }
 
     async fn sign_assertion(
