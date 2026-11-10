@@ -1,8 +1,8 @@
 # Registry Coordinator client
 
 A bounded server-side client for Registry Coordinator's HTTP contract. Build
-this crate and its Node.js or Python binding from source; they are not part of
-the unified Rust, Node.js, or Python client packages. Browser apps call their
+this crate from source. The unified Node.js and Python client packages carry the
+`coordinator` namespace from v0.44.0, built from the internal bindings. Browser apps call their
 own authorized server routes.
 
 The operations are `workflow`, `start`, `list`, `status`, `inspect`, `reconcile`,

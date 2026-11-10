@@ -1,7 +1,7 @@
 # Registry Coordinator Python binding
 
-This internal PyO3 binding is not published separately, and Registry
-Coordinator is not yet part of the released `registry-stack-client` wheel.
+This internal PyO3 binding is not published separately. Registry
+Coordinator is part of the released `registry-stack-client` wheel from v0.44.0.
 Built from source, the internal binding can be used like this, assuming an authorized `permit-notice` Workflow with the shown
 input contract:
 
