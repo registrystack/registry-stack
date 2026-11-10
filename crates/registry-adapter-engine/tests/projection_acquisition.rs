@@ -850,3 +850,68 @@ async fn an_unsuccessful_source_status_without_no_store_stays_unavailable() {
     );
     assert_eq!(count(&served.data), 1);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caught_failure_of_the_initial_authorization_fails_the_acquisition() {
+    // The enrich is the first send and its credential cannot be obtained; the
+    // route catches that failure and the next send then succeeds with a fresh
+    // token. Only the projection's own record of the credential failure keeps
+    // the partial result from being released.
+    let steps = json!([
+        {"enrich":{
+            "uri":"http:source",
+            "aggregateOnException":true,
+            "parameters":{"httpMethod":"GET","path":"/people"}
+        }},
+        {"to":{"uri":"http:source","parameters":{"httpMethod":"GET","path":"/people"}}}
+    ]);
+    let (result, served) =
+        oauth_exact_steps(ProjectionMode::Indexed, steps, vec![(200, "")], vec![503]).await;
+    assert!(
+        matches!(result, Err(ProjectionError::Unavailable)),
+        "{result:?}"
+    );
+    assert_eq!(count(&served.tokens), 2);
+    assert_eq!(count(&served.data), 1, "the second send ran");
+}
+
+fn replayed_exact(status: u16, headers: Value) -> Value {
+    json!({
+        "request":{"endpoint":"source","method":"GET","path":"/people"},
+        "response":{"status":status,"headers":headers,"body":{}}
+    })
+}
+
+/// A recorded response that is not a data response cannot forbid retention,
+/// so the previous snapshot is kept (the acquisition is unavailable, not
+/// no-store), whatever its Cache-Control says.
+#[tokio::test]
+async fn a_replayed_response_that_is_not_data_cannot_forbid_retention() {
+    for status in [503, 202] {
+        let reply = replayed_exact(status, json!({"Cache-Control":"no-store"}));
+        let exchanges = transcript(vec![reply]);
+        let result = exact(ProjectionMode::Indexed, "retain", Arc::clone(&exchanges)).await;
+        assert!(
+            matches!(result, Err(ProjectionError::Unavailable)),
+            "{status}: {result:?}"
+        );
+        exchanges.finish().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_202_marked_no_store_keeps_the_previous_snapshot() {
+    let (result, served) = oauth_exact(
+        ProjectionMode::Indexed,
+        1,
+        vec![(202, "Cache-Control: no-store\r\n")],
+    )
+    .await;
+    assert!(
+        matches!(result, Err(ProjectionError::Unavailable)),
+        "{result:?}"
+    );
+    assert_eq!(count(&served.data), 1);
+}
