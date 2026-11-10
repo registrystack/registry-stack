@@ -38,8 +38,10 @@ release manifests, and docs.
 
 ## What It Includes
 
-Registry Stack ships seven installable products on one release train. Each has
-its own deployment contract and adopter tooling, and each one is optional.
+Registry Stack ships ten installable products on one release train. Each has
+its own deployment contract and adopter tooling, and each one is optional. An
+eleventh, the Document Store, is documented and built from source but held out
+of releases.
 
 - **Base Registry Engine:** a configuration-defined writable registry backed by
   PostgreSQL. A registry project declares Record Types, relationships,
@@ -77,6 +79,18 @@ its own deployment contract and adopter tooling, and each one is optional.
   to send, who the recipient is, and consent to be contacted stay with the
   caller's source of record.
   Docs: [Registry Messaging API](https://docs.registrystack.org/reference/apis/registry-messaging/).
+- **Registry Render:** renders a PDF from registry data to the same bytes every
+  time, and can seal it with a PAdES signature.
+  Docs: [Registry Render overview](https://docs.registrystack.org/dev/start/registry-render/).
+- **Registry Coordinator:** finite, reviewed workflows of calls to the other
+  products' APIs, kept across durable waits, outages, and restarts. Binaries,
+  installer, and the client namespace ship from v0.44.0; its container image is
+  held.
+  Docs: [Registry Coordinator overview](https://docs.registrystack.org/dev/start/coordinator/).
+- **Registry Adapter:** a governed facade that exposes a standard registry API
+  over a source an institution already operates, from reviewed, digest-pinned
+  packs. Binaries and installer ship from v0.46.0.
+  Docs: [Registry Adapter](products/adapter/README.md).
 
 Evidence Gateway can use a fixed Base Registry Engine route or another bounded
 HTTP endpoint as a source, and keeps its own authorization either way. The stack also
