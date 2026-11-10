@@ -956,7 +956,7 @@ impl PostgresExternalViewService {
             self.audit.profile(),
             ReadTerminalAudit {
                 terminal: TerminalAudit {
-                    grant: request.context.grant_audit().cloned(),
+                    context: request.context.audit_context().cloned(),
                     outcome: if permitted {
                         TerminalAuditOutcome::Returned
                     } else {
@@ -4013,7 +4013,7 @@ mod postgres_tests {
                 "refresh".to_owned(),
                 Vec::new(),
             )
-            .with_grant_audit(&worker),
+            .with_audit_context(&worker),
             correlation: RequestCorrelation::breg_created(),
             view: "view".to_owned(),
             link: "members-link".to_owned(),
