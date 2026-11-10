@@ -719,6 +719,65 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
+  - id: breg/project-dev
+    product: breg
+    title: Registry Stack project development plan
+    files: [dev.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
+      kind: BRegProjectDev
+      checkedBy:
+        file: crates/registry-bregctl/src/project_dev/plan.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
+      kind: BRegProjectDev
+    schema:
+      path: products/breg/generated/tools/project-dev.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/project_dev/plan.rs
+      function: load
+      type: Plan
+    check: rstack dev check {project}
+    example: products/platform/conformance/projects/breg-project-dev/dev.yaml
+    conformance:
+      requiredText: /issuer
+      optionalText: none
+      integer: /journey/steps/0/expect/status
+      boolean: none
+      idList: /journey/steps
+      set: /people/operator/grants/breg/scopes
+      reference: /journey/steps/0/as
+      operand: none
+      relativePath: none
+    securityMembers:
+      - pointer: /issuer
+        whenOmitted: refused
+      - pointer: /products/*/audience
+        whenOmitted: refused
+      - pointer: /people/*/grants/breg/profile
+        whenOmitted: refused
+      - pointer: /people/*/grants/breg/scopes
+        whenOmitted: refused
+      - pointer: /people/*/grants/breg/claims
+        whenOmitted: closed
+      - pointer: /people/*/grants/casework/profile
+        whenOmitted: refused
+      - pointer: /people/*/grants/casework/scopes
+        whenOmitted: refused
+      - pointer: /people/*/grants/casework/claims
+        whenOmitted: closed
+      - pointer: /people/*/caseworkContext
+        whenOmitted: closed
+    restrictingMembers: [/issuer, /products/*/audience, /people/*/grants/breg/profile, /people/*/grants/casework/profile, /people/*/caseworkContext]
   - id: breg/example-scenarios
     product: breg
     title: Example scenarios

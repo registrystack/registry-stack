@@ -2697,6 +2697,15 @@ jobs:
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl -p registry-rstack --bins
 
+      - name: Install native PostgreSQL 18 for the project development run
+        # The Ubuntu runner's PostgreSQL 16 is below BReg's minimum.
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends postgresql-18
+          /usr/lib/postgresql/18/bin/postgres --version
+
       - name: Verify the combined licensing development run with native PostgreSQL
         shell: bash
         run: |
@@ -2704,7 +2713,7 @@ jobs:
           cargo build --locked -p registry-rstack
           python3 products/platform/scripts/test-rstack-dev.py \
             --bin-dir "${GITHUB_WORKSPACE}/target/debug" \
-            --postgres-bin-dir "$(pg_config --bindir)" \
+            --postgres-bin-dir /usr/lib/postgresql/18/bin \
             --scratch-parent "${RUNNER_TEMP}"
 
       - name: Execute the Registry Casework tutorials from a reader directory

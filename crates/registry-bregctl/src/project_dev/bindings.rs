@@ -36,7 +36,7 @@ use zeroize::Zeroizing;
 use super::{
     clock,
     issuer::Issuer,
-    plan::{self, Person, Plan, Product},
+    plan::{self, Plan, Product, TestPerson},
     write_private, RunInput,
 };
 
@@ -62,17 +62,23 @@ pub(super) struct Bindings {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct BregReviewAuthority {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) id: String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) producer: String,
-    pub(super) person: String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub(super) identity: String,
 }
 
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct CaseworkContextProvider {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) id: String,
-    pub(super) person: String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub(super) identity: String,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) action: String,
 }
 
@@ -103,9 +109,9 @@ impl Bindings {
             );
             require_machine_person(
                 plan,
-                &binding.person,
+                &binding.identity,
                 Product::Casework,
-                "/bindings/bregReviewAuthority/person",
+                "/bindings/bregReviewAuthority/identity",
             )?;
         }
         if let Some(binding) = &self.casework_context_provider {
@@ -119,9 +125,9 @@ impl Bindings {
             );
             require_machine_person(
                 plan,
-                &binding.person,
+                &binding.identity,
                 Product::Breg,
-                "/bindings/caseworkContextProvider/person",
+                "/bindings/caseworkContextProvider/identity",
             )?;
         }
         Ok(())
@@ -139,7 +145,7 @@ fn require_machine_person<'a>(
     alias: &str,
     product: Product,
     field: &str,
-) -> Result<&'a Person> {
+) -> Result<&'a TestPerson> {
     ensure!(
         plan::identifier(alias),
         "dev.yaml {field} must be a test person alias"
@@ -224,7 +230,7 @@ impl RuntimeBindings {
                 prepare_binding(
                     root,
                     &input,
-                    &binding.person,
+                    &binding.identity,
                     Product::Casework,
                     "breg-review-client",
                     &mut clients,
@@ -238,7 +244,7 @@ impl RuntimeBindings {
                 prepare_binding(
                     root,
                     &input,
-                    &binding.person,
+                    &binding.identity,
                     Product::Breg,
                     "casework-context-client",
                     &mut clients,
@@ -681,7 +687,7 @@ mod tests {
             people: BTreeMap::from([
                 (
                     "producer".to_owned(),
-                    Person {
+                    TestPerson {
                         subject: "review-producer".to_owned(),
                         client: "review-producer-client".to_owned(),
                         grants: BTreeMap::from([(
@@ -693,7 +699,7 @@ mod tests {
                 ),
                 (
                     "context-reader".to_owned(),
-                    Person {
+                    TestPerson {
                         subject: "context-reader".to_owned(),
                         client: "context-reader-client".to_owned(),
                         grants: BTreeMap::from([(
@@ -708,11 +714,11 @@ mod tests {
                 breg_review_authority: Some(BregReviewAuthority {
                     id: "casework".to_owned(),
                     producer: "registry".to_owned(),
-                    person: "producer".to_owned(),
+                    identity: "producer".to_owned(),
                 }),
                 casework_context_provider: Some(CaseworkContextProvider {
                     id: "registry".to_owned(),
-                    person: "context-reader".to_owned(),
+                    identity: "context-reader".to_owned(),
                     action: "reviewed-change".to_owned(),
                 }),
             },
@@ -752,7 +758,7 @@ mod tests {
         value.people.get_mut("producer").unwrap().grants.clear();
         let error = value.bindings.validate(&value).unwrap_err().to_string();
         assert!(
-            error.contains("/bindings/bregReviewAuthority/person"),
+            error.contains("/bindings/bregReviewAuthority/identity"),
             "{error}"
         );
     }

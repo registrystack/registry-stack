@@ -3,17 +3,24 @@
 Use `rstack dev` to start a checkout's BReg and Casework projects together.
 Install matching BReg and Casework components and supply a dedicated development
 PostgreSQL server over TLS. The database administrator needs to create and
-remove roles and databases and install `btree_gist`. Use the platform's trusted
-roots or set `RSTACK_DEV_DATABASE_CA` to your server's CA bundle in PEM format.
+remove roles and databases and install `btree_gist`. PostgreSQL 17 or newer is
+required. Use the platform's trusted roots or set `RSTACK_DEV_DATABASE_CA` to
+your server's CA bundle in PEM format.
 
 ```sh
 rstack install breg casework
 # Set RSTACK_DEV_DATABASE_URL through your shell's secret provider.
+rstack dev check ./licensing --json
 rstack dev start ./licensing --ttl 30m --json
 rstack dev status RUN_ID
 rstack dev token RUN_ID --as applicant --json
 rstack dev stop RUN_ID
 ```
+
+Run `rstack dev check PROJECT [--deny-warnings] [--json]` to validate the plan
+and its project-local file references offline. With `--json`, the check writes a
+`BRegCtlReport` with `command` set to `dev-check`. Use `--deny-warnings` to
+refuse any unaccepted warning.
 
 You can also pass `--database-url`. Use the environment variable when the URL
 includes a password. Start reports the product URLs and the journey result.
@@ -50,13 +57,14 @@ and the authority explicitly shared by both grants.
 See the [native review example](../breg/acceptance/reviewed-evidence-journey/dev.yaml).
 
 Journey steps call relative product API paths and assert the HTTP status and
-optional JSON-pointer values. Capture a string or number by JSON pointer and
-refer to it as `{{capture-name}}` in a later path, request body, header, or
+optional JSON-pointer values. Capture a string or number with a `pointer`
+capture and refer to it as `{{capture-name}}` in a later path, request body, header, or
 expected value. Use URI-safe characters for values in a path. Each step names
 the test person it runs as.
 
-Use a bounded GET poll for asynchronous delivery or result retrieval. Each
-poll can wait up to 60 seconds. A journey can make at most 512 requests and
+Use a bounded GET poll for asynchronous delivery or result retrieval. Set
+`maximumWaitMilliseconds` up to 60 seconds and choose a
+`pollIntervalMilliseconds`. A journey can make at most 512 requests and
 transfer at most 8 MiB of request and response bodies in total.
 
 `token` writes a short-lived bearer header file for each grant. Its JSON report

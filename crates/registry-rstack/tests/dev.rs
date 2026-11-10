@@ -392,6 +392,21 @@ fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
     let tools = SourceTools::new();
     for (arguments, expected) in [
         (
+            vec![
+                "dev",
+                "check",
+                tools.project.to_str().unwrap(),
+                "--deny-warnings",
+                "--json",
+            ],
+            serde_json::json!({
+                "action":"check",
+                "project":tools.project,
+                "deny_warnings":true,
+                "json":true
+            }),
+        ),
+        (
             vec!["--format", "json", "dev", "status", "run-1"],
             serde_json::json!({"action":"status","run_id":"run-1","json":true}),
         ),
@@ -449,7 +464,11 @@ fn root_and_dev_help_need_no_installation_or_binary_overrides() {
         (&["--help"][..], &["dev"][..]),
         (
             &["dev", "--help"][..],
-            &["start", "status", "token", "stop"][..],
+            &["check", "start", "status", "token", "stop"][..],
+        ),
+        (
+            &["dev", "check", "--help"][..],
+            &["PROJECT", "--deny-warnings", "--json"][..],
         ),
         (
             &["dev", "start", "--help"][..],

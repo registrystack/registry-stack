@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
+kind: BRegProjectDev
+issuer: https://issuer.example.invalid
+products:
+  - product: breg
+    project: registry
+    audience: urn:example:registry
+people:
+  operator:
+    subject: operator
+    client: operator-client
+    grants:
+      breg:
+        profile: operator
+        scopes: [registry:read]
+journey:
+  id: smoke
+  steps:
+    - id: read
+      product: breg
+      as: operator
+      method: GET
+      path: /v1/records/records
+      expect: {status: 200}

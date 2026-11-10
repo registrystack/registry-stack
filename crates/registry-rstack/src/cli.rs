@@ -165,6 +165,18 @@ enum Command {
 
 #[derive(Subcommand)]
 enum DevCommand {
+    /// Validate a development plan without starting services.
+    Check {
+        /// Project directory containing dev.yaml.
+        #[arg(value_name = "PROJECT")]
+        project: PathBuf,
+        /// Refuse an unaccepted warning.
+        #[arg(long)]
+        deny_warnings: bool,
+        /// Emit the check report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Start a development environment for a registry project.
     Start {
         /// Project directory containing dev.yaml.
@@ -215,6 +227,11 @@ enum DevCommand {
 #[derive(Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum DevRequest<'a> {
+    Check {
+        project: &'a std::path::Path,
+        deny_warnings: bool,
+        json: bool,
+    },
     Start {
         project: &'a std::path::Path,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1323,6 +1340,19 @@ fn first_path_rstack() -> Option<PathBuf> {
 fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
     let launcher_json = matches!(format, ReportFormat::Json);
     let (request, database_url, needs_services) = match action {
+        DevCommand::Check {
+            project,
+            deny_warnings,
+            json,
+        } => (
+            DevRequest::Check {
+                project,
+                deny_warnings: *deny_warnings,
+                json: *json || launcher_json,
+            },
+            None,
+            false,
+        ),
         DevCommand::Start {
             project,
             database_url,

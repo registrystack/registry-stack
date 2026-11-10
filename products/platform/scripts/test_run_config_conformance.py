@@ -1053,6 +1053,14 @@ class ReportTest(unittest.TestCase):
 
 
 class PlanTest(unittest.TestCase):
+    def test_check_child_selects_the_built_breg_helper_for_source_rstack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "bregctl"
+            binary.write_text("fixture", encoding="utf-8")
+            with unittest.mock.patch.dict(runner.os.environ, {}, clear=True):
+                environment = runner.check_environment(Path(directory))
+        self.assertEqual(environment["RSTACK_BREGCTL_BIN"], str(binary))
+
     def test_macos_check_child_restores_the_cargo_runtime_library_path(self) -> None:
         with (
             unittest.mock.patch.object(runner.sys, "platform", "darwin"),

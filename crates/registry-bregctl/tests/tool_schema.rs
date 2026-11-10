@@ -87,6 +87,92 @@ fn every_committed_example_satisfies_its_generated_schema() {
     }
 }
 
+fn project_dev_with_studio_identifiers() -> Value {
+    let mut plan = example("products/platform/examples/licensing/dev.yaml");
+    let applicant = plan["people"]
+        .as_object_mut()
+        .expect("people is a mapping")
+        .remove("applicant")
+        .expect("the licensing example has an applicant");
+    plan["people"]["date_of_birth"] = applicant;
+    plan["people"]["date_of_birth"]["grants"]["breg"]["profile"] = json!("date_of_birth");
+    plan["journey"]["id"] = json!("review_flow");
+    plan["journey"]["steps"][0]["id"] = json!("read.v1");
+    plan["journey"]["steps"][0]["as"] = json!("date_of_birth");
+    plan["journey"]["steps"][0]["capture"] =
+        json!({"draftEtag": {"type": "pointer", "pointer": "/etag"}});
+    plan["schemaTestPeople"] = json!({
+        "review_flow": {"read.v1": "date_of_birth"}
+    });
+    plan
+}
+
+#[test]
+fn project_dev_schema_accepts_the_readers_local_derived_and_capture_identifiers() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
+
+    assert!(schema.is_valid(&project_dev_with_studio_identifiers()));
+}
+
+#[test]
+fn project_dev_schema_refuses_identifiers_the_reader_refuses() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
+    let valid = project_dev_with_studio_identifiers();
+
+    for step in ["-read", "1read", ".read", "read.", "read..v1", "read.-v1"] {
+        let mut changed = valid.clone();
+        changed["journey"]["steps"][0]["id"] = json!(step);
+        assert!(!schema.is_valid(&changed), "step identifier: {step}");
+    }
+    for capture in ["1draft", "draft_etag", "draft.etag"] {
+        let mut changed = valid.clone();
+        let value = changed["journey"]["steps"][0]["capture"]
+            .as_object_mut()
+            .unwrap()
+            .remove("draftEtag")
+            .unwrap();
+        changed["journey"]["steps"][0]["capture"][capture] = value;
+        assert!(!schema.is_valid(&changed), "capture identifier: {capture}");
+    }
+    for person in ["-person", "1person", "Person", "person.name"] {
+        let mut changed = valid.clone();
+        let value = changed["people"]
+            .as_object_mut()
+            .unwrap()
+            .remove("date_of_birth")
+            .unwrap();
+        changed["people"][person] = value;
+        assert!(!schema.is_valid(&changed), "person identifier: {person}");
+    }
+
+    let mut bad_step_reference = valid.clone();
+    bad_step_reference["schemaTestPeople"]["review_flow"] = json!({"read..v1": "date_of_birth"});
+    assert!(!schema.is_valid(&bad_step_reference));
+
+    let mut bad_journey_reference = valid.clone();
+    let people = bad_journey_reference["schemaTestPeople"]
+        .as_object_mut()
+        .unwrap()
+        .remove("review_flow")
+        .unwrap();
+    bad_journey_reference["schemaTestPeople"]["review.flow"] = people;
+    assert!(!schema.is_valid(&bad_journey_reference));
+
+    let mut bad_person_reference = valid.clone();
+    bad_person_reference["schemaTestPeople"]["review_flow"] = json!({"read.v1": "date.of.birth"});
+    assert!(!schema.is_valid(&bad_person_reference));
+
+    let mut bad_person_alias = valid.clone();
+    bad_person_alias["journey"]["steps"][0]["as"] = json!("date.of.birth");
+    assert!(!schema.is_valid(&bad_person_alias));
+
+    let mut bad_journey_id = valid;
+    bad_journey_id["journey"]["id"] = json!("review.flow");
+    assert!(!schema.is_valid(&bad_journey_id));
+}
+
 #[test]
 fn example_scenario_schema_uses_bounded_display_text() {
     let documents = documents().expect("the tool schemas generate");

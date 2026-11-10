@@ -14,7 +14,10 @@ use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -418,22 +421,12 @@ impl<'a> ProductRunner<'a> {
             .stdout(output.try_clone()?)
             .spawn()
             .with_context(|| format!("cannot start {} {stage}", product.name()))?;
-        loop {
-            if let Err(error) = self.ensure_active() {
-                stop_child(&mut child)?;
-                return Err(error);
-            }
-            if child_exited(&child)? {
-                let status = stop_child(&mut child)?;
-                if status.success() {
-                    return Ok(());
-                }
-                output.rewind()?;
-                let codes = report_codes(output)?;
-                bail!("{} {stage} failed{codes}", product.name());
-            }
-            thread::sleep(POLL);
+        if wait_for_tool(&mut child, || self.ensure_active())?.success() {
+            return Ok(());
         }
+        output.rewind()?;
+        let codes = report_codes(output)?;
+        bail!("{} {stage} failed{codes}", product.name());
     }
 
     fn ready(&mut self, product: Product, base: &str) -> Result<()> {
@@ -610,6 +603,7 @@ pub(super) fn casework_principals(
     root: &Path,
     plan: &Plan,
     breg: Option<&BregAuthority>,
+    terminate: &AtomicBool,
 ) -> Result<BTreeMap<String, String>> {
     let Some(entry) = plan
         .products
@@ -618,23 +612,15 @@ pub(super) fn casework_principals(
     else {
         return Ok(BTreeMap::new());
     };
-    let path = root.join(&entry.project).join("casework.yaml");
-    let bytes = plan::read(&path, 1024 * 1024).context("cannot read casework.yaml")?;
-    let Ok(project) =
-        registry_casework_core::CaseworkProject::read(&path.display().to_string(), &bytes)
-    else {
-        bail!(
-            "Casework project check failed. Run rstack casework check for the authored diagnostics"
-        );
-    };
+    let tool = super::binaries(Product::Casework)?.tool;
+    let profiles = explain_casework_profiles(&tool, &root.join(&entry.project), terminate)?;
     let mut principals = BTreeMap::new();
     for (name, person) in &plan.people {
         let Some(grant) = person.grants.get(&Product::Casework) else {
             continue;
         };
-        let profile = project.value.access_profiles.iter().find(|profile| profile.id == grant.profile)
+        let claim = profiles.get(&grant.profile).map(String::as_str)
             .with_context(|| format!("dev.yaml /people/{name}/grants/casework/profile must name a Casework access profile"))?;
-        let claim = profile.principal_claim.as_str();
         ensure!(
             matches!(claim, "sub" | "registry_principal")
                 || (!plan::reserved_claim(claim)
@@ -651,7 +637,82 @@ pub(super) fn casework_principals(
                 "dev.yaml /people/{name}/caseworkContext requires Casework to read sub or the BReg principal claim"
             );
         }
-        principals.insert(profile.id.clone(), profile.principal_claim.clone());
+        principals.insert(grant.profile.clone(), claim.to_owned());
+    }
+    Ok(principals)
+}
+
+fn explain_casework_profiles(
+    tool: &Path,
+    project: &Path,
+    terminate: &AtomicBool,
+) -> Result<BTreeMap<String, String>> {
+    const MAX_REPORT: u64 = 4 * 1024 * 1024;
+
+    let mut child = child_command(tool)
+        .args(["--format", "json", "explain"])
+        .arg(project)
+        .stdout(Stdio::piped())
+        .spawn()
+        .context("cannot start caseworkctl explain")?;
+    let stdout = child.stdout.take().expect("the explain output was piped");
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.take(MAX_REPORT + 1).read_to_end(&mut bytes)?;
+        Ok::<_, std::io::Error>(bytes)
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = wait_for_tool(&mut child, || {
+        ensure!(
+            !terminate.load(Ordering::Relaxed),
+            "development start was interrupted"
+        );
+        ensure!(Instant::now() < deadline, "caseworkctl explain timed out");
+        Ok(())
+    })?;
+    let bytes = reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("cannot collect the Casework authoring report"))??;
+    ensure!(
+        bytes.len() as u64 <= MAX_REPORT,
+        "the Casework authoring report exceeds the size limit"
+    );
+    ensure!(
+        status.success(),
+        "Casework project check failed. Run rstack casework check for the authored diagnostics"
+    );
+    let report: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("caseworkctl explain did not emit a JSON report"))?;
+    casework_report_profiles(&report)
+}
+
+fn casework_report_profiles(report: &Value) -> Result<BTreeMap<String, String>> {
+    ensure!(
+        report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
+            && report["kind"] == "CaseworkReport"
+            && report["command"] == "explain"
+            && report["status"] == "complete"
+            && report["ok"] == true,
+        "caseworkctl explain returned an incompatible report"
+    );
+    // Each explained policy includes the whole project's access profiles.
+    let profiles = report
+        .pointer("/reviewPolicies/0/dependencies/accessProfiles")
+        .and_then(Value::as_array)
+        .context("caseworkctl explain did not report access profiles")?;
+    let mut principals = BTreeMap::new();
+    for profile in profiles {
+        let id = profile["id"]
+            .as_str()
+            .context("an explained Casework profile has no ID")?;
+        let claim = profile["principalClaim"]
+            .as_str()
+            .filter(|claim| !claim.is_empty())
+            .context("an explained Casework profile has no principal claim")?;
+        ensure!(
+            principals.insert(id.to_owned(), claim.to_owned()).is_none(),
+            "caseworkctl explain returned duplicate access profiles"
+        );
     }
     Ok(principals)
 }
@@ -715,6 +776,19 @@ fn stop_child(child: &mut Child) -> Result<ExitStatus> {
     }
     signal_group(child, Signal::KILL)?;
     Ok(child.wait()?)
+}
+
+fn wait_for_tool(child: &mut Child, active: impl Fn() -> Result<()>) -> Result<ExitStatus> {
+    loop {
+        if let Err(error) = active() {
+            stop_child(child)?;
+            return Err(error);
+        }
+        if child_exited(child)? {
+            return stop_child(child);
+        }
+        thread::sleep(POLL);
+    }
 }
 
 fn report_codes(output: impl Read) -> Result<String> {
@@ -784,7 +858,7 @@ pub(super) fn schema_people(root: &Path, plan: &Plan) -> Result<Vec<SchemaPerson
     let mut used = BTreeSet::new();
     let mut bindings = Vec::new();
     for step in steps {
-        let eligible = |person: &plan::Person| {
+        let eligible = |person: &plan::TestPerson| {
             person.grants.get(&Product::Breg).is_some_and(|grant| {
                 grant.profile == step.access_profile
                     && step.scopes.as_ref().is_none_or(|scopes| {
@@ -836,6 +910,40 @@ mod tests {
         io::{BufRead, BufReader},
         sync::mpsc,
     };
+
+    #[test]
+    fn the_casework_cli_report_owns_profile_principals() {
+        let mut report = json!({
+            "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
+            "kind": "CaseworkReport", "command": "explain", "status": "complete", "ok": true,
+            "reviewPolicies": [{"dependencies": {"accessProfiles": [
+                {"id": "reviewer", "principalClaim": "sub", "requiredScopes": ["casework:staff"]},
+                {"id": "producer", "principalClaim": "producer_identity"}
+            ]}}]
+        });
+        assert_eq!(
+            casework_report_profiles(&report).unwrap(),
+            BTreeMap::from([
+                ("producer".to_owned(), "producer_identity".to_owned()),
+                ("reviewer".to_owned(), "sub".to_owned()),
+            ])
+        );
+        let profiles = report
+            .pointer_mut("/reviewPolicies/0/dependencies/accessProfiles")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        profiles.push(json!({"id": "reviewer", "principalClaim": "different"}));
+        assert!(casework_report_profiles(&report)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate"));
+        report["command"] = json!("check");
+        assert!(casework_report_profiles(&report)
+            .unwrap_err()
+            .to_string()
+            .contains("incompatible report"));
+    }
 
     #[test]
     fn cancellation_closes_the_pipe_of_a_nested_tool() {

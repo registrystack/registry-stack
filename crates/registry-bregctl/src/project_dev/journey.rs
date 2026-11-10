@@ -308,12 +308,12 @@ fn capture_value(
     lookup: impl Fn(&str) -> Result<Value> + Copy,
 ) -> Result<Value> {
     match capture {
-        Capture::Pointer(pointer) => response
+        Capture::Pointer { pointer } => response
             .body
             .pointer(pointer)
             .cloned()
             .context("journey capture pointer was not present"),
-        Capture::Header(header) => match header.header {
+        Capture::Header { header } => match header {
             CapturedHeader::Etag => Ok(Value::String(
                 response
                     .headers
@@ -324,13 +324,13 @@ fn capture_value(
                     .to_owned(),
             )),
         },
-        Capture::Value(capture) => {
+        Capture::Value { pointer, query } => {
             let value = response
                 .body
-                .pointer(&capture.pointer)
+                .pointer(pointer)
                 .cloned()
                 .context("journey capture pointer was not present")?;
-            if let Some(query) = &capture.query {
+            if let Some(query) = query {
                 let text = value
                     .as_str()
                     .context("journey query capture did not select text")?;
@@ -345,16 +345,20 @@ fn capture_value(
                 Ok(value)
             }
         }
-        Capture::Find(capture) => {
-            let expected = expand_json(&capture.r#where.equals, lookup)?;
+        Capture::Find {
+            find,
+            r#where,
+            pointer,
+        } => {
+            let expected = expand_json(&r#where.equals, lookup)?;
             let items = response
                 .body
-                .pointer(&capture.find)
+                .pointer(find)
                 .and_then(Value::as_array)
                 .context("journey find capture did not select an array")?;
             let mut matches = items
                 .iter()
-                .filter(|item| item.pointer(&capture.r#where.pointer) == Some(&expected));
+                .filter(|item| item.pointer(&r#where.pointer) == Some(&expected));
             let item = matches
                 .next()
                 .context("journey find capture found no item")?;
@@ -362,7 +366,7 @@ fn capture_value(
                 matches.next().is_none(),
                 "journey find capture matched more than one item"
             );
-            item.pointer(&capture.pointer)
+            item.pointer(pointer)
                 .cloned()
                 .context("journey find capture pointer was not present")
         }
@@ -546,6 +550,7 @@ mod tests {
     #[test]
     fn find_capture_requires_one_matching_item() {
         let capture: Capture = serde_json::from_value(json!({
+            "type": "find",
             "find": "/items", "where": {"pointer": "/id", "equals": "two"},
             "pointer": "/revision"
         }))
@@ -565,9 +570,10 @@ mod tests {
 
     #[test]
     fn expected_status_helpers_keep_the_first_for_reports() {
-        let status = ExpectedStatus::Many(vec![202, 200]);
+        let status: ExpectedStatus = serde_json::from_value(json!([202, 200])).unwrap();
         assert_eq!(status.first(), 202);
         assert!(status.contains(200));
+        assert_eq!(serde_json::to_value(&status).unwrap(), json!([202, 200]));
     }
 
     #[test]

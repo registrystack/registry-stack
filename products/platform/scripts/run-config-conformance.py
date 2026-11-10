@@ -1934,6 +1934,9 @@ def prepare_problems(fmt: Format, staged: "Staged", env: dict[str, str], bin_dir
 def check_environment(bin_dir: Path) -> dict[str, str]:
     env = dict(os.environ)
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    bregctl = bin_dir / "bregctl"
+    if bregctl.is_file():
+        env["RSTACK_BREGCTL_BIN"] = str(bregctl)
     env["NO_COLOR"] = "1"
     env[VARIABLE] = MARKER
     env.pop(UNSET_VARIABLE, None)

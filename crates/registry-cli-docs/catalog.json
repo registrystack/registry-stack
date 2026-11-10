@@ -25923,6 +25923,96 @@
           "constraints": [],
           "subcommands": [
             {
+              "name": "check",
+              "invocation": "rstack dev check",
+              "about": "Validate a development plan without starting services",
+              "long_about": null,
+              "usage": "rstack dev check [OPTIONS] <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Project directory containing dev.yaml",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--deny-warnings",
+                  "description": "Refuse an unaccepted warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--json",
+                  "description": "Emit the check report as JSON",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
               "name": "start",
               "invocation": "rstack dev start",
               "about": "Start a development environment for a registry project",

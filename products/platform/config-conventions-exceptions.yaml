@@ -72,6 +72,36 @@ exceptions:
   reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
 - rule: CFG-NAME-2
+  format: breg/project-dev
+  location: products/breg/generated/tools/project-dev.v1alpha1.schema.json#/$defs/Method/enum/DELETE
+  class: protocol-constant
+  reason: DELETE is written as HTTP methods (RFC 9110) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/project-dev
+  location: products/breg/generated/tools/project-dev.v1alpha1.schema.json#/$defs/Method/enum/GET
+  class: protocol-constant
+  reason: GET is written as HTTP methods (RFC 9110) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/project-dev
+  location: products/breg/generated/tools/project-dev.v1alpha1.schema.json#/$defs/Method/enum/PATCH
+  class: protocol-constant
+  reason: PATCH is written as HTTP PATCH (RFC 5789) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/project-dev
+  location: products/breg/generated/tools/project-dev.v1alpha1.schema.json#/$defs/Method/enum/POST
+  class: protocol-constant
+  reason: POST is written as HTTP methods (RFC 9110) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/project-dev
+  location: products/breg/generated/tools/project-dev.v1alpha1.schema.json#/$defs/Method/enum/PUT
+  class: protocol-constant
+  reason: PUT is written as HTTP methods (RFC 9110) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
   format: breg/queries-explanation
   location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/filterable/items/properties/wireOperators/items/enum/eq null
   class: protocol-constant

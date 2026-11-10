@@ -60,6 +60,7 @@ SCHEMAS = {
         ),
         ("products/breg/generated/tools/backup-binding.v1alpha1.schema.json", "*-binding.json"),
         ("products/breg/generated/tools/dev-clients.v1alpha1.schema.json", "dev-clients.yaml"),
+        ("products/breg/generated/tools/project-dev.v1alpha1.schema.json", "dev.yaml"),
         ("products/breg/generated/tools/example-scenarios.v1alpha1.schema.json", "examples/scenarios.json"),
         (
             "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
