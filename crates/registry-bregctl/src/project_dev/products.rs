@@ -1874,6 +1874,19 @@ mod tests {
     }
 
     #[test]
+    fn a_breg_grant_may_name_a_profile_with_only_proposal_permissions() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/reviewed-evidence-journey/registry");
+        let scratch = tempfile::tempdir().unwrap();
+        let project = scratch.path().join("project");
+        copy_project(&source, &project).unwrap();
+        let registry = crate::compile(&project, crate::ProfileArg::Production, "project-dev-test")
+            .unwrap_or_else(|_| panic!("the reviewed evidence project must compile"));
+        let people = BTreeMap::from([("applier".to_owned(), breg_person("applier"))]);
+        check_breg_grants(&registry, &people).unwrap();
+    }
+
+    #[test]
     fn encrypted_fields_are_refused_before_provisioning() {
         let registry = minimal_registry(|source| {
             let source = source.replacen(
