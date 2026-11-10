@@ -467,7 +467,7 @@ pub(super) fn reserved_claim(claim: &str) -> bool {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("dev.yaml {field} {reason}")]
+#[error("dev.yaml {field}: {reason} Next: {remedy}")]
 pub(super) struct SemanticRefusal {
     field: String,
     reason: String,
@@ -492,7 +492,7 @@ pub(super) fn require(
     Ok(())
 }
 
-fn refuse<T>(field: &str, reason: &str, remedy: &str) -> SemanticResult<T> {
+pub(super) fn refuse<T>(field: &str, reason: &str, remedy: &str) -> SemanticResult<T> {
     Err(SemanticRefusal {
         field: field.to_owned(),
         reason: reason.to_owned(),
@@ -543,23 +543,30 @@ fn read_plan(root: &Path) -> Result<Decoded<Plan>> {
         .decode::<Plan>(&bytes, &Expect::one(&FORMAT))?)
 }
 
+fn refusal_report(decoded: &Decoded<Plan>, refusal: &SemanticRefusal) -> Report {
+    let diagnostic = decoded.document.diagnostic_at_value(
+        Severity::Error,
+        "rstack.dev.invalid-plan",
+        &refusal.field,
+        &refusal.reason,
+        &refusal.remedy,
+    );
+    decoded.document.report_with([diagnostic])
+}
+
 fn validate_plan(root: &Path, decoded: &Decoded<Plan>) -> Result<()> {
-    if let Err(refusal) = decoded.value.validate(root) {
-        let diagnostic = decoded.document.diagnostic_at_value(
-            Severity::Error,
-            "rstack.dev.invalid-plan",
-            &refusal.field,
-            &refusal.reason,
-            &refusal.remedy,
-        );
-        return Err(decoded.document.report_with([diagnostic]).into());
-    }
-    Ok(())
+    decoded
+        .value
+        .validate(root)
+        .map_err(|refusal| refusal_report(decoded, &refusal).into())
 }
 
 pub(crate) fn check(root: &Path) -> Result<Report> {
     let decoded = read_plan(root)?;
     validate_plan(root, &decoded)?;
+    if let Err(refusal) = super::products::schema_people(root, &decoded.value, false) {
+        return Err(refusal_report(&decoded, &refusal).into());
+    }
     Ok(decoded.document.report_with(Vec::new()))
 }
 

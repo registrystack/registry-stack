@@ -37,6 +37,28 @@ journey:\n  id: smoke\n  steps:\n    - id: read\n      product: breg\n      as: 
     .unwrap();
 }
 
+fn fixture_project(root: &std::path::Path, extra: &str) {
+    project(root, extra);
+    fs::create_dir(root.join("tests")).unwrap();
+    fs::write(
+        root.join("tests/journeys.yaml"),
+        concat!(
+            "apiVersion: id.registrystack.org/formats/breg/journeys/v1\n",
+            "kind: BRegJourneys\n",
+            "journeys:\n",
+            "  - id: real-journey\n",
+            "    steps:\n",
+            "      - id: real-step\n",
+            "        recordType: record\n",
+            "        accessProfile: operator\n",
+            "        claims: {principal: fixture-operator}\n",
+            "        request: {type: list}\n",
+            "        expect: {outcome: success, status: 200, count: 0}\n",
+        ),
+    )
+    .unwrap();
+}
+
 fn check(root: &std::path::Path, state: &std::path::Path, json: bool) -> std::process::Output {
     let request = serde_json::json!({
         "action": "check", "project": root, "deny_warnings": true, "json": json,
@@ -48,6 +70,54 @@ fn check(root: &std::path::Path, state: &std::path::Path, json: bool) -> std::pr
         .env_remove("RSTACK_DEV_DATABASE_URL")
         .output()
         .unwrap()
+}
+
+fn start(root: &std::path::Path, state: &std::path::Path) -> std::process::Output {
+    let request = serde_json::json!({
+        "action": "start", "project": root, "json": true,
+    });
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("project-dev")
+        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
+        .env("RSTACK_DEV_STATE_DIR", state)
+        .env_remove("RSTACK_DEV_DATABASE_URL")
+        .output()
+        .unwrap()
+}
+
+fn assert_dangling_schema_assignment(
+    extra: &str,
+    path: &str,
+    message: &str,
+    suggested_action: &str,
+) {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fixture_project(scratch.path(), extra);
+
+    let checked = check(scratch.path(), &state, true);
+
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(report["kind"], "BRegCtlReport");
+    assert_eq!(report["command"], "dev-check");
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "rstack.dev.invalid-plan");
+    assert_eq!(diagnostic["path"], path);
+    assert_eq!(diagnostic["message"], message);
+    assert_eq!(diagnostic["suggestedAction"], suggested_action);
+    assert!(!state.exists());
+
+    let started = start(scratch.path(), &state);
+
+    assert_eq!(started.status.code(), Some(1), "{started:?}");
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    let error = report["error"].as_str().unwrap();
+    assert!(error.contains(path), "{error}");
+    assert!(error.contains(message), "{error}");
+    assert!(error.contains(suggested_action), "{error}");
+    assert!(!state.exists());
 }
 
 #[test]
@@ -66,6 +136,274 @@ fn check_validates_the_closed_plan_without_allocating_run_state() {
     assert_eq!(report["status"], "complete");
     assert_eq!(report["ok"], true);
     assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_and_start_reject_an_unknown_fixture_journey_without_allocating_state() {
+    assert_dangling_schema_assignment(
+        "schemaTestPeople:\n  \"private/journey~marker\":\n    real-step: operator\n",
+        "/schemaTestPeople/private~1journey~0marker/real-step",
+        "The schema test assignment names a BReg fixture journey that does not exist.",
+        "Set the journey key to a journey defined in tests/journeys.yaml, or remove this assignment.",
+    );
+}
+
+#[test]
+fn check_and_start_reject_an_unknown_fixture_step_without_allocating_state() {
+    assert_dangling_schema_assignment(
+        "schemaTestPeople:\n  real-journey:\n    \"private/step~marker\": operator\n",
+        "/schemaTestPeople/real-journey/private~1step~0marker",
+        "The schema test assignment names a BReg fixture step that does not exist in the named journey.",
+        "Set the step key to a step defined in that fixture journey, or remove this assignment.",
+    );
+}
+
+#[test]
+fn check_accepts_a_valid_explicit_fixture_assignment_without_allocating_state() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fixture_project(
+        scratch.path(),
+        "schemaTestPeople:\n  real-journey:\n    real-step: operator\n",
+    );
+
+    let result = check(scratch.path(), &state, true);
+
+    assert!(result.status.success(), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert!(!state.exists());
+}
+
+#[test]
+fn implicit_fixture_person_refusals_keep_the_intended_assignment_pointer() {
+    for ambiguous in [false, true] {
+        let scratch = tempfile::tempdir().unwrap();
+        let state = scratch.path().join("state");
+        fixture_project(scratch.path(), "");
+        let plan = fs::read_to_string(scratch.path().join("dev.yaml")).unwrap();
+        let plan = if ambiguous {
+            plan.replace(
+                "journey:\n",
+                "  second:\n    subject: second\n    client: second-client\n    grants:\n      breg: {profile: operator, scopes: []}\njourney:\n",
+            )
+        } else {
+            plan.replace("profile: operator", "profile: other")
+        };
+        fs::write(scratch.path().join("dev.yaml"), plan).unwrap();
+
+        let result = check(scratch.path(), &state, true);
+
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(
+            diagnostic["path"],
+            "/schemaTestPeople/real-journey/real-step"
+        );
+        assert_eq!(
+            diagnostic["message"],
+            "A BReg fixture step must resolve to exactly one test person with matching profile, scopes, and purpose."
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Add or update a matching BReg grant, or select the matching person in schemaTestPeople."
+        );
+        assert!(!state.exists());
+    }
+}
+
+#[test]
+fn check_and_start_report_an_explicit_assignment_with_no_fixture_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    project(
+        scratch.path(),
+        "schemaTestPeople:\n  real-journey:\n    real-step: operator\n",
+    );
+
+    let checked = check(scratch.path(), &state, true);
+
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/schemaTestPeople");
+    assert_eq!(
+        diagnostic["message"],
+        "The BReg fixture journeys file is missing, unreadable, or outside the BReg product project."
+    );
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Create a readable tests/journeys.yaml inside the BReg product project, or remove schemaTestPeople."
+    );
+    assert!(!state.exists());
+
+    let started = start(scratch.path(), &state);
+
+    assert_eq!(started.status.code(), Some(1), "{started:?}");
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    let error = report["error"].as_str().unwrap();
+    assert!(error.contains("/schemaTestPeople"), "{error}");
+    assert!(
+        error.contains("fixture journeys file is missing"),
+        "{error}"
+    );
+    assert!(
+        error.contains("Create a readable tests/journeys.yaml"),
+        "{error}"
+    );
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_and_start_refuse_a_fixture_symlink_outside_the_breg_project() {
+    let scratch = tempfile::tempdir().unwrap();
+    let sibling = tempfile::tempdir_in(scratch.path()).unwrap();
+    let state = scratch.path().join("state");
+    fixture_project(sibling.path(), "");
+    project(scratch.path(), "");
+    fs::create_dir(scratch.path().join("breg")).unwrap();
+    fs::write(scratch.path().join("breg/registry.yaml"), "fixture\n").unwrap();
+    let plan = fs::read_to_string(scratch.path().join("dev.yaml"))
+        .unwrap()
+        .replace("product: breg, project: .", "product: breg, project: breg");
+    fs::write(scratch.path().join("dev.yaml"), plan).unwrap();
+    fs::create_dir(scratch.path().join("breg/tests")).unwrap();
+    std::os::unix::fs::symlink(
+        sibling.path().join("tests/journeys.yaml"),
+        scratch.path().join("breg/tests/journeys.yaml"),
+    )
+    .unwrap();
+
+    let checked = check(scratch.path(), &state, true);
+
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/products/0/project");
+    assert_eq!(
+        diagnostic["message"],
+        "The BReg fixture journeys file must be a readable regular file inside the BReg product project."
+    );
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Place tests/journeys.yaml inside the BReg product project without linking it outside that project."
+    );
+    assert!(!state.exists());
+
+    let started = start(scratch.path(), &state);
+
+    assert_eq!(started.status.code(), Some(1), "{started:?}");
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    let error = report["error"].as_str().unwrap();
+    assert!(error.contains("/products/0/project"), "{error}");
+    assert!(error.contains("fixture journeys file must be"), "{error}");
+    assert!(error.contains("without linking it outside"), "{error}");
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_reports_an_invalid_fixture_as_an_actionable_plan_refusal() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    project(
+        scratch.path(),
+        "schemaTestPeople:\n  real-journey:\n    real-step: operator\n",
+    );
+    fs::create_dir(scratch.path().join("tests")).unwrap();
+    fs::write(
+        scratch.path().join("tests/journeys.yaml"),
+        "not a fixture\n",
+    )
+    .unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/schemaTestPeople");
+    assert_eq!(
+        diagnostic["message"],
+        "The BReg fixture journeys file is not valid."
+    );
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Run `rstack breg check` for authored diagnostics, then correct tests/journeys.yaml."
+    );
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_reports_an_oversized_fixture_as_an_actionable_plan_refusal() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    project(
+        scratch.path(),
+        "schemaTestPeople:\n  real-journey:\n    real-step: operator\n",
+    );
+    fs::create_dir(scratch.path().join("tests")).unwrap();
+    fs::write(
+        scratch.path().join("tests/journeys.yaml"),
+        vec![b' '; 1024 * 1024 + 1],
+    )
+    .unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/schemaTestPeople");
+    assert_eq!(
+        diagnostic["message"],
+        "The BReg fixture journeys file is unreadable or exceeds the 1 MiB limit."
+    );
+    assert_eq!(
+        diagnostic["suggestedAction"],
+        "Make tests/journeys.yaml readable and no larger than 1 MiB, then run the check again."
+    );
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_refuses_a_breg_project_directory_that_resolves_outside_the_project() {
+    let scratch = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    project(scratch.path(), "");
+    fs::create_dir(outside.path().join("tests")).unwrap();
+    fs::write(
+        outside.path().join("tests/journeys.yaml"),
+        include_str!("../../../products/breg/examples/minimal/tests/journeys.yaml"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path().join("registry.yaml"),
+        outside.path().join("registry.yaml"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outside.path(), scratch.path().join("linked-breg")).unwrap();
+    let plan = fs::read_to_string(scratch.path().join("dev.yaml"))
+        .unwrap()
+        .replace(
+            "product: breg, project: .",
+            "product: breg, project: linked-breg",
+        );
+    fs::write(scratch.path().join("dev.yaml"), plan).unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/products/0/project");
+    assert_eq!(
+        diagnostic["message"],
+        "The BReg fixture journeys file must be a readable regular file inside the BReg product project."
+    );
     assert!(!state.exists());
 }
 
@@ -242,6 +580,55 @@ fn start_reports_an_actionable_value_free_unstarted_grant() {
     ] {
         assert!(!error.contains(supplied), "leaked {supplied}: {error}");
     }
+    assert!(!state.exists());
+}
+
+#[test]
+fn start_rejects_a_dangling_breg_grant_profile_before_allocating_state() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fs::write(
+        scratch.path().join("registry.yaml"),
+        include_str!("../../../products/breg/examples/minimal/registry.yaml"),
+    )
+    .unwrap();
+    fs::create_dir(scratch.path().join("tests")).unwrap();
+    fs::write(
+        scratch.path().join("tests/journeys.yaml"),
+        include_str!("../../../products/breg/examples/minimal/tests/journeys.yaml"),
+    )
+    .unwrap();
+    fs::write(
+        scratch.path().join("dev.yaml"),
+        "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\n\
+kind: BRegProjectDev\n\
+issuer: https://issuer.example.invalid\n\
+products:\n  - {product: breg, project: ., audience: registry}\n\
+people:\n  editor:\n    subject: editor\n    client: editor-client\n    grants:\n      breg:\n        profile: directory-editor\n        scopes: [registry:directory:write]\n        claims: {registry_purpose: directory-administration}\n  unused:\n    subject: unused\n    client: unused-client\n    grants:\n      breg: {profile: private-profile-marker, scopes: []}\n\
+journey:\n  id: smoke\n  steps:\n    - {id: read, product: breg, as: editor, method: GET, path: /v1/records, expect: {status: 200}}\n",
+    )
+    .unwrap();
+
+    let result = start(scratch.path(), &state);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let error = report["error"].as_str().unwrap();
+    assert!(
+        error.contains("/people/unused/grants/breg/profile"),
+        "{error}"
+    );
+    assert!(
+        error.contains(
+            "The BReg grant profile does not name an access profile in the BReg project."
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("Set profile to an access profile defined by the BReg project."),
+        "{error}"
+    );
+    assert!(!error.contains("private-profile-marker"), "{error}");
     assert!(!state.exists());
 }
 

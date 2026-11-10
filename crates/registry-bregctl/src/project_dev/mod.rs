@@ -338,7 +338,7 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
         .canonicalize()
         .context("cannot open the development project directory")?;
     let plan = plan::load(&project)?;
-    let schema_people = products::schema_people(&project, &plan)?;
+    let schema_people = products::schema_people(&project, &plan, true)?;
     let breg_authority = products::breg_authority(&project, &plan)?;
     let signals = signals()?;
     let casework_principals =
