@@ -117,8 +117,9 @@ ordinary permissions. If several people match a step in the BReg project's
 `schemaTestPeople.<journey-id>.<step-id>`. The run obtains the normal
 schema-test receipt before packaging.
 
-Every BReg grant must name an access profile that one of the BReg project's
-entities declares. The run refuses a grant that does not, before it provisions
+Every BReg grant must name an access profile the BReg project declares,
+including a profile that carries only proposal permissions and so belongs to no
+entity. The run refuses a grant that does not, before it provisions
 anything. The error names the plan pointer, for example
 `/people/NAME/grants/breg/profile`, and lists the profiles the project
 declares. A Casework grant must name an access profile of the Casework project,
@@ -195,7 +196,9 @@ starts with `breg_bbox_`; cleanup removes it with the others.
 
 The state directory holds one directory per run. It defaults to
 `rstack-dev-UID` in the system temporary directory. Set `RSTACK_DEV_STATE_DIR`
-to use another location.
+to use another location. A run directory is renamed to `.<run_id>.removing`
+before it is deleted, and `status` and `stop` ignore that name. If the deletion
+is interrupted, delete that directory yourself.
 
 ## When a run fails
 
