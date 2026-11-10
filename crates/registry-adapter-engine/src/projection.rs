@@ -392,15 +392,18 @@ impl ProjectionProgram {
             .ok_or(ProjectionError::Contract)?;
         let previous_successes = http.successful.load(Ordering::Relaxed);
         let result = self.program.execute_raw(acquisition, input).await;
+        // A response that forbids retention outranks every failure: BReg
+        // drops the cached snapshot for `NoStore` but keeps it for
+        // `Unavailable`.
+        if mode == ProjectionMode::Indexed && http.retention_restricted.load(Ordering::Relaxed) {
+            return Err(ProjectionError::NoStore);
+        }
         if http.failed.load(Ordering::Relaxed)
             || http.successful.load(Ordering::Relaxed) == previous_successes
         {
             return Err(ProjectionError::Unavailable);
         }
         let value = result.map_err(|_| ProjectionError::Unavailable)?;
-        if mode == ProjectionMode::Indexed && http.retention_restricted.load(Ordering::Relaxed) {
-            return Err(ProjectionError::NoStore);
-        }
         match serde_json::from_value(value) {
             Ok(SourceResult::Unavailable {}) => Err(ProjectionError::Unavailable),
             Ok(result) => Ok(result),
