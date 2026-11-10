@@ -34,6 +34,24 @@ up these alongside every database backup, on the same schedule:
   pg_dump --format=custom --file=/srv/backup/registry-before-build-2.dump registry
   ```
 
+  When the package declares an indexed external projection, exclude the data of its four
+  projection tables. The backup then holds no source values, bindings, or refresh receipts. Keep
+  the tables themselves: use `--exclude-table-data`, never `--exclude-table`.
+
+  ```sh
+  pg_dump --format=custom \
+    --exclude-table-data=registry_internal.registry_external_projection_scopes \
+    --exclude-table-data=registry_internal.registry_external_projection_refreshes \
+    --exclude-table-data=registry_internal.registry_external_projection_snapshots \
+    --exclude-table-data=registry_internal.registry_external_projection_values \
+    --file=/srv/backup/registry-before-build-2.dump registry
+  ```
+
+  A restore then starts with an empty projection cache, as a fresh install does. Authorized refresh
+  rebuilds it under the current binding and source grant; nothing is restored from the backup. See
+  [Logical backups](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md#logical-backups)
+  in the external projection storage guide.
+
 - The package directory, the runtime file, and the secret files it
   references. A restore needs the package the backup was taken under.
 - The field-encryption key when the project encrypts a field: the Transit key, or the local
@@ -43,6 +61,9 @@ up these alongside every database backup, on the same schedule:
   that no longer match the ones already in the archive.
 - The attachment bucket, when `attachmentStorage` binds an S3-compatible backend. The database
   holds references; the bucket holds the bytes, so back it up at the same point.
+
+{/* Evidence: products/breg/external-projection-storage.md, Logical backups and Restore;
+    crates/registry-breg/src/postgres/external_projection.rs, INSTALL_SQL. */}
 
 ### Registry Casework state
 
