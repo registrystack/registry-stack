@@ -8174,6 +8174,7 @@ dependencies = [
  "registry-platform-buildinfo",
  "registry-platform-canonical-json",
  "registry-platform-config",
+ "registry-platform-yaml",
  "registry-thunderid-tooling",
  "rustix 1.1.5",
  "serde",

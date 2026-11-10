@@ -612,3 +612,40 @@ fn missing_breg_names_the_install_command_before_the_overrides() {
         .unwrap_or_else(|| panic!("{stderr}"));
     assert!(install < overrides, "{stderr}");
 }
+
+#[test]
+fn casework_text_outside_the_products_list_does_not_require_casework() {
+    let tools = SourceTools::new();
+    fs::write(
+        tools.project.join("dev.yaml"),
+        "# product: casework\nissuer: https://issuer.example\nproducts:\n  - {product: breg, project: breg, audience: \"urn:example:breg\"}\njourney:\n  steps:\n    - name: \"product: casework\"\n",
+    )
+    .unwrap();
+    let output = tools
+        .empty_command()
+        .args(["dev", "start"])
+        .arg(&tools.project)
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .env("RSTACK_BREG_BIN", &tools.breg)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn unparsable_plan_still_requires_casework() {
+    let tools = SourceTools::new();
+    fs::write(tools.project.join("dev.yaml"), "products: [\n").unwrap();
+    let output = tools
+        .empty_command()
+        .args(["dev", "start"])
+        .arg(&tools.project)
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .env("RSTACK_BREG_BIN", &tools.breg)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("rstack install casework"));
+}
