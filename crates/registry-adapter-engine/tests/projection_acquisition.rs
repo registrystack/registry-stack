@@ -29,6 +29,17 @@ fn operation_with_authentication(
     authentication: Value,
     step_count: usize,
 ) -> (AdapterPack, PackArtifactBytes) {
+    let step = json!({"to":{"uri":"http:source","parameters":{
+        "httpMethod":"GET", "path":"/people"
+    }}});
+    operation_with_steps(retention, authentication, json!(vec![step; step_count]))
+}
+
+fn operation_with_steps(
+    retention: &str,
+    authentication: Value,
+    steps: Value,
+) -> (AdapterPack, PackArtifactBytes) {
     let schema = serde_json::to_vec(&json!({
         "type":"object",
         "additionalProperties":false,
@@ -36,10 +47,6 @@ fn operation_with_authentication(
     }))
     .unwrap();
     let digest = registry_platform_config::sha256_uri(&schema);
-    let step = json!({"to":{"uri":"http:source","parameters":{
-        "httpMethod":"GET", "path":"/people"
-    }}});
-    let steps = json!(vec![step; step_count]);
     let pack: AdapterPack = serde_json::from_value(json!({
         "id":"synthetic","version":"1","testedVersions":[],
         "endpoints":[{"id":"source","component":"http","authentication":authentication,"attemptTimeoutMilliseconds":1000,"maximumResponseBytes":4096}],
@@ -515,26 +522,33 @@ async fn an_audit_delay_cannot_start_source_io_after_the_grant_deadline() {
     exchanges.finish().unwrap();
 }
 
+/// Request counts observed by the loopback source.
+#[cfg(unix)]
+#[derive(Default)]
+struct Served {
+    tokens: std::sync::atomic::AtomicUsize,
+    data: std::sync::atomic::AtomicUsize,
+}
+
 /// Serves `/token` and `/people` on loopback. Each `/people` request takes
-/// the next `(status, extra header lines)` entry; each `/token` request mints
-/// a numbered credential. Returns the origin and the count of token requests.
+/// the next `(status, extra header lines)` entry; each `/token` request takes
+/// the next status from `token_statuses` (200 once it is exhausted) and mints
+/// a numbered credential on 200. Returns the origin and the request counts.
 #[cfg(unix)]
 async fn oauth_source(
     data: Vec<(u16, &'static str)>,
-) -> (
-    String,
-    Arc<std::sync::atomic::AtomicUsize>,
-    tokio::task::JoinHandle<()>,
-) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    token_statuses: Vec<u16>,
+) -> (String, Arc<Served>, tokio::task::JoinHandle<()>) {
+    use std::sync::atomic::Ordering;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
-    let tokens = Arc::new(AtomicUsize::new(0));
-    let observed = Arc::clone(&tokens);
+    let served = Arc::new(Served::default());
+    let observed = Arc::clone(&served);
     let task = tokio::spawn(async move {
         let mut data = data.into_iter();
+        let mut token_statuses = token_statuses.into_iter();
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut buffer = Vec::new();
@@ -565,14 +579,18 @@ async fn oauth_source(
                 .unwrap()
                 .to_owned();
             let (status, extra, body) = if path == "/token" {
-                let number = observed.fetch_add(1, Ordering::SeqCst) + 1;
-                (
-                    200,
-                    "",
-                    json!({"access_token":format!("token-{number}"),"token_type":"Bearer","expires_in":300})
-                        .to_string(),
-                )
+                let number = observed.tokens.fetch_add(1, Ordering::SeqCst) + 1;
+                match token_statuses.next().unwrap_or(200) {
+                    200 => (
+                        200,
+                        "",
+                        json!({"access_token":format!("token-{number}"),"token_type":"Bearer","expires_in":300})
+                            .to_string(),
+                    ),
+                    status => (status, "", "{}".to_owned()),
+                }
             } else {
+                observed.data.fetch_add(1, Ordering::SeqCst);
                 let (status, extra) = data.next().expect("an unexpected source request");
                 let body = if status == 200 {
                     json!({"type":"exact","record":{"outcome":"present","key":"person-7","fields":{"familyName":"Lee"}}})
@@ -594,7 +612,7 @@ async fn oauth_source(
                 .unwrap();
         }
     });
-    (origin, tokens, task)
+    (origin, served, task)
 }
 
 #[cfg(unix)]
@@ -602,13 +620,26 @@ async fn oauth_exact(
     mode: ProjectionMode,
     step_count: usize,
     data: Vec<(u16, &'static str)>,
-) -> (Result<ProjectionResult, ProjectionError>, usize) {
+) -> (Result<ProjectionResult, ProjectionError>, Arc<Served>) {
+    let step = json!({"to":{"uri":"http:source","parameters":{
+        "httpMethod":"GET", "path":"/people"
+    }}});
+    oauth_exact_steps(mode, json!(vec![step; step_count]), data, vec![]).await
+}
+
+#[cfg(unix)]
+async fn oauth_exact_steps(
+    mode: ProjectionMode,
+    steps: Value,
+    data: Vec<(u16, &'static str)>,
+    token_statuses: Vec<u16>,
+) -> (Result<ProjectionResult, ProjectionError>, Arc<Served>) {
     use registry_adapter_core::{AdapterEndpointBindings, EvidenceConnectionPolicy};
     use registry_adapter_engine::evidence::EvidenceRuntimeBindings;
     use registry_platform_config::{SecretProvider, SecretResolver};
     use std::os::unix::fs::PermissionsExt;
 
-    let (origin, tokens, source) = oauth_source(data).await;
+    let (origin, served, source) = oauth_source(data, token_statuses).await;
     let root = tempfile::tempdir().unwrap();
     for (name, value) in [("client-id", "client"), ("client-secret", "secret")] {
         let path = root.path().join(name);
@@ -642,11 +673,8 @@ async fn oauth_exact(
         }
     }))
     .unwrap();
-    let (pack, artifacts) = operation_with_authentication(
-        "retain",
-        json!({"type":"oauth2-client-credentials"}),
-        step_count,
-    );
+    let (pack, artifacts) =
+        operation_with_steps("retain", json!({"type":"oauth2-client-credentials"}), steps);
     let program = compile_projection_pack(&pack, "lookup", &artifacts, EvidenceLimits::default())
         .unwrap()
         .bind_live(&runtime, "synthetic-connection", &[policy])
@@ -662,63 +690,128 @@ async fn oauth_exact(
         )
         .await;
     source.abort();
-    (result, tokens.load(std::sync::atomic::Ordering::SeqCst))
+    (result, served)
+}
+
+#[cfg(unix)]
+fn count(counter: &std::sync::atomic::AtomicUsize) -> usize {
+    counter.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(unix)]
+fn is_present(result: &Result<ProjectionResult, ProjectionError>) -> bool {
+    matches!(
+        result,
+        Ok(ProjectionResult::Exact {
+            record: ProjectionRecord::Present { .. }
+        })
+    )
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_credential_refresh_after_a_401_does_not_fail_the_acquisition() {
-    let (result, tokens) = oauth_exact(ProjectionMode::Live, 1, vec![(401, ""), (200, "")]).await;
-    assert!(
-        matches!(
-            result,
-            Ok(ProjectionResult::Exact {
-                record: ProjectionRecord::Present { .. }
-            })
-        ),
-        "{result:?}"
+    let (result, served) = oauth_exact(ProjectionMode::Live, 1, vec![(401, ""), (200, "")]).await;
+    assert!(is_present(&result), "{result:?}");
+    assert_eq!(
+        count(&served.tokens),
+        2,
+        "the 401 triggers exactly one refresh"
     );
-    assert_eq!(tokens, 2, "the 401 triggers exactly one refresh");
+    assert_eq!(count(&served.data), 2);
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_401_that_survives_the_credential_refresh_still_fails() {
-    let (result, tokens) = oauth_exact(ProjectionMode::Live, 1, vec![(401, ""), (401, "")]).await;
-    assert!(result.is_err(), "{result:?}");
-    assert_eq!(tokens, 2);
+    let (result, served) = oauth_exact(ProjectionMode::Live, 1, vec![(401, ""), (401, "")]).await;
+    assert!(
+        matches!(result, Err(ProjectionError::Unavailable)),
+        "{result:?}"
+    );
+    assert_eq!(count(&served.tokens), 2);
+    assert_eq!(count(&served.data), 2);
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_non_401_source_failure_still_fails_without_a_refresh() {
-    let (result, tokens) = oauth_exact(ProjectionMode::Live, 1, vec![(503, "")]).await;
+    let (result, served) = oauth_exact(ProjectionMode::Live, 1, vec![(503, "")]).await;
     assert!(
         matches!(result, Err(ProjectionError::Unavailable)),
         "{result:?}"
     );
-    assert_eq!(tokens, 1);
+    assert_eq!(count(&served.tokens), 1);
+    assert_eq!(count(&served.data), 1);
+}
+
+#[cfg(unix)]
+fn enrich_after_a_primary_send() -> Value {
+    json!([
+        {"to":{"uri":"http:source","parameters":{"httpMethod":"GET","path":"/people"}}},
+        {"enrich":{
+            "uri":"http:source",
+            "aggregateOnException":true,
+            "parameters":{"httpMethod":"GET","path":"/people"}
+        }}
+    ])
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn no_store_wins_over_an_unsuccessful_source_status() {
-    let (result, _) = oauth_exact(
+async fn a_caught_token_endpoint_failure_during_a_refresh_fails_the_acquisition() {
+    // The primary send succeeds; the enrich gets a 401 and the token refresh
+    // then fails. The route catches that failure, so only the projection's
+    // own record of it keeps the partial result from being released.
+    let (result, served) = oauth_exact_steps(
+        ProjectionMode::Indexed,
+        enrich_after_a_primary_send(),
+        vec![(200, ""), (401, "")],
+        vec![200, 503],
+    )
+    .await;
+    assert!(
+        matches!(result, Err(ProjectionError::Unavailable)),
+        "{result:?}"
+    );
+    assert_eq!(count(&served.tokens), 2);
+    assert_eq!(count(&served.data), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_error_response_that_marks_itself_no_store_does_not_purge_the_snapshot() {
+    let (result, served) = oauth_exact(
         ProjectionMode::Indexed,
         1,
         vec![(503, "Cache-Control: no-store\r\n")],
     )
     .await;
     assert!(
-        matches!(result, Err(ProjectionError::NoStore)),
+        matches!(result, Err(ProjectionError::Unavailable)),
         "{result:?}"
     );
+    assert_eq!(count(&served.data), 1);
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn no_store_wins_over_a_route_failure_after_the_header_arrived() {
-    let (result, _) = oauth_exact(
+async fn a_no_store_401_that_is_refreshed_does_not_restrict_the_clean_retry() {
+    let (result, served) = oauth_exact(
+        ProjectionMode::Indexed,
+        1,
+        vec![(401, "Cache-Control: no-store\r\n"), (200, "")],
+    )
+    .await;
+    assert!(is_present(&result), "{result:?}");
+    assert_eq!(count(&served.tokens), 2);
+    assert_eq!(count(&served.data), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn no_store_on_a_successful_response_wins_over_a_later_route_failure() {
+    let (result, served) = oauth_exact(
         ProjectionMode::Indexed,
         2,
         vec![(200, "Cache-Control: no-store\r\n"), (503, "")],
@@ -728,14 +821,32 @@ async fn no_store_wins_over_a_route_failure_after_the_header_arrived() {
         matches!(result, Err(ProjectionError::NoStore)),
         "{result:?}"
     );
+    assert_eq!(count(&served.data), 2, "the failing second step ran");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreadable_cache_control_on_a_successful_response_fails_closed() {
+    let (result, served) = oauth_exact(
+        ProjectionMode::Indexed,
+        1,
+        vec![(200, "Cache-Control: caf\u{e9}\r\n")],
+    )
+    .await;
+    assert!(
+        matches!(result, Err(ProjectionError::NoStore)),
+        "{result:?}"
+    );
+    assert_eq!(count(&served.data), 1);
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn an_unsuccessful_source_status_without_no_store_stays_unavailable() {
-    let (result, _) = oauth_exact(ProjectionMode::Indexed, 1, vec![(503, "")]).await;
+    let (result, served) = oauth_exact(ProjectionMode::Indexed, 1, vec![(503, "")]).await;
     assert!(
         matches!(result, Err(ProjectionError::Unavailable)),
         "{result:?}"
     );
+    assert_eq!(count(&served.data), 1);
 }

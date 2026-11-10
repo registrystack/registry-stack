@@ -2843,6 +2843,18 @@ impl Run<'_, '_> {
         }
     }
 
+    /// A credential failure in a projection acquisition is terminal for the
+    /// projection even when a route step catches the resulting failure, so a
+    /// partial result is never released.
+    fn observe_credential_failure(&self) {
+        if let Some(projection) = self
+            .evidence
+            .and_then(|acquisition| acquisition.projection_http.as_ref())
+        {
+            projection.observe_response(false);
+        }
+    }
+
     /// Refuse work that begins at or after the route-wide deadline. The
     /// outer timeout remains the final guard for an in-flight operation.
     pub(crate) fn ensure_deadline(&self) -> Result<(), RouteFailure> {
@@ -3265,7 +3277,10 @@ impl Run<'_, '_> {
         .map_err(|_| RouteFailure::of(ErrorClass::BudgetExhausted))?;
         // The send is announced only once its credential is in hand; a
         // credential failure never reads as a send that began.
-        let mut credential = authorized.map_err(|error| auth_failure(&error, &auth_events))?;
+        let mut credential = authorized.map_err(|error| {
+            self.observe_credential_failure();
+            auth_failure(&error, &auth_events)
+        })?;
         let headers = self.exchange.message.string_headers();
         let system_traceparent = self.exchange.system_traceparent().cloned();
         let source_idempotency_key = match resume_send {
@@ -3581,7 +3596,7 @@ impl Run<'_, '_> {
                     .and_then(|acquisition| acquisition.projection_http.as_ref())
                 {
                     let successful = matches!(&reply, PhysicalSendReply::Ordinary(Ok(reply))
-                        if (200..300).contains(&reply.status) && reply.status != 202);
+                        if crate::projection::ProjectionHttpState::status_successful(reply.status));
                     projection.observe_response(successful);
                 }
             }
@@ -3683,7 +3698,10 @@ impl Run<'_, '_> {
                 };
                 credential = refreshed
                     .map_err(|_| RouteFailure::of(ErrorClass::BudgetExhausted))?
-                    .map_err(|error| auth_failure(&error, &auth_events))?;
+                    .map_err(|error| {
+                        self.observe_credential_failure();
+                        auth_failure(&error, &auth_events)
+                    })?;
                 continue;
             }
             if action == UpstreamStatusAction::CredentialRejected {

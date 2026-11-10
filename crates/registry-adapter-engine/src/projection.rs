@@ -80,6 +80,12 @@ impl ProjectionHttpState {
         }
     }
 
+    /// The status test shared by success counting and no-store handling: a
+    /// 2xx that is not a 202 acceptance carries data.
+    pub(crate) fn status_successful(status: u16) -> bool {
+        (200..300).contains(&status) && status != 202
+    }
+
     pub(crate) fn observe_response(&self, successful: bool) {
         if successful {
             self.successful.fetch_add(1, Ordering::Relaxed);
