@@ -334,9 +334,9 @@ impl ReviewStagePolicy {
             ReviewPurpose::Answer => ReviewOutcomeSettlement::Answered,
         };
         if !outcomes.is_empty()
-            && !declared.iter().any(|outcome| {
-                outcome.settlement == advancing && outcomes.iter().any(|id| *id == outcome.id)
-            })
+            && !declared
+                .iter()
+                .any(|outcome| outcome.settlement == advancing && outcomes.contains(&outcome.id))
         {
             findings.push(
                 "casework.review-policy.stage-without-advancing-outcome",
