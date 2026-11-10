@@ -205,3 +205,18 @@ fn stage_outcomes_example_passes_offline_authoring_commands() {
         assert_eq!(report["status"], "complete");
     }
 }
+
+#[test]
+fn explain_lists_every_access_profile_at_the_top_level() {
+    let root = repo_root();
+    let (report, _) = output(&root, &["explain", STANDALONE], 0);
+    assert_eq!(
+        report["accessProfiles"],
+        serde_json::json!([
+            {"id": "administrator", "principalClaim": "sub"},
+            {"id": "requester", "principalClaim": "sub"},
+            {"id": "staff", "principalClaim": "sub"},
+            {"id": "supervisor", "principalClaim": "sub"}
+        ])
+    );
+}

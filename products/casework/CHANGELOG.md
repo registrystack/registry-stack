@@ -7,6 +7,8 @@
   `caseworkctl explain` lists them. A stage that omits the list offers every
   policy outcome.
 
+- `caseworkctl explain` adds a top-level `accessProfiles` list, sorted by `id`, with each access profile's `id` and `principalClaim`, so a caller no longer reads them from a review policy's `dependencies`. The member is additive.
+
 ## 0.46.0 - 2026-11-08
 
 - Each access profile may carry an optional `label` and `description`. Neither is matched against a caller, a profile that writes neither reads as before, and rewording them leaves a policy's behavioral binding unchanged. Casework keeps both in the review policy description, which any caller who may read that description, requesters included, can see.

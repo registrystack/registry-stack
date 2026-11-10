@@ -778,8 +778,17 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
             "refusals": ["untrusted producer", "policy binding mismatch", "concealed source", "changed subject or contract", "stale task revision", "ineligible reviewer"],
         }))
     }).collect::<std::result::Result<Vec<Value>,registry_casework_core::ReviewPolicyError>>()?;
+    let mut access_profiles = policy
+        .access_profiles
+        .iter()
+        .map(|profile| crate::report::ExplainAccessProfile {
+            id: profile.id.clone(),
+            principal_claim: profile.principal_claim.clone(),
+        })
+        .collect::<Vec<_>>();
+    access_profiles.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(
-        json!({"ok":true,"command":"explain","project":policy.project,"reviewPolicies":reviews,"contextProviders":policy.context_providers,"clocks":policy.clocks,"calendars":policy.calendars,"trustedProducers":policy.trusted_producers,"staffing":{"next":"due ordered eligible visible tasks","holdings":"claimed or assigned tasks under current visibility","caseload":"atomic preview and revision-fenced apply","routing":"once per task or stage from compiled minimized fields","clockRecompute":"pinned policy closure"},"authority":"producer, human reviewer and downstream executor authenticate independently"}),
+        json!({"ok":true,"command":"explain","project":policy.project,"accessProfiles":access_profiles,"reviewPolicies":reviews,"contextProviders":policy.context_providers,"clocks":policy.clocks,"calendars":policy.calendars,"trustedProducers":policy.trusted_producers,"staffing":{"next":"due ordered eligible visible tasks","holdings":"claimed or assigned tasks under current visibility","caseload":"atomic preview and revision-fenced apply","routing":"once per task or stage from compiled minimized fields","clockRecompute":"pinned policy closure"},"authority":"producer, human reviewer and downstream executor authenticate independently"}),
     )
 }
 pub(super) fn test(project: &Path, deny_warnings: bool) -> Result<Value> {
