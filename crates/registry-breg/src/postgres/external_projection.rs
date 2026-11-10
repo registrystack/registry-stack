@@ -894,6 +894,40 @@ pub(crate) async fn lock_generation(
     })
 }
 
+/// Whether each named snapshot is still the current, unexpired one for its
+/// subject in this scope epoch. A label sweep uses this to confirm that the
+/// parent snapshots supplying its selectors were not replaced or removed.
+pub(crate) async fn snapshots_current(
+    transaction: &GuardedTransaction<'_>,
+    scope: &ProjectionScope,
+    subject_keys: &[&str],
+    snapshot_ids: &[&str],
+) -> Result<bool, ProjectionError> {
+    if subject_keys.len() != snapshot_ids.len() {
+        return Err(ProjectionError::InvalidScope);
+    }
+    let row = transaction
+        .transaction()
+        .query_one(
+            "SELECT count(*)=cardinality($3::text[])
+             FROM unnest($3::text[],$4::text[]) AS expected(subject_key,snapshot_id)
+             JOIN registry_internal.registry_external_projection_snapshots AS snapshot
+                ON snapshot.projection_id=$1 AND snapshot.epoch=$2
+                AND snapshot.subject_key=expected.subject_key
+                AND snapshot.snapshot_id=expected.snapshot_id
+                AND snapshot.expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint",
+            &[
+                &scope.projection_id,
+                &scope.epoch,
+                &subject_keys,
+                &snapshot_ids,
+            ],
+        )
+        .await
+        .map_err(|_| ProjectionError::Unavailable)?;
+    Ok(row.get(0))
+}
+
 /// Tests withdraw under migration authority; operators use the maintenance
 /// function, and the runtime role holds no EXECUTE grant on either.
 #[cfg(all(test, feature = "postgres-test"))]
@@ -1120,7 +1154,8 @@ BEGIN
         SELECT p_projection,p_epoch,p_subject,r->>'source_key',r->'fields' FROM jsonb_array_elements(p_rows) AS r;
     UPDATE registry_internal.registry_external_projection_refreshes SET state='published'
         WHERE projection_id=p_projection AND sequence=p_sequence;
-    UPDATE registry_internal.registry_external_projection_scopes SET generation=generation+1 WHERE projection_id=p_projection;
+    -- Generation tracks scope-wide changes only, so cursors and label sweeps
+    -- survive per-key publication.
     RETURN 'published';
 END $body$;
 

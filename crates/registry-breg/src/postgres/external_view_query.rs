@@ -911,7 +911,8 @@ mod postgres_tests {
             connection.await.expect("query fixture connection");
         });
         runtime.batch_execute("SET registry.access_profile='reader'; SET registry.principal='staff'; SET registry.purpose='consultation'; SET registry.row_boundaries='[{\"field\":\"tenant\",\"operator\":\"equals\",\"values\":[\"allowed\"]}]';").await.unwrap();
-        let mut request = super::tests::request(&scope, 2);
+        // Publication leaves the configured scope generation unchanged.
+        let mut request = super::tests::request(&scope, 0);
         request.include_count = true;
         request.filter = Some(ExactFilter {
             field: "label".to_owned(),
@@ -922,7 +923,6 @@ mod postgres_tests {
         assert_eq!(incomplete.get::<_, Option<i64>>(4), None);
         assert_eq!(incomplete.get::<_, Value>(5), serde_json::json!([]));
         publish(&migration, &scope, "uncovered", Some("B"), "third").await;
-        request.generation.generation = 3;
         let complete = run(&runtime, &registry, &request).await;
         assert!(complete.get::<_, bool>(1));
         assert_eq!(complete.get::<_, Option<i64>>(4), Some(1));

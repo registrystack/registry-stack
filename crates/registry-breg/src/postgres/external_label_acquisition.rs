@@ -35,7 +35,23 @@ pub(crate) struct LabelSelector {
     pub(crate) root_id: Uuid,
     pub(crate) member_key: String,
     pub(crate) selector: String,
+    parent_key: String,
+    parent_snapshot: String,
     parent_expires_at: i64,
+}
+
+/// One parent snapshot that supplied label selectors. Acquisition goes ahead
+/// only while that exact snapshot is still current and unexpired.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SupportingSnapshot {
+    pub(crate) subject_key: String,
+    pub(crate) snapshot_id: String,
+}
+
+impl fmt::Debug for SupportingSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SupportingSnapshot(<redacted>)")
+    }
 }
 
 impl fmt::Debug for LabelSelector {
@@ -48,6 +64,7 @@ pub(crate) struct LabelSelectorPage {
     pub(crate) rows: Vec<LabelSelector>,
     pub(crate) continuation: Option<LabelAfter>,
     pub(crate) minimum_parent_expires_at: Option<i64>,
+    pub(crate) supporting: Vec<SupportingSnapshot>,
 }
 
 pub(crate) struct LabelAcquisition {
@@ -222,10 +239,20 @@ fn bounded_page(mut rows: Vec<LabelSelector>, limit: u16) -> LabelSelectorPage {
         None
     };
     let minimum_parent_expires_at = rows.iter().map(|row| row.parent_expires_at).min();
+    let supporting = rows
+        .iter()
+        .map(|row| SupportingSnapshot {
+            subject_key: row.parent_key.clone(),
+            snapshot_id: row.parent_snapshot.clone(),
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
     LabelSelectorPage {
         rows,
         continuation,
         minimum_parent_expires_at,
+        supporting,
     }
 }
 
@@ -234,7 +261,8 @@ fn literal(value: &str) -> String {
 }
 
 const ELIGIBLE_SQL: &str = r#"
-SELECT roots.root_id,members.source_key AS member_key,members.fields->>__SELECTOR_FIELD__ AS selector,snapshot.expires_at AS parent_expires_at
+SELECT roots.root_id,members.source_key AS member_key,members.fields->>__SELECTOR_FIELD__ AS selector,
+    snapshot.subject_key AS parent_key,snapshot.snapshot_id AS parent_snapshot,snapshot.expires_at AS parent_expires_at
 FROM (__ROOT_SQL__) AS roots
 JOIN parent_state AS scope ON true
 JOIN registry_internal.registry_external_projection_snapshots AS snapshot
@@ -252,12 +280,13 @@ const PAGE_SQL: &str = r#"
 WITH parent_state AS MATERIALIZED (__STATE_SQL__), selected AS (
     __ELIGIBLE_SQL__
 ), page AS MATERIALIZED (
-    SELECT root_id,member_key,selector,parent_expires_at FROM selected
+    SELECT root_id,member_key,selector,parent_key,parent_snapshot,parent_expires_at FROM selected
     WHERE $1::uuid IS NULL OR root_id>$1::uuid OR (root_id=$1::uuid AND member_key COLLATE "C">$2::text COLLATE "C")
     ORDER BY root_id,member_key COLLATE "C" LIMIT $3::bigint
 )
 SELECT EXISTS(SELECT 1 FROM parent_state),COALESCE((SELECT jsonb_agg(jsonb_build_object(
-    'root_id',root_id,'member_key',member_key,'selector',selector,'parent_expires_at',parent_expires_at) ORDER BY root_id,member_key COLLATE "C") FROM page),'[]'::jsonb)
+    'root_id',root_id,'member_key',member_key,'selector',selector,'parent_key',parent_key,
+    'parent_snapshot',parent_snapshot,'parent_expires_at',parent_expires_at) ORDER BY root_id,member_key COLLATE "C") FROM page),'[]'::jsonb)
 "#;
 
 const PUBLICATION_SQL: &str = r#"
@@ -363,11 +392,20 @@ mod tests {
                 root_id: Uuid::nil(),
                 member_key: index.to_string(),
                 selector: "internal".to_owned(),
+                parent_key: format!("parent-{}", index / 2),
+                parent_snapshot: format!("snapshot-{}", index / 2),
                 parent_expires_at: expiry,
             })
             .collect();
         let page = bounded_page(rows, 2);
         assert_eq!(page.minimum_parent_expires_at, Some(200));
+        assert_eq!(
+            page.supporting,
+            [SupportingSnapshot {
+                subject_key: "parent-0".to_owned(),
+                snapshot_id: "snapshot-0".to_owned(),
+            }]
+        );
         assert_eq!(page.continuation.unwrap().member_key, "1");
         assert_eq!(bounded_page(vec![], 2).minimum_parent_expires_at, None);
     }
@@ -382,9 +420,15 @@ mod tests {
             root_id: Uuid::nil(),
             member_key: "PRIVATE_MEMBER_CANARY".to_owned(),
             selector: "PRIVATE_SELECTOR_CANARY".to_owned(),
+            parent_key: "PRIVATE_PARENT_CANARY".to_owned(),
+            parent_snapshot: "PRIVATE_SNAPSHOT_CANARY".to_owned(),
             parent_expires_at: 1000,
         };
-        assert!(!format!("{position:?} {selector:?}").contains("CANARY"));
+        let supporting = SupportingSnapshot {
+            subject_key: "PRIVATE_PARENT_CANARY".to_owned(),
+            snapshot_id: "PRIVATE_SNAPSHOT_CANARY".to_owned(),
+        };
+        assert!(!format!("{position:?} {selector:?} {supporting:?}").contains("CANARY"));
     }
 }
 
@@ -478,9 +522,10 @@ mod postgres_tests {
             "view",
             "members",
             &parent,
+            // Publication leaves the configured scope generation unchanged.
             ProjectionGeneration {
                 epoch: parent.epoch,
-                generation: 3,
+                generation: 0,
             },
         )
         .unwrap();
@@ -496,6 +541,8 @@ mod postgres_tests {
         let rows: Value = page.get(1);
         assert_eq!(rows.as_array().unwrap().len(), 2);
         assert_eq!(rows[0]["selector"], "indirect-person");
+        assert_eq!(rows[0]["parent_key"], "allowed-parent");
+        assert_eq!(rows[0]["parent_snapshot"], "members");
         assert_eq!(rows[1]["member_key"], "d");
         let allowed = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
         let next = runtime
