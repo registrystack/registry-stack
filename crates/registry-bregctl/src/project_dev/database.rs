@@ -29,6 +29,16 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 const STATEMENT_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+/// Lets a role holding CREATEROLE use the roles it creates. PostgreSQL 16 and
+/// later grant such a creator only ADMIN on them, which is not enough for
+/// `CREATE SCHEMA ... AUTHORIZATION` or `CREATE DATABASE ... OWNER`.
+const CREATEROLE_SELF_GRANT: &str = "set,inherit";
+/// Mirrors the BReg kernel's supported PostGIS floor
+/// (`MIN_POSTGIS_MAJOR` and `MIN_POSTGIS_MINOR` in
+/// `registry-breg/src/postgres/roles.rs`), so the runner can name it before
+/// the kernel refuses with a generic connection error.
+const MIN_POSTGIS: (u32, u32) = (3, 5);
 
 async fn bounded_connection<T>(
     connection: impl Future<Output = std::result::Result<T, tokio_postgres::Error>>,
@@ -97,12 +107,48 @@ fn retain_create_acquisition<T>(
     }
 }
 
-fn apply_statement_deadline(config: &mut Config) {
-    let deadline = format!("-c statement_timeout={}", STATEMENT_TIMEOUT.as_millis());
+/// Startup options for every administrator session: the statement deadline and
+/// the CREATEROLE self-grant. The comma in the self-grant value is not a
+/// separator for the server's startup option parser, which splits on spaces.
+fn apply_session_options(config: &mut Config) {
+    let added = format!(
+        "-c statement_timeout={} -c createrole_self_grant={CREATEROLE_SELF_GRANT}",
+        STATEMENT_TIMEOUT.as_millis()
+    );
     if let Some(existing) = config.get_options().filter(|value| !value.is_empty()) {
-        config.options(format!("{existing} {deadline}"));
+        config.options(format!("{existing} {added}"));
     } else {
-        config.options(deadline);
+        config.options(added);
+    }
+}
+
+fn postgis_version_supported(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let mut next = || parts.next().and_then(|value| value.parse::<u32>().ok());
+    match (next(), next()) {
+        (Some(major), Some(minor)) => (major, minor) >= MIN_POSTGIS,
+        _ => false,
+    }
+}
+
+/// Refuses a spatial BReg run when the server does not offer a supported
+/// PostGIS. `available` is the `default_version` of the `postgis` row in
+/// `pg_available_extensions`, or `None` when there is no such row.
+fn require_postgis(available: Option<&str>) -> Result<()> {
+    match available {
+        None => bail!(
+            "spatial BReg needs PostGIS {}.{} or later installed on the PostgreSQL server; \
+             the server does not offer the postgis extension",
+            MIN_POSTGIS.0,
+            MIN_POSTGIS.1
+        ),
+        Some(version) if !postgis_version_supported(version) => bail!(
+            "spatial BReg needs PostGIS {}.{} or later installed on the PostgreSQL server; \
+             the server offers {version}",
+            MIN_POSTGIS.0,
+            MIN_POSTGIS.1
+        ),
+        Some(_) => Ok(()),
     }
 }
 
@@ -214,7 +260,7 @@ impl Database {
         validate_run_id(run_id)?;
         let (mut admin_config, endpoint) = admin_config(admin_url)?;
         admin_config.ssl_mode(SslMode::Require);
-        apply_statement_deadline(&mut admin_config);
+        apply_session_options(&mut admin_config);
         let tls = tls_connector(ca_pem)?;
         let runtime = Builder::new_current_thread()
             .enable_all()
@@ -259,6 +305,10 @@ impl Database {
             matches!(acquisition, Acquisition::Database(database) if database == &names.database)
         }) {
             bail!("the {label} database was already provisioned for this run");
+        }
+
+        if requires_postgis {
+            self.check_postgis_available()?;
         }
 
         let migration_password = random_password()?;
@@ -472,7 +522,11 @@ impl Database {
                             &client, migration, runtime,
                         )
                         .await
-                        .context("cannot provision BReg PostGIS prerequisites")?;
+                        .context(
+                            "cannot provision BReg PostGIS prerequisites; the PostgreSQL \
+                             administrator must be allowed to CREATE EXTENSION postgis, \
+                             which normally needs a superuser",
+                        )?;
                     }
                     Result::<()>::Ok(())
                 })
@@ -487,6 +541,34 @@ impl Database {
                 executed
             })
             .context("cannot finish PostgreSQL database provisioning")
+    }
+
+    /// Reads the PostGIS version the server offers, before this run acquires
+    /// any role or database.
+    fn check_postgis_available(&mut self) -> Result<()> {
+        let queried = self.runtime.block_on(bounded_operation(
+            "PostGIS availability check",
+            self.client.query_opt(
+                "SELECT default_version FROM pg_available_extensions WHERE name = 'postgis'",
+                &[],
+            ),
+            OPERATION_TIMEOUT,
+        ));
+        if queried
+            .as_ref()
+            .is_err_and(OperationFailure::effect_is_unconfirmed)
+        {
+            self.retire_admin_session();
+        }
+        let row = queried
+            .map_err(anyhow::Error::new)
+            .context("cannot check that the PostgreSQL server offers PostGIS")?;
+        let version = row
+            .map(|row| row.try_get::<_, Option<String>>(0))
+            .transpose()
+            .context("cannot read the PostGIS version the PostgreSQL server offers")?
+            .flatten();
+        require_postgis(version.as_deref())
     }
 
     fn execute_admin(&mut self, statement: &str) -> Result<()> {
@@ -641,8 +723,8 @@ fn database_setup_sql(names: &Names, breg: bool) -> String {
 }
 
 fn admin_config(admin_url: &str) -> Result<(Config, Endpoint)> {
-    let parsed =
-        Url::parse(admin_url).map_err(|_| anyhow!("the PostgreSQL admin URL is invalid"))?;
+    let parsed = Url::parse(admin_url)
+        .map_err(|_| anyhow!("the PostgreSQL admin URL is not a parseable URL"))?;
     if !matches!(parsed.scheme(), "postgres" | "postgresql")
         || parsed.cannot_be_a_base()
         || parsed.fragment().is_some()
@@ -669,9 +751,41 @@ fn admin_config(admin_url: &str) -> Result<(Config, Endpoint)> {
             "the PostgreSQL admin URL must not override its endpoint or credentials in the query"
         );
     }
+    for (key, value) in parsed.query_pairs() {
+        match key.as_ref() {
+            "sslmode" => {
+                if !matches!(value.as_ref(), "require" | "verify-ca" | "verify-full") {
+                    bail!(
+                        "the PostgreSQL admin URL sslmode must be require, verify-ca, or \
+                         verify-full; the runner always uses verified TLS"
+                    );
+                }
+            }
+            "sslrootcert" => bail!(
+                "the PostgreSQL admin URL must not set sslrootcert; set RSTACK_DEV_DATABASE_CA \
+                 to a CA PEM file instead"
+            ),
+            "connect_timeout" | "application_name" => {}
+            other => bail!("the PostgreSQL admin URL query parameter {other} is not supported"),
+        }
+    }
 
-    let config =
-        Config::from_str(admin_url).map_err(|_| anyhow!("the PostgreSQL admin URL is invalid"))?;
+    // tokio-postgres does not parse verify-ca or verify-full, and the runner
+    // sets its own TLS mode, so the checked sslmode is not passed on.
+    let mut sanitized = parsed.clone();
+    let kept: Vec<(String, String)> = parsed
+        .query_pairs()
+        .filter(|(key, _)| key != "sslmode")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    if kept.is_empty() {
+        sanitized.set_query(None);
+    } else {
+        sanitized.query_pairs_mut().clear().extend_pairs(kept);
+    }
+    let mut config = Config::from_str(sanitized.as_str())
+        .map_err(|_| anyhow!("the PostgreSQL admin URL has an invalid query parameter value"))?;
+    config.keepalives_idle(KEEPALIVE_IDLE);
     if config.get_hosts().len() != 1
         || !matches!(config.get_hosts().first(), Some(Host::Tcp(_)))
         || !config.get_hostaddrs().is_empty()
@@ -859,10 +973,19 @@ mod tests {
     fn operation_deadlines_fit_the_worker_stop_budget() {
         let mut config = Config::new();
         config.options("-c application_name=rstack-dev");
-        apply_statement_deadline(&mut config);
+        apply_session_options(&mut config);
         assert_eq!(
             config.get_options(),
-            Some("-c application_name=rstack-dev -c statement_timeout=10000")
+            Some(
+                "-c application_name=rstack-dev -c statement_timeout=10000 \
+                 -c createrole_self_grant=set,inherit"
+            )
+        );
+        let mut bare = Config::new();
+        apply_session_options(&mut bare);
+        assert_eq!(
+            bare.get_options(),
+            Some("-c statement_timeout=10000 -c createrole_self_grant=set,inherit")
         );
         assert!(STATEMENT_TIMEOUT < OPERATION_TIMEOUT);
         assert!(OPERATION_TIMEOUT < CLEANUP_ATTEMPT_TIMEOUT);
@@ -906,6 +1029,88 @@ mod tests {
                 admin_config(url).is_err(),
                 "accepted invalid admin URL case {case}"
             );
+        }
+    }
+
+    #[test]
+    fn admin_url_query_keys_and_ssl_modes_are_checked_by_name() {
+        let password = random_password().unwrap();
+        let base = format!(
+            "postgresql://admin:{}@db.example/postgres",
+            password.as_str()
+        );
+        for accepted in [
+            "sslmode=require",
+            "sslmode=verify-ca",
+            "sslmode=verify-full",
+            "connect_timeout=5",
+            "application_name=rstack",
+        ] {
+            assert!(
+                admin_config(&format!("{base}?{accepted}")).is_ok(),
+                "{accepted}"
+            );
+        }
+        for (query, expected) in [
+            ("sslmode=disable", "always uses verified TLS"),
+            ("sslmode=allow", "always uses verified TLS"),
+            ("sslmode=prefer", "always uses verified TLS"),
+            ("sslrootcert=/tmp/ca.pem", "RSTACK_DEV_DATABASE_CA"),
+            (
+                "options=-csearch_path%3Dx",
+                "query parameter options is not supported",
+            ),
+            (
+                "channel_binding=require",
+                "query parameter channel_binding is not supported",
+            ),
+        ] {
+            let message = admin_config(&format!("{base}?{query}"))
+                .err()
+                .unwrap_or_else(|| panic!("accepted {query}"))
+                .to_string();
+            assert!(message.contains(expected), "{query}: {message}");
+            assert!(
+                !message.contains(password.as_str()),
+                "{query} leaked the URL"
+            );
+        }
+        let unparseable = admin_config("not a url").err().unwrap().to_string();
+        assert!(unparseable.contains("not a parseable URL"), "{unparseable}");
+        let bad_value = admin_config(&format!("{base}?connect_timeout=soon"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            bad_value.contains("invalid query parameter value"),
+            "{bad_value}"
+        );
+        assert!(!bad_value.contains(password.as_str()));
+    }
+
+    #[test]
+    fn admin_config_keeps_idle_connections_alive() {
+        let (config, _) = admin_config("postgresql://admin:secret@db.example/postgres").unwrap();
+        assert_eq!(config.get_keepalives_idle(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn spatial_runs_are_refused_without_a_supported_postgis() {
+        assert!(require_postgis(Some("3.5.2")).is_ok());
+        assert!(require_postgis(Some("3.5")).is_ok());
+        assert!(require_postgis(Some("3.10.0")).is_ok());
+        assert!(require_postgis(Some("4.0.0")).is_ok());
+        let missing = require_postgis(None).unwrap_err().to_string();
+        assert!(
+            missing.starts_with(
+                "spatial BReg needs PostGIS 3.5 or later installed on the PostgreSQL server"
+            ),
+            "{missing}"
+        );
+        for old in ["3.4.9", "2.5.5", "garbage", ""] {
+            let message = require_postgis(Some(old)).unwrap_err().to_string();
+            assert!(message.contains("PostGIS 3.5 or later"), "{old}: {message}");
+            assert!(message.contains(&format!("offers {old}")), "{message}");
         }
     }
 
