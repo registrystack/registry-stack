@@ -36,6 +36,21 @@ pub(super) struct StepReport {
     status: u16,
     expected_status: u16,
     result: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+const REASON_LIMIT: usize = 512;
+
+fn bounded_reason(text: &str) -> String {
+    text.chars().take(REASON_LIMIT).collect()
+}
+
+/// What one step observed. `reason` is set when the step failed.
+struct StepOutcome {
+    status: u16,
+    reason: Option<String>,
+    updates: BTreeMap<String, Value>,
 }
 
 struct ResponseData {
@@ -82,15 +97,29 @@ pub(super) fn run(
             &mut transferred,
             &mut attempts,
         );
-        let (status, passed, updates) = outcome.unwrap_or_else(|_| (0, false, BTreeMap::new()));
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // A stop signal or the startup deadline interrupts the
+                // journey; it is not a failure of this step.
+                active()?;
+                StepOutcome {
+                    status: 0,
+                    reason: Some(bounded_reason(&format!("{error:#}"))),
+                    updates: BTreeMap::new(),
+                }
+            }
+        };
+        let passed = outcome.reason.is_none();
         if passed {
-            captures.extend(updates);
+            captures.extend(outcome.updates);
         }
         report.steps.push(StepReport {
             id: step.id.clone(),
-            status,
+            status: outcome.status,
             expected_status: step.expect.status.first(),
             result: if passed { "passed" } else { "failed" },
+            reason: outcome.reason,
         });
         if !passed {
             report.result = "failed";
@@ -112,7 +141,7 @@ fn execute_step(
     active: &impl Fn() -> Result<()>,
     transferred: &mut usize,
     attempts: &mut usize,
-) -> Result<(u16, bool, BTreeMap<String, Value>)> {
+) -> Result<StepOutcome> {
     let lookup = |name: &str| {
         captures
             .get(name)
@@ -157,11 +186,12 @@ fn execute_step(
         .as_ref()
         .map(|poll| Instant::now() + Duration::from_millis(poll.timeout_ms));
     let mut last_status = 0;
+    let mut last_reason = None;
 
     loop {
         active()?;
         if poll_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Ok((last_status, false, BTreeMap::new()));
+            return Ok(poll_timed_out(last_status, last_reason));
         }
         add_attempt(attempts)?;
         add_transfer(transferred, request_bytes)?;
@@ -187,23 +217,50 @@ fn execute_step(
         let Some(response) =
             read_response_before_deadline(runtime, request, poll_deadline, transferred)?
         else {
-            return Ok((last_status, false, BTreeMap::new()));
+            return Ok(poll_timed_out(last_status, last_reason));
         };
         last_status = response.status;
-        let captures = matches_expectation(step, &response, lookup)?
-            .then(|| capture_updates(step, &response, lookup))
-            .and_then(Result::ok);
-        if let Some(updates) = captures {
-            return Ok((response.status, true, updates));
-        }
+        let reason = match first_mismatch(step, &response, lookup)? {
+            Some(reason) => reason,
+            None => match capture_updates(step, &response, lookup) {
+                Ok(updates) => {
+                    return Ok(StepOutcome {
+                        status: response.status,
+                        reason: None,
+                        updates,
+                    })
+                }
+                Err(error) => format!("capture failed: {error:#}"),
+            },
+        };
+        let failed = |reason: &str| StepOutcome {
+            status: response.status,
+            reason: Some(bounded_reason(reason)),
+            updates: BTreeMap::new(),
+        };
         let Some((poll, deadline)) = step.poll.as_ref().zip(poll_deadline) else {
-            return Ok((response.status, false, BTreeMap::new()));
+            return Ok(failed(&reason));
         };
         let now = Instant::now();
         if now >= deadline {
-            return Ok((response.status, false, BTreeMap::new()));
+            return Ok(failed(&reason));
         }
+        last_reason = Some(reason);
         thread::sleep(Duration::from_millis(poll.interval_ms).min(deadline - now));
+    }
+}
+
+/// A poll whose deadline passed keeps the last completed status and says why
+/// that response did not match.
+fn poll_timed_out(status: u16, last_reason: Option<String>) -> StepOutcome {
+    let reason = match last_reason {
+        Some(reason) => format!("poll deadline passed; last response: {reason}"),
+        None => "poll deadline passed before a response arrived".to_owned(),
+    };
+    StepOutcome {
+        status,
+        reason: Some(bounded_reason(&reason)),
+        updates: BTreeMap::new(),
     }
 }
 
@@ -234,32 +291,68 @@ fn request_url(base: &str, path: &str) -> Result<url::Url> {
     Ok(url)
 }
 
-fn matches_expectation(
+/// Describe the first expectation the response misses, as
+/// `<pointer> expected <json> observed <json>`.
+fn first_mismatch(
     step: &Step,
     response: &ResponseData,
     lookup: impl Fn(&str) -> Result<Value> + Copy,
-) -> Result<bool> {
+) -> Result<Option<String>> {
+    let observed_at = |pointer: &str| {
+        response
+            .body
+            .pointer(pointer)
+            .map_or_else(|| "nothing".to_owned(), Value::to_string)
+    };
     if !step.expect.status.contains(response.status) {
-        return Ok(false);
+        return Ok(Some(format!(
+            "/status expected {} observed {}",
+            serde_json::to_string(&step.expect.status)?,
+            response.status
+        )));
     }
     for (pointer, expected) in &step.expect.json {
-        if response.body.pointer(pointer) != Some(&expand_json(expected, lookup)?) {
-            return Ok(false);
+        let expected = expand_json(expected, lookup)?;
+        if response.body.pointer(pointer) != Some(&expected) {
+            return Ok(Some(format!(
+                "{pointer} expected {expected} observed {}",
+                observed_at(pointer)
+            )));
         }
     }
     if let Some(code) = &step.expect.code {
-        if response.body.pointer("/code").and_then(Value::as_str)
-            != Some(expand_text(code, lookup)?.as_str())
-        {
-            return Ok(false);
+        let expected = expand_text(code, lookup)?;
+        if response.body.pointer("/code").and_then(Value::as_str) != Some(expected.as_str()) {
+            return Ok(Some(format!(
+                "/code expected {} observed {}",
+                Value::String(expected),
+                observed_at("/code")
+            )));
         }
     }
     for check in &step.expect.checks {
         if !matches_check(check, &response.body, lookup)? {
-            return Ok(false);
+            return Ok(Some(format!(
+                "{} expected {} observed {}",
+                check.pointer,
+                describe_check(check, lookup)?,
+                observed_at(&check.pointer)
+            )));
         }
     }
-    Ok(true)
+    Ok(None)
+}
+
+fn describe_check(check: &Check, lookup: impl Fn(&str) -> Result<Value> + Copy) -> Result<String> {
+    Ok(if let Some(expected) = &check.equals {
+        expand_json(expected, lookup)?.to_string()
+    } else if let Some(length) = check.length {
+        format!("length {length}")
+    } else if let Some(expected) = &check.contains {
+        format!("containing {}", expand_json(expected, lookup)?)
+    } else {
+        "a check".to_owned()
+    })
 }
 
 fn matches_check(
@@ -659,6 +752,10 @@ mod tests {
 
         assert_eq!(report.result, "failed");
         assert_eq!(report.steps[0].status, 202);
+        assert!(report.steps[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("poll deadline passed; last response: ")));
         assert_eq!(server.finish(), 2);
     }
 
@@ -677,6 +774,10 @@ mod tests {
 
         assert_eq!(report.result, "failed");
         assert_eq!(report.steps[0].status, 202);
+        assert!(report.steps[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("poll deadline passed; last response: ")));
         assert_eq!(server.finish(), 1);
     }
 
@@ -772,8 +873,57 @@ mod tests {
             headers: HeaderMap::new(),
             body: json!({"code": "missing"}),
         };
-        assert!(matches_expectation(&step, &response, no_capture).unwrap());
+        assert!(first_mismatch(&step, &response, no_capture)
+            .unwrap()
+            .is_none());
         assert_eq!(step.expect.status.first(), 404);
+    }
+
+    #[test]
+    fn mismatch_names_the_pointer_expected_and_observed_values() {
+        let step: Step = serde_json::from_value(json!({
+            "id": "read", "product": "breg", "as": "person", "method": "GET",
+            "path": "/v1/records", "expect": {"status": 200, "json": {"/state": "open"}}
+        }))
+        .unwrap();
+        let mut response = ResponseData {
+            status: 500,
+            headers: HeaderMap::new(),
+            body: json!({"state": "closed"}),
+        };
+        assert_eq!(
+            first_mismatch(&step, &response, no_capture)
+                .unwrap()
+                .unwrap(),
+            "/status expected 200 observed 500"
+        );
+        response.status = 200;
+        assert_eq!(
+            first_mismatch(&step, &response, no_capture)
+                .unwrap()
+                .unwrap(),
+            "/state expected \"open\" observed \"closed\""
+        );
+        response.body = json!({"state": "open"});
+        assert!(first_mismatch(&step, &response, no_capture)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn reasons_are_bounded_and_omitted_when_the_step_passes() {
+        assert_eq!(bounded_reason(&"é".repeat(2000)).chars().count(), 512);
+        let report = StepReport {
+            id: "a".into(),
+            status: 200,
+            expected_status: 200,
+            result: "passed",
+            reason: None,
+        };
+        assert!(serde_json::to_value(&report)
+            .unwrap()
+            .get("reason")
+            .is_none());
     }
 
     #[test]
