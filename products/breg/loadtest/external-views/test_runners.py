@@ -15,24 +15,19 @@ from synthetic_source import runtime_fragment
 
 
 class RecoveryTests(unittest.TestCase):
-    def test_operator_report_reads_the_psql_json_cell(self):
-        output = b"""BEGIN
-SET
-SET
-                    jsonb_pretty
-----------------------------------------------------
- {                                                 +
-     "projection": "holdings-indexed",             +
-     "active": false                               +
- }
-(1 row)
-
-COMMIT
-"""
-        self.assertEqual(operator_report(output), {"projection": "holdings-indexed", "active": False})
-        for invalid in (output.replace(b"COMMIT", b"ROLLBACK"), b"COMMIT", output + output):
+    def test_operator_report_reads_the_bregctl_scope(self):
+        output = (b'{"ok":true,"command":"external-projection withdraw",'
+                  b'"scope":{"projection":"holdings-indexed","active":false}}\n')
+        self.assertEqual(operator_report(output, "withdraw"), {"projection": "holdings-indexed", "active": False})
+        for invalid, action in (
+            (output, "rotate"),
+            (output.replace(b'"ok":true', b'"ok":false'), "withdraw"),
+            (b'{"ok":true,"command":"external-projection withdraw"}', "withdraw"),
+            (output + output, "withdraw"),
+            (b"COMMIT", "withdraw"),
+        ):
             with self.assertRaisesRegex(JourneyError, "scope report"):
-                operator_report(invalid)
+                operator_report(invalid, action)
 
 
 class CandidateFixtureTests(unittest.TestCase):

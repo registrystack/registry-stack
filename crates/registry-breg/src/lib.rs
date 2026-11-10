@@ -70,6 +70,8 @@ pub(crate) mod event_record;
 pub mod evidence_source;
 #[cfg(feature = "tooling")]
 pub mod example_references;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub mod external_projection_maintenance;
 #[cfg(feature = "runtime")]
 pub mod external_source;
 pub(crate) mod external_view_artifacts;

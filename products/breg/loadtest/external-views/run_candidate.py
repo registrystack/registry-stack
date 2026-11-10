@@ -289,7 +289,6 @@ def run(options):
     else:
         scale = None
     if options.recovery:
-        expect(shutil.which("psql") is not None, "psql is required for the recovery operator")
         from recovery import ScopeRecovery
     work = options.work_dir.resolve()
     work.mkdir(mode=0o700)
@@ -372,7 +371,7 @@ def run(options):
                 print("Basic external view HTTP checks passed", flush=True)
                 if options.recovery:
                     print("Withdrawing holdings scope during a paged refresh", flush=True)
-                    recovery = ScopeRecovery(journey, fixture, work, facts, private_write, write_json)
+                    recovery = ScopeRecovery(journey, fixture, work, facts, ctl, runtime, write_json)
                     recovery.withdraw_and_rotate()
             if options.recovery:
                 print("Restarting and rebuilding the rotated holdings scope", flush=True)
