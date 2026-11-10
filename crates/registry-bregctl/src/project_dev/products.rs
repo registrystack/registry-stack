@@ -23,7 +23,7 @@ use std::{
 };
 
 use super::{
-    bindings::RuntimeBindings,
+    bindings::{Bindings, RuntimeBindings},
     clock,
     database::{Database, DatabaseUrls},
     issuer::Issuer,
@@ -586,6 +586,36 @@ pub(super) fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuth
             "BReg project check failed; run rstack breg check for the authored diagnostics"
         )
     })?;
+    let review_authorities = registry
+        .review_authorities()
+        .iter()
+        .map(|authority| authority.id.as_str())
+        .collect();
+    let actions = registry
+        .actions()
+        .actions
+        .iter()
+        .map(|action| action.id.as_str())
+        .collect();
+    validate_breg_binding_ids(&plan.bindings, &review_authorities, &actions)?;
+    let profiles: BTreeSet<_> = registry
+        .access_profile_displays()
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect();
+    for (name, person) in &plan.people {
+        if let Some(grant) = person.grants.get(&Product::Breg) {
+            plan::require(
+                profiles.contains(grant.profile.as_str()),
+                &format!(
+                    "/people/{}/grants/breg/profile",
+                    registry_platform_yaml::escape_pointer_segment(name)
+                ),
+                "The BReg grant profile does not name an access profile in the BReg project.",
+                "Set profile to an access profile defined by the BReg project.",
+            )?;
+        }
+    }
     let inventory = registry_breg::authority::authority_inventory(&registry)?;
     ensure!(
         inventory.principal_claims.len() <= 1,
@@ -609,6 +639,30 @@ pub(super) fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuth
     }))
 }
 
+fn validate_breg_binding_ids(
+    bindings: &Bindings,
+    review_authorities: &BTreeSet<&str>,
+    actions: &BTreeSet<&str>,
+) -> plan::SemanticResult<()> {
+    if let Some(binding) = &bindings.breg_review_authority {
+        plan::require(
+            review_authorities.contains(binding.id.as_str()),
+            "/bindings/bregReviewAuthority/id",
+            "The BReg review authority ID does not name a review authority in the BReg project.",
+            "Set id to a review authority defined by the BReg project.",
+        )?;
+    }
+    if let Some(binding) = &bindings.casework_context_provider {
+        plan::require(
+            actions.contains(binding.action.as_str()),
+            "/bindings/caseworkContextProvider/action",
+            "The Casework context provider action does not name an action in the BReg project.",
+            "Set action to an action defined by the BReg project.",
+        )?;
+    }
+    Ok(())
+}
+
 fn breg_requires_postgis(registry: &registry_breg::CompiledRegistry) -> bool {
     registry.ddl().requires_postgis
 }
@@ -627,13 +681,14 @@ pub(super) fn casework_principals(
         return Ok(BTreeMap::new());
     };
     let tool = super::binaries(Product::Casework)?.tool;
-    let profiles = explain_casework_profiles(&tool, &root.join(&entry.project), terminate)?;
+    let facts = explain_casework_facts(&tool, &root.join(&entry.project), terminate)?;
+    validate_casework_binding_ids(&plan.bindings, &facts)?;
     let mut principals = BTreeMap::new();
     for (name, person) in &plan.people {
         let Some(grant) = person.grants.get(&Product::Casework) else {
             continue;
         };
-        let claim = profiles.get(&grant.profile).map(String::as_str)
+        let claim = facts.profiles.get(&grant.profile).map(String::as_str)
             .with_context(|| format!("dev.yaml /people/{name}/grants/casework/profile must name a Casework access profile"))?;
         ensure!(
             matches!(claim, "sub" | "registry_principal")
@@ -656,11 +711,11 @@ pub(super) fn casework_principals(
     Ok(principals)
 }
 
-fn explain_casework_profiles(
+fn explain_casework_facts(
     tool: &Path,
     project: &Path,
     terminate: &AtomicBool,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<CaseworkFacts> {
     const MAX_REPORT: u64 = 4 * 1024 * 1024;
 
     let mut child = child_command(tool)
@@ -697,10 +752,17 @@ fn explain_casework_profiles(
     );
     let report: Value = serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("caseworkctl explain did not emit a JSON report"))?;
-    casework_report_profiles(&report)
+    casework_report_facts(&report)
 }
 
-fn casework_report_profiles(report: &Value) -> Result<BTreeMap<String, String>> {
+#[derive(Debug, Eq, PartialEq)]
+struct CaseworkFacts {
+    profiles: BTreeMap<String, String>,
+    trusted_producers: BTreeSet<String>,
+    context_providers: BTreeSet<String>,
+}
+
+fn casework_report_facts(report: &Value) -> Result<CaseworkFacts> {
     ensure!(
         report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
             && report["kind"] == "CaseworkReport"
@@ -728,7 +790,51 @@ fn casework_report_profiles(report: &Value) -> Result<BTreeMap<String, String>> 
             "caseworkctl explain returned duplicate access profiles"
         );
     }
-    Ok(principals)
+    Ok(CaseworkFacts {
+        profiles: principals,
+        trusted_producers: casework_report_ids(report, "trustedProducers")?,
+        context_providers: casework_report_ids(report, "contextProviders")?,
+    })
+}
+
+fn casework_report_ids(report: &Value, member: &str) -> Result<BTreeSet<String>> {
+    let entries = report[member]
+        .as_array()
+        .with_context(|| format!("caseworkctl explain did not report {member}"))?;
+    let mut ids = BTreeSet::new();
+    for entry in entries {
+        let id = entry["id"]
+            .as_str()
+            .with_context(|| format!("a caseworkctl explain {member} entry has no ID"))?;
+        ensure!(
+            ids.insert(id.to_owned()),
+            "caseworkctl explain returned duplicate {member} IDs"
+        );
+    }
+    Ok(ids)
+}
+
+fn validate_casework_binding_ids(
+    bindings: &Bindings,
+    facts: &CaseworkFacts,
+) -> plan::SemanticResult<()> {
+    if let Some(binding) = &bindings.breg_review_authority {
+        plan::require(
+            facts.trusted_producers.contains(&binding.producer),
+            "/bindings/bregReviewAuthority/producer",
+            "The BReg review producer does not name a trusted producer in the Casework project.",
+            "Set producer to a trusted producer defined by the Casework project.",
+        )?;
+    }
+    if let Some(binding) = &bindings.casework_context_provider {
+        plan::require(
+            facts.context_providers.contains(&binding.id),
+            "/bindings/caseworkContextProvider/id",
+            "The Casework context provider ID does not name a context provider in the Casework project.",
+            "Set id to a context provider defined by the Casework project.",
+        )?;
+    }
+    Ok(())
 }
 
 impl Drop for ProductRunner<'_> {
@@ -853,23 +959,130 @@ pub(super) struct SchemaPerson {
     person: String,
 }
 
-pub(super) fn schema_people(root: &Path, plan: &Plan) -> Result<Vec<SchemaPerson>> {
-    let Some(entry) = plan
-        .products
+fn breg_entry(plan: &Plan) -> Option<(usize, &plan::ProductPlan)> {
+    plan.products
         .iter()
-        .find(|entry| entry.product == Product::Breg)
-    else {
-        ensure!(
-            plan.schema_test_people.is_empty(),
-            "dev.yaml /schemaTestPeople requires a BReg product"
-        );
+        .enumerate()
+        .find(|(_, entry)| entry.product == Product::Breg)
+}
+
+fn schema_assignment_pointer(journey: &str, step: &str) -> String {
+    format!(
+        "/schemaTestPeople/{}/{}",
+        registry_platform_yaml::escape_pointer_segment(journey),
+        registry_platform_yaml::escape_pointer_segment(step)
+    )
+}
+
+fn fixture_file_refusal<T>(plan: &Plan, field: &str) -> plan::SemanticResult<T> {
+    if plan.schema_test_people.is_empty() {
+        plan::refuse(
+            field,
+            "The BReg fixture journeys file must be a readable regular file inside the BReg product project.",
+            "Place tests/journeys.yaml inside the BReg product project without linking it outside that project.",
+        )
+    } else {
+        plan::refuse(
+            "/schemaTestPeople",
+            "The BReg fixture journeys file is missing, unreadable, or outside the BReg product project.",
+            "Create a readable tests/journeys.yaml inside the BReg product project, or remove schemaTestPeople.",
+        )
+    }
+}
+
+pub(super) fn schema_people(
+    root: &Path,
+    plan: &Plan,
+    required: bool,
+) -> plan::SemanticResult<Vec<SchemaPerson>> {
+    let Some((product_index, entry)) = breg_entry(plan) else {
+        if !plan.schema_test_people.is_empty() {
+            return plan::refuse(
+                "/schemaTestPeople",
+                "Schema test assignments require a BReg product.",
+                "Add BReg to products, or remove schemaTestPeople.",
+            );
+        }
         return Ok(Vec::new());
     };
-    let path = root.join(&entry.project).join("tests/journeys.yaml");
-    let bytes = plan::read(&path, 1024 * 1024).context("cannot read BReg tests/journeys.yaml")?;
-    let steps =
-        journey_step_profiles(&bytes).context("cannot validate BReg tests/journeys.yaml")?;
-    let mut used = BTreeSet::new();
+    let field = format!("/products/{product_index}/project");
+    let product_root = match root.join(&entry.project).canonicalize() {
+        Ok(path) if path.starts_with(root) && path.is_dir() => path,
+        Ok(_) | Err(_) => return fixture_file_refusal(plan, &field),
+    };
+    let path = product_root.join("tests/journeys.yaml");
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && !required
+                && plan.schema_test_people.is_empty() =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(_) => return fixture_file_refusal(plan, &field),
+    }
+    let canonical = match path.canonicalize() {
+        Ok(path) if path.starts_with(&product_root) && path.is_file() => path,
+        Ok(_) | Err(_) => return fixture_file_refusal(plan, &field),
+    };
+    let bytes = match plan::read(
+        &canonical,
+        registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64,
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return plan::refuse(
+                if plan.schema_test_people.is_empty() {
+                    &field
+                } else {
+                    "/schemaTestPeople"
+                },
+                "The BReg fixture journeys file is unreadable or exceeds the 1 MiB limit.",
+                "Make tests/journeys.yaml readable and no larger than 1 MiB, then run the check again.",
+            );
+        }
+    };
+    let steps = match journey_step_profiles(&bytes) {
+        Ok(steps) => steps,
+        Err(_) => {
+            return plan::refuse(
+                if plan.schema_test_people.is_empty() {
+                    &field
+                } else {
+                    "/schemaTestPeople"
+                },
+                "The BReg fixture journeys file is not valid.",
+                "Run `rstack breg check` for authored diagnostics, then correct tests/journeys.yaml.",
+            );
+        }
+    };
+    let mut fixture_steps = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for step in &steps {
+        fixture_steps
+            .entry(&step.journey_id)
+            .or_default()
+            .insert(&step.step_id);
+    }
+    for (journey, assignments) in &plan.schema_test_people {
+        for step in assignments.keys() {
+            let field = schema_assignment_pointer(journey, step);
+            if !fixture_steps.contains_key(journey.as_str()) {
+                return plan::refuse(
+                    &field,
+                    "The schema test assignment names a BReg fixture journey that does not exist.",
+                    "Set the journey key to a journey defined in tests/journeys.yaml, or remove this assignment.",
+                );
+            }
+            if !fixture_steps[journey.as_str()].contains(step.as_str()) {
+                return plan::refuse(
+                    &field,
+                    "The schema test assignment names a BReg fixture step that does not exist in the named journey.",
+                    "Set the step key to a step defined in that fixture journey, or remove this assignment.",
+                );
+            }
+        }
+    }
     let mut bindings = Vec::new();
     for step in steps {
         let eligible = |person: &plan::TestPerson| {
@@ -897,22 +1110,18 @@ pub(super) fn schema_people(root: &Path, plan: &Plan) -> Result<Vec<SchemaPerson
             .map(|(name, _)| name)
             .collect();
         let [person] = aliases.as_slice() else {
-            bail!("dev.yaml /schemaTestPeople/{}/{} must select one person with matching BReg profile, scope and purpose", step.journey_id, step.step_id);
+            let field = schema_assignment_pointer(&step.journey_id, &step.step_id);
+            return plan::refuse(
+                &field,
+                "A BReg fixture step must resolve to exactly one test person with matching profile, scopes, and purpose.",
+                "Add or update a matching BReg grant, or select the matching person in schemaTestPeople.",
+            );
         };
-        used.insert((step.journey_id.clone(), step.step_id.clone()));
         bindings.push(SchemaPerson {
             journey: step.journey_id,
             step: step.step_id,
             person: (*person).clone(),
         });
-    }
-    for (journey, steps) in &plan.schema_test_people {
-        for step in steps.keys() {
-            ensure!(
-                used.contains(&(journey.clone(), step.clone())),
-                "dev.yaml /schemaTestPeople/{journey}/{step} does not name a BReg fixture step"
-            );
-        }
     }
     Ok(bindings)
 }
@@ -920,6 +1129,7 @@ pub(super) fn schema_people(root: &Path, plan: &Plan) -> Result<Vec<SchemaPerson
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project_dev::bindings::{Bindings, BregReviewAuthority, CaseworkContextProvider};
     use std::{
         io::{BufRead, BufReader},
         sync::mpsc,
@@ -950,10 +1160,12 @@ mod tests {
             "reviewPolicies": [{"dependencies": {"accessProfiles": [
                 {"id": "reviewer", "principalClaim": "sub", "requiredScopes": ["casework:staff"]},
                 {"id": "producer", "principalClaim": "producer_identity"}
-            ]}}]
+            ]}}],
+            "trustedProducers": [],
+            "contextProviders": []
         });
         assert_eq!(
-            casework_report_profiles(&report).unwrap(),
+            casework_report_facts(&report).unwrap().profiles,
             BTreeMap::from([
                 ("producer".to_owned(), "producer_identity".to_owned()),
                 ("reviewer".to_owned(), "sub".to_owned()),
@@ -965,15 +1177,111 @@ mod tests {
             .as_array_mut()
             .unwrap();
         profiles.push(json!({"id": "reviewer", "principalClaim": "different"}));
-        assert!(casework_report_profiles(&report)
+        assert!(casework_report_facts(&report)
             .unwrap_err()
             .to_string()
             .contains("duplicate"));
         report["command"] = json!("check");
-        assert!(casework_report_profiles(&report)
+        assert!(casework_report_facts(&report)
             .unwrap_err()
             .to_string()
             .contains("incompatible report"));
+    }
+
+    fn product_bindings() -> Bindings {
+        Bindings {
+            breg_review_authority: Some(BregReviewAuthority {
+                id: "review-authority".to_owned(),
+                producer: "review-producer".to_owned(),
+                identity: "reviewer".to_owned(),
+            }),
+            casework_context_provider: Some(CaseworkContextProvider {
+                id: "proposal-context".to_owned(),
+                identity: "context-reader".to_owned(),
+                action: "review-action".to_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn breg_binding_ids_are_resolved_with_typed_value_free_refusals() {
+        let bindings = product_bindings();
+        let authorities = BTreeSet::from(["review-authority"]);
+        let actions = BTreeSet::from(["review-action"]);
+        validate_breg_binding_ids(&bindings, &authorities, &actions).unwrap();
+
+        for (authorities, actions, field, reason, action) in [
+            (
+                BTreeSet::new(),
+                actions.clone(),
+                "/bindings/bregReviewAuthority/id",
+                "The BReg review authority ID does not name a review authority in the BReg project.",
+                "Set id to a review authority defined by the BReg project.",
+            ),
+            (
+                authorities.clone(),
+                BTreeSet::new(),
+                "/bindings/caseworkContextProvider/action",
+                "The Casework context provider action does not name an action in the BReg project.",
+                "Set action to an action defined by the BReg project.",
+            ),
+        ] {
+            let error = validate_breg_binding_ids(&bindings, &authorities, &actions)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{error}");
+            assert!(error.contains(reason), "{error}");
+            assert!(error.contains(action), "{error}");
+            assert!(!error.contains("review-authority"), "{error}");
+            assert!(!error.contains("review-action"), "{error}");
+        }
+    }
+
+    #[test]
+    fn casework_binding_ids_use_the_existing_explain_facts() {
+        let bindings = product_bindings();
+        let mut report = json!({
+            "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
+            "kind": "CaseworkReport", "command": "explain", "status": "complete", "ok": true,
+            "reviewPolicies": [{"dependencies": {"accessProfiles": [
+                {"id": "reviewer", "principalClaim": "sub"}
+            ]}}],
+            "trustedProducers": [{"id": "review-producer"}],
+            "contextProviders": [{"id": "proposal-context"}]
+        });
+        let facts = casework_report_facts(&report).unwrap();
+        validate_casework_binding_ids(&bindings, &facts).unwrap();
+
+        for (member, field, reason, action) in [
+            (
+                "trustedProducers",
+                "/bindings/bregReviewAuthority/producer",
+                "The BReg review producer does not name a trusted producer in the Casework project.",
+                "Set producer to a trusted producer defined by the Casework project.",
+            ),
+            (
+                "contextProviders",
+                "/bindings/caseworkContextProvider/id",
+                "The Casework context provider ID does not name a context provider in the Casework project.",
+                "Set id to a context provider defined by the Casework project.",
+            ),
+        ] {
+            report[member] = json!([]);
+            let facts = casework_report_facts(&report).unwrap();
+            let error = validate_casework_binding_ids(&bindings, &facts)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{error}");
+            assert!(error.contains(reason), "{error}");
+            assert!(error.contains(action), "{error}");
+            assert!(!error.contains("review-producer"), "{error}");
+            assert!(!error.contains("proposal-context"), "{error}");
+            report[member] = match member {
+                "trustedProducers" => json!([{"id": "review-producer"}]),
+                "contextProviders" => json!([{"id": "proposal-context"}]),
+                _ => unreachable!(),
+            };
+        }
     }
 
     #[test]

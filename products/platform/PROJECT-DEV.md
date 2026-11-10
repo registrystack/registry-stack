@@ -19,10 +19,11 @@ rstack dev token RUN_ID --as applicant --json
 rstack dev stop RUN_ID
 ```
 
-Run `rstack dev check PROJECT [--deny-warnings] [--json]` to validate the plan
-and its project-local file references offline. With `--json`, the check writes a
-`BRegCtlReport` with `command` set to `dev-check`. Use `--deny-warnings` to
-refuse any unaccepted warning.
+Run `rstack dev check PROJECT [--deny-warnings] [--json]` to validate the plan,
+the product directories it names, and BReg schema-test assignments offline.
+With `--json`, the check writes a `BRegCtlReport` with `command` set to
+`dev-check`. Use `--deny-warnings` to refuse any unaccepted warning.
+`start` also validates the authored products with their own tooling.
 
 You can also pass `--database-url`. Use the environment variable when the URL
 includes a password. Start reports the product URLs and the journey result.
@@ -44,9 +45,10 @@ List the project's issuer, product directories and audiences in startup order,
 and test people with synthetic subjects and exact product grants. A grant selects
 the access profile, scopes, and additional claims. Each selected profile gets
 the test person's subject in its principal claim. The products enforce their
-ordinary permissions. If several people match a BReg schema-test step, select
-its alias under `schemaTestPeople.<journey-id>.<step-id>`. The run obtains the
-normal schema-test receipt before packaging.
+ordinary permissions. If several people match a step in the BReg project's
+`tests/journeys.yaml`, select its alias under
+`schemaTestPeople.<journey-id>.<step-id>`. The run obtains the normal
+schema-test receipt before packaging.
 
 For a native review handoff, `bindings.bregReviewAuthority` identifies the
 Casework producer, and `bindings.caseworkContextProvider` identifies the BReg
