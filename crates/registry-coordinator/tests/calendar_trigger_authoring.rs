@@ -818,6 +818,135 @@ async fn a_removed_trigger_that_is_added_back_starts_from_its_first_check() {
     assert_eq!(cursors().await, 1);
 }
 
+/// Retirement matches the Workflow id and the trigger id together: a cursor
+/// that shares only one of them with a served pair is still removed.
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn retirement_matches_the_workflow_and_trigger_pair() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let definition = fixture.definition(&project());
+    let workflow = definition.workflow.id.clone();
+    assert_eq!(
+        store
+            .admit_calendar_due(&definition, "month-end", &fixture.runtime)
+            .await
+            .unwrap(),
+        CalendarCheck::Idle
+    );
+    for (other_workflow, other_trigger) in [
+        ("other-workflow", "month-end"),
+        (workflow.as_str(), "other-trigger"),
+    ] {
+        fixture
+            .sql
+            .execute(
+                &format!(
+                    "INSERT INTO {ns}.calendar_cursors (workflow_id,trigger_id,workflow_revision,schedule_cron,schedule_timezone,cursor_at) SELECT $1,$2,workflow_revision,schedule_cron,schedule_timezone,cursor_at FROM {ns}.calendar_cursors WHERE workflow_id=$3 AND trigger_id='month-end'",
+                    ns = fixture.namespace
+                ),
+                &[&other_workflow, &other_trigger, &workflow],
+            )
+            .await
+            .unwrap();
+    }
+    let active = vec![(workflow.clone(), "month-end".to_owned())];
+    assert_eq!(store.retire_calendar_cursors(&active).await.unwrap(), 2);
+    let remaining = fixture
+        .sql
+        .query(
+            &format!(
+                "SELECT workflow_id,trigger_id FROM {}.calendar_cursors",
+                fixture.namespace
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(remaining, active, "only the served pair keeps its cursor");
+}
+
+/// A deployment whose activation moved retires nothing.
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn a_moved_activation_retires_nothing() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let definition = fixture.definition(&project());
+    assert_eq!(
+        store
+            .admit_calendar_due(&definition, "month-end", &fixture.runtime)
+            .await
+            .unwrap(),
+        CalendarCheck::Idle
+    );
+    fixture
+        .sql
+        .execute(
+            &format!(
+                "UPDATE {}.control SET active_flows_digest='calendar-moved' WHERE id",
+                fixture.namespace
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.retire_calendar_cursors(&[]).await.unwrap_err().code,
+        "store-unavailable",
+        "a moved activation fences the old runner"
+    );
+    let count: i64 = fixture
+        .sql
+        .query_one(
+            &format!(
+                "SELECT count(*) FROM {}.calendar_cursors",
+                fixture.namespace
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1);
+}
+
+/// With no stale cursor the sweep needs no admission lock, so a held
+/// deployment is not refused and does not wait on admissions.
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn retiring_nothing_succeeds_under_a_hold() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let definition = fixture.definition(&project());
+    let workflow = definition.workflow.id.clone();
+    assert_eq!(
+        store
+            .admit_calendar_due(&definition, "month-end", &fixture.runtime)
+            .await
+            .unwrap(),
+        CalendarCheck::Idle
+    );
+    let active = vec![(workflow, "month-end".to_owned())];
+    set_admissions_hold(&fixture, true).await;
+    assert_eq!(store.retire_calendar_cursors(&active).await.unwrap(), 0);
+    fixture
+        .sql
+        .execute(
+            &format!(
+                "UPDATE {}.control SET admissions_hold=false,restore_hold=true WHERE id",
+                fixture.namespace
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.retire_calendar_cursors(&active).await.unwrap(), 0);
+}
+
 #[cfg(feature = "postgres-test")]
 async fn set_admissions_hold(fixture: &Fixture, held: bool) {
     fixture
