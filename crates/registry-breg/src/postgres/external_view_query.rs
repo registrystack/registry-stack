@@ -1254,6 +1254,11 @@ mod postgres_tests {
                 "{:?}",
                 key.chars().take(8).collect::<String>()
             );
+            assert_eq!(
+                crate::external_views::link_key_acceptable(&key),
+                registry_adapter_core::projection_token_valid(&key),
+                "the write-time rule is the source contract's selector rule"
+            );
         }
         for key in ["", "ok"] {
             let accepted: Option<String> = database
