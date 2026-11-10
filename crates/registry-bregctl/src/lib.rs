@@ -3053,6 +3053,7 @@ where
                     success.insecure_http_warning,
                     &success.checked.unbound_review_authorities,
                     &success.checked.unavailable_external_projections,
+                    &success.checked.external_projections,
                     format,
                     stdout,
                     stderr,
@@ -12971,6 +12972,7 @@ fn write_doctor_success(
     insecure_http_warning: Option<&'static str>,
     unbound_review_authorities: &[String],
     unavailable_external_projections: &BTreeMap<String, String>,
+    external_projections: &[registry_breg::startup::ExternalProjectionStatus],
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -13015,6 +13017,18 @@ fn write_doctor_success(
             severity: "warning",
             message,
             observed: ObservedNumbers(&[]),
+        });
+    }
+    let status_reports = external_projections
+        .iter()
+        .map(external_projection_status_report)
+        .collect::<Vec<_>>();
+    for (message, observed) in &status_reports {
+        doctor_advisories.push(DoctorAdvisory {
+            code: "external-projection.status".to_owned(),
+            severity: "information",
+            message,
+            observed: ObservedNumbers(observed),
         });
     }
     let report = DoctorSuccessReport {
@@ -13069,6 +13083,39 @@ fn write_doctor_success(
             ExitCode::from(OPERATIONAL_FAILURE_EXIT)
         }
     }
+}
+
+/// One served external projection's grant horizon and newest held snapshot,
+/// so an operator sees a lapsing grant or a stalled refresh sweep.
+fn external_projection_status_report(
+    status: &registry_breg::startup::ExternalProjectionStatus,
+) -> (String, Vec<(&'static str, i64)>) {
+    let instant = |seconds: i64| {
+        chrono::DateTime::from_timestamp(seconds, 0).map_or_else(
+            || format!("Unix second {seconds}"),
+            |value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        )
+    };
+    let holding = match (status.indexed, status.newest_publication) {
+        (false, _) => "It reads live and holds no snapshots.".to_owned(),
+        (true, None) => "It holds no snapshot; run a refresh sweep to fill it.".to_owned(),
+        (true, Some(observed)) => format!(
+            "The newest snapshot it holds was observed at {}.",
+            instant(observed)
+        ),
+    };
+    let mut observed = vec![("grantValidUntilUnixSeconds", status.grant_valid_until)];
+    if let Some(newest) = status.newest_publication {
+        observed.push(("newestPublicationUnixSeconds", newest));
+    }
+    (
+        format!(
+            "External projection `{}`: its source grant is valid until {}. {holding}",
+            status.projection,
+            instant(status.grant_valid_until)
+        ),
+        observed,
+    )
 }
 
 fn write_field_encryption_keygen_success(
@@ -17061,7 +17108,7 @@ mod tests {
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], RoleMode::Split, None, &[], &BTreeMap::new(), format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, None, &[], &BTreeMap::new(), &[], format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(
@@ -17083,6 +17130,7 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -17108,6 +17156,7 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -17142,6 +17191,7 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -17182,6 +17232,7 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -17240,6 +17291,7 @@ mod tests {
                     None,
                     &["local-review".into()],
                     &BTreeMap::new(),
+                    &[],
                     format,
                     &mut stdout,
                     &mut stderr
@@ -17280,6 +17332,7 @@ mod tests {
                     None,
                     &[],
                     &unavailable,
+                    &[],
                     format,
                     &mut stdout,
                     &mut stderr
@@ -17312,6 +17365,77 @@ mod tests {
     }
 
     #[test]
+    fn doctor_reports_each_external_projection_grant_horizon_and_newest_publication() {
+        use registry_breg::startup::ExternalProjectionStatus;
+        const GRANT: i64 = 1_798_761_600;
+        const PUBLISHED: i64 = 1_793_491_200;
+        let status = |projection: &str, indexed, newest_publication| ExternalProjectionStatus {
+            projection: projection.to_owned(),
+            indexed,
+            grant_valid_until: GRANT,
+            newest_publication,
+        };
+        let projections = [
+            status("person-indexed", true, Some(PUBLISHED)),
+            status("person-unrefreshed", true, None),
+            status("person-live", false, None),
+        ];
+        for format in [OutputFormat::Human, OutputFormat::Json] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            assert_eq!(
+                write_doctor_success(
+                    &[],
+                    RoleMode::Split,
+                    None,
+                    &[],
+                    &BTreeMap::new(),
+                    &projections,
+                    format,
+                    &mut stdout,
+                    &mut stderr,
+                ),
+                ExitCode::SUCCESS
+            );
+            assert!(stderr.is_empty());
+            let text = plain(&stdout)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            for expected in [
+                "External projection `person-indexed`: its source grant is valid until 2027-01-01T00:00:00Z. The newest snapshot it holds was observed at 2026-11-01T00:00:00Z.",
+                "External projection `person-unrefreshed`: its source grant is valid until 2027-01-01T00:00:00Z. It holds no snapshot; run a refresh sweep to fill it.",
+                "External projection `person-live`: its source grant is valid until 2027-01-01T00:00:00Z. It reads live and holds no snapshots.",
+            ] {
+                assert!(text.contains(expected), "{text}");
+            }
+            if format == OutputFormat::Json {
+                let report: Value = serde_json::from_slice(&stdout).unwrap();
+                assert_eq!(report["ok"], true);
+                let advisories = report["advisories"].as_array().unwrap();
+                assert_eq!(advisories.len(), 3);
+                for advisory in advisories {
+                    assert_eq!(advisory["code"], "external-projection.status");
+                    assert_eq!(advisory["severity"], "information");
+                }
+                assert_eq!(
+                    advisories[0]["observed"],
+                    json!({
+                        "grantValidUntilUnixSeconds": GRANT,
+                        "newestPublicationUnixSeconds": PUBLISHED,
+                    })
+                );
+                for advisory in &advisories[1..] {
+                    assert_eq!(
+                        advisory["observed"],
+                        json!({"grantValidUntilUnixSeconds": GRANT})
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn doctor_reports_the_plain_http_issuer_opt_in_as_a_value_free_advisory() {
         const WARNING: &str =
             "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration";
@@ -17325,6 +17449,7 @@ mod tests {
                     Some(WARNING),
                     &[],
                     &BTreeMap::new(),
+                    &[],
                     format,
                     &mut stdout,
                     &mut stderr,
