@@ -1378,21 +1378,35 @@ impl Needs {
     }
 }
 
-/// Whether the project's dev.yaml lists a casework product. An unreadable or
-/// oversized plan counts as using Casework, so the launcher never skips a
-/// binary the helper might need; the helper reports the real plan error.
+/// Whether the project's dev.yaml lists a casework product under
+/// `/products/*/product`. A missing, unreadable, oversized or unparsable plan,
+/// or one without a products list, counts as using Casework, so the launcher
+/// never skips a binary the helper might need; the helper reports the real
+/// plan error.
 fn plan_uses_casework(project: &std::path::Path) -> bool {
+    use registry_platform_yaml::{NodeValue, Reader, MAXIMUM_DOCUMENT_BYTES};
     use std::io::Read;
-    const LIMIT: u64 = 1024 * 1024;
-    let mut text = String::new();
-    let read = std::fs::File::open(project.join("dev.yaml"))
-        .and_then(|file| file.take(LIMIT + 1).read_to_string(&mut text));
-    if read.is_err() || text.len() as u64 > LIMIT {
+    let limit = MAXIMUM_DOCUMENT_BYTES as u64;
+    let file = project.join("dev.yaml");
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(&file)
+        .and_then(|handle| handle.take(limit + 1).read_to_end(&mut bytes));
+    if read.is_err() || bytes.len() as u64 > limit {
         return true;
     }
-    text.lines()
-        .filter_map(|line| line.split_once("product:"))
-        .any(|(_, value)| value.trim_start().starts_with("casework"))
+    let Ok(Some(root)) = Reader::new(file.display().to_string()).scan(&bytes) else {
+        return true;
+    };
+    let Some(NodeValue::Sequence(products)) = root.pointer("/products").map(|node| &node.value)
+    else {
+        return true;
+    };
+    products.iter().any(|entry| {
+        !matches!(
+            entry.pointer("/product").map(|node| &node.value),
+            Some(NodeValue::String(text)) if text.text != "casework"
+        )
+    })
 }
 
 fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
