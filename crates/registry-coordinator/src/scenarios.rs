@@ -30,6 +30,9 @@ pub const SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json";
 /// The file a scenario refusal names before it is placed in a project.
 const SCENARIOS_FILE: &str = "scenarios.yaml";
+/// The most synthetic replies one call step may declare. The `replies` field
+/// documentation states the same number.
+const MAX_REPLIES_PER_STEP: usize = 8;
 const FORMAT: FormatSpec<'static> = FormatSpec {
     kind: KIND,
     envelope: EnvelopeRule::ApiVersionKind {
@@ -531,8 +534,8 @@ impl CoordinatorScenarios {
             for (step, replies) in &case.replies {
                 bound(
                     &format!("{path}/replies/{step}"),
-                    (1..=8).contains(&replies.len()),
-                    "expected from 1 to 8 synthetic replies",
+                    (1..=MAX_REPLIES_PER_STEP).contains(&replies.len()),
+                    &format!("expected from 1 to {MAX_REPLIES_PER_STEP} synthetic replies"),
                 );
             }
         }
@@ -657,7 +660,7 @@ fn replies_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema
         "propertyNames": generator.subschema_for::<LocalId>(),
         "maxProperties": 64,
         "additionalProperties": {
-            "type": "array", "minItems": 1, "maxItems": 8,
+            "type": "array", "minItems": 1, "maxItems": MAX_REPLIES_PER_STEP,
             "items": generator.subschema_for::<AuthoredReply>(),
         },
     })
