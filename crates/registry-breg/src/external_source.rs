@@ -922,6 +922,90 @@ pub(crate) mod tests {
         transcript.finish().unwrap();
     }
 
+    #[tokio::test]
+    async fn a_no_store_source_response_is_refused_for_the_indexed_store() {
+        async fn indexed_batch(
+            no_store: bool,
+        ) -> (
+            Result<ProjectionResult, ExternalSourceError>,
+            Arc<registry_adapter_engine::replay::ReplayTranscript>,
+        ) {
+            let (pack, artifacts) = example();
+            let mut response = json!({"status":200,"body":{"records":[
+                {"subject":"person-7","state":"found","properties":{"family-name":"Lee"}}
+            ]}});
+            if no_store {
+                response["headers"] = json!({"Cache-Control":"private, no-store"});
+            }
+            let transcript = Arc::new(
+                registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                    serde_json::from_value(
+                        json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                    )
+                    .unwrap(),
+                    serde_json::from_value(json!([{
+                        "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                            "type":"batch","keys":["person-7"],"fields":["family-name"]
+                        }},
+                        "response":response
+                    }]))
+                    .unwrap(),
+                ),
+            );
+            let program = compile_projection_pack(
+                &pack,
+                "person-batch",
+                &artifacts,
+                EvidenceLimits::default(),
+            )
+            .unwrap()
+            .bind_replay(Arc::clone(&transcript))
+            .unwrap();
+            let fields = BTreeSet::from(["family-name".to_owned()]);
+            let service = ExternalSourceService {
+                bindings: BTreeMap::from([(
+                    "holder".to_owned(),
+                    BoundExternalSource {
+                        program,
+                        fields: fields.clone(),
+                        mode: ExternalProjectionMode::Indexed,
+                        grant_valid_until: Utc::now() + chrono::Duration::days(1),
+                        binding_fingerprint: "binding".to_owned(),
+                        grant_fingerprint: "grant".to_owned(),
+                        cache_ttl_seconds: Some(60),
+                        field_types: BTreeMap::from([(
+                            "family-name".to_owned(),
+                            (ExternalFieldType::String, false),
+                        )]),
+                    },
+                )]),
+                unavailable: BTreeMap::new(),
+            };
+            let result = service
+                .acquire(
+                    "holder",
+                    Arc::new(Hooks),
+                    ProjectionRequest::Batch {
+                        keys: vec!["person-7".to_owned()],
+                    },
+                    &fields,
+                    Utc::now,
+                )
+                .await;
+            (result, transcript)
+        }
+
+        let (stored, transcript) = indexed_batch(false).await;
+        assert!(stored.is_ok());
+        transcript.finish().unwrap();
+        let (refused, transcript) = indexed_batch(true).await;
+        assert!(matches!(
+            refused,
+            Err(ExternalSourceError::Acquisition(ProjectionError::NoStore))
+        ));
+        transcript.finish().unwrap();
+    }
+
     #[test]
     fn a_deployment_cache_lifetime_only_shortens_the_authored_one() {
         let (live, _) = project_contracts();
