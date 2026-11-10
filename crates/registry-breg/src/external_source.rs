@@ -522,8 +522,9 @@ fn check_result(result: &ProjectionResult, types: &FieldTypes) -> Result<(), Ext
 }
 
 /// The source contract states a decimal as a JSON number; BReg serves and
-/// stores it as the JSON string its own decimal fields use on the wire. A
-/// number with no plain decimal spelling (an exponent form) is refused.
+/// stores it as the JSON string its own decimal fields use on the wire. An
+/// integer keeps its exact digits; any other number is read as a double and
+/// spelled without an exponent.
 fn decimals_to_wire(
     result: &mut ProjectionResult,
     types: &FieldTypes,
@@ -539,7 +540,12 @@ fn decimals_to_wire(
             if !is_decimal {
                 continue;
             }
-            let text = number.to_string();
+            let text = if number.is_f64() {
+                // `f64` Display never uses an exponent form.
+                number.as_f64().map_or_else(String::new, |f| f.to_string())
+            } else {
+                number.to_string()
+            };
             if !plain_decimal(&text) {
                 return Err(ExternalSourceError::Result);
             }
@@ -1231,17 +1237,36 @@ pub(crate) mod tests {
         assert!(!validator.is_valid(&json!(12.5)));
     }
 
+    /// A source number whose shortest spelling is an exponent form (below 1e-5
+    /// or from 1e16) is still served as a plain decimal string, and one such
+    /// value does not fail the batch that carries it.
     #[test]
-    fn a_decimal_with_no_plain_spelling_is_refused() {
+    fn exponent_range_decimals_are_served_as_plain_strings() {
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&crate::external_view_artifacts::decimal_schema())
+            .unwrap();
         let types = decimal_types();
-        for number in [json!(1e30), json!(1.5e-9)] {
-            let mut result = ProjectionResult::Exact {
-                record: present("a", number),
-            };
-            assert!(matches!(
-                decimals_to_wire(&mut result, &types),
-                Err(ExternalSourceError::Result)
-            ));
+        let spelled: [(Value, &str); 5] = [
+            (json!(0.000001), "0.000001"),
+            (json!(1e16), "10000000000000000"),
+            (json!(-1e-7), "-0.0000001"),
+            (json!(1.5e-9), "0.0000000015"),
+            (json!(12.5), "12.5"),
+        ];
+        let mut batch = ProjectionResult::Batch {
+            records: spelled
+                .iter()
+                .map(|(number, _)| present("a", number.clone()))
+                .collect(),
+        };
+        decimals_to_wire(&mut batch, &types).expect("one extreme value does not fail the batch");
+        let ProjectionResult::Batch { records } = &batch else {
+            unreachable!()
+        };
+        for (record, (_, text)) in records.iter().zip(spelled) {
+            assert_eq!(balance_of(record), json!(text));
+            assert!(validator.is_valid(&balance_of(record)), "{text}");
         }
     }
 
