@@ -2527,4 +2527,45 @@ mod postgres_tests {
         assert_eq!(labels(&after), ["renewed", "renewed", "renewed"]);
         served.fixture.cleanup().await;
     }
+
+    #[tokio::test]
+    async fn a_cursor_replayed_under_other_authority_is_an_invalid_cursor() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        served.publish_all().await;
+        let (status, first) = served
+            .get("&$top=1", reader("reader-principal", &["allowed"]))
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+        for (caller, authority) in [
+            (
+                reader("another-principal", &["allowed"]),
+                "another principal",
+            ),
+            (
+                reader("reader-principal", &["other"]),
+                "another row boundary",
+            ),
+        ] {
+            let (status, problem) = served.get(&format!("&$skiptoken={cursor}"), caller).await;
+            assert_eq!(
+                status,
+                axum::http::StatusCode::BAD_REQUEST,
+                "{authority}: {problem}"
+            );
+            assert_eq!(
+                problem["code"], "query.cursor_invalid",
+                "{authority}: {problem}"
+            );
+        }
+        let (status, next) = served
+            .get(
+                &format!("&$skiptoken={cursor}"),
+                reader("reader-principal", &["allowed"]),
+            )
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{next}");
+        assert_eq!(labels(&next), ["second"]);
+        served.fixture.cleanup().await;
+    }
 }
