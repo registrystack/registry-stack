@@ -2214,6 +2214,22 @@ mod postgres_tests {
         fixture: &Activated,
         lock_timeout: Duration,
     ) -> PostgresExternalViewService {
+        service_from(registry, fixture, lock_timeout, indexed_sources())
+    }
+
+    fn indexed_sources() -> crate::external_source::ExternalSourceService {
+        crate::external_source::tests::indexed_service(&[
+            ("projection", "binding", "grant", 60),
+            ("other", "other-binding", "other-grant", 120),
+        ])
+    }
+
+    fn service_from(
+        registry: &CompiledRegistry,
+        fixture: &Activated,
+        lock_timeout: Duration,
+        sources: crate::external_source::ExternalSourceService,
+    ) -> PostgresExternalViewService {
         PostgresExternalViewService::new(
             fixture.pool.clone(),
             Arc::new(registry.clone()),
@@ -2234,10 +2250,7 @@ mod postgres_tests {
                 )
                 .unwrap(),
             ),
-            crate::external_source::tests::indexed_service(&[
-                ("projection", "binding", "grant", 60),
-                ("other", "other-binding", "other-grant", 120),
-            ]),
+            sources,
         )
     }
 
@@ -2370,11 +2383,19 @@ mod postgres_tests {
 
     impl Served {
         async fn new(lock_timeout: Duration) -> Self {
+            Self::with(&two_projection_project(), indexed_sources(), lock_timeout).await
+        }
+
+        async fn with(
+            project: &Value,
+            sources: crate::external_source::ExternalSourceService,
+            lock_timeout: Duration,
+        ) -> Self {
             let registry = Arc::new(super::super::external_view_query::tests::compile_project(
-                &two_projection_project(),
+                project,
             ));
             let fixture = Activated::new(&registry).await;
-            let mut service = service_with(&registry, &fixture, lock_timeout);
+            let mut service = service_from(&registry, &fixture, lock_timeout, sources);
             service.bind_configured_scopes(true).await.ok().unwrap();
             let service = Arc::new(service);
             let scope = bound_scope(&fixture, "projection").await;
@@ -2452,20 +2473,43 @@ mod postgres_tests {
             query: &str,
             claims: crate::api::VerifiedRequestClaims,
         ) -> (axum::http::StatusCode, Value) {
+            let (status, _, body) = self
+                .send(
+                    &format!("/v1/external-views/view/link/records?accessProfile=reader{query}"),
+                    claims,
+                )
+                .await;
+            (status, body)
+        }
+
+        /// GET `uri`, returning the status, the content type and the body.
+        async fn send(
+            &self,
+            uri: &str,
+            claims: crate::api::VerifiedRequestClaims,
+        ) -> (axum::http::StatusCode, String, Value) {
             use tower::ServiceExt;
             let mut request = axum::http::Request::builder()
-                .uri(format!(
-                    "/v1/external-views/view/link/records?accessProfile=reader{query}"
-                ))
+                .uri(uri)
                 .body(axum::body::Body::empty())
                 .unwrap();
             request.extensions_mut().insert(claims);
             let response = self.router.clone().oneshot(request).await.unwrap();
             let status = response.status();
+            let content_type = response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
             let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
                 .await
                 .unwrap();
-            (status, serde_json::from_slice(&bytes).unwrap())
+            (
+                status,
+                content_type,
+                serde_json::from_slice(&bytes).unwrap(),
+            )
         }
     }
 
@@ -2852,6 +2896,187 @@ mod postgres_tests {
             .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{next}");
         assert_eq!(labels(&next), ["second"]);
+        served.fixture.cleanup().await;
+    }
+
+    /// The fixture project with a live projection of a second external record
+    /// type, linked from the same view and readable by the reader profile.
+    fn live_and_indexed_project() -> Value {
+        let mut project = two_projection_project();
+        project["externalRecordTypes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"person","authority":"urn:test:authority","identifierScheme":"urn:test:keys",
+                "fields":[{"id":"family-name","type":"string","classification":"internal"}]
+            }));
+        project["externalProjections"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"holder","recordType":"person","operation":"person-exact","operationVersion":"1",
+                "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+                "mode":"live","cardinality":"one","fields":["family-name"]
+            }));
+        project["externalViews"][0]["links"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"holder-link","projection":"holder","fromField":"subject-key",
+                "identifierScheme":"urn:test:keys","fields":["family-name"]
+            }));
+        project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"link":"holder-link","readableFields":["family-name"]}));
+        project
+    }
+
+    fn assert_problem(content_type: &str, problem: &Value, code: &str) {
+        assert_eq!(content_type, "application/problem+json", "{problem}");
+        assert_eq!(problem["code"], code, "{problem}");
+        for member in ["type", "title", "status", "detail"] {
+            assert!(problem.get(member).is_some(), "{member}: {problem}");
+        }
+        assert!(problem.get("records").is_none(), "{problem}");
+    }
+
+    /// Every table whose rows contain `needle` in their text form.
+    async fn tables_holding(client: &tokio_postgres::Client, needle: &str) -> Vec<String> {
+        let tables = client
+            .query(
+                "SELECT format('%I.%I', table_schema, table_name) FROM information_schema.tables
+                 WHERE table_type = 'BASE TABLE'
+                   AND table_schema NOT IN ('pg_catalog', 'information_schema')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let mut holding = Vec::new();
+        for table in tables {
+            let name: String = table.get(0);
+            let found: bool = client
+                .query_one(
+                    &format!(
+                        "SELECT EXISTS (SELECT 1 FROM {name} AS t WHERE strpos(t::text, $1) > 0)"
+                    ),
+                    &[&needle],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if found {
+                holding.push(name);
+            }
+        }
+        holding
+    }
+
+    #[tokio::test]
+    async fn a_live_read_over_http_answers_from_the_source_and_retains_nothing() {
+        // Only the source holds this value, so finding it in any table
+        // afterwards would mean the read retained it.
+        const SOURCE_VALUE: &str = "synthetic-live-family-name";
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                serde_json::from_value(json!([{
+                    "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/exact","body":{
+                        "type":"exact","key":"first","fields":["family-name"]
+                    }},
+                    "response":{"status":200,"body":{
+                        "subject":"first","state":"found","properties":{"family-name":SOURCE_VALUE}
+                    }}
+                }]))
+                .unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_live_binding(
+            &mut sources,
+            "holder",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served =
+            Served::with(&live_and_indexed_project(), sources, Duration::from_secs(2)).await;
+        let caller = reader("reader-principal", &["allowed"]);
+        let detail = |root: &str, query: &str| {
+            format!(
+                "/v1/external-views/view/holder-link/records/{root}?accessProfile=reader{query}"
+            )
+        };
+
+        let (status, _, body) = served.send(&detail(ROOTS[0].0, ""), caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "available", "{body}");
+        assert_eq!(
+            body["records"][0]["fields"]["family-name"], SOURCE_VALUE,
+            "{body}"
+        );
+
+        // A root outside the caller's row boundary, and a count the live
+        // link's grant does not allow, are refused before any source call.
+        let (status, content_type, problem) =
+            served.send(&detail(ROOTS[3].0, ""), caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{problem}");
+        assert_problem(&content_type, &problem, "resource.not_found");
+        let (status, content_type, problem) = served
+            .send(&detail(ROOTS[0].0, "&$count=true"), caller)
+            .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{problem}");
+        assert_problem(&content_type, &problem, "query.invalid");
+        // The one recorded exchange was used, and nothing else reached it.
+        transcript.finish().unwrap();
+
+        let admin = &served.fixture.database.admin;
+        for table in [
+            "registry_external_projection_refreshes",
+            "registry_external_projection_snapshots",
+            "registry_external_projection_values",
+        ] {
+            let rows: i64 = admin
+                .query_one(
+                    &format!("SELECT count(*) FROM registry_internal.{table}"),
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(rows, 0, "{table}");
+        }
+        let scoped: Vec<String> = admin
+            .query(
+                "SELECT projection_id FROM registry_internal.registry_external_projection_scopes
+                 ORDER BY projection_id",
+                &[],
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(
+            scoped,
+            ["other", "projection"],
+            "only indexed projections bind"
+        );
+        // The scan finds a value the fixture did store, so an empty answer
+        // below means the source value is absent, not that the scan is blind.
+        let stored = tables_holding(admin, ROOTS[3].1).await;
+        assert!(
+            stored
+                .iter()
+                .any(|table| table.starts_with("registry_data.")),
+            "{stored:?}"
+        );
+        assert_eq!(
+            tables_holding(admin, SOURCE_VALUE).await,
+            Vec::<String>::new()
+        );
         served.fixture.cleanup().await;
     }
 

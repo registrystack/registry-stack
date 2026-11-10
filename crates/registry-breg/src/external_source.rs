@@ -756,6 +756,39 @@ pub(crate) mod tests {
         service
     }
 
+    /// Add a live binding over the example pack's exact route, which retains
+    /// nothing. Each source call must match the next `transcript` exchange.
+    #[cfg(feature = "postgres-test")]
+    pub(crate) fn add_live_binding(
+        service: &mut ExternalSourceService,
+        projection: &str,
+        field: &str,
+        transcript: Arc<registry_adapter_engine::replay::ReplayTranscript>,
+    ) {
+        let (pack, artifacts) = example();
+        let program =
+            compile_projection_pack(&pack, "person-exact", &artifacts, EvidenceLimits::default())
+                .unwrap()
+                .bind_replay(transcript)
+                .unwrap();
+        service.bindings.insert(
+            projection.to_owned(),
+            BoundExternalSource {
+                program,
+                fields: BTreeSet::from([field.to_owned()]),
+                mode: ExternalProjectionMode::Live,
+                grant_valid_until: Utc::now() + chrono::Duration::days(1),
+                binding_fingerprint: "live-binding".to_owned(),
+                grant_fingerprint: "live-grant".to_owned(),
+                cache_ttl_seconds: None,
+                field_types: BTreeMap::from([(
+                    field.to_owned(),
+                    (ExternalFieldType::String, false),
+                )]),
+            },
+        );
+    }
+
     struct Hooks;
     impl EvidenceHostHooks for Hooks {
         fn before_acquisition<'a>(
