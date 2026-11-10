@@ -488,24 +488,28 @@ mod tests {
 
     #[test]
     fn admin_urls_require_one_explicit_password_authenticated_tcp_database() {
-        assert!(
-            admin_config("postgresql://admin:secret@db.example:5432/postgres?sslmode=require")
-                .is_ok()
-        );
-        assert!(admin_config("postgres://admin:secret@[::1]:5432/postgres").is_ok());
-        for invalid in [
-            "http://admin:secret@db.example/postgres",
-            "postgresql://db.example/postgres",
-            "postgresql://admin@db.example/postgres",
-            "postgresql://admin:@db.example/postgres",
-            "postgresql://admin:secret@db.example",
-            "postgresql://admin:secret@db.example/one/two",
-            "postgresql://admin:secret@db.example/postgres?host=other.example",
-            "postgresql://admin:secret@db.example/postgres?dbname=other",
-            "postgresql://admin:secret@db.example/postgres?hostaddr=127.0.0.1",
-            "postgresql:///postgres",
-        ] {
-            assert!(admin_config(invalid).is_err(), "accepted {invalid}");
+        let password = random_password().unwrap();
+        let password = password.as_str();
+        let endpoint = format!("postgresql://admin:{password}@db.example");
+        assert!(admin_config(&format!("{endpoint}:5432/postgres?sslmode=require")).is_ok());
+        assert!(admin_config(&format!("postgres://admin:{password}@[::1]:5432/postgres")).is_ok());
+        let invalid = [
+            format!("http://admin:{password}@db.example/postgres"),
+            "postgresql://db.example/postgres".to_owned(),
+            "postgresql://admin@db.example/postgres".to_owned(),
+            "postgresql://admin:@db.example/postgres".to_owned(),
+            endpoint.clone(),
+            format!("{endpoint}/one/two"),
+            format!("{endpoint}/postgres?host=other.example"),
+            format!("{endpoint}/postgres?dbname=other"),
+            format!("{endpoint}/postgres?hostaddr=127.0.0.1"),
+            "postgresql:///postgres".to_owned(),
+        ];
+        for (case, url) in invalid.iter().enumerate() {
+            assert!(
+                admin_config(url).is_err(),
+                "accepted invalid admin URL case {case}"
+            );
         }
     }
 
@@ -515,40 +519,40 @@ mod tests {
             host: UrlHost::Domain("db.example".to_owned()),
             port: Some(5543),
         };
-        let url = endpoint
-            .product_url("owned", "runtime", "generated-secret")
-            .unwrap();
-        assert_eq!(
-            url,
-            "postgresql://runtime:generated-secret@db.example:5543/owned?sslmode=require"
+        let password = random_password().unwrap();
+        let password = password.as_str();
+        let url = endpoint.product_url("owned", "runtime", password).unwrap();
+        assert!(
+            url == format!("postgresql://runtime:{password}@db.example:5543/owned?sslmode=require"),
+            "unexpected product connection URL"
         );
-        assert!(!url.contains("admin"));
     }
 
     #[test]
     fn generated_product_urls_round_trip_ipv6_hosts_and_credentials() {
+        let admin_password = random_password().unwrap();
+        let admin_password = admin_password.as_str();
         for address_text in ["::1", "2001:db8:1234:5678::9"] {
             let address = address_text.parse().unwrap();
             let (_, endpoint) = admin_config(&format!(
-                "postgresql://admin:secret@[{address_text}]:5543/postgres"
+                "postgresql://admin:{admin_password}@[{address_text}]:5543/postgres"
             ))
             .unwrap();
-            for (user, database, password) in [
-                ("runtime", "owned", "runtime-generated-secret"),
-                ("migration", "owned_test", "migration-generated-secret"),
-            ] {
+            for (user, database) in [("runtime", "owned"), ("migration", "owned_test")] {
+                let password = random_password().unwrap();
+                let password = password.as_str();
                 let rendered = endpoint.product_url(database, user, password).unwrap();
                 let parsed = Url::parse(&rendered).unwrap();
-                assert_eq!(parsed.host(), Some(UrlHost::Ipv6(address)), "{rendered}");
-                assert_eq!(parsed.port(), Some(5543), "{rendered}");
-                assert_eq!(parsed.username(), user, "{rendered}");
-                assert_eq!(parsed.password(), Some(password), "{rendered}");
-                assert_eq!(parsed.path(), format!("/{database}"), "{rendered}");
-                assert_eq!(parsed.query(), Some("sslmode=require"), "{rendered}");
+                assert_eq!(parsed.host(), Some(UrlHost::Ipv6(address)));
+                assert_eq!(parsed.port(), Some(5543));
+                assert_eq!(parsed.username(), user);
                 assert!(
-                    rendered.contains(&format!("@[{address}]:5543/")),
-                    "{rendered}"
+                    parsed.password() == Some(password),
+                    "unexpected product password"
                 );
+                assert_eq!(parsed.path(), format!("/{database}"));
+                assert_eq!(parsed.query(), Some("sslmode=require"));
+                assert!(rendered.contains(&format!("@[{address}]:5543/")));
             }
         }
     }
@@ -612,17 +616,14 @@ mod tests {
 
     #[test]
     fn role_statement_carries_a_postgresql_scram_verifier_not_cleartext() {
-        // postgres-protocol's fixed-salt vector for password `secret`. Its
-        // production API generates a fresh random salt for every verifier.
-        let verifier = "SCRAM-SHA-256$4096:AQIDBAUGBwgJCgsMDQ4PEA==$8rrDg00OqaiWXJ7p+sCgHEIaBSHY89ZJl3mfIsf32oY=:05L1f+yZbiN8O0AnO40Og85NNRhvzTS57naKRWCcsIA=";
-        let sql = create_role_sql("rstack_role", verifier);
-        assert_eq!(
-            sql,
-            format!(
-                "CREATE ROLE \"rstack_role\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{verifier}'"
-            )
+        let password = random_password().unwrap();
+        let verifier = postgres_protocol::password::scram_sha_256(password.as_bytes());
+        let sql = create_role_sql("rstack_role", &verifier);
+        let expected = format!(
+            "CREATE ROLE \"rstack_role\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{verifier}'"
         );
-        assert!(!sql.contains("PASSWORD 'secret'"));
+        assert!(verifier.starts_with("SCRAM-SHA-256$"));
+        assert!(sql == expected && !sql.contains(password.as_str()));
     }
 
     #[test]
