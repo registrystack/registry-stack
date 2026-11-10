@@ -14,6 +14,10 @@ use super::{ExpectedRegistryIdentity, GuardedTransaction, RuntimeRevoke, SqlIden
 
 pub(crate) const BIND_ONCE_FUNCTION: &str = "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,bigint,text,text,uuid)";
 pub(crate) const MAINTENANCE_FUNCTION:&str="registry_internal.maintain_external_projection_scope(text,text,uuid,text,uuid,text,text,bigint,bigint)";
+/// Withdrawal stays with migration authority: the runtime role holds no
+/// EXECUTE grant on it, so a compromised runtime cannot purge a scope.
+pub(crate) const WITHDRAW_FUNCTION: &str =
+    "registry_internal.withdraw_external_projection(text,uuid,text,text)";
 /// Exact catalog identities include PostgreSQL argument names and spacing.
 /// ACL/install signatures above remain type-only SQL call signatures.
 /// Entries are (identity, result type, returns set, security definer, runtime execute).
@@ -21,7 +25,7 @@ pub(crate) const MANAGED_FUNCTIONS: &[(&str,&str,bool,bool,bool)] = &[
     ("registry_internal.allocate_external_projection_refresh(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_subject text)","bigint",false,true,true),
     ("registry_internal.publish_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_sequence bigint, p_subject text, p_snapshot text, p_observed bigint, p_expires bigint, p_purge bigint, p_kind text, p_rows jsonb)","text",false,true,true),
     ("registry_internal.fail_external_projection_refresh(p_projection text, p_epoch uuid, p_sequence bigint, p_subject text, p_reason text)","boolean",false,true,true),
-    ("registry_internal.withdraw_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text)","boolean",false,true,true),
+    ("registry_internal.withdraw_external_projection(p_projection text, p_epoch uuid, p_binding text, p_grant text)","boolean",false,true,false),
     ("registry_internal.purge_external_projections(p_limit integer)","record",true,true,true),
     ("registry_internal.lock_external_projection_generation(p_projection text, p_epoch uuid, p_binding text, p_grant text)","bigint",false,true,true),
     ("registry_internal.bind_external_projection_once(p_projection text, p_epoch uuid, p_binding text, p_grant text, p_ttl bigint, p_retention bigint, p_contract text, p_package text, p_activation uuid)","uuid",false,true,true),
@@ -72,11 +76,11 @@ pub(crate) async fn reconcile(
     if !enabled(registry) {
         let exists: bool=migration.query_one("SELECT to_regclass('registry_internal.registry_external_projection_scopes') IS NOT NULL",&[]).await.map_err(|_|ProjectionError::Unavailable)?.get(0);
         if exists {
-            for function in RUNTIME_FUNCTIONS
-                .iter()
-                .copied()
-                .chain([BIND_ONCE_FUNCTION, MAINTENANCE_FUNCTION])
-            {
+            for function in RUNTIME_FUNCTIONS.iter().copied().chain([
+                WITHDRAW_FUNCTION,
+                BIND_ONCE_FUNCTION,
+                MAINTENANCE_FUNCTION,
+            ]) {
                 migration
                     .batch_execute(&format!("DROP FUNCTION IF EXISTS {function};"))
                     .await
@@ -230,7 +234,6 @@ pub(crate) const RUNTIME_FUNCTIONS: &[&str] = &[
     "registry_internal.allocate_external_projection_refresh(text,uuid,text,text,text)",
     "registry_internal.publish_external_projection(text,uuid,text,text,bigint,text,text,bigint,bigint,bigint,text,jsonb)",
     "registry_internal.fail_external_projection_refresh(text,uuid,bigint,text,text)",
-    "registry_internal.withdraw_external_projection(text,uuid,text,text)",
     "registry_internal.purge_external_projections(integer)",
     "registry_internal.lock_external_projection_generation(text,uuid,text,text)",
 ];
@@ -602,6 +605,12 @@ pub(crate) async fn install(
     for function in RUNTIME_FUNCTIONS {
         migration.batch_execute(&format!("REVOKE ALL ON FUNCTION {function} FROM {revoke}; GRANT EXECUTE ON FUNCTION {function} TO {};", runtime_role.quoted())).await.map_err(|_| ProjectionError::Unavailable)?;
     }
+    migration
+        .batch_execute(&format!(
+            "REVOKE ALL ON FUNCTION {WITHDRAW_FUNCTION} FROM {revoke};"
+        ))
+        .await
+        .map_err(|_| ProjectionError::Unavailable)?;
     Ok(())
 }
 
@@ -882,13 +891,14 @@ pub(crate) async fn lock_generation(
     })
 }
 
+/// Tests withdraw under migration authority; operators use the maintenance
+/// function, and the runtime role holds no EXECUTE grant on either.
 #[cfg(all(test, feature = "postgres-test"))]
 pub(crate) async fn withdraw_scope(
-    transaction: &GuardedTransaction<'_>,
+    migration: &impl GenericClient,
     scope: &ProjectionScope,
 ) -> Result<(), ProjectionError> {
-    let row = transaction
-        .transaction()
+    let row = migration
         .query_one(
             "SELECT registry_internal.withdraw_external_projection($1,$2,$3,$4)",
             &[
@@ -1707,7 +1717,16 @@ mod postgres_tests {
         .await
         .unwrap()
         .contains("subject"));
-        withdraw_scope(&transaction, &bound).await.unwrap();
+        transaction.commit().await.unwrap();
+        withdraw_scope(&migration, &bound).await.unwrap();
+        let transaction = super::super::begin_registry_transaction(
+            &mut runtime,
+            RegistryLockKey::derive(registry.registry_id()).unwrap(),
+            std::time::Duration::from_secs(2),
+            &expected,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             refresh_due_keys(&transaction, &bound, &[], baseline, now)
                 .await
@@ -1988,7 +2007,9 @@ mod postgres_tests {
         assert_eq!(runtime.query_one("SELECT kind FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='parent'", &[]).await.unwrap().get::<_,String>(0), "complete-collection");
 
         let pending = allocate_inner(&runtime, &scope, "subject").await.unwrap();
-        runtime
+        // Withdrawal is operator authority: a runtime credential cannot end a
+        // scope, and so cannot force the next start to rebind it.
+        let refused = runtime
             .query_one(
                 "SELECT registry_internal.withdraw_external_projection($1,$2,$3,$4)",
                 &[
@@ -1999,7 +2020,13 @@ mod postgres_tests {
                 ],
             )
             .await
-            .unwrap();
+            .unwrap_err();
+        assert_eq!(
+            refused.code(),
+            Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
+        );
+        assert!(migration.query_one("SELECT active FROM registry_internal.registry_external_projection_scopes WHERE projection_id=$1",&[&scope.projection_id]).await.unwrap().get::<_,bool>(0));
+        withdraw_scope(&migration, &scope).await.unwrap();
         assert_eq!(
             publish_inner(
                 &runtime,
