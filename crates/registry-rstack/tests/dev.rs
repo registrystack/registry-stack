@@ -484,3 +484,131 @@ fn root_and_dev_help_need_no_installation_or_binary_overrides() {
         }
     }
 }
+
+fn write_plan(project: &Path, products: &[&str]) {
+    let entries: Vec<String> = products
+        .iter()
+        .map(|product| {
+            format!("  - {{product: {product}, project: {product}, audience: \"urn:example:{product}\"}}\n")
+        })
+        .collect();
+    fs::write(
+        project.join("dev.yaml"),
+        format!(
+            "issuer: https://issuer.example\nproducts:\n{}",
+            entries.concat()
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn dev_subcommand_json_makes_launcher_failures_json() {
+    let tools = SourceTools::new();
+    let output = tools
+        .empty_command()
+        .args(["dev", "start", "/missing", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schema_version"], "registry.rstack.error.v1");
+    assert_eq!(report["status"], "refused");
+    assert_eq!(report["error"]["class"], "domain");
+
+    let usage = tools
+        .empty_command()
+        .args(["dev", "token", "run-1", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(usage.status.code(), Some(2), "{usage:?}");
+    let report: Value = serde_json::from_slice(&usage.stdout).unwrap();
+    assert_eq!(report["schema_version"], "registry.rstack.error.v1");
+    assert_eq!(report["error"]["class"], "usage");
+
+    let human = tools
+        .empty_command()
+        .args(["dev", "start", "/missing"])
+        .output()
+        .unwrap();
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(human.stdout.is_empty(), "{human:?}");
+    assert!(String::from_utf8(human.stderr)
+        .unwrap()
+        .starts_with("rstack: "));
+}
+
+#[test]
+fn breg_only_plan_does_not_require_casework_binaries() {
+    let tools = SourceTools::new();
+    write_plan(&tools.project, &["breg"]);
+    let output = tools
+        .empty_command()
+        .args(["dev", "start"])
+        .arg(&tools.project)
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .env("RSTACK_BREG_BIN", &tools.breg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert_eq!(output_field(&stdout, "caseworkctl"), "");
+    assert_eq!(output_field(&stdout, "casework"), "");
+}
+
+#[test]
+fn casework_plan_passes_casework_binaries_and_names_missing_installs() {
+    let tools = SourceTools::new();
+    write_plan(&tools.project, &["breg", "casework"]);
+    let output = tools
+        .command()
+        .args(["dev", "start"])
+        .arg(&tools.project)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        output_field(&stdout, "casework"),
+        tools.casework.to_str().unwrap()
+    );
+
+    let missing = tools
+        .empty_command()
+        .args(["dev", "start"])
+        .arg(&tools.project)
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .env("RSTACK_BREG_BIN", &tools.breg)
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(1), "{missing:?}");
+    let stderr = String::from_utf8(missing.stderr).unwrap();
+    assert!(stderr.contains("rstack install casework"), "{stderr}");
+    assert!(!stderr.contains("rstack install breg"), "{stderr}");
+    assert!(stderr.contains("RSTACK_CASEWORKCTL_BIN"), "{stderr}");
+}
+
+#[test]
+fn missing_breg_names_the_install_command_before_the_overrides() {
+    let tools = SourceTools::new();
+    write_plan(&tools.project, &["breg", "casework"]);
+    let output = tools
+        .empty_command()
+        .args(["dev", "start"])
+        .arg(&tools.project)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let install = stderr
+        .find("rstack install breg casework")
+        .unwrap_or_else(|| panic!("{stderr}"));
+    let overrides = stderr
+        .find("RSTACK_BREGCTL_BIN")
+        .unwrap_or_else(|| panic!("{stderr}"));
+    assert!(install < overrides, "{stderr}");
+}

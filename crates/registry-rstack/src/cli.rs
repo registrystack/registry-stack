@@ -384,6 +384,7 @@ pub fn run() -> i32 {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     let (duplicate_format, json_requested, format_supplied, requested_format) =
         report_arguments(&arguments);
+    let json_requested = json_requested || dev_json_requested(&arguments);
     if duplicate_format {
         return emit_failure(2, "--format may be supplied only once", json_requested);
     }
@@ -451,6 +452,16 @@ fn report_arguments(arguments: &[OsString]) -> (bool, bool, bool, Option<Request
         }
     }
     (occurrences > 1, json, occurrences > 0, requested)
+}
+
+/// Whether a `dev` subcommand carries its own `--json` before any `--`.
+fn dev_json_requested(arguments: &[OsString]) -> bool {
+    command_tokens(arguments).first() == Some(&"dev")
+        && arguments
+            .iter()
+            .skip(1)
+            .take_while(|argument| *argument != "--")
+            .any(|argument| argument == "--json")
 }
 
 fn requested_report_format(value: &OsString) -> RequestedReportFormat {
@@ -1337,9 +1348,56 @@ fn first_path_rstack() -> Option<PathBuf> {
     None
 }
 
+/// What a development action needs from the installed components. Only
+/// `start` runs services; Casework is needed only when the plan lists it.
+#[derive(Default)]
+struct Needs {
+    services: bool,
+    casework: bool,
+}
+
+impl Needs {
+    fn components(&self) -> Vec<&'static str> {
+        if self.casework {
+            vec!["breg", "casework"]
+        } else {
+            vec!["breg"]
+        }
+    }
+
+    fn variables(&self) -> Vec<&'static str> {
+        let mut variables = vec!["RSTACK_BREGCTL_BIN"];
+        if self.services {
+            variables.push("RSTACK_BREG_BIN");
+        }
+        if self.services && self.casework {
+            variables.push("RSTACK_CASEWORKCTL_BIN");
+            variables.push("RSTACK_CASEWORK_BIN");
+        }
+        variables
+    }
+}
+
+/// Whether the project's dev.yaml lists a casework product. An unreadable or
+/// oversized plan counts as using Casework, so the launcher never skips a
+/// binary the helper might need; the helper reports the real plan error.
+fn plan_uses_casework(project: &std::path::Path) -> bool {
+    use std::io::Read;
+    const LIMIT: u64 = 1024 * 1024;
+    let mut text = String::new();
+    let read = std::fs::File::open(project.join("dev.yaml"))
+        .and_then(|file| file.take(LIMIT + 1).read_to_string(&mut text));
+    if read.is_err() || text.len() as u64 > LIMIT {
+        return true;
+    }
+    text.lines()
+        .filter_map(|line| line.split_once("product:"))
+        .any(|(_, value)| value.trim_start().starts_with("casework"))
+}
+
 fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
     let launcher_json = matches!(format, ReportFormat::Json);
-    let (request, database_url, needs_services) = match action {
+    let (request, database_url, needs) = match action {
         DevCommand::Check {
             project,
             deny_warnings,
@@ -1351,7 +1409,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 json: *json || launcher_json,
             },
             None,
-            false,
+            Needs::default(),
         ),
         DevCommand::Start {
             project,
@@ -1365,7 +1423,10 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 json: *json || launcher_json,
             },
             database_url.as_deref(),
-            true,
+            Needs {
+                services: true,
+                casework: plan_uses_casework(project),
+            },
         ),
         DevCommand::Status { run_id, json } => (
             DevRequest::Status {
@@ -1373,7 +1434,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 json: *json || launcher_json,
             },
             None,
-            false,
+            Needs::default(),
         ),
         DevCommand::Token {
             run_id,
@@ -1386,7 +1447,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 json: *json || launcher_json,
             },
             None,
-            false,
+            Needs::default(),
         ),
         DevCommand::Stop { run_id, json } => (
             DevRequest::Stop {
@@ -1394,7 +1455,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 json: *json || launcher_json,
             },
             None,
-            false,
+            Needs::default(),
         ),
     };
     let request = serde_json::to_string(&request).map_err(|error| {
@@ -1403,12 +1464,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
 
     let selected = selected_state(cli)?;
     let (mut command, lease) = if let Some((lease, selection, manifest)) = selected {
-        let required_components = if needs_services {
-            &["breg", "casework"][..]
-        } else {
-            &["breg"][..]
-        };
-        for component in required_components {
+        for component in needs.components() {
             if !selection.components.iter().any(|name| name == component) {
                 return Err(CliFailure::domain(format!(
                     "component {component} is missing; run rstack install {component}"
@@ -1423,16 +1479,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
         }
         let mut command = ProcessCommand::new(executable);
         set_selected_generation_environment(&mut command, lease.path(), &selection, &manifest)?;
-        let required_variables = if needs_services {
-            &[
-                "RSTACK_BREGCTL_BIN",
-                "RSTACK_BREG_BIN",
-                "RSTACK_CASEWORKCTL_BIN",
-                "RSTACK_CASEWORK_BIN",
-            ][..]
-        } else {
-            &["RSTACK_BREGCTL_BIN"][..]
-        };
+        let required_variables = needs.variables();
         let missing: Vec<_> = required_variables
             .iter()
             .filter(|variable| {
@@ -1450,16 +1497,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
         }
         (command, Some(lease))
     } else {
-        let variables = if needs_services {
-            &[
-                "RSTACK_BREGCTL_BIN",
-                "RSTACK_BREG_BIN",
-                "RSTACK_CASEWORKCTL_BIN",
-                "RSTACK_CASEWORK_BIN",
-            ][..]
-        } else {
-            &["RSTACK_BREGCTL_BIN"][..]
-        };
+        let variables = needs.variables();
         let mut paths = Vec::with_capacity(variables.len());
         let mut missing = Vec::new();
         for variable in variables {
@@ -1467,13 +1505,23 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from);
             match path {
-                Some(path) if path.is_file() => paths.push((*variable, path)),
-                _ => missing.push(*variable),
+                Some(path) if path.is_file() => paths.push((variable, path)),
+                _ => missing.push(variable),
             }
         }
         if !missing.is_empty() {
             return Err(CliFailure::domain(format!(
-                "without a managed installation, rstack dev requires existing source binary overrides: {}",
+                "without a managed installation, run rstack install {}, or set existing source binary overrides: {}",
+                needs
+                    .components()
+                    .into_iter()
+                    .filter(|component| {
+                        missing
+                            .iter()
+                            .any(|variable| variable.starts_with(&format!("RSTACK_{}", component.to_ascii_uppercase())))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 missing.join(", ")
             )));
         }
