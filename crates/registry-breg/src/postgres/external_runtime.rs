@@ -1304,6 +1304,7 @@ struct RootKeys {
     select: String,
     publication_eligibility: String,
     id: String,
+    base_id: String,
 }
 
 impl RootKeys {
@@ -1327,6 +1328,7 @@ impl RootKeys {
                 relations.from_sql, relations.id_expression, key.sql,
             ),
             id: relations.id_expression,
+            base_id: format!("{}.record_id", relations.base_alias),
         })
     }
 
@@ -1344,9 +1346,13 @@ impl RootKeys {
     }
 
     fn page_sql(&self) -> String {
+        // The base table joins the source view on the record id, and
+        // PostgreSQL does not carry an inequality across that equality.
+        // Repeating the bound on the base table lets a merge join start its
+        // primary key scan at the continuation instead of at the first record.
         format!(
-            "{} WHERE ($1::uuid IS NULL OR {} > $1) ORDER BY {} LIMIT $2",
-            self.select, self.id, self.id
+            "{} WHERE ($1::uuid IS NULL OR ({} > $1 AND {} > $1)) ORDER BY {} LIMIT $2",
+            self.select, self.id, self.base_id, self.id
         )
     }
 
@@ -2911,20 +2917,140 @@ mod postgres_tests {
                 .unwrap();
             let page = keys.page(&transaction, after, 101).await.ok().unwrap();
             assert_eq!(page.len(), 101);
-            let explained = transaction
+            let explained: Value = transaction
                 .transaction()
-                .query(
-                    &format!("EXPLAIN (COSTS OFF) {}", keys.page_sql()),
+                .query_one(
+                    &format!(
+                        "EXPLAIN (ANALYZE, FORMAT JSON, COSTS OFF, TIMING OFF, SUMMARY OFF) {}",
+                        keys.page_sql()
+                    ),
                     &[&after, &101i64],
                 )
                 .await
                 .unwrap()
-                .into_iter()
-                .map(|row| row.get::<_, String>(0))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(!explained.contains("Sort"), "after {after:?}: {explained}");
+                .get(0);
+            let mut nodes = Vec::new();
+            plan_nodes(&explained[0]["Plan"], &mut nodes);
+            assert!(
+                !nodes.iter().any(|node| node["Node Type"]
+                    .as_str()
+                    .is_some_and(|kind| kind.contains("Sort"))),
+                "after {after:?}: {explained}"
+            );
+            // Both copies of the table start at the continuation: a scan of
+            // either from the first record would read about half of it here.
+            for node in &nodes {
+                let rows = node["Actual Rows"].as_f64().unwrap_or(0.0)
+                    * node["Actual Loops"].as_f64().unwrap_or(1.0);
+                let removed = node["Rows Removed by Filter"].as_f64().unwrap_or(0.0)
+                    * node["Actual Loops"].as_f64().unwrap_or(1.0);
+                assert!(
+                    rows + removed <= 3.0 * 101.0,
+                    "after {after:?} reads about one page at every node: {explained}"
+                );
+            }
         }
+        served.fixture.cleanup().await;
+    }
+
+    fn plan_nodes<'a>(plan: &'a Value, nodes: &mut Vec<&'a Value>) {
+        nodes.push(plan);
+        for child in plan["Plans"].as_array().into_iter().flatten() {
+            plan_nodes(child, nodes);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_continuation_returns_each_root_once_in_order_past_an_insert_behind_it() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        let entity = &served.service.registry.entities()["local-record"];
+        let column = |id: &str| {
+            entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == id)
+                .unwrap()
+                .physical_name
+                .clone()
+        };
+        let insert = |rows: &[(&str, &str, &str)]| {
+            format!(
+                "INSERT INTO registry_data.\"{}\" (record_id,active_package_revision,\"{}\",\"{}\") VALUES {}",
+                entity.physical_table,
+                column("subject-key"),
+                column("tenant"),
+                rows.iter()
+                    .map(|(id, key, tenant)| format!("('{id}','fixture','{key}','{tenant}')"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        };
+        served
+            .fixture
+            .database
+            .admin
+            .batch_execute(&insert(&[
+                ("00000000-0000-4000-8000-000000000005", "fifth", "allowed"),
+                ("00000000-0000-4000-8000-000000000006", "sixth", "other"),
+                ("00000000-0000-4000-8000-000000000007", "seventh", "allowed"),
+            ]))
+            .await
+            .unwrap();
+        let refresh = request("link");
+        let plan = served.service.plan(&refresh, None).ok().unwrap();
+        let claims = ClaimContext::for_compiled(
+            &served.service.registry,
+            &plan.root.id,
+            Some("reader-principal".to_owned()),
+            "reader",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::context::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "allowed".to_owned(),
+            }],
+        )
+        .unwrap();
+        let keys = RootKeys::new(&plan).ok().unwrap();
+        let mut after = None;
+        let mut read = Vec::new();
+        loop {
+            let mut session = served.service.session().await.ok().unwrap();
+            let transaction = served
+                .service
+                .transaction(
+                    &mut session,
+                    &claims,
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .await
+                .ok()
+                .unwrap();
+            let page = keys.page(&transaction, after, 2).await.ok().unwrap();
+            drop(transaction);
+            if after.is_none() {
+                // Another session commits one root behind the boundary and
+                // one ahead of it before the next page.
+                served
+                    .fixture
+                    .database
+                    .admin
+                    .batch_execute(&insert(&[
+                        ("00000000-0000-4000-8000-000000000000", "behind", "allowed"),
+                        ("00000000-0000-4000-8000-000000000008", "ahead", "allowed"),
+                    ]))
+                    .await
+                    .unwrap();
+            }
+            let Some((last, _)) = page.last() else {
+                break;
+            };
+            after = Some(*last);
+            read.extend(page.into_iter().map(|(_, key)| key.unwrap()));
+        }
+        assert_eq!(
+            read,
+            ["first", "second", "third", "fifth", "seventh", "ahead"]
+        );
         served.fixture.cleanup().await;
     }
 
