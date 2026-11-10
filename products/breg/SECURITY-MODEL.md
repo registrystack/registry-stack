@@ -136,6 +136,27 @@ For the invariants to hold, a deployment must do the following.
     or `lease-expired`, for the current submitted Proposal. Run it after the
     cause is fixed; it refuses a withdrawn, unsubmitted, or detail-erased
     Proposal and one blocked as `package-changed` or `application-refused`.
+17. **Grant write access to a link's `fromField` only to identities trusted
+    to assert that link.** Whoever can set that field on a root chooses the
+    outside subject BReg asks the source for, under the deployment's source
+    grant, and which subject's values readers of that root then see. Review a
+    change to it as you would review a disclosure. See
+    [External projection storage](external-projection-storage.md).
+18. **Keep the external projection cache out of logical backups.** Dump with
+    the four `--exclude-table-data` options for the
+    `registry_external_projection_*` tables, so a restore starts with no
+    source values, old bindings, or refresh receipts. Physical backups and
+    storage snapshots cannot exclude them and need a separately approved
+    erasure and restore procedure
+    ([logical backups](external-projection-storage.md#logical-backups)).
+19. **Withdraw a source grant in deployment configuration.** Remove the
+    binding and restart; that is the only cutoff for acquisition.
+    `bregctl external-projection withdraw` purges retained values and refresh
+    receipts but does not stop acquisition, and a binding that stays
+    configured acquires again at the next start. Record the withdrawal in
+    deployment configuration or at the source authority so it also holds after
+    a restore
+    ([stop acquisition](external-projection-storage.md#stop-acquisition-withdraw-and-renew)).
 
 ## 3. Accepted residuals
 
