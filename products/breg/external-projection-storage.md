@@ -6,9 +6,13 @@ When you operate indexed external views, keep the projection cache separate from
 
 Indexed projections require separate migration and runtime PostgreSQL roles. Activation and startup refuse a shared role; packages without indexed projections can keep their existing role layout. The migration role installs the projection store when the compiled project contains an indexed projection. A project with live projections only, or without external projections, does not install this store. The runtime role can read the four tables and execute their bounded functions. It cannot insert, update, or delete their rows directly.
 
-The migration-installed binding function contains the compiled projection allowlist. Its definition is part of the managed catalog fingerprint. At startup, a current reviewed deployment binding can fill an empty allowlisted slot under the exact active package and activation. A restart with the same binding and source grant reuses the stored epoch.
+The migration-installed binding function contains the compiled projection allowlist. Its definition is part of the managed catalog fingerprint. At startup, each configured deployment binding binds its allowlisted slot under the exact active package and activation, one projection at a time. A restart with the same binding, source grant, and cache lifetime reuses the stored epoch, so the cache stays warm.
 
-A different binding or source grant cannot replace an already bound slot through runtime startup. A withdrawn slot also stays withdrawn. These changes require operator maintenance under migration authority. Changing the compiled external contract invalidates its previous associations and requires a fresh binding and acquisition. Removing the final indexed projection removes its rebuildable store during package activation.
+The binding and source grant fingerprints cover only what grants authority over cached rows: the reviewed pack contract, the operation, and the allowed fields. Renewing the grant cutoff, replacing a CA bundle, moving an endpoint, or changing acquisition limits keeps the stored epoch. A changed contract, operation, allowed field list, or effective cache lifetime starts a fresh epoch at the next start. A withdrawn slot whose binding is still configured also starts a fresh epoch. Rows under every older epoch are left for purge, and a withdrawn or replaced epoch never becomes readable again.
+
+Each projection's scope covers its own declaration and its external record type. Editing a view, an access profile, or another projection keeps its cache. Changing the projection's own declaration resets its scope during package activation and requires fresh acquisition. Removing the final indexed projection removes its rebuildable store during package activation.
+
+A projection that cannot bind leaves only its own views unavailable. Its binding may fail its own checks, its source grant may have expired, or the database may refuse its scope. Those views answer `503` with the `source.unavailable` Problem, whose `fieldPath` is `/externalProjections/{id}`. Other views keep serving. Startup logs each unavailable projection with the reason, and `bregctl doctor` reports each one as an `external-projection.unavailable` warning. A doctor check binds and rolls back, so it never moves a serving scope to a new epoch.
 
 The current link requires the local reference scheme to match the source selector scheme.
 The named link reserves `identifierBinding` for a future versioned resolver contract.
@@ -33,15 +37,17 @@ Run the named view’s `POST /v1/external-views/{view}/{link}/refresh` with the 
 
 The refresh report counts processed roots or related rows, published values, reused keys and unavailable results. The migration role’s scope inspection reports receipt counts by outcome and fresh, expired and invalidated snapshot counts. Use an authorised indexed query to test readiness for its local root scope.
 
-## Operator withdrawal and grant renewal
+## Stop acquisition, withdraw, and renew
+
+Deployment configuration is the only cutoff for acquisition. To stop acquiring a projection, remove its binding from the deployment configuration and restart. Its views then answer `source.unavailable`. A binding that stays in the configuration binds again at the next start and acquires fresh data, even after a withdrawal. Record a source withdrawal in deployment configuration or at the source authority so that it also holds after a backup restore.
 
 Use [external-projection-scope.sh](../../scripts/external-projection-scope.sh) with a PostgreSQL service profile for the migration role. The script never requests source values. Runtime cannot execute its maintenance function. It takes the package advisory lock and checks the exact inspected package, activation, and scope epoch before mutation.
 
-1. Stop dependent acquisition and update or disable the deployment binding first. Record the source withdrawal in deployment configuration or the source authority so it remains effective after a backup restore.
+1. Remove or update the deployment binding first, then restart.
 2. Run `bash scripts/external-projection-scope.sh inspect breg-migration PROJECTION`. Preserve the returned epoch, packageDigest, and activationId for the next command. A null epoch is passed as `unbound`.
-3. Withdraw with `bash scripts/external-projection-scope.sh withdraw breg-migration PROJECTION EPOCH PACKAGE_DIGEST ACTIVATION_UUID`. This disables the scope and erases its retained values and refresh receipts. Runtime startup cannot reactivate it.
-4. After reviewing a renewed binding and grant, obtain its validated fingerprints and effective limits with `bregctl generate external-source-facts --runtime-config ABSOLUTE_FILE --output NEW_FILE PROJECT`. This reads deployment configuration without acquiring source data. Use the chosen projection entry's `bindingDigest`, `grantDigest`, and `cacheTtlSeconds`; do not calculate the digests by hand. Inspect again, then run `bash scripts/external-projection-scope.sh rotate breg-migration PROJECTION EPOCH PACKAGE_DIGEST ACTIVATION_UUID BINDING_DIGEST GRANT_DIGEST TTL_SECONDS`. Use the exact digests and effective bounds from the reviewed deployment configuration. Rotation allocates a fresh epoch and removes previous cache contents. A changed package or epoch refuses the operation; inspect and review again instead of retrying old values.
-5. Start with the matching reviewed configuration and acquire fresh authorized data. Rotation does not assert coverage.
+3. Withdraw with `bash scripts/external-projection-scope.sh withdraw breg-migration PROJECTION EPOCH PACKAGE_DIGEST ACTIVATION_UUID`. This disables the scope and erases its retained values and refresh receipts. Withdrawal purges data; it does not stop acquisition. If the binding is still configured, the next start binds a fresh epoch and acquires again.
+4. A renewed binding or grant needs no maintenance. When its contract, operation, allowed fields, or cache lifetime changed, the next start moves the projection to a fresh epoch and leaves the old rows for purge. Otherwise the stored epoch and its cache stay in place. To discard the cache under an unchanged binding, obtain its validated fingerprints and effective limits with `bregctl generate external-source-facts --runtime-config ABSOLUTE_FILE --output NEW_FILE PROJECT`. This reads deployment configuration without acquiring source data. Use the chosen projection entry's `bindingDigest`, `grantDigest`, and `cacheTtlSeconds`; do not calculate the digests by hand. Inspect again, then run `bash scripts/external-projection-scope.sh rotate breg-migration PROJECTION EPOCH PACKAGE_DIGEST ACTIVATION_UUID BINDING_DIGEST GRANT_DIGEST TTL_SECONDS`. Rotation allocates a fresh epoch and removes previous cache contents. A changed package or epoch refuses the operation; inspect and review again instead of retrying old values.
+5. Acquire fresh authorized data. Neither a fresh epoch nor rotation asserts coverage.
 
 These operations do not change the governed schema or package digest. They mutate only the rebuildable projection cache. A database-only withdrawal cannot be durable across a backup that excludes those rows; the current deployment/source authority is the durable cutoff.
 
@@ -68,7 +74,7 @@ Restore with the registry's ordinary PostgreSQL and instance-claim procedure. Fe
 
 Before startup, check the current source grant and deployment binding. A withdrawal stored only in excluded database rows does not survive the restore. Reflect withdrawn source authority in the current deployment configuration or at the source before allowing reacquisition. The absence of cached values prevents old bytes from being served, but it is not permission for a new acquisition.
 
-Startup can bind empty slots using the current reviewed deployment configuration. Indexed queries remain incomplete until authorized refresh covers their eligible roots. Restore does not mark a projection ready or extend any source lifetime. Live reads continue to use their own current source contract and retain no projection copy.
+Startup binds each configured projection using the current reviewed deployment configuration. Indexed queries remain incomplete until authorized refresh covers their eligible roots. Restore does not mark a projection ready or extend any source lifetime. Live reads continue to use their own current source contract and retain no projection copy.
 
 ## Implementation references
 

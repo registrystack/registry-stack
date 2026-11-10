@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Startup ordering gate for one verified Registry package.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -141,7 +142,7 @@ pub enum StartupError {
     AuditDestination(String),
     #[error("the Registry cursor profile was refused")]
     Cursor,
-    #[error("an external source binding or its reviewed Adapter pack was refused")]
+    #[error("the external source binding list or the external projection store was refused")]
     ExternalSources,
     #[error(
         "indexed external projections require separate migration and runtime PostgreSQL roles"
@@ -765,7 +766,7 @@ impl StartupError {
             Self::Audit => "the Registry audit profile or destination was refused",
             Self::AuditDestination(_) => "the Registry audit destination was refused",
             Self::Cursor => "the Registry cursor profile was refused",
-            Self::ExternalSources => "an external source binding or its reviewed Adapter pack was refused",
+            Self::ExternalSources => "the external source binding list or the external projection store was refused",
             Self::ExternalProjectionRoleMode => "indexed external projections require separate migration and runtime PostgreSQL roles",
             Self::Oidc => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
@@ -851,6 +852,7 @@ pub struct PreparedServer {
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
     postgres_advisories: Vec<BaselineAdvisory>,
+    unavailable_external_projections: BTreeMap<String, String>,
     role_mode: RoleMode,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
@@ -878,6 +880,13 @@ impl PreparedServer {
     #[must_use]
     pub fn postgres_advisories(&self) -> &[BaselineAdvisory] {
         &self.postgres_advisories
+    }
+
+    /// External projections this server cannot serve, with the reason. Their
+    /// views answer unavailable while every other view serves.
+    #[must_use]
+    pub fn unavailable_external_projections(&self) -> &BTreeMap<String, String> {
+        &self.unavailable_external_projections
     }
 
     /// The role mode the runtime file selects and startup verified.
@@ -932,6 +941,7 @@ impl PreparedServer {
             external_projection_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
+            unavailable_external_projections: BTreeMap::new(),
             role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -973,6 +983,7 @@ impl PreparedServer {
             external_projection_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
+            unavailable_external_projections: BTreeMap::new(),
             role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -1044,16 +1055,19 @@ pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
             postgres_advisories: prepared.postgres_advisories().to_vec(),
             role_mode: prepared.role_mode(),
             unbound_review_authorities,
+            unavailable_external_projections: prepared.unavailable_external_projections().clone(),
         })
 }
 
 /// What a startup check that passed decided without refusing: the
-/// PostgreSQL baseline advisories and the role mode it verified.
+/// PostgreSQL baseline advisories, the role mode it verified, and the external
+/// projections a server would start without, with the reason.
 #[derive(Debug, Clone)]
 pub struct CheckedStartup {
     pub postgres_advisories: Vec<BaselineAdvisory>,
     pub role_mode: RoleMode,
     pub unbound_review_authorities: Vec<String>,
+    pub unavailable_external_projections: BTreeMap<String, String>,
 }
 
 /// Prepare the clean database capability consumed by the production pre-sign
@@ -1324,6 +1338,7 @@ async fn prepare_verified_package_with_connection(
         key_source,
         audit,
         cursor_codec,
+        opening,
     )
     .await
 }
@@ -1353,6 +1368,7 @@ async fn prepare_verified_package_with_key_source(
         key_source,
         audit,
         cursor_codec,
+        AuditOpening::Serve,
     )
     .await
 }
@@ -1466,6 +1482,7 @@ async fn prepare_database_startup(
     Ok((pool, startup, advisories))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_prepared_server(
     config: RuntimeConfig,
     startup: VerifiedStartup,
@@ -1474,6 +1491,7 @@ async fn finish_prepared_server(
     key_source: Arc<JwksFetcher>,
     audit: RegistryAudit,
     cursor_codec: Arc<crate::cursor::CursorCodec>,
+    opening: AuditOpening,
 ) -> Result<PreparedServer> {
     let oidc = config.authentication().oidc();
     key_source
@@ -1611,6 +1629,7 @@ async fn finish_prepared_server(
     } else {
         None
     };
+    let mut unavailable_external_projections = BTreeMap::new();
     let external_views =
         if registry.external_views().views.is_empty() && config.external_sources().is_empty() {
             None
@@ -1625,7 +1644,14 @@ async fn finish_prepared_server(
                 ),
             )
             .map_err(|_| StartupError::ExternalSources)?;
-            let external = crate::postgres::external_runtime::PostgresExternalViewService::new(
+            for (projection, reason) in sources.unavailable_projections() {
+                tracing::warn!(
+                    projection = %projection,
+                    reason = %reason,
+                    "external projection is unavailable; its views answer source.unavailable"
+                );
+            }
+            let mut external = crate::postgres::external_runtime::PostgresExternalViewService::new(
                 pool.clone(),
                 Arc::clone(&registry),
                 expected.clone(),
@@ -1635,10 +1661,12 @@ async fn finish_prepared_server(
                 Arc::clone(&cursor_codec),
                 sources,
             );
+            // A check binds and rolls back, so it never rotates a serving scope.
             external
-                .bind_configured_scopes()
+                .bind_configured_scopes(opening == AuditOpening::Serve)
                 .await
                 .map_err(|_| StartupError::ExternalSources)?;
+            unavailable_external_projections = external.unavailable_projections().clone();
             Some(Arc::new(external))
         };
     let records = PostgresRecordReadService::new(
@@ -1944,6 +1972,7 @@ async fn finish_prepared_server(
         external_projection_retention,
         metrics,
         postgres_advisories,
+        unavailable_external_projections,
         role_mode: RoleMode::from_roles(
             config.database().roles().migration(),
             config.database().roles().runtime(),

@@ -45,12 +45,15 @@ pub(crate) struct ExternalOrder {
     pub(crate) descending: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum ExternalViewError {
     Concealed,
     InvalidCursor,
     Incomplete,
     Unavailable,
+    /// This projection cannot serve: its binding was refused, its grant has
+    /// expired or its scope moved to another binding. Other views still serve.
+    ProjectionUnavailable(String),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -339,19 +342,42 @@ async fn handle(
     };
     let mut response = match result {
         Ok(value) => Json(value).into_response(),
-        Err(ExternalViewError::Concealed) => concealed(),
-        Err(ExternalViewError::InvalidCursor) => cursor_invalid(),
-        Err(ExternalViewError::Incomplete) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"status": "incomplete"})),
-        )
-            .into_response(),
-        Err(ExternalViewError::Unavailable) => unavailable(),
+        Err(error) => external_view_problem(error),
     };
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+fn external_view_problem(error: ExternalViewError) -> Response {
+    match error {
+        ExternalViewError::Concealed => concealed(),
+        ExternalViewError::InvalidCursor => cursor_invalid(),
+        ExternalViewError::Incomplete => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "incomplete"})),
+        )
+            .into_response(),
+        ExternalViewError::Unavailable => unavailable(),
+        ExternalViewError::ProjectionUnavailable(projection) => projection_unavailable(&projection),
+    }
+}
+
+/// The backend reports this only after the caller's view and link grant was
+/// admitted, so naming the compiled projection discloses no source value.
+fn projection_unavailable(projection: &str) -> Response {
+    let code = ProblemCode::SourceUnavailable;
+    crate::correlation::problem_response_with_field_path(
+        StatusCode::from_u16(code.status()).expect("problem catalogue status is valid"),
+        code.title(),
+        code.description(),
+        code.code(),
+        format!(
+            "/externalProjections/{}",
+            projection.replace('~', "~0").replace('/', "~1")
+        ),
+    )
 }
 
 fn admission_profile(raw: Option<&str>) -> Option<String> {
@@ -475,5 +501,31 @@ fn literal_value(field_type: ExternalFieldType, literal: Literal) -> Option<Valu
             .ok()
             .map(|id| Value::String(id.hyphenated().to_string())),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn body(response: Response) -> Value {
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_projection_names_itself_and_other_failures_stay_generic() {
+        let named = external_view_problem(ExternalViewError::ProjectionUnavailable(
+            "person-indexed".to_owned(),
+        ));
+        assert_eq!(named.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let named = body(named).await;
+        assert_eq!(named["code"], "source.unavailable");
+        assert_eq!(named["fieldPath"], "/externalProjections/person-indexed");
+
+        let generic = external_view_problem(ExternalViewError::Unavailable);
+        assert_eq!(generic.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let generic = body(generic).await;
+        assert_eq!(generic["code"], "source.unavailable");
+        assert!(generic.get("fieldPath").is_none());
     }
 }

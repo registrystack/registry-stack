@@ -637,7 +637,26 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn registry_with_external(include_external: bool) -> CompiledRegistry {
-        let mut project = json!({
+        let mut project = project();
+        if !include_external {
+            let root = project.as_object_mut().unwrap();
+            root.remove("externalRecordTypes");
+            root.remove("externalProjections");
+            root.remove("externalViews");
+            root.get_mut("accessProfiles")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()[0]["permissions"]
+                .as_object_mut()
+                .unwrap()
+                .remove("externalViews");
+        }
+        compile_project(&project)
+    }
+
+    /// The authoring project behind [`registry`], for tests that edit it.
+    pub(crate) fn project() -> Value {
+        json!({
             "apiVersion":crate::compiler::AUTHORING_API_VERSION,"kind":"BRegProject",
             "project":{"id":"external-query-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://fixture.example.test"},
             "datasets":[{"id":"records"}],
@@ -655,22 +674,12 @@ pub(crate) mod tests {
                 "records":[{"recordType":"local-record","operations":["get","list"],"allowCount":true,"rowBoundaries":[{"field":"tenant","claim":"tenant","operator":"equals"}]}],
                 "externalViews":[{"view":"view","links":[{"link":"link","readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],"allowCount":true}]}]
             }}]
-        });
-        if !include_external {
-            let root = project.as_object_mut().unwrap();
-            root.remove("externalRecordTypes");
-            root.remove("externalProjections");
-            root.remove("externalViews");
-            root.get_mut("accessProfiles")
-                .unwrap()
-                .as_array_mut()
-                .unwrap()[0]["permissions"]
-                .as_object_mut()
-                .unwrap()
-                .remove("externalViews");
-        }
+        })
+    }
+
+    pub(crate) fn compile_project(project: &Value) -> CompiledRegistry {
         let project =
-            crate::contract::parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap();
+            crate::contract::parse_project_json(&serde_json::to_vec(project).unwrap()).unwrap();
         crate::compiler::compile_project(&project, &[], crate::compiler::CompileProfile::Authoring)
             .unwrap()
     }

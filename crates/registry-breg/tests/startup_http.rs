@@ -806,7 +806,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::AuditDestination(_) => "the Registry audit destination was refused",
         StartupError::Cursor => "the Registry cursor profile was refused",
         StartupError::ExternalSources => {
-            "an external source binding or its reviewed Adapter pack was refused"
+            "the external source binding list or the external projection store was refused"
         }
         StartupError::ExternalProjectionRoleMode => {
             "indexed external projections require separate migration and runtime PostgreSQL roles"

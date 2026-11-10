@@ -168,7 +168,13 @@ impl PostgresExternalViewService {
         }
     }
 
-    pub(crate) async fn bind_configured_scopes(&self) -> Result<()> {
+    /// Bind each configured indexed projection in its own transaction. A
+    /// projection the database refuses becomes unavailable for this process,
+    /// with the reason, while the others bind and serve. A database that
+    /// cannot be reached still fails the whole start. With `persist` false
+    /// (doctor) every bind rolls back, so a check never rotates a serving
+    /// scope or writes one.
+    pub(crate) async fn bind_configured_scopes(&mut self, persist: bool) -> Result<()> {
         let configured = self
             .registry
             .external_views()
@@ -176,44 +182,75 @@ impl PostgresExternalViewService {
             .values()
             .filter_map(|projection| {
                 let bound = self.sources.binding(projection.id.as_str())?;
-                Some((projection, bound, bound.effective_cache_ttl_seconds()?))
+                let ttl = bound.effective_cache_ttl_seconds()?;
+                Some((
+                    projection.id.to_string(),
+                    ProjectionScope::new(
+                        projection.id.as_str(),
+                        Uuid::new_v4(),
+                        bound.binding_fingerprint(),
+                        bound.grant_fingerprint(),
+                        i64::from(ttl),
+                    ),
+                ))
             })
             .collect::<Vec<_>>();
         if configured.is_empty() {
             return Ok(());
         }
         let mut session = self.session().await?;
-        let transaction = begin_registry_transaction(
-            session.client(),
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-        )
-        .await
-        .map_err(|_| ExternalViewError::Unavailable)?;
-        transaction
-            .set_statement_budget(Duration::from_secs(10))
+        for (id, scope) in configured {
+            let transaction = begin_registry_transaction(
+                session.client(),
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+            )
             .await
             .map_err(|_| ExternalViewError::Unavailable)?;
-        for (projection, bound, ttl) in configured {
-            let scope = ProjectionScope::new(
-                projection.id.as_str(),
-                Uuid::new_v4(),
-                bound.binding_fingerprint(),
-                bound.grant_fingerprint(),
-                i64::from(ttl),
-            )
-            .map_err(|_| ExternalViewError::Unavailable)?;
-            store::bind_initial_scope(&transaction, &self.registry, &self.expected, &scope)
+            transaction
+                .set_statement_budget(Duration::from_secs(10))
                 .await
                 .map_err(|_| ExternalViewError::Unavailable)?;
+            let bound = match scope {
+                Ok(scope) => {
+                    store::bind_initial_scope(&transaction, &self.registry, &self.expected, &scope)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            let refusal = match bound {
+                Ok(_) => None,
+                Err(store::ProjectionError::ScopeChanged) => Some(
+                    "the database refused its cache scope; run migrate for this package with this release, then restart",
+                ),
+                Err(store::ProjectionError::InvalidScope) => {
+                    Some("its cache scope is invalid for this package")
+                }
+                Err(_) => return Err(ExternalViewError::Unavailable),
+            };
+            if let Some(reason) = refusal {
+                tracing::error!(
+                    projection = %id,
+                    reason,
+                    "external projection is unavailable; its views answer source.unavailable"
+                );
+                self.sources.refuse(&id, reason.to_owned());
+            }
+            let finished = if persist && refusal.is_none() {
+                transaction.commit().await
+            } else {
+                transaction.rollback().await
+            };
+            finished.map_err(|_| ExternalViewError::Unavailable)?;
         }
-        transaction
-            .commit()
-            .await
-            .map_err(|_| ExternalViewError::Unavailable)?;
         session.disarm();
         Ok(())
+    }
+
+    /// Projections without a usable binding in this process, with the reason.
+    pub(crate) fn unavailable_projections(&self) -> &BTreeMap<String, String> {
+        self.sources.unavailable_projections()
     }
 
     pub(crate) async fn run_retention(
@@ -269,6 +306,13 @@ impl PostgresExternalViewService {
         Ok(())
     }
 
+    /// Called only after the caller's view, link and purpose were admitted.
+    fn bound_source(&self, projection: &ExternalProjectionSource) -> Result<&BoundExternalSource> {
+        self.sources
+            .binding(projection.id.as_str())
+            .ok_or_else(|| ExternalViewError::ProjectionUnavailable(projection.id.to_string()))
+    }
+
     fn plan<'a>(
         &'a self,
         request: &ExternalViewRequest,
@@ -321,10 +365,7 @@ impl PostgresExternalViewService {
                 }
                 label_parent = Some(LabelParent {
                     projection,
-                    source: self
-                        .sources
-                        .binding(projection.id.as_str())
-                        .ok_or(ExternalViewError::Unavailable)?,
+                    source: self.bound_source(projection)?,
                 });
                 projection = label;
             }
@@ -348,10 +389,7 @@ impl PostgresExternalViewService {
             .record_types
             .get(projection.record_type.as_str())
             .ok_or(ExternalViewError::Unavailable)?;
-        let source = self
-            .sources
-            .binding(projection.id.as_str())
-            .ok_or(ExternalViewError::Unavailable)?;
+        let source = self.bound_source(projection)?;
         Ok(Plan {
             root,
             link,
@@ -1159,9 +1197,12 @@ async fn active_scope(
     source: &BoundExternalSource,
     projection: &str,
 ) -> Result<ProjectionScope> {
+    let unavailable = || ExternalViewError::ProjectionUnavailable(projection.to_owned());
     if Utc::now() >= source.grant_valid_until() {
-        return Err(ExternalViewError::Unavailable);
+        return Err(unavailable());
     }
+    // Another process bound this projection with different authority or a
+    // different cache lifetime, or an operator withdrew it.
     let scope = store::load_active_scope(
         transaction,
         projection,
@@ -1169,9 +1210,14 @@ async fn active_scope(
         source.grant_fingerprint(),
     )
     .await
-    .map_err(|_| ExternalViewError::Unavailable)?;
+    .map_err(|error| match error {
+        store::ProjectionError::ScopeChanged | store::ProjectionError::InvalidScope => {
+            unavailable()
+        }
+        _ => ExternalViewError::Unavailable,
+    })?;
     if Some(scope.cache_ttl_seconds) != source.effective_cache_ttl_seconds().map(i64::from) {
-        return Err(ExternalViewError::Unavailable);
+        return Err(unavailable());
     }
     Ok(scope)
 }
@@ -1755,5 +1801,128 @@ mod tests {
             third.split_once(':').unwrap().1
         );
         assert!(Uuid::parse_str(&snapshot_identity(&codec, "binding-a", None).unwrap()).is_ok());
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "postgres-test")]
+mod postgres_tests {
+    use super::*;
+    use crate::correlation::RequestCorrelation;
+    use crate::postgres::external_projection::postgres_tests::{two_projection_project, Activated};
+
+    fn service(registry: &CompiledRegistry, fixture: &Activated) -> PostgresExternalViewService {
+        PostgresExternalViewService::new(
+            fixture.pool.clone(),
+            Arc::new(registry.clone()),
+            fixture.expected.clone(),
+            RegistryLockKey::derive(registry.registry_id()).unwrap(),
+            Duration::from_secs(2),
+            crate::audit::test_support::capturing(
+                registry_platform_audit::AuditProfile::unkeyed_dev_only(),
+            )
+            .0,
+            Arc::new(
+                CursorCodec::new(
+                    zeroize::Zeroizing::new(vec![7; 32]),
+                    Duration::from_secs(60),
+                )
+                .unwrap(),
+            ),
+            crate::external_source::tests::indexed_service(&[
+                ("projection", "binding", "grant", 60),
+                ("other", "other-binding", "other-grant", 120),
+            ]),
+        )
+    }
+
+    fn request(link: &str) -> ExternalViewRequest {
+        ExternalViewRequest {
+            context: crate::api::AuthorizedRequestContext::new(
+                Some("reader-principal".to_owned()),
+                Some("consultation".to_owned()),
+                "reader".to_owned(),
+                Vec::new(),
+            ),
+            correlation: RequestCorrelation::breg_created(),
+            view: "view".to_owned(),
+            link: link.to_owned(),
+            root: None,
+            query: ExternalQueryMode::First(ExternalQuery::default()),
+            deadline: Instant::now() + Duration::from_secs(5),
+        }
+    }
+
+    async fn scopes(fixture: &Activated) -> BTreeMap<String, (String, bool)> {
+        fixture
+            .migration
+            .query(
+                "SELECT projection_id,contract_digest,active
+                 FROM registry_internal.registry_external_projection_scopes",
+                &[],
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.get(0), (row.get(1), row.get(2))))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_refused_projection_scope_leaves_the_other_projections_serving() {
+        let registry =
+            super::super::external_view_query::tests::compile_project(&two_projection_project());
+        let fixture = Activated::new(&registry).await;
+
+        let mut checked = service(&registry, &fixture);
+        checked.bind_configured_scopes(false).await.ok().unwrap();
+        assert!(checked.unavailable_projections().is_empty());
+        assert!(
+            scopes(&fixture).await.is_empty(),
+            "a doctor check binds and rolls back"
+        );
+
+        // A scope this release did not reconcile: its stored contract differs.
+        fixture
+            .migration
+            .execute(
+                "INSERT INTO registry_internal.registry_external_projection_scopes
+                 (projection_id,contract_digest,epoch,binding_digest,grant_digest,cache_ttl_seconds)
+                 VALUES ('projection','sha256:another',gen_random_uuid(),'binding','grant',60)",
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let mut serving = service(&registry, &fixture);
+        serving.bind_configured_scopes(true).await.ok().unwrap();
+        let unavailable = serving.unavailable_projections();
+        assert_eq!(
+            unavailable.keys().collect::<Vec<_>>(),
+            ["projection"],
+            "only the refused projection is unavailable"
+        );
+        assert!(unavailable["projection"].contains("run migrate"));
+
+        match serving.plan(&request("link"), None) {
+            Err(ExternalViewError::ProjectionUnavailable(id)) => assert_eq!(id, "projection"),
+            Err(_) => panic!("the refused projection must name itself"),
+            Ok(_) => panic!("the refused projection must not plan"),
+        }
+        assert!(
+            serving.plan(&request("other-link"), None).is_ok(),
+            "the other projection still serves"
+        );
+
+        let stored = scopes(&fixture).await;
+        assert_eq!(stored["projection"].0, "sha256:another");
+        assert_eq!(
+            stored["other"],
+            (
+                store::scope_contract_digest(&registry, "other").unwrap(),
+                true
+            )
+        );
+        fixture.cleanup().await;
     }
 }
