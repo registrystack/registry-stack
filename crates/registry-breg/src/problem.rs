@@ -27,6 +27,7 @@ pub enum ProblemCode {
     ActionHandlerFailed,
     ActionRefused,
     AuthenticationRefused,
+    ExternalViewIncomplete,
     IdempotencyConflict,
     IdempotencyExpired,
     IngestionChunkMismatch,
@@ -66,6 +67,7 @@ impl ProblemCode {
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
+        Self::ExternalViewIncomplete,
         Self::IdempotencyExpired,
         Self::IdempotencyConflict,
         Self::IngestionChunkMismatch,
@@ -100,6 +102,8 @@ impl ProblemCode {
     /// The codes a documented HTTP operation can answer with. The readiness
     /// probe is an operational route with no documented operation, so its code
     /// is registered and published but never listed in a generated document.
+    /// External view routes are not package operations either, so their
+    /// incomplete-coverage code is published in the catalogue only.
     pub const DOCUMENTED: &'static [Self] = &[
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
@@ -144,6 +148,7 @@ impl ProblemCode {
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
+            Self::ExternalViewIncomplete => "external_view.incomplete",
             Self::IdempotencyConflict => "idempotency.key-reused",
             Self::IdempotencyExpired => "idempotency.expired",
             Self::IngestionChunkMismatch => "ingestion.chunk_mismatch",
@@ -203,6 +208,7 @@ impl ProblemCode {
             Self::PreconditionRequired => 428,
             Self::ActionHandlerFailed | Self::StatisticalDatasetDomainViolation => 500,
             Self::ActionEvidenceFailed
+            | Self::ExternalViewIncomplete
             | Self::RuntimeFieldEncryptionUnavailable
             | Self::RuntimeNotReady
             | Self::ServiceUnavailable
@@ -244,6 +250,9 @@ impl ProblemCode {
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
+            Self::ExternalViewIncomplete => {
+                "The external view's indexed coverage is incomplete for this request."
+            }
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
             Self::IdempotencyExpired => {
                 "The held response of the idempotency key expired; the key stays spent."
@@ -367,13 +376,19 @@ mod tests {
     }
 
     #[test]
-    fn the_readiness_probe_is_the_only_undocumented_code() {
+    fn only_routes_outside_package_operations_have_undocumented_codes() {
         let undocumented: Vec<_> = ProblemCode::ALL
             .iter()
             .filter(|code| !ProblemCode::DOCUMENTED.contains(code))
             .copied()
             .collect();
-        assert_eq!(undocumented, vec![ProblemCode::RuntimeNotReady]);
+        assert_eq!(
+            undocumented,
+            vec![
+                ProblemCode::ExternalViewIncomplete,
+                ProblemCode::RuntimeNotReady
+            ]
+        );
     }
 
     #[test]

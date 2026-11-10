@@ -354,11 +354,7 @@ fn external_view_problem(error: ExternalViewError) -> Response {
     match error {
         ExternalViewError::Concealed => concealed(),
         ExternalViewError::InvalidCursor => cursor_invalid(),
-        ExternalViewError::Incomplete => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"status": "incomplete"})),
-        )
-            .into_response(),
+        ExternalViewError::Incomplete => fixed_problem(ProblemCode::ExternalViewIncomplete),
         ExternalViewError::Unavailable => unavailable(),
         ExternalViewError::ProjectionUnavailable(projection) => projection_unavailable(&projection),
     }
@@ -527,5 +523,38 @@ mod tests {
         let generic = body(generic).await;
         assert_eq!(generic["code"], "source.unavailable");
         assert!(generic.get("fieldPath").is_none());
+    }
+
+    #[tokio::test]
+    async fn incomplete_coverage_is_a_fixed_problem_with_its_own_code() {
+        let response = external_view_problem(ExternalViewError::Incomplete);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+        let problem = body(response).await;
+        assert_eq!(problem["code"], "external_view.incomplete");
+        assert_eq!(
+            problem["type"],
+            "https://id.registrystack.org/problems/registry-breg/external_view/incomplete"
+        );
+        assert_eq!(problem["title"], "Service Unavailable");
+        assert_eq!(problem["status"], 503);
+        assert_eq!(
+            problem["detail"],
+            "The external view's indexed coverage is incomplete for this request."
+        );
+        let members = problem
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        // The correlation layer adds traceId on the served route.
+        assert_eq!(
+            members,
+            ["code", "detail", "status", "title", "type"].into()
+        );
     }
 }

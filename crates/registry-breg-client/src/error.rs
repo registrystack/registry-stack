@@ -143,6 +143,7 @@ pub enum BRegProblemCode {
     ActionHandlerFailed,
     ActionRefused,
     AuthenticationRefused,
+    ExternalViewIncomplete,
     IdempotencyConflict,
     IdempotencyExpired,
     IngestionChunkMismatch,
@@ -175,12 +176,13 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
+        Self::ExternalViewIncomplete,
         Self::IdempotencyConflict,
         Self::IdempotencyExpired,
         Self::IngestionChunkMismatch,
@@ -220,6 +222,7 @@ impl BRegProblemCode {
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
+            Self::ExternalViewIncomplete => "external_view.incomplete",
             Self::IdempotencyConflict => "idempotency.key-reused",
             Self::IdempotencyExpired => "idempotency.expired",
             Self::IngestionChunkMismatch => "ingestion.chunk_mismatch",
@@ -279,7 +282,8 @@ impl BRegProblemCode {
             Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
             Self::StatisticalDatasetDomainViolation => 500,
-            Self::RuntimeFieldEncryptionUnavailable
+            Self::ExternalViewIncomplete
+            | Self::RuntimeFieldEncryptionUnavailable
             | Self::RuntimeNotReady
             | Self::ServiceUnavailable
             | Self::SourceUnavailable => 503,
@@ -330,6 +334,9 @@ impl BRegProblemCode {
             // package-declared label on the wire instead.
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
+            Self::ExternalViewIncomplete => {
+                "The external view's indexed coverage is incomplete for this request."
+            }
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
             Self::IdempotencyExpired => {
                 "The held response of the idempotency key expired; the key stays spent."

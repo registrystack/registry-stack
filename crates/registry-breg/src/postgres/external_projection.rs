@@ -2411,6 +2411,36 @@ pub(crate) mod postgres_tests {
             );
         }
 
+        /// Publish one exact-key label under migration authority at the
+        /// database clock, without a root eligibility recheck.
+        pub(crate) async fn publish_label(&self, scope: &ProjectionScope, key: &str, label: &str) {
+            let now: i64 = self
+                .migration
+                .query_one(
+                    "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            let ticket = allocate_inner(&self.migration, scope, key).await.unwrap();
+            let snapshot = AcceptedSnapshot::one(
+                key,
+                &format!("{key}-{label}"),
+                now,
+                now + scope.cache_ttl_seconds,
+                RetentionPermission::PermittedUntil(now + scope.cache_ttl_seconds),
+                record(key, label),
+            )
+            .unwrap();
+            assert_eq!(
+                publish_inner(&self.migration, &ticket, &snapshot)
+                    .await
+                    .unwrap(),
+                Publication::Published
+            );
+        }
+
         pub(crate) async fn cached(&self, projection: &str, epoch: Uuid) -> i64 {
             self.migration
                 .query_one(
