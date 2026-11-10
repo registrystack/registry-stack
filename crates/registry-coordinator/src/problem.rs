@@ -566,7 +566,6 @@ mod tests {
         "coordinator.operation.proposal-action",
         "calendar-invalid",
         "calendar-overflow",
-        "calendar-sweep-timeout",
         "database-identity-invalid",
         "database-invalid",
         "database-tls-required",
