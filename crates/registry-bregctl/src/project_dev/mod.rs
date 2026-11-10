@@ -48,6 +48,14 @@ const DATABASE_URL: &str = "RSTACK_DEV_DATABASE_URL";
 const CA_FILE: &str = "RSTACK_DEV_DATABASE_CA";
 const REPORT: &str = "report.json";
 const POLL: Duration = Duration::from_millis(100);
+// A capture can contain the 1 MiB development plan after JSON escaping,
+// selections derived from a second 1 MiB journeys document, facts selected
+// from the bounded 4 MiB Casework authoring report, and the remaining paths
+// and authority metadata. Keep headroom for those representations while
+// retaining one hard bound for both writing and restoring the private input.
+const MAXIMUM_CAPTURED_INPUT_BYTES: u64 =
+    16 * registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64;
+const MAXIMUM_RUN_REPORT_BYTES: u64 = 512 * 1024;
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct Args {
@@ -111,6 +119,7 @@ struct RunInput {
 struct BregAuthority {
     principal: String,
     purpose: bool,
+    requires_postgis: bool,
     named_clients: BTreeSet<String>,
 }
 
@@ -360,7 +369,7 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
         binaries,
     };
     let preparation = (|| {
-        write_private(&root.join("input.json"), &serde_json::to_vec(&input)?)?;
+        write_private(&root.join("input.json"), &capture_input(&input)?)?;
         Command::new(env::current_exe()?)
             .arg("project-dev")
             .arg("--worker")
@@ -452,7 +461,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     );
     ensure_private(root, false)?;
     let input = Arc::new(
-        read_json::<RunInput>(&root.join("input.json"))
+        read_json::<RunInput>(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)
             .context("cannot restore the captured development plan")?,
     );
     ensure!(
@@ -572,7 +581,7 @@ fn status(run_id: &str) -> Result<Value> {
             supervisor_running(&root)?,
             "run {run_id} lost its supervisor before cleanup"
         );
-        let report: Value = read_json(&root.join(REPORT))
+        let report: Value = read_json(&root.join(REPORT), MAXIMUM_RUN_REPORT_BYTES)
             .context("the development run has not reported readiness")?;
         if report["expires_at"]
             .as_u64()
@@ -596,7 +605,7 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         "development run {run_id} is not ready"
     );
     let root = run_dir(run_id)?;
-    let input: RunInput = read_json(&root.join("input.json"))?;
+    let input: RunInput = read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)?;
     let signer = Issuer::load(&root)?;
     let expires = report["expires_at"]
         .as_u64()
@@ -777,8 +786,17 @@ fn ensure_private(path: &Path, create: bool) -> Result<()> {
     Ok(())
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    Ok(serde_json::from_slice(&plan::read(path, 512 * 1024)?)?)
+fn capture_input(input: &RunInput) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec(input)?;
+    ensure!(
+        bytes.len() as u64 <= MAXIMUM_CAPTURED_INPUT_BYTES,
+        "captured development input exceeds the internal size limit"
+    );
+    Ok(bytes)
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> Result<T> {
+    Ok(serde_json::from_slice(&plan::read(path, limit)?)?)
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {

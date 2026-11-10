@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::str::FromStr;
+use std::{future::Future, str::FromStr, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -21,6 +21,17 @@ const BREG_SCHEMAS: [&str; 5] = [
     "registry_derived",
     "registry_context",
 ];
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn bounded_connection<T>(
+    connection: impl Future<Output = std::result::Result<T, tokio_postgres::Error>>,
+    timeout: Duration,
+) -> Result<T> {
+    tokio::time::timeout(timeout, connection)
+        .await
+        .map_err(|_| anyhow!("the PostgreSQL connection handshake timed out"))?
+        .context("the PostgreSQL connection handshake failed")
+}
 
 pub(super) struct DatabaseUrls {
     pub runtime: String,
@@ -89,7 +100,10 @@ impl Database {
             .build()
             .context("cannot initialize the PostgreSQL executor")?;
         let (client, connection) = runtime
-            .block_on(admin_config.connect(tls.clone()))
+            .block_on(bounded_connection(
+                admin_config.connect(tls.clone()),
+                CONNECTION_TIMEOUT,
+            ))
             .context("cannot connect to the PostgreSQL administrator database over verified TLS")?;
         let connection_task = runtime.spawn(connection);
         Ok(Self {
@@ -104,8 +118,16 @@ impl Database {
         })
     }
 
-    pub(super) fn provision(&mut self, label: &str, breg: bool) -> Result<DatabaseUrls> {
+    pub(super) fn provision(
+        &mut self,
+        label: &str,
+        breg: bool,
+        requires_postgis: bool,
+    ) -> Result<DatabaseUrls> {
         validate_label(label)?;
+        if requires_postgis && !breg {
+            bail!("PostGIS prerequisites may be provisioned only for a BReg database");
+        }
         let names = Names::new(&self.run_id, label);
         if self.acquisitions.iter().any(|acquisition| {
             matches!(acquisition, Acquisition::Database(database) if database == &names.database)
@@ -117,8 +139,11 @@ impl Database {
         let runtime_password = random_password()?;
         self.create_role(&names.migration_role, &migration_password)?;
         self.create_role(&names.runtime_role, &runtime_password)?;
+        if requires_postgis {
+            self.create_spatial_bbox_role(&names)?;
+        }
         self.create_database(&names)?;
-        self.configure_database(&names, breg)?;
+        self.configure_database(&names, breg, requires_postgis)?;
 
         Ok(DatabaseUrls {
             runtime: self.product_url(&names.database, &names.runtime_role, &runtime_password)?,
@@ -168,7 +193,10 @@ impl Database {
     fn reconnect_admin(&mut self) -> Result<()> {
         let (client, connection) = self
             .runtime
-            .block_on(self.admin_config.connect(self.tls.clone()))
+            .block_on(bounded_connection(
+                self.admin_config.connect(self.tls.clone()),
+                CONNECTION_TIMEOUT,
+            ))
             .context("cannot reconnect to the PostgreSQL administrator database")?;
         self._connection_task.abort();
         self.client = client;
@@ -206,14 +234,37 @@ impl Database {
             password.as_bytes(),
         ));
         let statement = Zeroizing::new(create_role_sql(role, &verifier));
-        let created = self.runtime.block_on(self.client.batch_execute(&statement));
+        self.create_owned_role(
+            role,
+            &statement,
+            "cannot create a least-privilege PostgreSQL role",
+        )
+    }
+
+    fn create_spatial_bbox_role(&mut self, names: &Names) -> Result<()> {
+        let role = spatial_bbox_role(names)?;
+        let statement = create_nologin_role_sql(&role);
+        self.create_owned_role(
+            &role,
+            &statement,
+            "cannot create the BReg spatial bbox role",
+        )
+    }
+
+    fn create_owned_role(
+        &mut self,
+        role: &str,
+        statement: &str,
+        context: &'static str,
+    ) -> Result<()> {
+        let created = self.runtime.block_on(self.client.batch_execute(statement));
         if created.is_ok() || created.as_ref().is_err_and(|error| error.is_closed()) {
             // A closed connection cannot tell us whether PostgreSQL committed
             // the statement. Retaining the exact run-owned name lets cleanup's
             // idempotent DROP cover both outcomes without replaying CREATE.
             self.acquisitions.push(Acquisition::Role(role.to_owned()));
         }
-        created.context("cannot create a least-privilege PostgreSQL role")
+        created.context(context)
     }
 
     fn create_database(&mut self, names: &Names) -> Result<()> {
@@ -231,24 +282,48 @@ impl Database {
             .context("cannot restrict the PostgreSQL database to this run's roles")
     }
 
-    fn configure_database(&self, names: &Names, breg: bool) -> Result<()> {
+    fn configure_database(&self, names: &Names, breg: bool, requires_postgis: bool) -> Result<()> {
         let statement = database_setup_sql(names, breg);
+        let spatial_roles = if requires_postgis {
+            Some((
+                registry_breg::postgres::SqlIdentifier::parse(&names.migration_role)
+                    .map_err(|_| anyhow!("the generated migration role is invalid"))?,
+                registry_breg::postgres::SqlIdentifier::parse(&names.runtime_role)
+                    .map_err(|_| anyhow!("the generated runtime role is invalid"))?,
+            ))
+        } else {
+            None
+        };
 
         let mut target = self.admin_config.clone();
         target.dbname(&names.database).ssl_mode(SslMode::Require);
         self.runtime
             .block_on(async {
-                let (client, connection) = target
-                    .connect(self.tls.clone())
-                    .await
-                    .context("cannot connect to the provisioned PostgreSQL database")?;
+                let (client, connection) =
+                    bounded_connection(target.connect(self.tls.clone()), CONNECTION_TIMEOUT)
+                        .await
+                        .context("cannot connect to the provisioned PostgreSQL database")?;
                 let connection_task = tokio::spawn(connection);
-                let executed = client.batch_execute(&statement).await;
+                let executed = async {
+                    client
+                        .batch_execute(&statement)
+                        .await
+                        .context("cannot configure the provisioned PostgreSQL database")?;
+                    if let Some((migration, runtime)) = &spatial_roles {
+                        registry_breg::postgres::provision_postgis_prerequisites(
+                            &client, migration, runtime,
+                        )
+                        .await
+                        .context("cannot provision BReg PostGIS prerequisites")?;
+                    }
+                    Result::<()>::Ok(())
+                }
+                .await;
                 drop(client);
                 let closed = connection_task
                     .await
                     .context("the PostgreSQL connection task stopped unexpectedly")?;
-                executed.context("cannot configure the provisioned PostgreSQL database")?;
+                executed?;
                 closed.context("the PostgreSQL configuration connection failed")?;
                 Result::<()>::Ok(())
             })
@@ -281,6 +356,14 @@ impl Names {
             database,
         }
     }
+}
+
+fn spatial_bbox_role(names: &Names) -> Result<String> {
+    let runtime = registry_breg::postgres::SqlIdentifier::parse(&names.runtime_role)
+        .map_err(|_| anyhow!("the generated runtime role is invalid"))?;
+    Ok(registry_breg::postgres::spatial_bbox_role(&runtime)
+        .as_str()
+        .to_owned())
 }
 
 fn validate_run_id(run_id: &str) -> Result<()> {
@@ -319,6 +402,13 @@ fn create_role_sql(role: &str, verifier: &str) -> String {
         "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD {}",
         quote_identifier(role),
         quote_literal(verifier)
+    )
+}
+
+fn create_nologin_role_sql(role: &str) -> String {
+    format!(
+        "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS",
+        quote_identifier(role)
     )
 }
 
@@ -446,6 +536,7 @@ fn quote_literal(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{future::pending, time::Instant};
 
     const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
 
@@ -484,6 +575,28 @@ mod tests {
         assert!(names.database.len() <= 63);
         assert!(names.migration_role.len() <= 63);
         assert!(names.runtime_role.len() <= 63);
+    }
+
+    #[test]
+    fn administrator_connection_attempt_has_a_deadline() {
+        let runtime = Builder::new_current_thread().enable_time().build().unwrap();
+        let started = Instant::now();
+        let result: Result<()> = runtime.block_on(bounded_connection(
+            pending::<std::result::Result<(), tokio_postgres::Error>>(),
+            Duration::from_millis(20),
+        ));
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        assert_eq!(
+            runtime
+                .block_on(bounded_connection(
+                    async { Ok::<_, tokio_postgres::Error>(7_u8) },
+                    Duration::from_secs(1),
+                ))
+                .unwrap(),
+            7
+        );
     }
 
     #[test]
@@ -590,6 +703,28 @@ mod tests {
                 )),
                 "{sql}"
             );
+        }
+    }
+
+    #[test]
+    fn spatial_breg_uses_the_governed_bbox_role_for_its_runtime() {
+        for label in ["breg_test", "breg"] {
+            let names = Names::new(RUN_ID, label);
+            let expected = registry_breg::postgres::spatial_bbox_role(
+                &registry_breg::postgres::SqlIdentifier::parse(&names.runtime_role).unwrap(),
+            );
+            assert_eq!(spatial_bbox_role(&names).unwrap(), expected.as_str());
+            assert!(expected.as_str().starts_with("breg_bbox_"));
+            assert!(expected.as_str().len() <= 63);
+            let statement = create_nologin_role_sql(expected.as_str());
+            assert_eq!(
+                statement,
+                format!(
+                    "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS",
+                    quote_identifier(expected.as_str())
+                )
+            );
+            assert!(!statement.contains("PASSWORD"));
         }
     }
 

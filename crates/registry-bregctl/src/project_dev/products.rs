@@ -159,7 +159,13 @@ impl<'a> ProductRunner<'a> {
         project: &Path,
         bind: &str,
     ) -> Result<(PathBuf, PathBuf)> {
-        let rehearsal = database.provision("breg_test", true)?;
+        let requires_postgis = self
+            .input
+            .breg_authority
+            .as_ref()
+            .expect("BReg authority")
+            .requires_postgis;
+        let rehearsal = database.provision("breg_test", true, requires_postgis)?;
         let empty_package = self.root.join("breg-test-package");
         fs::create_dir(&empty_package)?;
         let config = self.config(
@@ -197,7 +203,7 @@ impl<'a> ProductRunner<'a> {
             ],
         )?;
         let package = build.join("package");
-        let urls = database.provision("breg", true)?;
+        let urls = database.provision("breg", true, requires_postgis)?;
         let config = self.config(Product::Breg, "breg", bind, &package, urls)?;
         self.tool(
             Product::Breg,
@@ -291,7 +297,7 @@ impl<'a> ProductRunner<'a> {
                 package.as_os_str(),
             ],
         )?;
-        let urls = database.provision("casework", false)?;
+        let urls = database.provision("casework", false, false)?;
         let config = self.config(Product::Casework, "casework", bind, &package, urls)?;
         let arguments = ["--runtime-config".as_ref(), config.as_os_str()];
         self.tool(Product::Casework, "apply", &arguments)?;
@@ -365,11 +371,14 @@ impl<'a> ProductRunner<'a> {
                 });
                 config["audit"]["destination"] = json!("file");
                 config["listener"] = json!({"bind": bind});
+                let authority = self.input.breg_authority.as_ref().expect("BReg authority");
+                if name == "breg" && authority.requires_postgis {
+                    config["listener"]["publicOrigin"] = json!(format!("http://{bind}"));
+                }
                 config["identity"] = json!({
                     "environment": "development", "instanceId": identity,
                     "databaseId": identity, "databaseInitializationEnvironment": "development"
                 });
-                let authority = self.input.breg_authority.as_ref().expect("BReg authority");
                 let mut authority_claims = json!({"principal": authority.principal});
                 if authority.purpose {
                     authority_claims["purpose"] = json!("registry_purpose");
@@ -596,7 +605,12 @@ pub(super) fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuth
         principal,
         purpose: inventory.purpose_required,
         named_clients: crate::identity_facts::named_requester_clients(&registry),
+        requires_postgis: breg_requires_postgis(&registry),
     }))
+}
+
+fn breg_requires_postgis(registry: &registry_breg::CompiledRegistry) -> bool {
+    registry.ddl().requires_postgis
 }
 
 pub(super) fn casework_principals(
@@ -910,6 +924,23 @@ mod tests {
         io::{BufRead, BufReader},
         sync::mpsc,
     };
+
+    #[test]
+    fn postgis_requirement_comes_from_the_compiled_breg_inventory() {
+        let products = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg");
+        for (project, expected) in [
+            ("acceptance/spatial-service-sites", true),
+            ("examples/minimal", false),
+        ] {
+            let compiled = crate::compile(
+                &products.join(project),
+                crate::ProfileArg::Production,
+                "project-dev-test",
+            )
+            .unwrap_or_else(|_| panic!("{project} must compile"));
+            assert_eq!(breg_requires_postgis(&compiled), expected, "{project}");
+        }
+    }
 
     #[test]
     fn the_casework_cli_report_owns_profile_principals() {

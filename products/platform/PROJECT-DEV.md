@@ -6,6 +6,8 @@ PostgreSQL server over TLS. The database administrator needs to create and
 remove roles and databases and install `btree_gist`. PostgreSQL 17 or newer is
 required. Use the platform's trusted roots or set `RSTACK_DEV_DATABASE_CA` to
 your server's CA bundle in PEM format.
+Spatial BReg projects also need PostGIS available on the server and a database
+administrator that can install it in the run's databases.
 
 ```sh
 rstack install breg casework
