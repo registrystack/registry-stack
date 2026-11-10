@@ -386,8 +386,8 @@ fn today_is_available_to_a_plan_the_call_detector_cannot_see() {
     with_zone["project"]["timezone"] = json!("UTC");
     let registry = compile(with_zone, Some(script));
     assert!(!action(&registry).handler.as_ref().unwrap().uses_today);
-    let date = crate::action_handler::trusted_evaluation_date(action(&registry), &registry, now)
-        .unwrap();
+    let date =
+        crate::action_handler::trusted_evaluation_date(action(&registry), &registry, now).unwrap();
     assert_eq!(date, Some(time::macros::date!(2026 - 01 - 31)));
     let ActionHandlerOutcome::Effects(effects) = evaluate_plan_detailed(
         action(&registry),
