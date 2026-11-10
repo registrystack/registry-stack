@@ -24,8 +24,8 @@ from uuid import UUID
 
 import fixture_path
 fixture_path.ensure_importable()
-from recovery import ScopeRecovery
 from journey import HTTP, Journey, JourneyError, expect, request
+from recovery import ScopeRecovery
 from synthetic_source import Fixture, handler, runtime_fragment
 
 PROJECT = Path(__file__).resolve().parents[2] / "examples/external-views"
