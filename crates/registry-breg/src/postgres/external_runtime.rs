@@ -1527,94 +1527,19 @@ impl PostgresExternalViewService {
             let outcomes = self
                 .fetch_refresh(request, plan, &work, page.supporting_until, authority)
                 .await;
-            let mut session = self.session().await?;
-            let transaction = self
-                .transaction(&mut session, claims, request.deadline)
+            let attempted = work.len();
+            published = self
+                .record_refresh(
+                    request,
+                    plan,
+                    claims,
+                    &scope,
+                    parent.as_ref().map(|(_, generation)| generation),
+                    &page,
+                    work.into_iter().zip(outcomes).collect(),
+                )
                 .await?;
-            let current =
-                active_scope(&transaction, plan.source, plan.projection.id.as_str()).await?;
-            if current.epoch != scope.epoch {
-                return Err(ExternalViewError::Unavailable);
-            }
-            if let (Some(parent), Some((_, selected_generation))) = (&plan.label_parent, &parent) {
-                // A rotated or withdrawn parent abandons the page. A database
-                // or lock failure is reported as such and leaves the receipts
-                // to expire with their leases.
-                let parent_is_current = match self
-                    .lock_scope(&transaction, parent.source, parent.projection.id.as_str())
-                    .await
-                {
-                    Ok((_, generation)) => &generation == selected_generation,
-                    Err(ExternalViewError::ProjectionUnavailable(_)) => false,
-                    Err(error) => return Err(error),
-                };
-                if !parent_is_current
-                    || page
-                        .supporting_until
-                        .is_some_and(|cutoff| Utc::now().timestamp() >= cutoff)
-                {
-                    for work in &work {
-                        store::fail_refresh(&transaction, &work.ticket, RefreshFailure::Abandoned)
-                            .await
-                            .map_err(|_| ExternalViewError::Unavailable)?;
-                    }
-                    transaction
-                        .commit()
-                        .await
-                        .map_err(|_| ExternalViewError::Unavailable)?;
-                    session.disarm();
-                    return Err(ExternalViewError::Unavailable);
-                }
-            }
-            for (work, result) in work.into_iter().zip(outcomes) {
-                let accepted = match result {
-                    RefreshResult::Accepted(snapshot) => {
-                        let root_ids = work.roots.into_iter().collect::<Vec<_>>();
-                        // The RLS recheck and publication share a statement
-                        // snapshot. A detached association does not erase a
-                        // shared fact still used by another root.
-                        match store::publish_for_roots(
-                            &transaction,
-                            &work.ticket,
-                            &snapshot,
-                            &page.eligibility,
-                            &root_ids,
-                        )
-                        .await
-                        {
-                            Ok(store::Publication::Published | store::Publication::Replay) => true,
-                            Ok(store::Publication::Ineligible)
-                            | Err(store::ProjectionError::StaleRefresh) => {
-                                store::fail_refresh(
-                                    &transaction,
-                                    &work.ticket,
-                                    RefreshFailure::Abandoned,
-                                )
-                                .await
-                                .map_err(|_| ExternalViewError::Unavailable)?;
-                                false
-                            }
-                            Err(_) => return Err(ExternalViewError::Unavailable),
-                        }
-                    }
-                    RefreshResult::Failed(failure) => {
-                        store::fail_refresh(&transaction, &work.ticket, failure)
-                            .await
-                            .map_err(|_| ExternalViewError::Unavailable)?;
-                        false
-                    }
-                };
-                if accepted {
-                    published += 1;
-                } else {
-                    unavailable += 1;
-                }
-            }
-            transaction
-                .commit()
-                .await
-                .map_err(|_| ExternalViewError::Unavailable)?;
-            session.disarm();
+            unavailable += attempted - published;
         }
         let expires_at = plan.grant_valid_until().timestamp();
         let mut body = json!({"processed": page.rows.len(), "published": published, "reused": reused, "unavailable": unavailable});
@@ -1630,6 +1555,113 @@ impl PostgresExternalViewService {
             )?);
         }
         Ok(HeldResponse { body, expires_at })
+    }
+
+    /// Records each acquisition outcome in its own short transaction and
+    /// returns how many were published. A publication holds the projection
+    /// scope row until it commits, and indexed reads share that row, so one
+    /// transaction for the whole page would hold readers back for every key.
+    #[allow(clippy::too_many_arguments)] // The page's scope, parent and rows come from its selection transaction.
+    async fn record_refresh(
+        &self,
+        request: &ExternalViewRequest,
+        plan: &Plan<'_>,
+        claims: &ClaimContext,
+        scope: &ProjectionScope,
+        parent: Option<&ProjectionGeneration>,
+        page: &RefreshRows,
+        results: Vec<(RefreshWork, RefreshResult)>,
+    ) -> Result<usize> {
+        let mut published = 0usize;
+        let mut session = self.session().await?;
+        let mut results = results.into_iter();
+        while let Some((work, result)) = results.next() {
+            let transaction = self
+                .transaction(&mut session, claims, request.deadline)
+                .await?;
+            let current =
+                active_scope(&transaction, plan.source, plan.projection.id.as_str()).await?;
+            if current.epoch != scope.epoch {
+                return Err(ExternalViewError::Unavailable);
+            }
+            if let (Some(parent), Some(selected_generation)) = (&plan.label_parent, parent) {
+                // A rotated or withdrawn parent abandons the rest of the
+                // page. A database or lock failure is reported as such and
+                // leaves the receipts to expire with their leases.
+                let parent_is_current = match self
+                    .lock_scope(&transaction, parent.source, parent.projection.id.as_str())
+                    .await
+                {
+                    Ok((_, generation)) => generation == *selected_generation,
+                    Err(ExternalViewError::ProjectionUnavailable(_)) => false,
+                    Err(error) => return Err(error),
+                };
+                if !parent_is_current
+                    || page
+                        .supporting_until
+                        .is_some_and(|cutoff| Utc::now().timestamp() >= cutoff)
+                {
+                    let abandoned = std::iter::once(work).chain(results.map(|(work, _)| work));
+                    for work in abandoned {
+                        store::fail_refresh(&transaction, &work.ticket, RefreshFailure::Abandoned)
+                            .await
+                            .map_err(|_| ExternalViewError::Unavailable)?;
+                    }
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| ExternalViewError::Unavailable)?;
+                    session.disarm();
+                    return Err(ExternalViewError::Unavailable);
+                }
+            }
+            let accepted = match result {
+                RefreshResult::Accepted(snapshot) => {
+                    let root_ids = work.roots.into_iter().collect::<Vec<_>>();
+                    // The RLS recheck and publication share a statement
+                    // snapshot. A detached association does not erase a
+                    // shared fact still used by another root.
+                    match store::publish_for_roots(
+                        &transaction,
+                        &work.ticket,
+                        &snapshot,
+                        &page.eligibility,
+                        &root_ids,
+                    )
+                    .await
+                    {
+                        Ok(store::Publication::Published | store::Publication::Replay) => true,
+                        Ok(store::Publication::Ineligible)
+                        | Err(store::ProjectionError::StaleRefresh) => {
+                            store::fail_refresh(
+                                &transaction,
+                                &work.ticket,
+                                RefreshFailure::Abandoned,
+                            )
+                            .await
+                            .map_err(|_| ExternalViewError::Unavailable)?;
+                            false
+                        }
+                        Err(_) => return Err(ExternalViewError::Unavailable),
+                    }
+                }
+                RefreshResult::Failed(failure) => {
+                    store::fail_refresh(&transaction, &work.ticket, failure)
+                        .await
+                        .map_err(|_| ExternalViewError::Unavailable)?;
+                    false
+                }
+            };
+            transaction
+                .commit()
+                .await
+                .map_err(|_| ExternalViewError::Unavailable)?;
+            if accepted {
+                published += 1;
+            }
+        }
+        session.disarm();
+        Ok(published)
     }
 
     async fn fetch_refresh(
@@ -2046,6 +2078,7 @@ mod postgres_tests {
     struct Served {
         fixture: Activated,
         router: axum::Router,
+        service: Arc<PostgresExternalViewService>,
         scope: ProjectionScope,
     }
 
@@ -2057,6 +2090,7 @@ mod postgres_tests {
             let fixture = Activated::new(&registry).await;
             let mut service = service_with(&registry, &fixture, lock_timeout);
             service.bind_configured_scopes(true).await.ok().unwrap();
+            let service = Arc::new(service);
             let scope = bound_scope(&fixture, "projection").await;
             let entity = &registry.entities()["local-record"];
             let column = |id: &str| {
@@ -2100,10 +2134,11 @@ mod postgres_tests {
                     .unwrap(),
                 ),
             )
-            .with_external_views(Arc::new(service));
+            .with_external_views(service.clone());
             Self {
                 router: crate::api::router(Arc::new(http)),
                 fixture,
+                service,
                 scope,
             }
         }
@@ -2364,6 +2399,132 @@ mod postgres_tests {
         let (status, problem) = served.get("&$count=true", caller).await;
         assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(problem["code"], "external_view.incomplete", "{problem}");
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn indexed_reads_go_on_while_a_refresh_records_its_page() {
+        const BARRIER: i64 = 732_995_011;
+        let served = Served::new(Duration::from_millis(300)).await;
+        served.publish_all().await;
+        let caller = reader("reader-principal", &["allowed"]);
+        // The refresh worker waits out the barrier below; readers keep the
+        // short lock timeout.
+        let mut worker = service_with(
+            &served.service.registry,
+            &served.fixture,
+            Duration::from_secs(5),
+        );
+        worker.bind_configured_scopes(true).await.ok().unwrap();
+        let refresh = request("link");
+        let plan = worker.plan(&refresh, None).ok().unwrap();
+        let claims = ClaimContext::for_compiled(
+            &served.service.registry,
+            &plan.root.id,
+            Some("reader-principal".to_owned()),
+            "reader",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::context::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "allowed".to_owned(),
+            }],
+        )
+        .unwrap();
+        // The second key's publication pauses in its eligibility recheck,
+        // after the first key's publication.
+        let eligibility = RootKeys::new(&plan).ok().unwrap().publication_eligibility;
+        let page = RefreshRows {
+            rows: Vec::new(),
+            next: None,
+            eligibility: format!(
+                "SELECT 1 FROM ({eligibility}) AS eligible
+                 WHERE CASE WHEN $6::text='second'
+                     THEN pg_catalog.pg_advisory_xact_lock({BARRIER}) IS NOT NULL
+                     ELSE true END"
+            ),
+            supporting_until: None,
+            supporting: Vec::new(),
+        };
+        let mut results = Vec::new();
+        for (id, key, _) in &ROOTS[..3] {
+            let (ticket, snapshot) = served
+                .fixture
+                .label_refresh(&served.scope, key, "renewed")
+                .await;
+            results.push((
+                RefreshWork {
+                    key: (*key).to_owned(),
+                    roots: BTreeSet::from([Uuid::parse_str(id).unwrap()]),
+                    ticket,
+                },
+                RefreshResult::Accepted(snapshot),
+            ));
+        }
+        served
+            .fixture
+            .migration
+            .execute(&format!("SELECT pg_advisory_lock({BARRIER})"), &[])
+            .await
+            .unwrap();
+        let read_during_refresh = async {
+            let waited = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let waiting: bool = served
+                        .fixture
+                        .database
+                        .admin
+                        .query_one(
+                            &format!(
+                                "SELECT EXISTS (SELECT 1 FROM pg_locks
+                                 WHERE locktype='advisory' AND NOT granted AND objid={BARRIER})"
+                            ),
+                            &[],
+                        )
+                        .await
+                        .unwrap()
+                        .get(0);
+                    if waiting {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .is_ok();
+            let read = if waited {
+                Some(served.get("&$count=true", caller.clone()).await)
+            } else {
+                None
+            };
+            served
+                .fixture
+                .migration
+                .execute(&format!("SELECT pg_advisory_unlock({BARRIER})"), &[])
+                .await
+                .unwrap();
+            read.expect("the second publication reached the barrier")
+        };
+        let (recorded, (status, during)) = tokio::join!(
+            worker.record_refresh(
+                &refresh,
+                &plan,
+                &claims,
+                &served.scope,
+                None,
+                &page,
+                results
+            ),
+            read_during_refresh,
+        );
+        // The reader sees the first key's new value and the previous values
+        // of the keys still in flight, all under one complete coverage.
+        assert_eq!(status, axum::http::StatusCode::OK, "{during}");
+        assert_eq!(labels(&during), ["renewed", "second", "third"]);
+        assert_eq!(during["count"], 3);
+        assert_eq!(recorded.ok(), Some(3));
+        let (status, after) = served.get("&$count=true", caller).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{after}");
+        assert_eq!(labels(&after), ["renewed", "renewed", "renewed"]);
         served.fixture.cleanup().await;
     }
 }

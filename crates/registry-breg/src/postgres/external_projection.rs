@@ -2546,6 +2546,23 @@ pub(crate) mod postgres_tests {
         /// Publish one exact-key label under migration authority at the
         /// database clock, without a root eligibility recheck.
         pub(crate) async fn publish_label(&self, scope: &ProjectionScope, key: &str, label: &str) {
+            let (ticket, snapshot) = self.label_refresh(scope, key, label).await;
+            assert_eq!(
+                publish_without_eligibility(&self.migration, &ticket, &snapshot)
+                    .await
+                    .unwrap(),
+                Publication::Published
+            );
+        }
+
+        /// Allocate a refresh for one key and the accepted label snapshot a
+        /// source would return for it, stamped at the database clock.
+        pub(crate) async fn label_refresh(
+            &self,
+            scope: &ProjectionScope,
+            key: &str,
+            label: &str,
+        ) -> (RefreshTicket, AcceptedSnapshot) {
             let now: i64 = self
                 .migration
                 .query_one(
@@ -2565,12 +2582,7 @@ pub(crate) mod postgres_tests {
                 record(key, label),
             )
             .unwrap();
-            assert_eq!(
-                publish_without_eligibility(&self.migration, &ticket, &snapshot)
-                    .await
-                    .unwrap(),
-                Publication::Published
-            );
+            (ticket, snapshot)
         }
 
         /// Record a refresh failure for one key, as a refresh worker would.
