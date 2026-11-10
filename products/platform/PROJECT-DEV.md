@@ -161,7 +161,8 @@ Each step asserts the response with `expect`:
 - `code` is the problem code an error response must carry.
 
 A step remembers values from its response under `capture`. Refer to a capture
-as `{{capture-name}}` in a later path, request body, header, or expected value.
+as `{{capture-name}}` in a later step's path, request body, header, expected
+value, or `find` value. A step cannot use its own captures.
 Capture names are unique across the journey. A capture has one `type`:
 
 - `pointer` remembers the string or number at a JSON pointer in the body.

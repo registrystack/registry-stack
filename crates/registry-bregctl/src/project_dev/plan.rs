@@ -1117,8 +1117,10 @@ impl Journey {
                         )?;
                     }
                 }
-                captures.insert(name.clone());
             }
+            // A step's captures are all read from its own response, so they
+            // become available only to later steps.
+            captures.extend(step.capture.keys().cloned());
         }
         Ok(())
     }
@@ -1359,6 +1361,26 @@ mod tests {
         }));
         let error = format!("{:#}", plan.validate(&canonical(&root)).unwrap_err());
         assert!(error.contains("earlier capture"), "{error}");
+    }
+
+    #[test]
+    fn validation_refuses_a_find_capture_that_refers_to_its_own_step() {
+        let (root, plan) = plan(json!({
+            "id": "list", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records",
+            "expect": {"status": 200},
+            "capture": {
+                "first": {"type": "pointer", "pointer": "/items/0/recordIdentifier"},
+                "second": {
+                    "type": "find", "find": "/items",
+                    "where": {"pointer": "/recordIdentifier", "equals": "{{first}}"},
+                    "pointer": "/status"
+                }
+            }
+        }));
+        let error = format!("{:#}", plan.validate(&canonical(&root)).unwrap_err());
+        assert!(error.contains("earlier capture"), "{error}");
+        assert!(error.contains("/capture/second/find"), "{error}");
     }
 
     #[test]
