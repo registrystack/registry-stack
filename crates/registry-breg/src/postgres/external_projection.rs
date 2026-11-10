@@ -16,7 +16,9 @@ pub(crate) const BIND_ONCE_FUNCTION: &str =
     "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,text,text,uuid)";
 pub(crate) const MAINTENANCE_FUNCTION:&str="registry_internal.maintain_external_projection_scope(text,text,uuid,text,uuid,text,text,bigint)";
 /// Withdrawal stays with migration authority: the runtime role holds no
-/// EXECUTE grant on it, so a compromised runtime cannot purge a scope.
+/// EXECUTE grant on it. The runtime bind can still move a configured
+/// projection to a fresh epoch, which discards rebuildable cache but never
+/// makes a withdrawn or replaced epoch readable again.
 pub(crate) const WITHDRAW_FUNCTION: &str =
     "registry_internal.withdraw_external_projection(text,uuid,text,text)";
 /// Exact catalog identities include PostgreSQL argument names and spacing.
@@ -48,19 +50,29 @@ pub(crate) fn enabled(registry: &crate::model::CompiledRegistry) -> bool {
         .any(|projection| projection.mode == crate::external_views::ExternalProjectionMode::Indexed)
 }
 
-/// Scope identity includes the reviewed external inventory, so changing a hop,
-/// field, grant or eligible acquisition path invalidates retained associations.
+/// Scope identity covers what defines one projection's cached rows: its
+/// declaration (record type, fields, operation, selector scheme, cache
+/// lifetime ceiling) and the external record type it reads. Editing a view,
+/// an access profile or another projection leaves this cache in place; views
+/// and grants are rechecked on every read.
 pub(crate) fn scope_contract_digest(
     registry: &crate::model::CompiledRegistry,
     projection_id: &str,
 ) -> Result<String, ProjectionError> {
-    let projection = registry
-        .external_views()
+    let catalog = registry.external_views();
+    let projection = catalog
         .projections
         .get(projection_id)
         .ok_or(ProjectionError::InvalidScope)?;
-    let value = serde_json::to_value((registry.external_views(), projection))
-        .map_err(|_| ProjectionError::InvalidScope)?;
+    let record_type = catalog
+        .record_types
+        .get(projection.record_type.as_str())
+        .ok_or(ProjectionError::InvalidScope)?;
+    let value = serde_json::to_value(serde_json::json!({
+        "projection": projection,
+        "recordType": record_type,
+    }))
+    .map_err(|_| ProjectionError::InvalidScope)?;
     let canonical = registry_platform_canonical_json::canonicalize_json(&value)
         .map_err(|_| ProjectionError::InvalidScope)?;
     Ok(registry_platform_config::sha256_uri(&canonical))
@@ -173,9 +185,12 @@ pub(crate) async fn reconcile(
     Ok(())
 }
 
-/// Initialize only a migration-allowlisted empty slot under the exact active
-/// package. Same bindings reuse their stored epoch; withdrawal or mismatched
-/// bindings require explicit migration authority and cannot reactivate here.
+/// Bind a migration-allowlisted projection under the exact active package.
+/// The same binding fingerprints and cache lifetime reuse the stored epoch, so
+/// a restart keeps the cache. Changed fingerprints, a changed cache lifetime, a
+/// withdrawn scope or an empty slot start the requested fresh epoch, which
+/// leaves every older row for purge. A requested epoch equal to the stored one
+/// is refused, so a withdrawn or replaced epoch never becomes readable again.
 pub(crate) async fn bind_initial_scope(
     transaction: &GuardedTransaction<'_>,
     registry: &crate::model::CompiledRegistry,
@@ -1302,16 +1317,16 @@ BEGIN
         VALUES (p_projection,p_contract,p_epoch,p_binding,p_grant,p_ttl)
         ON CONFLICT (projection_id) DO NOTHING;
     SELECT * INTO scope FROM registry_internal.registry_external_projection_scopes WHERE projection_id=p_projection FOR UPDATE;
-    IF scope.active AND scope.contract_digest=p_contract AND scope.binding_digest=p_binding AND scope.grant_digest=p_grant
+    IF scope.contract_digest<>p_contract THEN RETURN NULL; END IF;
+    IF scope.active AND scope.binding_digest=p_binding AND scope.grant_digest=p_grant
         AND scope.cache_ttl_seconds=p_ttl THEN RETURN scope.epoch; END IF;
-    IF NOT scope.active AND scope.epoch='00000000-0000-0000-0000-000000000000'::uuid
-        AND scope.binding_digest='' AND scope.grant_digest='' AND scope.contract_digest=p_contract THEN
-        UPDATE registry_internal.registry_external_projection_scopes
-            SET epoch=p_epoch,binding_digest=p_binding,grant_digest=p_grant,cache_ttl_seconds=p_ttl,active=true,generation=generation+1
-            WHERE projection_id=p_projection;
-        RETURN p_epoch;
-    END IF;
-    RETURN NULL;
+    IF scope.epoch=p_epoch THEN RETURN NULL; END IF;
+    -- Changed authority or cache lifetime, a withdrawn scope or an empty slot
+    -- start a fresh epoch. Rows under any older epoch become purgeable.
+    UPDATE registry_internal.registry_external_projection_scopes
+        SET epoch=p_epoch,binding_digest=p_binding,grant_digest=p_grant,cache_ttl_seconds=p_ttl,active=true,generation=generation+1
+        WHERE projection_id=p_projection;
+    RETURN p_epoch;
 END $body$;
 "#;
 
@@ -1460,13 +1475,13 @@ mod tests {
 
 #[cfg(test)]
 #[cfg(feature = "postgres-test")]
-mod postgres_tests {
+pub(crate) mod postgres_tests {
     use super::*;
     use serde_json::json;
     use tokio_postgres::{Client, NoTls};
 
     #[allow(dead_code)]
-    mod harness {
+    pub(crate) mod harness {
         use crate as registry_breg;
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1562,14 +1577,6 @@ mod postgres_tests {
             .await
             .unwrap();
         assert_eq!(bound.epoch, restarted.epoch);
-        let mut substituted = scope(Uuid::new_v4());
-        substituted.binding_digest = "another-binding".to_owned();
-        assert_eq!(
-            bind_initial_scope(&transaction, &registry, &expected, &substituted)
-                .await
-                .unwrap_err(),
-            ProjectionError::ScopeChanged
-        );
         assert!(
             load_active_scope(&transaction, "projection", "binding", "grant")
                 .await
@@ -1711,6 +1718,7 @@ mod postgres_tests {
                 .unwrap_err(),
             ProjectionError::ScopeChanged
         );
+        // A withdrawn epoch is never reused, so its rows stay purgeable.
         assert_eq!(
             bind_initial_scope(&transaction, &registry, &expected, &requested)
                 .await
@@ -1718,12 +1726,40 @@ mod postgres_tests {
             ProjectionError::ScopeChanged
         );
         transaction.commit().await.unwrap();
-        drop(runtime);
-        // Reapplying an unchanged compiled inventory cannot undo withdrawal.
+        // Reapplying an unchanged compiled inventory does not undo withdrawal.
         reconcile(&migration, &registry, &database.runtime_role)
             .await
             .unwrap();
-        assert!(!migration.query_one("SELECT active FROM registry_internal.registry_external_projection_scopes WHERE projection_id='projection'",&[]).await.unwrap().get::<_,bool>(0));
+        let active = "SELECT active FROM registry_internal.registry_external_projection_scopes WHERE projection_id='projection'";
+        assert!(!migration
+            .query_one(active, &[])
+            .await
+            .unwrap()
+            .get::<_, bool>(0));
+        // Deployment configuration is the cutoff: a binding still configured
+        // reacquires at the next start, under a fresh epoch and an empty cache.
+        let transaction = super::super::begin_registry_transaction(
+            &mut runtime,
+            RegistryLockKey::derive(registry.registry_id()).unwrap(),
+            std::time::Duration::from_secs(2),
+            &expected,
+        )
+        .await
+        .unwrap();
+        let mut restarted = scope(Uuid::new_v4());
+        restarted.cache_ttl_seconds = 30;
+        let reacquired = bind_initial_scope(&transaction, &registry, &expected, &restarted)
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
+        drop(runtime);
+        assert_ne!(reacquired.epoch, bound.epoch);
+        assert!(migration
+            .query_one(active, &[])
+            .await
+            .unwrap()
+            .get::<_, bool>(0));
+        let bound = reacquired;
         migration
             .batch_execute(&format!(
                 "GRANT UPDATE ON registry_internal.registry_external_projection_values TO {}",
@@ -2237,5 +2273,320 @@ mod postgres_tests {
         drop(migration);
         restored.cleanup().await;
         database.cleanup().await;
+    }
+
+    /// The fixture registry with a second indexed projection and its own
+    /// granted view link.
+    pub(crate) fn two_projection_project() -> Value {
+        let mut project = super::super::external_view_query::tests::project();
+        project["externalProjections"].as_array_mut().unwrap().push(json!({
+            "id":"other","recordType":"external-record","operation":"batch","operationVersion":"1",
+            "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+            "mode":"indexed","cardinality":"one","cacheTtlSeconds":120,"fields":["label"]
+        }));
+        project["externalViews"][0]["links"]
+            .as_array_mut()
+            .unwrap()
+            .push(
+                json!({"id":"other-link","projection":"other","fromField":"subject-key",
+                "identifierScheme":"urn:test:keys","fields":["label"]}),
+            );
+        project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"link":"other-link","readableFields":["label"]}));
+        project
+    }
+
+    pub(crate) struct Activated {
+        pub(crate) database: harness::TestDatabase,
+        pub(crate) migration: Client,
+        migration_task: tokio::task::JoinHandle<()>,
+        pub(crate) expected: ExpectedRegistryIdentity,
+        pub(crate) pool: super::super::RuntimePool,
+    }
+
+    impl Activated {
+        pub(crate) async fn new(registry: &crate::model::CompiledRegistry) -> Self {
+            let database = harness::TestDatabase::create(2).await;
+            let (migration, migration_task) = database.connect_migration().await;
+            super::super::install_compiled_schema(&migration, registry, &database.runtime_role)
+                .await
+                .unwrap();
+            let expected = super::super::initialize_compiled_registry_state_for_test(
+                &migration,
+                &database.runtime_role,
+                registry,
+                super::super::RegistryStateTestIdentity {
+                    package_id: "projection-package",
+                    database_id: "projection-database",
+                    label: "projection-catalog",
+                },
+            )
+            .await
+            .unwrap();
+            let pool = database.runtime_config.build_pool().unwrap();
+            Self {
+                database,
+                migration,
+                migration_task,
+                expected,
+                pool,
+            }
+        }
+
+        /// One startup bind attempt: a fresh epoch in its own transaction.
+        async fn bind(
+            &self,
+            registry: &crate::model::CompiledRegistry,
+            projection: &str,
+            binding: &str,
+            grant: &str,
+            ttl: i64,
+        ) -> Result<ProjectionScope, ProjectionError> {
+            let requested =
+                ProjectionScope::new(projection, Uuid::new_v4(), binding, grant, ttl).unwrap();
+            self.bind_requested(registry, &requested).await
+        }
+
+        async fn bind_requested(
+            &self,
+            registry: &crate::model::CompiledRegistry,
+            requested: &ProjectionScope,
+        ) -> Result<ProjectionScope, ProjectionError> {
+            let mut runtime = self.pool.get().await.unwrap();
+            let transaction = super::super::begin_registry_transaction(
+                &mut runtime,
+                super::super::RegistryLockKey::derive(registry.registry_id()).unwrap(),
+                std::time::Duration::from_secs(2),
+                &self.expected,
+            )
+            .await
+            .unwrap();
+            let bound = bind_initial_scope(&transaction, registry, &self.expected, requested).await;
+            transaction.commit().await.unwrap();
+            bound
+        }
+
+        /// Whether a process holding these fingerprints can still serve.
+        async fn serves(
+            &self,
+            registry: &crate::model::CompiledRegistry,
+            projection: &str,
+            binding: &str,
+            grant: &str,
+        ) -> bool {
+            let mut runtime = self.pool.get().await.unwrap();
+            let transaction = super::super::begin_registry_transaction(
+                &mut runtime,
+                super::super::RegistryLockKey::derive(registry.registry_id()).unwrap(),
+                std::time::Duration::from_secs(2),
+                &self.expected,
+            )
+            .await
+            .unwrap();
+            let loaded = load_active_scope(&transaction, projection, binding, grant).await;
+            transaction.rollback().await.unwrap();
+            loaded.is_ok()
+        }
+
+        async fn cache(&self, scope: &ProjectionScope) {
+            let now: i64 = self
+                .migration
+                .query_one(
+                    "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            let ticket = allocate_inner(&self.migration, scope, "subject")
+                .await
+                .unwrap();
+            assert_eq!(
+                publish_inner(&self.migration, &ticket, &snapshot("cached", now, "cached"))
+                    .await
+                    .unwrap(),
+                Publication::Published
+            );
+        }
+
+        async fn cached(&self, projection: &str, epoch: Uuid) -> i64 {
+            self.migration
+                .query_one(
+                    "SELECT count(*) FROM registry_internal.registry_external_projection_snapshots
+                     WHERE projection_id=$1 AND epoch=$2",
+                    &[&projection, &epoch],
+                )
+                .await
+                .unwrap()
+                .get(0)
+        }
+
+        pub(crate) async fn cleanup(self) {
+            drop(self.pool);
+            self.migration_task.abort();
+            drop(self.migration);
+            self.database.cleanup().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn authority_changes_rotate_only_their_projection_and_restarts_keep_the_cache() {
+        let registry =
+            super::super::external_view_query::tests::compile_project(&two_projection_project());
+        let fixture = Activated::new(&registry).await;
+        let first = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let other = fixture
+            .bind(&registry, "other", "other-binding", "other-grant", 120)
+            .await
+            .unwrap();
+        fixture.cache(&first).await;
+        fixture.cache(&other).await;
+
+        // A restart with the same authority keeps the epoch and its cache.
+        let restarted = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        assert_eq!(restarted.epoch, first.epoch);
+        assert_eq!(fixture.cached("projection", first.epoch).await, 1);
+
+        // Changed authority rotates only that projection to a fresh epoch. A
+        // process still holding the old fingerprints stops serving it.
+        let rotated = fixture
+            .bind(&registry, "projection", "binding", "narrowed-grant", 60)
+            .await
+            .unwrap();
+        assert_ne!(rotated.epoch, first.epoch);
+        assert!(
+            !fixture
+                .serves(&registry, "projection", "binding", "grant")
+                .await
+        );
+        assert!(
+            fixture
+                .serves(&registry, "projection", "binding", "narrowed-grant")
+                .await
+        );
+        let unchanged = fixture
+            .bind(&registry, "other", "other-binding", "other-grant", 120)
+            .await
+            .unwrap();
+        assert_eq!(unchanged.epoch, other.epoch);
+        assert!(
+            fixture
+                .serves(&registry, "other", "other-binding", "other-grant")
+                .await
+        );
+
+        // A shorter deployment cache lifetime also starts a fresh epoch, and
+        // a bind cannot reuse the epoch it would replace.
+        let shortened = fixture
+            .bind(&registry, "projection", "binding", "narrowed-grant", 30)
+            .await
+            .unwrap();
+        assert_ne!(shortened.epoch, rotated.epoch);
+        let mut reused = ProjectionScope::new(
+            "projection",
+            shortened.epoch,
+            "another",
+            "narrowed-grant",
+            30,
+        )
+        .unwrap();
+        assert_eq!(
+            fixture
+                .bind_requested(&registry, &reused)
+                .await
+                .unwrap_err(),
+            ProjectionError::ScopeChanged
+        );
+        reused.cache_ttl_seconds = 61;
+        reused.epoch = Uuid::new_v4();
+        assert_eq!(
+            fixture
+                .bind_requested(&registry, &reused)
+                .await
+                .unwrap_err(),
+            ProjectionError::ScopeChanged
+        );
+
+        // Purge removes the replaced epoch's cache; the other projection's
+        // cache stays warm.
+        fixture
+            .migration
+            .query_one(
+                "SELECT * FROM registry_internal.purge_external_projections(100)",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(fixture.cached("projection", first.epoch).await, 0);
+        assert_eq!(fixture.cached("other", other.epoch).await, 1);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_edit_leaves_other_projection_caches_warm() {
+        let project = two_projection_project();
+        let registry = super::super::external_view_query::tests::compile_project(&project);
+        let fixture = Activated::new(&registry).await;
+        let first = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let other = fixture
+            .bind(&registry, "other", "other-binding", "other-grant", 120)
+            .await
+            .unwrap();
+        fixture.cache(&first).await;
+
+        // A profile grant edit and another projection's cache lifetime are
+        // outside this projection's contract.
+        let mut edited = project;
+        edited["accessProfiles"][0]["permissions"]["externalViews"][0]["links"][0]["allowCount"] =
+            json!(false);
+        edited["externalProjections"][1]["cacheTtlSeconds"] = json!(90);
+        let edited = super::super::external_view_query::tests::compile_project(&edited);
+        assert_eq!(
+            scope_contract_digest(&registry, "projection").unwrap(),
+            scope_contract_digest(&edited, "projection").unwrap()
+        );
+        assert_ne!(
+            scope_contract_digest(&registry, "other").unwrap(),
+            scope_contract_digest(&edited, "other").unwrap()
+        );
+        reconcile(&fixture.migration, &edited, &fixture.database.runtime_role)
+            .await
+            .unwrap();
+
+        assert!(
+            fixture
+                .serves(&edited, "projection", "binding", "grant")
+                .await
+        );
+        assert_eq!(fixture.cached("projection", first.epoch).await, 1);
+        let restarted = fixture
+            .bind(&edited, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        assert_eq!(restarted.epoch, first.epoch);
+
+        // The changed projection reacquires under a fresh epoch.
+        assert!(
+            !fixture
+                .serves(&edited, "other", "other-binding", "other-grant")
+                .await
+        );
+        let rebound = fixture
+            .bind(&edited, "other", "other-binding", "other-grant", 90)
+            .await
+            .unwrap();
+        assert_ne!(rebound.epoch, other.epoch);
+        fixture.cleanup().await;
     }
 }

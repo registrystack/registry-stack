@@ -3022,6 +3022,7 @@ where
                     success.checked.role_mode,
                     success.insecure_http_warning,
                     &success.checked.unbound_review_authorities,
+                    &success.checked.unavailable_external_projections,
                     format,
                     stdout,
                     stderr,
@@ -12792,11 +12793,13 @@ fn write_dev_success(
     write_result(result, stderr)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_doctor_success(
     advisories: &[registry_breg::postgres::BaselineAdvisory],
     role_mode: registry_breg::postgres::RoleMode,
     insecure_http_warning: Option<&'static str>,
     unbound_review_authorities: &[String],
+    unavailable_external_projections: &BTreeMap<String, String>,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -12824,6 +12827,20 @@ fn write_doctor_success(
     for message in &review_messages {
         doctor_advisories.push(DoctorAdvisory {
             code: "proposal.submit.review-authority-unbound".to_owned(),
+            severity: "warning",
+            message,
+            observed: ObservedNumbers(&[]),
+        });
+    }
+    let projection_messages = unavailable_external_projections
+        .iter()
+        .map(|(projection, reason)| format!(
+            "External projection `{projection}` is unavailable: {reason}. Its views answer 503 source.unavailable; other views serve."
+        ))
+        .collect::<Vec<_>>();
+    for message in &projection_messages {
+        doctor_advisories.push(DoctorAdvisory {
+            code: "external-projection.unavailable".to_owned(),
             severity: "warning",
             message,
             observed: ObservedNumbers(&[]),
@@ -16872,7 +16889,7 @@ mod tests {
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], RoleMode::Split, None, &[], format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, None, &[], &BTreeMap::new(), format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(
@@ -16893,6 +16910,7 @@ mod tests {
                 RoleMode::Single,
                 None,
                 &[],
+                &BTreeMap::new(),
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -16917,6 +16935,7 @@ mod tests {
                 RoleMode::Single,
                 None,
                 &[],
+                &BTreeMap::new(),
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -16950,6 +16969,7 @@ mod tests {
                 RoleMode::Split,
                 None,
                 &[],
+                &BTreeMap::new(),
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -16989,6 +17009,7 @@ mod tests {
                 RoleMode::Split,
                 None,
                 &[],
+                &BTreeMap::new(),
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -17046,6 +17067,7 @@ mod tests {
                     RoleMode::Split,
                     None,
                     &["local-review".into()],
+                    &BTreeMap::new(),
                     format,
                     &mut stdout,
                     &mut stderr
@@ -17071,6 +17093,53 @@ mod tests {
     }
 
     #[test]
+    fn doctor_names_each_unavailable_external_projection_and_its_reason() {
+        let unavailable = BTreeMap::from([(
+            "person-indexed".to_owned(),
+            "no external source is bound to this projection".to_owned(),
+        )]);
+        for format in [OutputFormat::Human, OutputFormat::Json] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            assert_eq!(
+                write_doctor_success(
+                    &[],
+                    RoleMode::Split,
+                    None,
+                    &[],
+                    &unavailable,
+                    format,
+                    &mut stdout,
+                    &mut stderr
+                ),
+                ExitCode::SUCCESS
+            );
+            assert!(stderr.is_empty());
+            let text = plain(&stdout)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            for expected in [
+                "external-projection.unavailable",
+                "person-indexed",
+                "no external source is bound to this projection",
+                "other views serve",
+            ] {
+                assert!(text.contains(expected), "{text}");
+            }
+            if format == OutputFormat::Json {
+                let report: Value = serde_json::from_slice(&stdout).unwrap();
+                assert_eq!(report["ok"], true);
+                assert_eq!(report["advisories"][0]["severity"], "warning");
+                assert_eq!(
+                    report["advisories"][0]["code"],
+                    "external-projection.unavailable"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn doctor_reports_the_plain_http_issuer_opt_in_as_a_value_free_advisory() {
         const WARNING: &str =
             "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration";
@@ -17083,6 +17152,7 @@ mod tests {
                     RoleMode::Split,
                     Some(WARNING),
                     &[],
+                    &BTreeMap::new(),
                     format,
                     &mut stdout,
                     &mut stderr,

@@ -282,7 +282,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::ExternalSources => (
             "startup.external-sources.refused",
             "externalSources",
-            "review the indexed projection scope and the configured source grant and pinned Adapter pack",
+            "check each binding for a unique ID, an absolute pack file, allowed fields, endpoint policies and an RFC 3339 grant cutoff, and that the database is reachable; a binding that fails its own checks only leaves its views unavailable",
         ),
         StartupError::ExternalProjectionRoleMode => (
             "startup.external-projections.role-mode",

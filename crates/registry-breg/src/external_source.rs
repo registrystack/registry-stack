@@ -99,6 +99,10 @@ pub enum ExternalSourceError {
     Contract,
     #[error("no external source is bound to this projection")]
     Unbound,
+    #[error("the active package declares no projection with this ID")]
+    UnknownProjection,
+    #[error("another binding describes the same connection differently")]
+    ConnectionConflict,
     #[error("the external source grant does not permit this acquisition")]
     Grant,
     #[error("the source result is incompatible with the approved BReg field types")]
@@ -110,6 +114,7 @@ pub enum ExternalSourceError {
 #[derive(Default)]
 pub struct ExternalSourceService {
     bindings: BTreeMap<String, BoundExternalSource>,
+    unavailable: BTreeMap<String, String>,
 }
 
 pub struct BoundExternalSource {
@@ -156,104 +161,48 @@ impl BoundExternalSource {
 impl ExternalSourceService {
     /// Capture the pack and public TLS material without source calls or
     /// resolving service credentials. Missing bindings never get a fallback.
+    /// Only a malformed binding list refuses the whole load. A binding that
+    /// fails its own checks leaves that projection unavailable, with the
+    /// reason, while every other projection keeps its binding.
     pub fn load(
         compiled: &CompiledRegistry,
         bindings: &[ExternalSourceBinding],
         resolver: Arc<SecretResolver>,
     ) -> Result<Self, ExternalSourceError> {
         validate_bindings(bindings)?;
-        let catalog = compiled.external_views();
         let mut result = Self::default();
         let mut connections = BTreeMap::new();
         for binding in bindings {
             let id = binding.id.as_str();
-            let projection = catalog
-                .projections
-                .get(id)
-                .ok_or(ExternalSourceError::Contract)?;
-            let record = catalog
-                .record_types
-                .get(projection.record_type.as_str())
-                .ok_or(ExternalSourceError::Contract)?;
-            let (pack, artifacts) = load_pack(Path::new(&binding.pack_file), &binding.pack_digest)?;
-            let limits = EvidenceLimits::try_new(
-                binding.acquisition.maximum_data_operations.get(),
-                binding.acquisition.timeout_milliseconds.get(),
-                binding.acquisition.maximum_response_bytes.get() as usize,
-            )
-            .map_err(|_| ExternalSourceError::Configuration)?;
-            let program =
-                compile_projection_pack(&pack, projection.operation.as_str(), &artifacts, limits)
-                    .map_err(|_| ExternalSourceError::Contract)?;
-            check_pack_contract(projection, record, &program)?;
-            let (fields, field_types) = project_fields(projection, record, binding)?;
-            let cache_ttl_seconds =
-                effective_ttl(projection, binding.cache_ttl_seconds.map(|ttl| ttl.get()))?;
-            let grant_valid_until = parse_grant_cutoff(&binding.grant_valid_until)?;
-
-            let ca_bundles = capture_ca_bundles(&binding.connection)?;
-            let ca_digests: BTreeMap<_, _> = ca_bundles
-                .iter()
-                .map(|(name, bytes)| (name, sha256_uri(bytes)))
-                .collect();
-            let connection_fingerprint = fingerprint(&json!({
-                "connection":binding.connection,
-                "endpointPolicies":binding.endpoint_policies,
-                "caDigests":ca_digests
-            }))?;
-            let connection_id = binding.connection.id.as_str();
-            let connection = match connections.entry(connection_id) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    &entry
-                        .insert((
-                            connection_fingerprint.clone(),
-                            EvidenceRuntimeBindings::from_shared_http(
-                                binding.connection.clone(),
-                                Arc::clone(&resolver),
-                                ca_bundles,
-                            ),
-                        ))
-                        .1
+            match bind_one(compiled, binding, &mut connections, &resolver) {
+                Ok(bound) => {
+                    result.bindings.insert(id.to_owned(), bound);
                 }
-                std::collections::btree_map::Entry::Occupied(entry) => {
-                    let (previous, runtime) = entry.into_mut();
-                    if previous.as_str() != connection_fingerprint.as_str() {
-                        return Err(ExternalSourceError::Configuration);
-                    }
-                    runtime
+                Err(error) => {
+                    result.unavailable.insert(id.to_owned(), error.to_string());
                 }
-            };
-            let program = program
-                .bind_live(connection, connection_id, &binding.endpoint_policies)
-                .map_err(|_| ExternalSourceError::Contract)?;
-            let binding_fingerprint = fingerprint(&json!({
-                "packDigest":binding.pack_digest,
-                "operation":projection.operation,
-                "connectionFingerprint":connection_fingerprint,
-                "acquisition":binding.acquisition
-            }))?;
-            let grant_fingerprint = fingerprint(&json!({
-                "projection":projection,
-                "externalType":record,
-                "sourceGrant":program.contract(),
-                "allowedFields":fields,
-                "grantValidUntil":grant_valid_until.to_rfc3339()
-            }))?;
-            result.bindings.insert(
-                id.to_owned(),
-                BoundExternalSource {
-                    program,
-                    fields,
-                    mode: projection.mode,
-                    grant_valid_until,
-                    binding_fingerprint,
-                    grant_fingerprint,
-                    cache_ttl_seconds,
-                    field_types,
-                },
-            );
+            }
+        }
+        for id in compiled.external_views().projections.keys() {
+            if !result.bindings.contains_key(id) && !result.unavailable.contains_key(id) {
+                result
+                    .unavailable
+                    .insert(id.clone(), ExternalSourceError::Unbound.to_string());
+            }
         }
         Ok(result)
+    }
+
+    /// Every declared or configured projection without a usable binding,
+    /// with the reason. Views over these projections answer unavailable.
+    pub fn unavailable_projections(&self) -> &BTreeMap<String, String> {
+        &self.unavailable
+    }
+
+    /// Withdraw one projection's binding for this process, recording why.
+    pub(crate) fn refuse(&mut self, projection: &str, reason: String) {
+        self.bindings.remove(projection);
+        self.unavailable.insert(projection.to_owned(), reason);
     }
 
     pub fn binding(&self, projection: &str) -> Option<&BoundExternalSource> {
@@ -299,6 +248,101 @@ impl ExternalSourceService {
         }
         Ok(result)
     }
+}
+
+type SharedConnections<'a> = BTreeMap<&'a str, (String, EvidenceRuntimeBindings)>;
+
+fn bind_one<'a>(
+    compiled: &CompiledRegistry,
+    binding: &'a ExternalSourceBinding,
+    connections: &mut SharedConnections<'a>,
+    resolver: &Arc<SecretResolver>,
+) -> Result<BoundExternalSource, ExternalSourceError> {
+    let catalog = compiled.external_views();
+    let projection = catalog
+        .projections
+        .get(binding.id.as_str())
+        .ok_or(ExternalSourceError::UnknownProjection)?;
+    let record = catalog
+        .record_types
+        .get(projection.record_type.as_str())
+        .ok_or(ExternalSourceError::Contract)?;
+    let (pack, artifacts) = load_pack(Path::new(&binding.pack_file), &binding.pack_digest)?;
+    let limits = EvidenceLimits::try_new(
+        binding.acquisition.maximum_data_operations.get(),
+        binding.acquisition.timeout_milliseconds.get(),
+        binding.acquisition.maximum_response_bytes.get() as usize,
+    )
+    .map_err(|_| ExternalSourceError::Configuration)?;
+    let program = compile_projection_pack(&pack, projection.operation.as_str(), &artifacts, limits)
+        .map_err(|_| ExternalSourceError::Contract)?;
+    check_pack_contract(projection, record, &program)?;
+    let (fields, field_types) = project_fields(projection, record, binding)?;
+    let cache_ttl_seconds =
+        effective_ttl(projection, binding.cache_ttl_seconds.map(|ttl| ttl.get()))?;
+    let grant_valid_until = parse_grant_cutoff(&binding.grant_valid_until)?;
+
+    let ca_bundles = capture_ca_bundles(&binding.connection)?;
+    let ca_digests: BTreeMap<_, _> = ca_bundles
+        .iter()
+        .map(|(name, bytes)| (name, sha256_uri(bytes)))
+        .collect();
+    // Bindings that share a connection must describe it identically. This
+    // fingerprint only enforces that; it grants no authority.
+    let connection_fingerprint = fingerprint(&json!({
+        "connection":binding.connection,
+        "endpointPolicies":binding.endpoint_policies,
+        "caDigests":ca_digests
+    }))?;
+    let connection_id = binding.connection.id.as_str();
+    let connection = match connections.entry(connection_id) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            &entry
+                .insert((
+                    connection_fingerprint,
+                    EvidenceRuntimeBindings::from_shared_http(
+                        binding.connection.clone(),
+                        Arc::clone(resolver),
+                        ca_bundles,
+                    ),
+                ))
+                .1
+        }
+        std::collections::btree_map::Entry::Occupied(entry) => {
+            let (previous, runtime) = entry.into_mut();
+            if previous.as_str() != connection_fingerprint.as_str() {
+                return Err(ExternalSourceError::ConnectionConflict);
+            }
+            runtime
+        }
+    };
+    let program = program
+        .bind_live(connection, connection_id, &binding.endpoint_policies)
+        .map_err(|_| ExternalSourceError::Contract)?;
+    // The scope fingerprints cover only what grants authority over cached
+    // rows: the reviewed source contract, its operation and the allowed
+    // fields. Connection details, CA bundles, acquisition limits, the grant
+    // cutoff and the cache lifetime can change without discarding the cache.
+    let source_contract = program.contract();
+    let binding_fingerprint = fingerprint(&json!({
+        "operation":projection.operation,
+        "sourceContract":source_contract
+    }))?;
+    let grant_fingerprint = fingerprint(&json!({
+        "operation":projection.operation,
+        "sourceContract":source_contract,
+        "allowedFields":fields
+    }))?;
+    Ok(BoundExternalSource {
+        program,
+        fields,
+        mode: projection.mode,
+        grant_valid_until,
+        binding_fingerprint,
+        grant_fingerprint,
+        cache_ttl_seconds,
+        field_types,
+    })
 }
 
 pub(crate) fn validate_bindings(
@@ -664,10 +708,53 @@ fn read_relative(_: &File, _: &Path, _: usize) -> Result<Vec<u8>, ExternalSource
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use registry_adapter_engine::evidence::{EvidenceAcquisitionIntent, EvidenceHookFuture};
     use registry_platform_yaml::ExternalId;
+
+    /// Indexed bindings over the example pack for store and startup tests,
+    /// as (projection, binding fingerprint, grant fingerprint, cache
+    /// lifetime). The replay transcript is empty, so no source call succeeds.
+    #[cfg(feature = "postgres-test")]
+    pub(crate) fn indexed_service(bindings: &[(&str, &str, &str, u32)]) -> ExternalSourceService {
+        let (pack, artifacts) = example();
+        let mut service = ExternalSourceService::default();
+        for (id, binding, grant, ttl) in bindings {
+            let transcript = Arc::new(
+                registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                    serde_json::from_value(
+                        json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                    )
+                    .unwrap(),
+                    serde_json::from_value(json!([])).unwrap(),
+                ),
+            );
+            let program = compile_projection_pack(
+                &pack,
+                "person-batch",
+                &artifacts,
+                EvidenceLimits::default(),
+            )
+            .unwrap()
+            .bind_replay(transcript)
+            .unwrap();
+            service.bindings.insert(
+                (*id).to_owned(),
+                BoundExternalSource {
+                    program,
+                    fields: BTreeSet::from(["label".to_owned()]),
+                    mode: ExternalProjectionMode::Indexed,
+                    grant_valid_until: Utc::now() + chrono::Duration::days(1),
+                    binding_fingerprint: (*binding).to_owned(),
+                    grant_fingerprint: (*grant).to_owned(),
+                    cache_ttl_seconds: Some(*ttl),
+                    field_types: BTreeMap::new(),
+                },
+            );
+        }
+        service
+    }
 
     struct Hooks;
     impl EvidenceHostHooks for Hooks {
@@ -811,6 +898,7 @@ mod tests {
                     )]),
                 },
             )]),
+            unavailable: BTreeMap::new(),
         };
         let samples = std::sync::atomic::AtomicUsize::new(0);
         let result = service
@@ -848,6 +936,172 @@ mod tests {
         assert!(matches!(effective_ttl(&indexed, None), Ok(Some(300))));
         assert!(matches!(effective_ttl(&indexed, Some(60)), Ok(Some(60))));
         assert!(matches!(effective_ttl(&indexed, Some(900)), Ok(Some(300))));
+    }
+
+    fn example_registry() -> CompiledRegistry {
+        let source = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/breg/examples/external-views/registry.yaml"),
+        )
+        .unwrap();
+        let project = crate::contract::parse_project_yaml(&source).unwrap();
+        crate::compiler::compile_project(&project, &[], crate::compiler::CompileProfile::Authoring)
+            .unwrap()
+    }
+
+    fn example_binding(id: &str, fields: &[&str], ca_file: &Path) -> Value {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples/external-projections/pack.yaml")
+            .canonicalize()
+            .unwrap();
+        let digest = sha256_uri(&std::fs::read(&pack).unwrap());
+        json!({
+            "id":id,"packFile":pack.to_str().unwrap(),"packDigest":digest,
+            "connection":{"id":"synthetic-licensing","endpoints":[{"endpoint":"synthetic-registry",
+                "baseUrl":"https://source.example.test","tlsTrustProfile":"source-ca",
+                "credential":{"type":"static-api-key","valueRef":"secret:file/source-key"}}],
+                "outboundTls":{"trustProfiles":{"source-ca":{"caBundleFile":ca_file.to_str().unwrap()}}}},
+            "endpointPolicies":[{"endpoint":"synthetic-registry","baseUrl":"https://source.example.test",
+                "tlsTrustProfile":"source-ca","clientIdentity":"forbidden",
+                "authentication":{"type":"static-api-key"}}],
+            "allowedFields":fields,"grantValidUntil":"2030-01-01T00:00:00Z",
+            "acquisition":{"maximumDataOperations":8,"timeoutMilliseconds":8000,"maximumResponseBytes":262144}
+        })
+    }
+
+    /// Copy the example pack into `dir` with an edited pack.yaml and point
+    /// the binding at the copy.
+    fn use_pack_copy(binding: &mut Value, dir: &Path, edit: impl Fn(&str) -> String) {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples/external-projections");
+        let target = dir.canonicalize().unwrap();
+        for folder in ["scripts", "schemas"] {
+            std::fs::create_dir_all(target.join(folder)).unwrap();
+            for entry in std::fs::read_dir(source.join(folder)).unwrap() {
+                let entry = entry.unwrap();
+                std::fs::copy(entry.path(), target.join(folder).join(entry.file_name())).unwrap();
+            }
+        }
+        let pack = edit(&std::fs::read_to_string(source.join("pack.yaml")).unwrap());
+        let pack_file = target.join("pack.yaml");
+        std::fs::write(&pack_file, &pack).unwrap();
+        binding["packFile"] = json!(pack_file.to_str().unwrap());
+        binding["packDigest"] = json!(sha256_uri(pack.as_bytes()));
+    }
+
+    fn load_values(registry: &CompiledRegistry, bindings: &[Value]) -> ExternalSourceService {
+        let bindings = bindings
+            .iter()
+            .map(|binding| serde_json::from_value(binding.clone()).unwrap())
+            .collect::<Vec<ExternalSourceBinding>>();
+        ExternalSourceService::load(registry, &bindings, Arc::new(SecretResolver::disabled()))
+            .unwrap()
+    }
+
+    fn fingerprints(service: &ExternalSourceService, id: &str) -> (String, String) {
+        let bound = service.binding(id).unwrap_or_else(|| {
+            panic!(
+                "{id} is unavailable: {:?}",
+                service.unavailable_projections().get(id)
+            )
+        });
+        (
+            bound.binding_fingerprint().to_owned(),
+            bound.grant_fingerprint().to_owned(),
+        )
+    }
+
+    #[test]
+    fn only_the_pack_contract_operation_and_fields_enter_the_authority_fingerprints() {
+        let registry = example_registry();
+        let trust = tempfile::tempdir().unwrap();
+        let ca_file = trust.path().canonicalize().unwrap().join("source-ca.pem");
+        std::fs::write(&ca_file, b"synthetic certificate authority one").unwrap();
+        let original = example_binding("person-indexed", &["family-name", "given-name"], &ca_file);
+        let first = fingerprints(
+            &load_values(&registry, std::slice::from_ref(&original)),
+            "person-indexed",
+        );
+
+        // A renewed grant, a replaced CA bundle, a moved endpoint and new
+        // acquisition limits grant no new authority.
+        std::fs::write(&ca_file, b"synthetic certificate authority two").unwrap();
+        let mut renewed = original.clone();
+        renewed["grantValidUntil"] = json!("2031-06-01T00:00:00Z");
+        renewed["connection"]["endpoints"][0]["baseUrl"] = json!("https://renewed.example.test");
+        renewed["endpointPolicies"][0]["baseUrl"] = json!("https://renewed.example.test");
+        renewed["acquisition"] = json!({"maximumDataOperations":2,"timeoutMilliseconds":3000,"maximumResponseBytes":65536});
+        renewed["cacheTtlSeconds"] = json!(120);
+        assert_eq!(
+            fingerprints(&load_values(&registry, &[renewed]), "person-indexed"),
+            first
+        );
+
+        // A rebuilt pack with the same reviewed contract keeps the authority,
+        // and fields approved beyond the projection's own grant nothing.
+        let packs = tempfile::tempdir().unwrap();
+        let mut rebuilt = original.clone();
+        use_pack_copy(&mut rebuilt, packs.path(), |pack| {
+            format!("{pack}# rebuilt without a contract change\n")
+        });
+        rebuilt["allowedFields"] = json!(["family-name", "given-name", "unprojected"]);
+        assert_eq!(
+            fingerprints(&load_values(&registry, &[rebuilt]), "person-indexed"),
+            first
+        );
+
+        // A changed source contract is a different authority.
+        let changed = tempfile::tempdir().unwrap();
+        let mut recontracted = original.clone();
+        use_pack_copy(&mut recontracted, changed.path(), |pack| {
+            pack.replacen("maximumBatchKeys: 64", "maximumBatchKeys: 32", 1)
+        });
+        let (binding, grant) =
+            fingerprints(&load_values(&registry, &[recontracted]), "person-indexed");
+        assert_ne!(binding, first.0);
+        assert_ne!(grant, first.1);
+
+        // Fields approved below the projection's own leave it unbound.
+        let mut narrowed = original;
+        narrowed["allowedFields"] = json!(["family-name"]);
+        let service = load_values(&registry, &[narrowed]);
+        assert_eq!(
+            service.unavailable_projections().get("person-indexed"),
+            Some(&ExternalSourceError::Grant.to_string())
+        );
+    }
+
+    #[test]
+    fn a_refused_binding_leaves_the_other_projections_bound() {
+        let registry = example_registry();
+        let trust = tempfile::tempdir().unwrap();
+        let ca_file = trust.path().canonicalize().unwrap().join("source-ca.pem");
+        std::fs::write(&ca_file, b"synthetic certificate authority").unwrap();
+        let good = example_binding("person-indexed", &["family-name", "given-name"], &ca_file);
+        let mut pinned_elsewhere = example_binding("person-live", &["family-name"], &ca_file);
+        pinned_elsewhere["packDigest"] =
+            json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+        let retired = example_binding("retired-projection", &["family-name"], &ca_file);
+        let service = load_values(&registry, &[good, pinned_elsewhere, retired]);
+
+        assert!(service.binding("person-indexed").is_some());
+        assert!(service.binding("person-live").is_none());
+        let unavailable = service.unavailable_projections();
+        assert_eq!(
+            unavailable.get("person-live").map(String::as_str),
+            Some(ExternalSourceError::Artifact.to_string().as_str())
+        );
+        assert_eq!(
+            unavailable.get("retired-projection").map(String::as_str),
+            Some(ExternalSourceError::UnknownProjection.to_string().as_str())
+        );
+        for unbound in ["holdings-live", "holdings-indexed"] {
+            assert_eq!(
+                unavailable.get(unbound).map(String::as_str),
+                Some(ExternalSourceError::Unbound.to_string().as_str())
+            );
+        }
+        assert!(!unavailable.contains_key("person-indexed"));
     }
 
     #[test]
