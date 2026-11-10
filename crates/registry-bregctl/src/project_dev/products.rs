@@ -806,7 +806,7 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
                 "Run `rstack breg check` for authored diagnostics, then correct the BReg project.",
             )
         })?;
-    refuse_encrypted_fields(&registry)?;
+    refuse_encrypted_fields(&registry, &project.field)?;
     let review_authorities = registry
         .review_authorities()
         .iter()
@@ -888,15 +888,23 @@ fn validate_breg_binding_ids(
 
 /// The generated runtime configuration has no field-encryption provider, so a
 /// project with encrypted fields would only fail late and obscurely.
-fn refuse_encrypted_fields(registry: &registry_breg::CompiledRegistry) -> Result<()> {
+fn refuse_encrypted_fields(
+    registry: &registry_breg::CompiledRegistry,
+    product_field: &str,
+) -> plan::SemanticResult<()> {
     for entity in registry.entities().values() {
         for field in entity.fields.values() {
-            ensure!(
+            plan::require(
                 field.encryption.is_none(),
-                "rstack dev does not configure field encryption yet; {}.{} is encrypted",
-                entity.id,
-                field.id
-            );
+                product_field,
+                format!(
+                    "The BReg project encrypts {}.{}, and rstack dev does not configure field \
+                     encryption yet.",
+                    entity.id, field.id
+                ),
+                "Run this BReg project with `rstack breg` and a field-encryption provider, or \
+                 select a project without encrypted fields.",
+            )?;
         }
     }
     Ok(())
@@ -925,10 +933,7 @@ fn check_breg_grants(
                     registry_platform_yaml::escape_pointer_segment(name)
                 ),
                 "The BReg grant profile does not name an access profile in the BReg project.",
-                format!(
-                    "Set profile to an access profile defined by the BReg project. It declares: {}.",
-                    profiles.iter().copied().collect::<Vec<_>>().join(", ")
-                ),
+                "Set profile to an access profile defined by the BReg project.",
             )?;
         }
     }
@@ -1867,7 +1872,11 @@ mod tests {
             error.contains("/people/typo/grants/breg/profile"),
             "{error}"
         );
-        assert!(error.contains("directory-editor"), "{error}");
+        assert!(
+            error.ends_with("Next: Set profile to an access profile defined by the BReg project."),
+            "{error}"
+        );
+        assert!(!error.contains("directory-edtor"), "{error}");
         let valid = BTreeMap::from([("editor".to_owned(), breg_person("directory-editor"))]);
         check_breg_grants(&registry, &valid).unwrap();
     }
@@ -1900,10 +1909,15 @@ mod tests {
             )
         });
         assert_eq!(
-            refuse_encrypted_fields(&registry).unwrap_err().to_string(),
-            "rstack dev does not configure field encryption yet; contact.email is encrypted"
+            refuse_encrypted_fields(&registry, "/products/0/project")
+                .unwrap_err()
+                .to_string(),
+            "dev.yaml /products/0/project: The BReg project encrypts contact.email, and rstack \
+             dev does not configure field encryption yet. Next: Run this BReg project with \
+             `rstack breg` and a field-encryption provider, or select a project without \
+             encrypted fields."
         );
-        refuse_encrypted_fields(&minimal_registry(str::to_owned)).unwrap();
+        refuse_encrypted_fields(&minimal_registry(str::to_owned), "/products/0/project").unwrap();
     }
 
     #[test]

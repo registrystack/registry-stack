@@ -119,20 +119,19 @@ schema-test receipt before packaging.
 
 Every BReg grant must name an access profile the BReg project declares,
 including a profile that carries only proposal permissions and so belongs to no
-entity. The run refuses a grant that does not, before it provisions
-anything. The error names the plan pointer, for example
-`/people/NAME/grants/breg/profile`, and lists the profiles the project
-declares. A Casework grant must name an access profile of the Casework project,
-reported at `/people/NAME/grants/casework/profile`. The run does not compare
+entity. `rstack dev check` refuses a grant that does not, and so does `start`,
+before it provisions anything. The error names the plan pointer, for example
+`/people/NAME/grants/breg/profile`. A Casework grant must name an access profile
+of the Casework project, reported at `/people/NAME/grants/casework/profile`. The run does not compare
 scopes with the profile: a profile's required scopes are a per-entity rule, and
 a mismatch appears as a failed journey step.
 
 For a native review handoff, `bindings.bregReviewAuthority` identifies the
 Casework producer, and `bindings.caseworkContextProvider` identifies the BReg
-context provider and action. Before it provisions anything, `start` refuses a
-binding that names a review authority or action the BReg project does not
-declare, or a producer or context provider the Casework project does not
-declare. The run pairs the provider on a private copy
+context provider and action. `rstack dev check` refuses a binding that names a
+review authority or action the BReg project does not declare, or a producer or
+context provider the Casework project does not declare; `start` refuses it
+before it provisions anything. The run pairs the provider on a private copy
 before packaging. A reviewer whose Casework context call forwards the bearer
 to BReg declares both grants, one shared client, and `caseworkContext: true`.
 Both grants declare the same scopes and additional claims. Casework reads the
@@ -240,5 +239,7 @@ missing component, print a `registry.rstack.error.v1` object with `status` set
 to `refused` and an `error` object holding `class` and `message`. The reports of
 `rstack dev check` use `BRegCtlReport` instead.
 
-A BReg project with encrypted fields is refused before anything is provisioned:
-`rstack dev does not configure field encryption yet; ENTITY.FIELD is encrypted`.
+`rstack dev` does not configure field encryption yet. `rstack dev check` and
+`start` refuse a BReg project with encrypted fields at the product's
+`/products/N/project` pointer, and the error names the encrypted
+`ENTITY.FIELD`; `start` refuses it before it provisions anything.
