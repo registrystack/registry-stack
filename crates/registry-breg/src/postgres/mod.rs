@@ -491,6 +491,47 @@ impl From<tokio_postgres::Error> for PostgresKernelError {
 /// Result returned by PostgreSQL kernel operations.
 pub type Result<T> = std::result::Result<T, PostgresKernelError>;
 
+#[derive(Clone, Copy)]
+pub(crate) enum RetentionFailureReason {
+    RegistryNotReady,
+    LockTimeout,
+    QueryCancelled,
+    Database,
+}
+
+impl RetentionFailureReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::RegistryNotReady => "registry-not-ready",
+            Self::LockTimeout => "lock-timeout",
+            Self::QueryCancelled => "query-cancelled",
+            Self::Database => "database",
+        }
+    }
+
+    pub(crate) fn sqlstate(code: Option<&str>) -> Self {
+        match code {
+            Some("55P03") => Self::LockTimeout,
+            Some("57014") => Self::QueryCancelled,
+            _ => Self::Database,
+        }
+    }
+
+    pub(crate) fn admission(error: crate::postgres::RegistryTransactionError) -> Self {
+        use crate::postgres::{PostgresKernelError, RegistryLockFailure, RegistryTransactionError};
+        match error {
+            RegistryTransactionError::Kernel(PostgresKernelError::RegistryUnavailable) => {
+                Self::RegistryNotReady
+            }
+            RegistryTransactionError::Lock(RegistryLockFailure::Timeout) => Self::LockTimeout,
+            RegistryTransactionError::Lock(RegistryLockFailure::QueryCancelled) => {
+                Self::QueryCancelled
+            }
+            _ => Self::Database,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::sqlstate_ends_the_session;

@@ -11,8 +11,10 @@ use serde_json::Value;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::{ExpectedRegistryIdentity, GuardedTransaction, RuntimeRevoke, SqlIdentifier};
-use crate::hooks::RetentionFailureReason;
+use super::{
+    ExpectedRegistryIdentity, GuardedTransaction, RetentionFailureReason, RuntimeRevoke,
+    SqlIdentifier,
+};
 
 pub(crate) const BIND_ONCE_FUNCTION: &str =
     "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,text,text,uuid)";

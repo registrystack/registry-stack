@@ -42,7 +42,9 @@ use crate::idempotency::IdempotencyPolicy;
 use crate::model::CompiledRegistry;
 use crate::mutation::{HookChangeApplication, HookChangeOutcome, MutationTransaction};
 use crate::package::PackageError;
-use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
+use crate::postgres::{
+    ExpectedRegistryIdentity, RegistryLockKey, RetentionFailureReason, RuntimePool,
+};
 use crate::runtime_config::load_runtime_config;
 use crate::startup::{HookStateTransitionCode, OperationalEvent};
 
@@ -366,47 +368,6 @@ struct ProposalCompletionBarrier {
 }
 
 const MAX_RETENTION_BATCHES_PER_TICK: usize = 100;
-
-#[derive(Clone, Copy)]
-pub(crate) enum RetentionFailureReason {
-    RegistryNotReady,
-    LockTimeout,
-    QueryCancelled,
-    Database,
-}
-
-impl RetentionFailureReason {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::RegistryNotReady => "registry-not-ready",
-            Self::LockTimeout => "lock-timeout",
-            Self::QueryCancelled => "query-cancelled",
-            Self::Database => "database",
-        }
-    }
-
-    pub(crate) fn sqlstate(code: Option<&str>) -> Self {
-        match code {
-            Some("55P03") => Self::LockTimeout,
-            Some("57014") => Self::QueryCancelled,
-            _ => Self::Database,
-        }
-    }
-
-    pub(crate) fn admission(error: crate::postgres::RegistryTransactionError) -> Self {
-        use crate::postgres::{PostgresKernelError, RegistryLockFailure, RegistryTransactionError};
-        match error {
-            RegistryTransactionError::Kernel(PostgresKernelError::RegistryUnavailable) => {
-                Self::RegistryNotReady
-            }
-            RegistryTransactionError::Lock(RegistryLockFailure::Timeout) => Self::LockTimeout,
-            RegistryTransactionError::Lock(RegistryLockFailure::QueryCancelled) => {
-                Self::QueryCancelled
-            }
-            _ => Self::Database,
-        }
-    }
-}
 
 impl BregDeliverySeams {
     async fn verify_delivery_transaction(
