@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    env,
-    str::FromStr,
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{env, str::FromStr, time::Duration};
 
 use registry_breg::audit::{test_support::AuditCapture, RegistryAudit};
 use registry_breg::postgres::{
@@ -329,14 +324,13 @@ async fn connect(config: Config) -> (Client, JoinHandle<()>) {
     (client, task)
 }
 
+/// A random suffix for the database and role names. Several modules of one
+/// test binary include this file, each copy with its own statics, so a counter
+/// here would repeat across copies, and the clock does not separate two
+/// copies that read it within the same tick. A random value needs no state
+/// shared between the copies or between test processes on one server.
 fn unique_suffix() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock is after the Unix epoch")
-        .as_nanos();
-    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}_{nanos}_{counter}", std::process::id())
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 /// Compare only the changed audit identity projection; the owning journeys
