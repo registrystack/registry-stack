@@ -123,11 +123,12 @@ stages those three files unchanged and applies the same binding and HTTP
 checks.
 
 Add `--recovery` to the small candidate runner to exercise migration-role
-scope maintenance. It uses the staged migration connection and requires
-`psql`. The runner pauses the first source response of a paged holdings
+scope maintenance with `bregctl external-projection` and the staged runtime
+configuration. The runner pauses the first source response of a paged holdings
 refresh, withdraws the inspected scope, and checks that the in-flight
 refresh sends no later source requests or restores indexed data. It
-rotates the scope using the checked synthetic binding, restarts BReg,
+rotates the scope under the configured synthetic binding, checks the
+rotated digests against the generated source facts, restarts BReg,
 and verifies that indexed coverage remains incomplete until an explicit
 fresh refresh. Owner-only `scope-*.json` and `recovery-*.json` reports
 record the transition and operation counts.
@@ -158,7 +159,7 @@ authorized absence, label reuse, company shareholders, retention refusal,
 complete snapshot replacement, and interrupted acquisition. It verifies that
 a retained Person becomes unavailable after source denial, ambiguity or
 disconnection and that recovery restores coverage. Source call counts check
-that indexed and denied reads skip acquisition. Database races, retention
+that indexed and denied reads skip acquisition. Database races, expiry
 purges and scale have separate acceptance checks.
 
 

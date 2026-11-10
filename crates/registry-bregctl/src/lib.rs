@@ -274,6 +274,8 @@ enum Command {
     EvidenceRetention(EvidenceRetentionArgs),
     /// Drop held idempotency responses past their receipt horizon using configured migration authority.
     IdempotencyRetention(IdempotencyRetentionArgs),
+    /// Inspect, withdraw, or rotate an indexed external projection's cache scope using configured migration authority.
+    ExternalProjection(ExternalProjectionArgs),
     /// Open, close, and list the authorities that bound `import` runs.
     ImportAuthority(ImportAuthorityArgs),
     /// Inspect and adopt the claim naming the database the Registry serves from.
@@ -442,6 +444,32 @@ struct IdempotencyRetentionEraseArgs {
     /// RFC 3339 cutoff, no later than the current time; responses whose horizon passed before it are dropped.
     #[arg(long)]
     before: String,
+}
+
+#[derive(Debug, Args)]
+struct ExternalProjectionArgs {
+    #[command(subcommand)]
+    command: ExternalProjectionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExternalProjectionCommand {
+    /// Report one projection's scope, refresh outcome counts and snapshot counts; reads no source values.
+    Inspect(ExternalProjectionTargetArgs),
+    /// Deactivate the scope and purge its cached rows; a binding still configured binds again at the next start.
+    Withdraw(ExternalProjectionTargetArgs),
+    /// Start a fresh epoch under the configured binding, grant and cache lifetime, and purge cached rows.
+    Rotate(ExternalProjectionTargetArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExternalProjectionTargetArgs {
+    /// Runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+    /// Indexed external projection ID declared by the active package.
+    #[arg(long, value_name = "ID")]
+    projection: String,
 }
 
 #[derive(Debug, Args)]
@@ -1974,6 +2002,7 @@ enum DiagnosticArtifact {
     ReviewRecoveryOperation,
     EvidenceRetentionOperation,
     IdempotencyRetentionOperation,
+    ExternalProjectionOperation,
     ImportAuthority,
     InstanceClaim,
     HistoryErasure,
@@ -2029,6 +2058,7 @@ enum SuggestedAction {
     VerifyReviewRecoveryOperation,
     VerifyEvidenceRetentionOperation,
     VerifyIdempotencyRetentionOperation,
+    VerifyExternalProjectionOperation,
     CorrectImportAuthorityRequest,
     VerifyImportAuthority,
     VerifyInstanceClaim,
@@ -3231,6 +3261,68 @@ where
                 ),
             };
         }
+        Command::ExternalProjection(args) => {
+            use registry_breg::external_projection_maintenance as maintenance;
+            let (command, lead, target) = match &args.command {
+                ExternalProjectionCommand::Inspect(target) => (
+                    "external-projection inspect",
+                    "External projection scope.",
+                    target,
+                ),
+                ExternalProjectionCommand::Withdraw(target) => (
+                    "external-projection withdraw",
+                    "Withdrew the external projection scope and purged its cached rows.",
+                    target,
+                ),
+                ExternalProjectionCommand::Rotate(target) => (
+                    "external-projection rotate",
+                    "Rotated the external projection scope to a fresh epoch.",
+                    target,
+                ),
+            };
+            let path = target.runtime_config.as_path();
+            let projection = target.projection.as_str();
+            let outcome = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| maintenance::ExternalProjectionMaintenanceError::Unavailable)
+                .and_then(|runtime| {
+                    runtime.block_on(async {
+                        match &args.command {
+                            ExternalProjectionCommand::Inspect(_) => {
+                                maintenance::inspect(path, projection).await
+                            }
+                            ExternalProjectionCommand::Withdraw(_) => {
+                                maintenance::withdraw(path, projection).await
+                            }
+                            ExternalProjectionCommand::Rotate(_) => {
+                                maintenance::rotate(path, projection).await
+                            }
+                        }
+                    })
+                });
+            return match outcome {
+                Ok(scope) => {
+                    let result = if format == OutputFormat::Json {
+                        write_ctl_report(
+                            &mut *stdout,
+                            &json!({"ok":true,"command":command,"scope":scope}),
+                        )
+                        .map_err(io::Error::other)
+                        .and_then(|()| writeln!(stdout))
+                    } else {
+                        render_report(lead, &external_projection_pairs(&scope), stdout)
+                    };
+                    write_result(result, stderr)
+                }
+                Err(error) => write_failure(
+                    &external_projection_failure(command, error),
+                    format,
+                    stdout,
+                    stderr,
+                ),
+            };
+        }
         Command::ReviewRecovery(args) => {
             let (command, operation, args) = match args.command {
                 ReviewRecoveryCommand::Resubmit(args) => (
@@ -3720,6 +3812,85 @@ fn idempotency_retention_failure(error: registry_breg::mutation::MutationError) 
             ),
             DiagnosticArtifact::IdempotencyRetentionOperation,
             SuggestedAction::VerifyIdempotencyRetentionOperation,
+        ),
+    }
+}
+
+/// The scope fields an operator reads in human output. Counts appear only
+/// when inspection returned them.
+fn external_projection_pairs(scope: &Value) -> Vec<(&'static str, String)> {
+    let text = |value: &Value| match value {
+        Value::String(text) => text.clone(),
+        Value::Null => "none".to_owned(),
+        other => other.to_string(),
+    };
+    let mut pairs = vec![
+        ("projection", text(&scope["projection"])),
+        ("epoch", text(&scope["epoch"])),
+        ("active", text(&scope["active"])),
+        ("cache TTL seconds", text(&scope["cacheTtlSeconds"])),
+    ];
+    if let Some(counts) = scope.get("snapshotCounts") {
+        pairs.push(("fresh snapshots", text(&counts["fresh"])));
+        pairs.push(("expired snapshots", text(&counts["expired"])));
+        pairs.push(("invalidated snapshots", text(&counts["invalidated"])));
+    }
+    pairs
+}
+
+fn external_projection_failure(
+    command: &'static str,
+    error: registry_breg::external_projection_maintenance::ExternalProjectionMaintenanceError,
+) -> FailureReport {
+    use registry_breg::external_projection_maintenance::ExternalProjectionMaintenanceError as Error;
+    let operation = |code: &str, message: &str| {
+        source_failure(
+            command,
+            diagnostic(code, "externalProjection", message),
+            DiagnosticArtifact::ExternalProjectionOperation,
+            SuggestedAction::VerifyExternalProjectionOperation,
+        )
+    };
+    match error {
+        Error::MigrationLockHeld => source_failure(
+            command,
+            diagnostic(
+                "external-projection.in-progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was changed. Retry once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+        ),
+        Error::PackagePinMismatch(mismatch) => package_pin_failure(
+            command,
+            "external-projection.package.refused",
+            "package",
+            &mismatch,
+        ),
+        Error::UnknownProjection(_) => operation(
+            "external-projection.unknown",
+            "the projection is not an indexed external projection of the active package; name one the package declares",
+        ),
+        Error::BindingUnavailable { .. } => source_failure(
+            command,
+            diagnostic(
+                "external-projection.binding.unavailable",
+                "externalSources",
+                &format!(
+                    "{error}. Rotation uses the configured binding: correct it, or remove it from the deployment configuration to stop acquisition"
+                ),
+            ),
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        Error::NotBound(_) => operation(
+            "external-projection.not-bound",
+            &format!("{error}; nothing was changed"),
+        ),
+        Error::InvalidRequest | Error::Unavailable => operation(
+            "external-projection.unavailable",
+            "Verify the absolute runtime configuration, migration authority and that the active package is ready.",
         ),
     }
 }
@@ -16525,6 +16696,7 @@ mod tests {
                 "review-recovery",
                 "evidence-retention",
                 "idempotency-retention",
+                "external-projection",
                 "import-authority",
                 "instance-claim",
                 "field-encryption"

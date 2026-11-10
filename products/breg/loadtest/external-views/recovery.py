@@ -4,11 +4,8 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import json
-import os
-from pathlib import Path
 import re
 import subprocess
-from urllib.parse import unquote, urlsplit
 
 import fixture_path  # noqa: F401
 from journey import JourneyError, expect, records, request
@@ -17,19 +14,18 @@ PROJECTION = "holdings-indexed"
 VIEW = "business-holdings-indexed"
 LINK = "holdings"
 OPERATION = "holdings-by-business"
-OPERATOR = Path(__file__).resolve().parents[4] / "scripts/external-projection-scope.sh"
 
 
-def operator_report(output):
-    lines = [line.strip().removesuffix("+").rstrip() for line in output.decode().splitlines()]
-    expect(lines.count("{") == lines.count("}") == lines.count("COMMIT") == 1
-           and "(1 row)" in lines, "the operator did not return one committed scope report")
+def operator_report(output, action):
     try:
-        report = json.loads("\n".join(lines[lines.index("{"):lines.index("}") + 1]))
+        report = json.loads(output)
     except ValueError as error:
         raise JourneyError("the operator returned an invalid scope report") from error
-    expect(isinstance(report, dict), "the operator returned an invalid scope report")
-    return report
+    expect(isinstance(report, dict) and report.get("ok") is True
+           and report.get("command") == f"external-projection {action}"
+           and isinstance(report.get("scope"), dict),
+           "the operator did not return one successful scope report")
+    return report["scope"]
 
 
 def verify_hidden(journey):
@@ -51,36 +47,24 @@ def verify_holdings(journey):
 
 
 class ScopeRecovery:
-    def __init__(self, journey, fixture, work, facts, private_write, write_json):
+    def __init__(self, journey, fixture, work, facts, ctl, runtime, write_json):
         self.journey = journey
         self.fixture = fixture
         self.work = work
+        self.ctl = ctl
+        self.runtime = runtime
         self.write_json = write_json
         self.fact = next(fact for fact in facts["projections"] if fact["id"] == PROJECTION)
-        keys = work / "secrets"
-        # The launcher validates these as loopback, split-role fixture URLs before staging them.
-        target = urlsplit((keys / "migration-url").read_text(encoding="ascii"))
-        service = keys / "recovery-pg-service.conf"
-        private_write(service, (
-            f"[external-fixture-migration]\nhost={target.hostname}\nport={target.port}\n"
-            f"dbname={target.path[1:]}\nuser={unquote(target.username)}\n"
-        ).encode("ascii"))
-        self.env = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
-        self.env.update(PGSERVICEFILE=str(service), PGSSLMODE="verify-full",
-                        PGSSLROOTCERT=str(keys / "postgres-ca"), PGCONNECT_TIMEOUT="3",
-                        PGPASSFILE="/dev/null", LC_ALL="C")
-        if target.password is not None:
-            self.env["PGPASSWORD"] = unquote(target.password)
 
-    def operator(self, action, step, current=None, arguments=()):
-        identity = () if current is None else (current["epoch"], current["packageDigest"], current["activationId"])
+    def operator(self, action, step, current=None):
         with (self.work / f"scope-{step}.stderr").open("xb") as error:
             result = subprocess.run(
-                ["bash", OPERATOR, action, "external-fixture-migration", PROJECTION, *identity, *arguments],
-                cwd=self.work, env=self.env, stdout=subprocess.PIPE, stderr=error, timeout=20, check=False,
+                [*self.ctl, "external-projection", action, "--runtime-config", self.runtime,
+                 "--projection", PROJECTION],
+                cwd=self.work, stdout=subprocess.PIPE, stderr=error, timeout=60, check=False,
             )
         expect(result.returncode == 0, "the migration-only scope operator failed; see the owner-only fixture log")
-        report = operator_report(result.stdout)
+        report = operator_report(result.stdout, action)
         expect(report.get("projection") == PROJECTION and type(report.get("active")) is bool
                and all(isinstance(report.get(key), str) for key in ("epoch", "packageDigest", "activationId"))
                and all(re.fullmatch(r"[0-9a-f-]{36}", report[key]) for key in ("epoch", "activationId"))
@@ -134,10 +118,7 @@ class ScopeRecovery:
         self.rotate(inactive)
 
     def rotate(self, inactive):
-        rotated = self.operator("rotate", "rotation", inactive, (
-            self.fact["bindingDigest"], self.fact["grantDigest"],
-            str(self.fact["cacheTtlSeconds"]),
-        ))
+        rotated = self.operator("rotate", "rotation", inactive)
         expect(rotated["active"] and rotated["epoch"] != inactive["epoch"]
                and rotated["bindingDigest"] == self.fact["bindingDigest"]
                and rotated["grantDigest"] == self.fact["grantDigest"]

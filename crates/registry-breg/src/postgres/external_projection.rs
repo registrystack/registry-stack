@@ -2336,7 +2336,7 @@ pub(crate) mod postgres_tests {
         }
 
         /// One startup bind attempt: a fresh epoch in its own transaction.
-        async fn bind(
+        pub(crate) async fn bind(
             &self,
             registry: &crate::model::CompiledRegistry,
             projection: &str,
@@ -2369,7 +2369,7 @@ pub(crate) mod postgres_tests {
         }
 
         /// Whether a process holding these fingerprints can still serve.
-        async fn serves(
+        pub(crate) async fn serves(
             &self,
             registry: &crate::model::CompiledRegistry,
             projection: &str,
@@ -2390,7 +2390,7 @@ pub(crate) mod postgres_tests {
             loaded.is_ok()
         }
 
-        async fn cache(&self, scope: &ProjectionScope) {
+        pub(crate) async fn cache(&self, scope: &ProjectionScope) {
             let now: i64 = self
                 .migration
                 .query_one(
@@ -2411,7 +2411,7 @@ pub(crate) mod postgres_tests {
             );
         }
 
-        async fn cached(&self, projection: &str, epoch: Uuid) -> i64 {
+        pub(crate) async fn cached(&self, projection: &str, epoch: Uuid) -> i64 {
             self.migration
                 .query_one(
                     "SELECT count(*) FROM registry_internal.registry_external_projection_snapshots
