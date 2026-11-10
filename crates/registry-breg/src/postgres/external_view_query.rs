@@ -461,7 +461,7 @@ fn compile(
         ){label_state}, authorized_roots AS MATERIALIZED ({root_sql}),
         candidates AS MATERIALIZED (
             SELECT r.root_id,r.subject_key,s.projection_id,s.epoch,o.kind,o.expires_at,
-                COALESCE(o.expires_at>{now}::bigint AND {expected_kind},false) AS covered
+                (COALESCE(r.subject_key,'')='' OR COALESCE(o.expires_at>{now}::bigint AND {expected_kind},false)) AS covered
             FROM authorized_roots AS r LEFT JOIN projection_state AS s ON true
             LEFT JOIN registry_internal.registry_external_projection_snapshots AS o
                 ON o.projection_id=s.projection_id AND o.epoch=s.epoch AND o.subject_key=r.subject_key
@@ -470,7 +470,7 @@ fn compile(
                 count(*)>0 AS root_found,min(expires_at) FILTER (WHERE covered) AS expires_at FROM candidates
         ), matched AS MATERIALIZED (
             SELECT c.root_id,COALESCE(v.source_key,'') AS source_key,
-                CASE WHEN c.covered AND c.kind='absent' THEN 'absent' WHEN c.covered THEN 'available' ELSE 'unavailable' END AS availability,
+                CASE WHEN c.covered AND (COALESCE(c.subject_key,'')='' OR c.kind='absent') THEN 'absent' WHEN c.covered THEN 'available' ELSE 'unavailable' END AS availability,
                 CASE WHEN c.covered THEN v.fields ELSE NULL::jsonb END AS data
             FROM candidates AS c {membership}
         ), filtered AS MATERIALIZED (

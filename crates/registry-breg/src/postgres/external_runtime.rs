@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use registry_adapter_core::{ProjectionRecord, ProjectionRequest, ProjectionResult};
+use registry_adapter_core::{
+    projection_token_valid, ProjectionRecord, ProjectionRequest, ProjectionResult,
+};
 use registry_adapter_engine::evidence::{
     EvidenceAcquisitionIntent, EvidenceHookError, EvidenceHookFuture, EvidenceHostHooks,
     EvidenceSendIntent,
@@ -607,10 +609,12 @@ impl PostgresExternalViewService {
         let transaction = self
             .transaction(&mut session, claims, request.deadline)
             .await?;
+        // A root without a link key has no outside subject to fetch.
         let key = RootKeys::new(plan)?
             .for_root(&transaction, root)
             .await?
-            .ok_or(ExternalViewError::Concealed)?;
+            .ok_or(ExternalViewError::Concealed)?
+            .filter(|key| !key.is_empty());
         transaction
             .commit()
             .await
@@ -647,11 +651,19 @@ impl PostgresExternalViewService {
         let current = RootKeys::new(plan)?
             .for_root(&transaction, root)
             .await?
-            .ok_or(ExternalViewError::Concealed)?;
-        let (status, records) = if current == key {
-            self.live_records(request, plan, root, result)?
-        } else {
+            .ok_or(ExternalViewError::Concealed)?
+            .filter(|key| !key.is_empty());
+        let (status, records) = if current != key {
             ("unavailable", Vec::new())
+        } else if key.is_none() {
+            match plan.projection.cardinality {
+                ExternalCardinality::One => {
+                    ("available", vec![response_row(root, "absent", json!({}))])
+                }
+                ExternalCardinality::Many => ("available", Vec::new()),
+            }
+        } else {
+            self.live_records(request, plan, root, result)?
         };
         self.log_roots(&transaction, request, plan, &[root.to_string()], operation)
             .await?;
@@ -1621,15 +1633,30 @@ impl PostgresExternalViewService {
                 query.page_size,
             )
             .await?;
+        // A root without a link key is covered with no outside value, so it
+        // needs no acquisition. A key the store or the source contract would
+        // refuse is never sent: its root stays unavailable, and the rest of
+        // the page still refreshes.
         let mut by_key = BTreeMap::<String, BTreeSet<Uuid>>::new();
-        let mut unavailable = 0usize;
+        let mut invalid = 0usize;
         for (root, key) in &page.rows {
-            if let Some(key) = key.as_ref().filter(|value| !value.is_empty()) {
-                by_key.entry(key.clone()).or_default().insert(*root);
-            } else {
-                unavailable += 1;
+            match key.as_deref() {
+                None | Some("") => {}
+                Some(key) if store::valid_key(key) && projection_token_valid(key) => {
+                    by_key.entry(key.to_owned()).or_default().insert(*root);
+                }
+                Some(_) => invalid += 1,
             }
         }
+        if invalid > 0 {
+            tracing::warn!(
+                projection = plan.projection.id.as_str(),
+                reason = "invalid-key",
+                keys = invalid,
+                "external projection refresh failed for some keys"
+            );
+        }
+        let mut unavailable = invalid;
         let keys = by_key.keys().cloned().collect::<Vec<_>>();
         let due = store::refresh_due_keys(
             &transaction,
@@ -3276,6 +3303,381 @@ mod postgres_tests {
             read,
             ["first", "second", "third", "fifth", "seventh", "ahead"]
         );
+        served.fixture.cleanup().await;
+    }
+
+    /// Insert local roots as (id, link key, tenant). Each key is a statement
+    /// parameter, so a missing key or one with control characters is stored
+    /// exactly as given.
+    async fn insert_roots(served: &Served, rows: &[(&str, Option<&str>, &str)]) {
+        let entity = &served.service.registry.entities()["local-record"];
+        let column = |id: &str| {
+            entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == id)
+                .unwrap()
+                .physical_name
+                .clone()
+        };
+        let sql = format!(
+            "INSERT INTO registry_data.\"{}\" (record_id,active_package_revision,\"{}\",\"{}\") VALUES ($1,'fixture',$2,$3)",
+            entity.physical_table,
+            column("subject-key"),
+            column("tenant"),
+        );
+        for (id, key, tenant) in rows {
+            served
+                .fixture
+                .database
+                .admin
+                .execute(&sql, &[&Uuid::parse_str(id).unwrap(), key, tenant])
+                .await
+                .unwrap();
+        }
+    }
+
+    /// (root, availability, fields) for each record of a view page.
+    fn availabilities(body: &Value) -> BTreeMap<String, (String, Value)> {
+        body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| {
+                (
+                    record["rootId"].as_str().unwrap().to_owned(),
+                    (
+                        record["availability"].as_str().unwrap().to_owned(),
+                        record["fields"].clone(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_root_without_a_link_key_is_covered_and_reads_absent() {
+        const UNLINKED: &str = "00000000-0000-4000-8000-000000000011";
+        const EMPTY: &str = "00000000-0000-4000-8000-000000000012";
+        const OUTSIDE: &str = "00000000-0000-4000-8000-000000000013";
+        let served = Served::new(Duration::from_secs(2)).await;
+        served.publish_all().await;
+        insert_roots(
+            &served,
+            &[
+                (UNLINKED, None, "allowed"),
+                (EMPTY, Some(""), "allowed"),
+                (OUTSIDE, None, "other"),
+            ],
+        )
+        .await;
+        let caller = reader("reader-principal", &["allowed"]);
+        let mut expected = BTreeMap::new();
+        for (id, key, _) in &ROOTS[..3] {
+            expected.insert(
+                (*id).to_owned(),
+                ("available".to_owned(), json!({ "label": key })),
+            );
+        }
+        for id in [UNLINKED, EMPTY] {
+            expected.insert(id.to_owned(), ("absent".to_owned(), json!({})));
+        }
+
+        // A root with no link key has no outside value, so it is covered:
+        // lists, counts, ordering and filters keep serving.
+        let (status, page) = served.get("&$count=true", caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(page["status"], "available", "{page}");
+        assert_eq!(page["count"], 5, "{page}");
+        assert_eq!(availabilities(&page), expected);
+        let (status, page) = served
+            .get("&$orderby=label%20asc&$count=true", caller.clone())
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(availabilities(&page), expected);
+        let (status, page) = served
+            .get("&$filter=label%20eq%20'second'&$count=true", caller.clone())
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(page["count"], 1, "{page}");
+        assert_eq!(labels(&page), ["second"]);
+
+        for root in [UNLINKED, EMPTY] {
+            let (status, _, body) = served
+                .send(
+                    &format!("/v1/external-views/view/link/records/{root}?accessProfile=reader"),
+                    caller.clone(),
+                )
+                .await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+            assert_eq!(body["status"], "available", "{body}");
+            assert_eq!(
+                availabilities(&body),
+                BTreeMap::from([(root.to_owned(), ("absent".to_owned(), json!({})))])
+            );
+        }
+
+        // An unlinked root outside the caller's row boundary stays concealed
+        // and does not change the caller's count.
+        let (status, content_type, problem) = served
+            .send(
+                &format!("/v1/external-views/view/link/records/{OUTSIDE}?accessProfile=reader"),
+                caller,
+            )
+            .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{problem}");
+        assert_problem(&content_type, &problem, "resource.not_found");
+        let (status, page) = served
+            .get("&$count=true", reader("reader-principal", &["other"]))
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(page["count"], 2, "{page}");
+        assert_eq!(
+            availabilities(&page),
+            BTreeMap::from([
+                (
+                    ROOTS[3].0.to_owned(),
+                    ("available".to_owned(), json!({"label": "hidden"}))
+                ),
+                (OUTSIDE.to_owned(), ("absent".to_owned(), json!({}))),
+            ])
+        );
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_live_read_of_a_root_without_a_link_key_answers_absent_without_a_source_call() {
+        const UNLINKED: &str = "00000000-0000-4000-8000-000000000011";
+        const EMPTY: &str = "00000000-0000-4000-8000-000000000012";
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                serde_json::from_value(json!([])).unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_live_binding(
+            &mut sources,
+            "holder",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served =
+            Served::with(&live_and_indexed_project(), sources, Duration::from_secs(2)).await;
+        insert_roots(
+            &served,
+            &[(UNLINKED, None, "allowed"), (EMPTY, Some(""), "allowed")],
+        )
+        .await;
+        let caller = reader("reader-principal", &["allowed"]);
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        for root in [UNLINKED, EMPTY] {
+            use tracing::instrument::WithSubscriber;
+            let (status, _, body) = served
+                .send(
+                    &format!(
+                        "/v1/external-views/view/holder-link/records/{root}?accessProfile=reader"
+                    ),
+                    caller.clone(),
+                )
+                .with_subscriber(captured.subscriber())
+                .await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+            assert_eq!(body["status"], "available", "{body}");
+            assert_eq!(
+                availabilities(&body),
+                BTreeMap::from([(root.to_owned(), ("absent".to_owned(), json!({})))])
+            );
+        }
+        // Nothing reached the source, and no acquisition failure was logged.
+        transcript.finish().unwrap();
+        let logs = captured.text();
+        assert!(!logs.contains("live acquisition failed"), "{logs}");
+        served.fixture.cleanup().await;
+    }
+
+    /// The fixture registry with an indexed person projection over the example
+    /// pack's batch route, linked from the same local key. The local key
+    /// admits 512 characters, which can exceed the store's byte bound.
+    fn indexed_person_project() -> Value {
+        let mut project = two_projection_project();
+        project["recordTypes"][0]["fields"][0]["maximumLength"] = json!(512);
+        project["externalRecordTypes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"person","authority":"urn:test:authority","identifierScheme":"urn:test:keys",
+                "fields":[{"id":"family-name","type":"string","classification":"internal"}]
+            }));
+        project["externalProjections"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"people","recordType":"person","operation":"person-batch","operationVersion":"1",
+                "purpose":"consultation","scope":"eligible","selectorScheme":"urn:test:keys",
+                "mode":"indexed","cardinality":"one","cacheTtlSeconds":60,"fields":["family-name"]
+            }));
+        project["externalViews"][0]["links"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":"people-link","projection":"people","fromField":"subject-key",
+                "identifierScheme":"urn:test:keys","fields":["family-name"]
+            }));
+        project["accessProfiles"][0]["permissions"]["externalViews"][0]["links"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"link":"people-link","readableFields":["family-name"],"allowCount":true}));
+        project
+    }
+
+    #[tokio::test]
+    async fn invalid_link_keys_are_unavailable_without_failing_the_rest_of_the_refresh_page() {
+        use tracing::instrument::WithSubscriber;
+        let oversized = "\u{1D518}".repeat(300); // 1200 bytes in 300 characters
+        let wide = "\u{E9}".repeat(300); // 600 bytes: over the source token bound
+        let rows = [
+            (
+                "00000000-0000-4000-8000-000000000011",
+                Some(oversized.as_str()),
+            ),
+            ("00000000-0000-4000-8000-000000000012", Some("bell\u{7}key")),
+            ("00000000-0000-4000-8000-000000000013", Some(wide.as_str())),
+            ("00000000-0000-4000-8000-000000000014", Some(" padded-key")),
+            ("00000000-0000-4000-8000-000000000015", None),
+            ("00000000-0000-4000-8000-000000000016", Some("")),
+            ("00000000-0000-4000-8000-000000000017", Some("fifth")),
+        ];
+        let batch = |keys: &[&str]| {
+            json!({
+                "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                    "type":"batch","keys":keys,"fields":["family-name"]
+                }},
+                "response":{"status":200,"body":{"records":keys.iter().map(|key| json!({
+                    "subject":key,"state":"found","properties":{"family-name":format!("family-{key}")}
+                })).collect::<Vec<_>>()}}
+            })
+        };
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                serde_json::from_value(json!([
+                    batch(&["first", "second", "third"]),
+                    batch(&["fifth"])
+                ]))
+                .unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served = Served::with(&indexed_person_project(), sources, Duration::from_secs(2)).await;
+        insert_roots(
+            &served,
+            &rows
+                .iter()
+                .map(|(id, key)| (*id, *key, "allowed"))
+                .collect::<Vec<_>>(),
+        )
+        .await;
+        let mut refresh = request("people-link");
+        refresh.query = ExternalQueryMode::First(ExternalQuery {
+            page_size: 9,
+            ..ExternalQuery::default()
+        });
+        let plan = served.service.plan(&refresh, None).ok().unwrap();
+        let claims = ClaimContext::for_compiled(
+            &served.service.registry,
+            &plan.root.id,
+            Some("reader-principal".to_owned()),
+            "reader",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::context::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "allowed".to_owned(),
+            }],
+        )
+        .unwrap();
+
+        // The first page holds the three valid fixture keys, four invalid
+        // keys and two roots without a key.
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let first = served
+            .service
+            .refresh_page(&refresh, &plan, &claims)
+            .with_subscriber(captured.subscriber())
+            .await
+            .ok()
+            .unwrap()
+            .body;
+        assert_eq!(first["processed"], 9, "{first}");
+        assert_eq!(first["published"], 3, "{first}");
+        assert_eq!(first["unavailable"], 4, "{first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+        let logs = captured.text();
+        let line = log_line(&logs, "people", "invalid-key");
+        assert!(line.contains(r#""level":"WARN""#), "{line}");
+        assert!(line.contains(r#""keys":4"#), "{line}");
+        assert_value_free(&logs);
+        for value in ["\u{1D518}", "\u{E9}", "bell", "padded", "family-"] {
+            assert!(!logs.contains(value), "{value} reached the log: {logs}");
+        }
+
+        // The sweep moves past the page.
+        refresh.query = ExternalQueryMode::Continue(cursor);
+        let second = served
+            .service
+            .refresh_page(&refresh, &plan, &claims)
+            .await
+            .ok()
+            .unwrap()
+            .body;
+        assert_eq!(second["processed"], 1, "{second}");
+        assert_eq!(second["published"], 1, "{second}");
+        assert_eq!(second["unavailable"], 0, "{second}");
+        assert!(second.get("nextCursor").is_none(), "{second}");
+        // Only the valid keys reached the source, in the two recorded calls.
+        transcript.finish().unwrap();
+        let stored: Vec<String> = served
+            .fixture
+            .database
+            .admin
+            .query(
+                "SELECT subject_key FROM registry_internal.registry_external_projection_snapshots
+                 WHERE projection_id='people' ORDER BY subject_key COLLATE \"C\"",
+                &[],
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(stored, ["fifth", "first", "second", "third"]);
+
+        // A root whose key cannot be acquired stays uncovered, so its view
+        // keeps refusing lists and counts until the key is corrected.
+        let (status, _, problem) = served
+            .send(
+                "/v1/external-views/view/people-link/records?accessProfile=reader&$count=true",
+                reader("reader-principal", &["allowed"]),
+            )
+            .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "{problem}"
+        );
+        assert_eq!(problem["code"], "external_view.incomplete", "{problem}");
         served.fixture.cleanup().await;
     }
 
