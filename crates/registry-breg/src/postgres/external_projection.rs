@@ -919,8 +919,9 @@ pub(crate) async fn withdraw_scope(
     Ok(())
 }
 
-/// Exact-key failures invalidate coverage. Generic collection interruption
-/// preserves its prior complete snapshot; denial and no-store invalidate both.
+/// A transient failure keeps the previous snapshot of either kind until its
+/// own expiry. Explicit denial and no-store remove it, fenced against newer
+/// publications.
 pub(crate) async fn fail_refresh(
     transaction: &GuardedTransaction<'_>,
     ticket: &RefreshTicket,
@@ -1127,7 +1128,7 @@ CREATE OR REPLACE FUNCTION registry_internal.fail_external_projection_refresh(
     p_projection text,p_epoch uuid,p_sequence bigint,p_subject text,p_reason text
 ) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, registry_internal AS $body$
-DECLARE current_epoch uuid; allocated boolean; removed bigint;
+DECLARE current_epoch uuid; allocated boolean;
 BEGIN
     IF p_reason IS NULL OR p_reason NOT IN ('abandoned','unavailable','denied','incomplete','invalid-binding','retention-refused') THEN RETURN false; END IF;
     SELECT epoch INTO current_epoch FROM registry_internal.registry_external_projection_scopes
@@ -1142,14 +1143,11 @@ BEGIN
         WHERE projection_id=p_projection AND epoch=p_epoch AND sequence=p_sequence AND subject_key=p_subject
             AND lease_expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint FOR UPDATE;
     IF NOT FOUND OR NOT allocated THEN RETURN false; END IF;
-    IF p_reason IN ('retention-refused','denied','unavailable','incomplete','invalid-binding') THEN
+    -- Only the source's explicit denial or no-store removes a snapshot. A
+    -- transient failure leaves the previous one until its own expiry.
+    IF p_reason IN ('retention-refused','denied') THEN
         DELETE FROM registry_internal.registry_external_projection_snapshots
-            WHERE projection_id=p_projection AND epoch=p_epoch AND subject_key=p_subject AND refresh_sequence<=p_sequence
-                AND (p_reason IN ('retention-refused','denied') OR kind IN ('one','absent'));
-        GET DIAGNOSTICS removed=ROW_COUNT;
-        IF removed>0 THEN
-            UPDATE registry_internal.registry_external_projection_scopes SET generation=generation+1 WHERE projection_id=p_projection;
-        END IF;
+            WHERE projection_id=p_projection AND epoch=p_epoch AND subject_key=p_subject AND refresh_sequence<=p_sequence;
     END IF;
     UPDATE registry_internal.registry_external_projection_refreshes SET state=p_reason
         WHERE projection_id=p_projection AND epoch=p_epoch AND sequence=p_sequence AND subject_key=p_subject AND state='allocated';
@@ -1978,7 +1976,8 @@ pub(crate) mod postgres_tests {
         assert_eq!(runtime.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='subject'",&[]).await.unwrap().get::<_,i64>(0),1);
         let failed = allocate_inner(&runtime, &scope, "subject").await.unwrap();
         assert!(runtime.query_one("SELECT registry_internal.fail_external_projection_refresh($1,$2,$3,$4,'unavailable')",&[&scope.projection_id,&scope.epoch,&failed.sequence,&failed.subject_key]).await.unwrap().get::<_,bool>(0));
-        assert_eq!(runtime.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='subject'",&[]).await.unwrap().get::<_,i64>(0),0);
+        // A transient failure keeps the snapshot until its own expiry.
+        assert_eq!(runtime.query_one("SELECT count(*) FROM registry_internal.registry_external_projection_snapshots WHERE subject_key='subject'",&[]).await.unwrap().get::<_,i64>(0),1);
         let restore = allocate_inner(&runtime, &scope, "subject").await.unwrap();
         publish_inner(&runtime, &restore, &fresh).await.unwrap();
         let no_store = allocate_inner(&runtime, &scope, "subject").await.unwrap();
@@ -2439,6 +2438,27 @@ pub(crate) mod postgres_tests {
                     .unwrap(),
                 Publication::Published
             );
+        }
+
+        /// Record a refresh failure for one key, as a refresh worker would.
+        pub(crate) async fn fail(&self, scope: &ProjectionScope, key: &str, reason: &str) {
+            let ticket = allocate_inner(&self.migration, scope, key).await.unwrap();
+            let failed: bool = self
+                .migration
+                .query_one(
+                    "SELECT registry_internal.fail_external_projection_refresh($1,$2,$3,$4,$5)",
+                    &[
+                        &scope.projection_id,
+                        &scope.epoch,
+                        &ticket.sequence,
+                        &ticket.subject_key,
+                        &reason,
+                    ],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert!(failed, "{reason} is recorded");
         }
 
         pub(crate) async fn cached(&self, projection: &str, epoch: Uuid) -> i64 {

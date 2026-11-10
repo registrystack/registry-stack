@@ -2044,6 +2044,18 @@ mod postgres_tests {
             }
         }
 
+        async fn generation(&self) -> i64 {
+            self.fixture
+                .migration
+                .query_one(
+                    "SELECT generation FROM registry_internal.registry_external_projection_scopes WHERE projection_id=$1",
+                    &[&self.scope.projection_id],
+                )
+                .await
+                .unwrap()
+                .get(0)
+        }
+
         async fn publish_all(&self) {
             for (_, key, _) in ROOTS {
                 self.fixture.publish_label(&self.scope, key, key).await;
@@ -2178,6 +2190,42 @@ mod postgres_tests {
         let (status, next) = served.get(&format!("&$skiptoken={cursor}"), caller).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{next}");
         assert_eq!(labels(&next).len(), 1);
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_transient_one_key_failure_keeps_coverage_and_denial_removes_it() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        served.publish_all().await;
+        let caller = reader("reader-principal", &["allowed"]);
+        let generation = served.generation().await;
+        for reason in ["unavailable", "incomplete"] {
+            served.fixture.fail(&served.scope, "second", reason).await;
+            let (status, page) = served.get("&$count=true", caller.clone()).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{reason}: {page}");
+            assert_eq!(
+                page["count"], 3,
+                "{reason} keeps the snapshot until it expires"
+            );
+            assert_eq!(labels(&page), ["first", "second", "third"]);
+        }
+        served.fixture.fail(&served.scope, "second", "denied").await;
+        let (status, problem) = served.get("&$count=true", caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(problem["code"], "external_view.incomplete", "{problem}");
+        // A per-key outcome never invalidates cursors over the rest of the scope.
+        assert_eq!(served.generation().await, generation);
+        served
+            .fixture
+            .publish_label(&served.scope, "second", "second")
+            .await;
+        served
+            .fixture
+            .fail(&served.scope, "second", "retention-refused")
+            .await;
+        let (status, problem) = served.get("&$count=true", caller).await;
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(problem["code"], "external_view.incomplete", "{problem}");
         served.fixture.cleanup().await;
     }
 }
