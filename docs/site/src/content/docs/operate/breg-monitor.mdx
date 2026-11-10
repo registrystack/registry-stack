@@ -196,12 +196,14 @@ rise in `client-error`, and put the registry behind an upstream rate limit: it h
 | `review` | Submits Proposals for review and reads results. |
 | `attachment-verification` | Sends uploaded files to an external verifier, when enabled. |
 | `subject-access-log-retention` | Drops expired subject access log entries, once a minute. |
+| `external-projection-retention` | Deletes expired, replaced, and withdrawn external projection snapshots and refresh receipts every five seconds, when the active package declares an indexed external projection. |
 
 `breg_worker_last_success_age_seconds` counts from the last iteration that did not fail, work or no
 work. The first three loop at least once a second, so an age of minutes means a worker fails every
-time or is stuck. `breg_queue_oldest_pending_age_seconds` is how long the oldest due item has
-waited; when it grows while the worker age stays small, the worker cannot keep up or keeps failing
-one item.
+time or is stuck. The `external-projection-retention` series is absent until its first pass
+completes; alert when it grows well past five seconds. `breg_queue_oldest_pending_age_seconds` is
+how long the oldest due item has waited; when it grows while the worker age stays small, the worker
+cannot keep up or keeps failing one item.
 
 `breg_proposal_application_blocked_jobs` counts application jobs held or closed for the current
 submitted version while its Proposal has `package-changed`. A zero queue age does not mean these
@@ -223,6 +225,34 @@ replicas share a database is a retried race; a run of them is worth investigatin
 or the metrics listener panics or returns, the process logs a code naming it, such as
 `review.worker.panicked`, drains requests, and exits with status 1. The same code on every restart
 names the worker to investigate.
+
+An external projection retention pass deletes at most eight batches of a thousand rows of each kind.
+None of its signals carries a source key, a value, or a secret:
+
+- A pass that deletes rows logs one `info` line per projection and reason, with `snapshots` and
+  `receipts` counts. The reason is `expired`, `replaced` for a rotated epoch, or `withdrawn`.
+- A pass that fails logs `external projection retention tick failed` at `error`, with a `reason` of
+  `registry-not-ready`, `lock-timeout`, `query-cancelled`, `database`, or `deadline`. It names no
+  projection, because one pass covers them all.
+- A pass that reaches its batch bound logs a `warn` line; the rest of the backlog waits for the next
+  pass.
+
+`bregctl doctor` adds an `external-projection.status` information advisory for each projection a
+server would serve. It gives the time the source grant expires, as `grantValidUntilUnixSeconds`, and
+for an indexed projection when the newest snapshot it holds was observed, as
+`newestPublicationUnixSeconds`. A live projection holds no snapshots, and an indexed projection that
+was never refreshed has no newest snapshot. Renew the grant before it expires. An old or missing
+newest snapshot means the refresh sweep is not running. A projection without a usable binding is
+reported as an `external-projection.unavailable` warning instead; see
+[Troubleshooting](#troubleshooting).
+
+{/* Evidence: crates/registry-breg/src/postgres/external_runtime.rs, run_retention(), retention_tick(),
+    purge_tick(), projection_status();
+    crates/registry-breg/src/postgres/external_projection.rs, enabled();
+    crates/registry-breg/src/postgres/mod.rs, RetentionFailureReason;
+    crates/registry-breg/src/startup.rs, external_projection_retention and background_task_stop_code();
+    crates/registry-bregctl/src/lib.rs, write_doctor_success() and external_projection_status_report();
+    products/breg/external-projection-storage.md, Monitor refresh and purge. */}
 
 {/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queues();
     crates/registry-breg/src/startup.rs, OperationalEvent, RecordTimerIterationCause,
@@ -301,6 +331,8 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `migration.review.*` | The reviewed migration directory was refused. | See [write a reviewed migration descriptor](../breg-changes/#write-a-reviewed-migration-descriptor). |
 | `migration.rehearsal.*` | PostgreSQL refused the rehearsal, so `apply` would too. | Correct the SQL or the project. |
 | `source.unavailable` | A read could not complete: the database is unreachable or has no free connection, an audit record could not be written, or history no longer covers the snapshot. | Check the database and the audit destination; for a snapshot read, take a fresh reference. |
+| `external-projection.unavailable` | From `doctor`, a warning: an external projection the package declares or the runtime file binds has no usable binding, and the message names why. Its views answer `source.unavailable`; other views serve. | Add or correct its entry under `externalSources` in the runtime file, then restart. |
+| `external-projection.status` | From `doctor`, information: when a projection's source grant expires and when its newest snapshot was observed. | Renew the grant before it expires; if the newest snapshot is old or missing, run the refresh sweep. |
 | `idempotency.expired` | The write committed; its receipt expired. | Read the record instead. |
 | `history.erase.acknowledgement.required` | `--acknowledge-irreversible` is missing. | Confirm, then add the flag. |
 | `history.rebaseline.live-rows.unverified` | A live row disagrees with its journal head. | Compare suspect records' revisions. |
