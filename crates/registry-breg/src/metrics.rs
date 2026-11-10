@@ -127,15 +127,17 @@ pub enum ProgressWorker {
     AttachmentVerification,
     Review,
     SubjectAccessLogRetention,
+    ExternalProjectionRetention,
 }
 
 impl ProgressWorker {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Hook,
         Self::RecordTimer,
         Self::AttachmentVerification,
         Self::Review,
         Self::SubjectAccessLogRetention,
+        Self::ExternalProjectionRetention,
     ];
 
     #[must_use]
@@ -146,6 +148,7 @@ impl ProgressWorker {
             Self::AttachmentVerification => "attachment-verification",
             Self::Review => "review",
             Self::SubjectAccessLogRetention => "subject-access-log-retention",
+            Self::ExternalProjectionRetention => "external-projection-retention",
         }
     }
 }

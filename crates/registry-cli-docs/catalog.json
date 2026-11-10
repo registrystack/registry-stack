@@ -3757,7 +3757,8 @@
                 "sql",
                 "evidence-source",
                 "sdk",
-                "identity-facts"
+                "identity-facts",
+                "external-source-facts"
               ],
               "environment": null
             },
@@ -3783,7 +3784,7 @@
             },
             {
               "display": "--output <PATH>",
-              "description": "New directory that will receive exactly the generated artifact inventory; for identity-facts, a new YAML file",
+              "description": "Destination directory for generated artifacts. Use a new YAML file for identity-facts or a new JSON file for external-source-facts",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -3792,7 +3793,7 @@
             },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
-              "description": "Runtime configuration file (identity-facts only): its authentication block states the issuer, audience and admitted clients. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file. Identity facts use its authentication block. External source facts use its reviewed source bindings. A symbolic link at any component of this path is refused.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

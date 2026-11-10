@@ -264,6 +264,11 @@ pub struct CompiledRegistryMigrationBaseline {
     pub entities: BTreeMap<String, CompiledEntity>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::external_views::CompiledExternalViews::is_empty"
+    )]
+    pub external_views: crate::external_views::CompiledExternalViews,
     pub physical_names: PhysicalNameInventory,
     pub routes: CompiledRouteInventory,
     pub access: CompiledAccessInventory,
@@ -293,6 +298,7 @@ impl CompiledRegistryMigrationBaseline {
             registry_revision: compiled.revision().to_owned(),
             entities: compiled.entities().clone(),
             statistical_datasets: compiled.statistical_datasets().clone(),
+            external_views: compiled.external_views().clone(),
             physical_names: compiled.physical_names().clone(),
             routes: compiled.routes().clone(),
             access: compiled.access().clone(),
@@ -401,6 +407,7 @@ pub enum CompiledRegistryChangeCode {
     StatisticalDatasetAdded,
     StatisticalDatasetRemoved,
     StatisticalDatasetChanged,
+    ExternalViewsChanged,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -432,6 +439,7 @@ pub enum CompiledRegistryChangeTargetKind {
     Action,
     Recipient,
     StatisticalDataset,
+    ExternalViews,
 }
 
 /// What package loading needs from the deployment. A package carries no
@@ -1007,6 +1015,14 @@ pub fn compiled_registry_change_set_from_baseline(
     compare_registry_identity(previous, &candidate_baseline, &mut changes);
     compare_entities(previous, &candidate_baseline, &mut changes);
     compare_statistical_datasets(previous, &candidate_baseline, &mut changes);
+    if previous.external_views != candidate_baseline.external_views {
+        push_change(
+            &mut changes,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            CompiledRegistryChangeCode::ExternalViewsChanged,
+            target(CompiledRegistryChangeTargetKind::ExternalViews, None, None),
+        );
+    }
     compare_routes(previous, &candidate_baseline, &mut changes);
     compare_query_inventory(previous, &candidate_baseline, &mut changes);
     compare_actions(previous, &candidate_baseline, &mut changes);
@@ -4402,6 +4418,7 @@ struct PredecessorGovernedModel {
     model_revision: String,
     entities: BTreeMap<String, CompiledEntity>,
     statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
+    external_views: crate::external_views::CompiledExternalViews,
     physical_names: PhysicalNameInventory,
     routes: CompiledRouteInventory,
     access: CompiledAccessInventory,
@@ -4425,6 +4442,7 @@ impl PredecessorGovernedModel {
             registry_revision: self.model_revision.clone(),
             entities: self.entities.clone(),
             statistical_datasets: self.statistical_datasets.clone(),
+            external_views: self.external_views.clone(),
             physical_names: self.physical_names.clone(),
             routes: self.routes.clone(),
             access: self.access.clone(),
@@ -4474,6 +4492,13 @@ fn package_predecessor_governed_model(
         serde_json::from_value(entities).map_err(|_| PackageError::Derivation)?;
     let statistical_datasets: BTreeMap<String, CompiledStatisticalDataset> = value
         .get("statisticalDatasets")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| PackageError::Derivation)?
+        .unwrap_or_default();
+    let external_views = value
+        .get("externalViews")
         .cloned()
         .map(serde_json::from_value)
         .transpose()
@@ -4545,6 +4570,7 @@ fn package_predecessor_governed_model(
         model_revision: entry.sha256.clone(),
         entities,
         statistical_datasets,
+        external_views,
         physical_names,
         routes,
         access,

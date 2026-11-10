@@ -34,6 +34,7 @@ pub mod language;
 pub mod load;
 pub mod processor;
 pub mod project_transform;
+pub mod projection;
 pub mod public_schema;
 pub mod rabbitmq_config;
 pub mod read_request;

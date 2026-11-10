@@ -95,6 +95,9 @@ pub async fn install_compiled_schema(
         .await?;
     }
 
+    super::external_projection::reconcile(migration, registry, runtime_role)
+        .await
+        .map_err(super::external_projection::kernel_error)?;
     super::timer::install_record_timer_schema(migration, registry, runtime_role).await?;
 
     reconcile_compiled_runtime_acl(migration, registry, runtime_role).await

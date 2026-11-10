@@ -67,6 +67,26 @@
     "revision": {
       "$ref": "#/$defs/Digest"
     },
+    "externalViews": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordTypes", "projections", "views", "grants", "refresh"],
+      "properties": {
+        "recordTypes": { "$ref": "#/$defs/ExternalDeclarations" },
+        "projections": { "$ref": "#/$defs/ExternalDeclarations" },
+        "views": { "$ref": "#/$defs/ExternalDeclarations" },
+        "grants": { "$ref": "#/$defs/ExternalDeclarations" },
+        "refresh": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/LocalId" },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/LocalId" }
+          }
+        }
+      }
+    },
     "recordTypes": {
       "type": "array",
       "items": {
@@ -563,6 +583,12 @@
     }
   },
   "$defs": {
+    "ExternalDeclarations": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/LocalId" },
+      "additionalProperties": { "type": "object" },
+      "x-registry-passthrough": "Normalized external view declarations and grants emitted by the compiler."
+    },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",

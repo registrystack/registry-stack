@@ -141,6 +141,12 @@ pub enum StartupError {
     AuditDestination(String),
     #[error("the Registry cursor profile was refused")]
     Cursor,
+    #[error("an external source binding or its reviewed Adapter pack was refused")]
+    ExternalSources,
+    #[error(
+        "indexed external projections require separate migration and runtime PostgreSQL roles"
+    )]
+    ExternalProjectionRoleMode,
     #[error("the Registry OIDC key source was refused")]
     Oidc,
     #[error("the Registry authentication profile was refused")]
@@ -302,19 +308,21 @@ pub enum BackgroundTask {
     ReviewWorker,
     SubjectAccessLogRetention,
     EvidenceRetention,
+    ExternalProjectionRetention,
     MetricsListener,
 }
 
 impl BackgroundTask {
     /// Every supervised task, used by exhaustive operational-log contract
     /// tests.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::HookWorker,
         Self::RecordTimerWorker,
         Self::AttachmentVerificationWorker,
         Self::ReviewWorker,
         Self::SubjectAccessLogRetention,
         Self::EvidenceRetention,
+        Self::ExternalProjectionRetention,
         Self::MetricsListener,
     ];
 }
@@ -361,6 +369,12 @@ const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskSto
         }
         (BackgroundTask::EvidenceRetention, BackgroundTaskStop::Returned) => {
             "evidence.retention.returned"
+        }
+        (BackgroundTask::ExternalProjectionRetention, BackgroundTaskStop::Panicked) => {
+            "external_projection.retention.panicked"
+        }
+        (BackgroundTask::ExternalProjectionRetention, BackgroundTaskStop::Returned) => {
+            "external_projection.retention.returned"
         }
         (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
             "metrics.listener.panicked"
@@ -751,6 +765,8 @@ impl StartupError {
             Self::Audit => "the Registry audit profile or destination was refused",
             Self::AuditDestination(_) => "the Registry audit destination was refused",
             Self::Cursor => "the Registry cursor profile was refused",
+            Self::ExternalSources => "an external source binding or its reviewed Adapter pack was refused",
+            Self::ExternalProjectionRoleMode => "indexed external projections require separate migration and runtime PostgreSQL roles",
             Self::Oidc => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
             Self::AuthenticationClientsUnlisted => {
@@ -827,6 +843,10 @@ pub struct PreparedServer {
     review_worker: Option<crate::review_store::ReviewWorker>,
     access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
     evidence_retention: Option<crate::action_evidence_retention::EvidenceRetentionWorker>,
+    external_projection_retention: Option<(
+        Arc<crate::postgres::external_runtime::PostgresExternalViewService>,
+        Arc<LastSuccess>,
+    )>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
@@ -909,6 +929,7 @@ impl PreparedServer {
             review_worker: None,
             access_log_retention: None,
             evidence_retention: None,
+            external_projection_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -949,6 +970,7 @@ impl PreparedServer {
             review_worker: None,
             access_log_retention: None,
             evidence_retention: None,
+            external_projection_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -1460,6 +1482,14 @@ async fn finish_prepared_server(
         .map_err(|_| StartupError::Oidc)?;
 
     let registry = Arc::new(startup.package().registry().clone());
+    if crate::postgres::external_projection::enabled(&registry)
+        && RoleMode::from_roles(
+            config.database().roles().migration(),
+            config.database().roles().runtime(),
+        ) != RoleMode::Split
+    {
+        return Err(StartupError::ExternalProjectionRoleMode);
+    }
     if registry
         .queries()
         .operations
@@ -1581,6 +1611,36 @@ async fn finish_prepared_server(
     } else {
         None
     };
+    let external_views =
+        if registry.external_views().views.is_empty() && config.external_sources().is_empty() {
+            None
+        } else {
+            let sources = crate::external_source::ExternalSourceService::load(
+                &registry,
+                config.external_sources(),
+                Arc::new(
+                    config
+                        .secret_resolver()
+                        .map_err(|_| StartupError::ExternalSources)?,
+                ),
+            )
+            .map_err(|_| StartupError::ExternalSources)?;
+            let external = crate::postgres::external_runtime::PostgresExternalViewService::new(
+                pool.clone(),
+                Arc::clone(&registry),
+                expected.clone(),
+                lock_key,
+                config.operational_timeouts().record_lock,
+                audit.clone(),
+                Arc::clone(&cursor_codec),
+                sources,
+            );
+            external
+                .bind_configured_scopes()
+                .await
+                .map_err(|_| StartupError::ExternalSources)?;
+            Some(Arc::new(external))
+        };
     let records = PostgresRecordReadService::new(
         pool.clone(),
         Arc::clone(&registry),
@@ -1803,11 +1863,18 @@ async fn finish_prepared_server(
         review_authorities,
         Arc::clone(&mutations),
     ));
+    let external_projection_retention = external_views
+        .as_ref()
+        .filter(|_| crate::postgres::external_projection::enabled(&registry))
+        .map(|backend| (Arc::clone(backend), Arc::new(LastSuccess::default())));
     let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)
         .with_postgres_mutations(mutations)
         .with_statistics(statistics);
+    if let Some(external_views) = external_views {
+        service = service.with_external_views(external_views);
+    }
     if let Some(receiver) = review_completion_receiver {
         service = service.with_review_completions(receiver);
     }
@@ -1837,6 +1904,12 @@ async fn finish_prepared_server(
         }
         if let Some(worker) = &review_worker {
             registry = registry.with_worker_progress(ProgressWorker::Review, worker.last_success());
+        }
+        if let Some((_, last_success)) = &external_projection_retention {
+            registry = registry.with_worker_progress(
+                ProgressWorker::ExternalProjectionRetention,
+                Arc::clone(last_success),
+            );
         }
         if let Some((_, last_success)) = &access_log_retention {
             registry = registry.with_worker_progress(
@@ -1868,6 +1941,7 @@ async fn finish_prepared_server(
         review_worker,
         access_log_retention,
         evidence_retention,
+        external_projection_retention,
         metrics,
         postgres_advisories,
         role_mode: RoleMode::from_roles(
@@ -2105,6 +2179,7 @@ pub async fn serve_until_shutdown(
         review_worker,
         access_log_retention,
         evidence_retention,
+        external_projection_retention,
         metrics,
         #[cfg(feature = "wasm")]
             wasm_runtime: _wasm_runtime,
@@ -2159,6 +2234,15 @@ pub async fn serve_until_shutdown(
             task_stopped_tx.clone(),
         )
     });
+    let mut external_projection_worker =
+        external_projection_retention.map(|(backend, last_success)| {
+            SupervisedTask::spawn(
+                BackgroundTask::ExternalProjectionRetention,
+                backend.run_retention(last_success, worker_shutdown_rx.clone()),
+                worker_shutdown_rx.clone(),
+                task_stopped_tx.clone(),
+            )
+        });
     let mut access_log_worker = access_log_retention.map(|(pool, last_success)| {
         SupervisedTask::spawn(
             BackgroundTask::SubjectAccessLogRetention,
@@ -2247,6 +2331,9 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = access_log_worker.as_mut() {
             worker.join().await;
         }
+        if let Some(worker) = external_projection_worker.as_mut() {
+            worker.join().await;
+        }
         if let Some(metrics_server) = metrics_server.as_mut() {
             metrics_server.join().await;
         }
@@ -2278,6 +2365,9 @@ pub async fn serve_until_shutdown(
                 worker.abort_and_join().await;
             }
             if let Some(worker) = access_log_worker.as_mut() {
+                worker.abort_and_join().await;
+            }
+            if let Some(worker) = external_projection_worker.as_mut() {
                 worker.abort_and_join().await;
             }
             Err(StartupError::Shutdown)

@@ -26,6 +26,7 @@ const MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 const MAX_TOKEN_BYTES: usize = ((1 + NONCE_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES) * 4).div_ceil(3);
 const MAX_AGE_SECONDS: u64 = 86_400;
 const CURSOR_AAD: &[u8] = b"breg-cursor-v3";
+const EXTERNAL_CURSOR_AAD: &[u8] = b"breg-external-cursor-v1";
 const AEAD_LABEL: &[u8] = b"breg-cursor-aead-key-v3";
 const BINDING_LABEL: &[u8] = b"breg-cursor-binding-key-v3";
 
@@ -58,11 +59,31 @@ impl CursorCodec {
         {
             return Err(CursorError::Malformed);
         }
+        self.seal(CURSOR_AAD, payload)
+    }
+
+    pub(crate) fn seal_external<T: Serialize>(&self, payload: &T) -> Result<String, CursorError> {
+        self.seal(EXTERNAL_CURSOR_AAD, payload)
+    }
+
+    pub(crate) fn open_external<T: serde::de::DeserializeOwned>(
+        &self,
+        token: &str,
+    ) -> Result<T, CursorError> {
+        let plaintext = self.open(EXTERNAL_CURSOR_AAD, token)?;
+        serde_json::from_slice(&plaintext).map_err(|_| CursorError::Invalid)
+    }
+
+    pub(crate) fn max_age(&self) -> Duration {
+        self.max_age
+    }
+
+    fn seal<T: Serialize>(&self, aad: &[u8], payload: &T) -> Result<String, CursorError> {
         let plaintext = serde_json::to_vec(payload).map_err(|_| CursorError::Malformed)?;
         if plaintext.is_empty() || plaintext.len() > MAX_PAYLOAD_BYTES {
             return Err(CursorError::Malformed);
         }
-        let sealed = xchacha_seal::seal(&self.aead_key, CURSOR_AAD, &plaintext)
+        let sealed = xchacha_seal::seal(&self.aead_key, aad, &plaintext)
             .map_err(|_| CursorError::Configuration)?;
         let mut envelope = Vec::with_capacity(1 + sealed.len());
         envelope.push(WIRE_VERSION);
@@ -83,7 +104,7 @@ impl CursorCodec {
         Ok(payload)
     }
 
-    fn decode(&self, token: &str, now_unix_seconds: u64) -> Result<CursorPayload, CursorError> {
+    fn open(&self, aad: &[u8], token: &str) -> Result<Zeroizing<Vec<u8>>, CursorError> {
         if token.is_empty() || token.len() > MAX_TOKEN_BYTES {
             return Err(CursorError::Invalid);
         }
@@ -96,11 +117,16 @@ impl CursorCodec {
         {
             return Err(CursorError::Invalid);
         }
-        let plaintext = xchacha_seal::open(&self.aead_key, CURSOR_AAD, &envelope[1..])
+        let plaintext = xchacha_seal::open(&self.aead_key, aad, &envelope[1..])
             .map_err(|_| CursorError::Invalid)?;
         if plaintext.is_empty() || plaintext.len() > MAX_PAYLOAD_BYTES {
             return Err(CursorError::Invalid);
         }
+        Ok(plaintext)
+    }
+
+    fn decode(&self, token: &str, now_unix_seconds: u64) -> Result<CursorPayload, CursorError> {
+        let plaintext = self.open(CURSOR_AAD, token)?;
         let payload: CursorPayload =
             serde_json::from_slice(&plaintext).map_err(|_| CursorError::Invalid)?;
         if payload.version != WIRE_VERSION {
@@ -537,6 +563,17 @@ mod tests {
     use super::*;
     use chacha20poly1305::aead::{Aead, Payload};
     use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
+
+    #[test]
+    fn external_cursor_is_bounded_and_has_a_separate_encryption_context() {
+        let codec = codec();
+        let value = serde_json::json!({"sourceKey": "fixture-sensitive-id"});
+        let token = codec.seal_external(&value).unwrap();
+        assert!(!token.contains("fixture-sensitive-id"));
+        assert_eq!(codec.open_external::<Value>(&token).unwrap(), value);
+        assert!(codec.open(CURSOR_AAD, &token).is_err());
+        assert!(codec.seal_external(&"x".repeat(MAX_PAYLOAD_BYTES)).is_err());
+    }
 
     fn codec() -> CursorCodec {
         CursorCodec::new(Zeroizing::new(vec![0x51; 32]), Duration::from_secs(60))

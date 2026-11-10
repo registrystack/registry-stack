@@ -96,7 +96,8 @@
         "recipient-group-changed",
         "statistical-dataset-added",
         "statistical-dataset-removed",
-        "statistical-dataset-changed"
+        "statistical-dataset-changed",
+        "external-views-changed"
       ],
       "type": "string"
     },
@@ -133,7 +134,8 @@
         "timer",
         "action",
         "recipient",
-        "statistical-dataset"
+        "statistical-dataset",
+        "external-views"
       ],
       "type": "string"
     },

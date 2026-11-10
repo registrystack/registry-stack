@@ -2639,12 +2639,259 @@
       ],
       "type": "object"
     },
+    "ExternalCardinality": {
+      "enum": [
+        "one",
+        "many"
+      ],
+      "type": "string"
+    },
+    "ExternalFieldSource": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "nullable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/ExternalFieldType"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification"
+      ],
+      "type": "object"
+    },
+    "ExternalFieldType": {
+      "enum": [
+        "string",
+        "integer",
+        "boolean",
+        "decimal",
+        "date",
+        "uuid"
+      ],
+      "type": "string"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
       "minLength": 1,
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
+    },
+    "ExternalLabelSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "fromField": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "identifierScheme": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "projection": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "projection",
+        "fromField",
+        "identifierScheme",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "ExternalLinkPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "allowCount": {
+          "default": false,
+          "type": "boolean"
+        },
+        "filterableFields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "labelFields": {
+          "description": "A separate grant for label fields reached through the related row.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "link": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "readableFields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sortableFields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "link",
+        "readableFields"
+      ],
+      "type": "object"
+    },
+    "ExternalLinkSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "fromField": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "identifierScheme": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "label": {
+          "$ref": "#/$defs/ExternalLabelSource",
+          "description": "An optional to-one label on a row of an indexed related collection."
+        },
+        "projection": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "id",
+        "projection",
+        "fromField",
+        "identifierScheme",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "ExternalProjectionMode": {
+      "enum": [
+        "live",
+        "indexed"
+      ],
+      "type": "string"
+    },
+    "ExternalProjectionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "cacheTtlSeconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cardinality": {
+          "$ref": "#/$defs/ExternalCardinality"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "mode": {
+          "$ref": "#/$defs/ExternalProjectionMode"
+        },
+        "operation": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "operationVersion": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "purpose": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "recordType": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "scope": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "selectorScheme": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "id",
+        "recordType",
+        "operation",
+        "operationVersion",
+        "purpose",
+        "scope",
+        "selectorScheme",
+        "mode",
+        "cardinality",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "ExternalRecordTypeSource": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource",
+          "default": {}
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/ExternalFieldSource"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "identifierScheme": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "id",
+        "authority",
+        "identifierScheme",
+        "fields"
+      ],
+      "type": "object"
     },
     "ExternalReferenceSource": {
       "additionalProperties": false,
@@ -2656,6 +2903,48 @@
       },
       "required": [
         "namespace"
+      ],
+      "type": "object"
+    },
+    "ExternalViewPermissionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "links": {
+          "items": {
+            "$ref": "#/$defs/ExternalLinkPermissionSource"
+          },
+          "type": "array"
+        },
+        "view": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "view",
+        "links"
+      ],
+      "type": "object"
+    },
+    "ExternalViewSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/ExternalLinkSource"
+          },
+          "type": "array"
+        },
+        "recordType": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "id",
+        "recordType",
+        "links"
       ],
       "type": "object"
     },
@@ -3851,6 +4140,12 @@
           },
           "type": "array"
         },
+        "externalViews": {
+          "items": {
+            "$ref": "#/$defs/ExternalViewPermissionSource"
+          },
+          "type": "array"
+        },
         "proposals": {
           "default": [],
           "items": {
@@ -3865,6 +4160,13 @@
             "$ref": "#/$defs/EntityPermissionSource"
           },
           "type": "array"
+        },
+        "refreshExternalProjections": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "type": "object"
@@ -5685,6 +5987,24 @@
     "evidenceProviders": {
       "items": {
         "$ref": "#/$defs/EvidenceProviderSource"
+      },
+      "type": "array"
+    },
+    "externalProjections": {
+      "items": {
+        "$ref": "#/$defs/ExternalProjectionSource"
+      },
+      "type": "array"
+    },
+    "externalRecordTypes": {
+      "items": {
+        "$ref": "#/$defs/ExternalRecordTypeSource"
+      },
+      "type": "array"
+    },
+    "externalViews": {
+      "items": {
+        "$ref": "#/$defs/ExternalViewSource"
       },
       "type": "array"
     },

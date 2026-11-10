@@ -13,6 +13,10 @@ is governed configuration. Proposal lifecycle operations use promoted links.
 timer-only immediate Action. Its [walkthrough](future-activation/README.md)
 separates compiler inspection from the opt-in real-PostgreSQL native-process
 journey.
+[`external-views/`](external-views/README.md) shows a hand-authored licensing
+project with live and indexed external Person and shareholding views.
+Its synthetic source and journey are acceptance fixtures for a disposable
+deployment.
 
 The `minimal/` and `facility/` shipped starters include their own local clients
 and authored journeys.

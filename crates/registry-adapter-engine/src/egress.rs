@@ -1350,6 +1350,18 @@ impl EndpointEgress {
         traceparent: Option<&HeaderValue>,
         source_idempotency_key: Option<&HeaderValue>,
     ) -> Result<SentReply, EgressError> {
+        self.send_observed(send, recovery, traceparent, source_idempotency_key, None)
+            .await
+    }
+
+    pub(crate) async fn send_observed(
+        &self,
+        send: OutboundSend<'_>,
+        recovery: Option<&SourceRecoveryHeader>,
+        traceparent: Option<&HeaderValue>,
+        source_idempotency_key: Option<&HeaderValue>,
+        projection: Option<&crate::projection::ProjectionHttpState>,
+    ) -> Result<SentReply, EgressError> {
         // A declared attempt above the ceiling the authoring check
         // bounds `attemptTimeoutMilliseconds` with is refused, never
         // shortened (`products/adapter/CONCEPT.md` section 8.8).
@@ -1406,6 +1418,7 @@ impl EndpointEgress {
                     source_idempotency_key,
                 },
                 &link,
+                projection,
             );
         }
         let EndpointTransport::Live(live) = self.transport.as_ref() else {
@@ -1465,6 +1478,18 @@ impl EndpointEgress {
         .map_err(destination_send_outcome)?;
 
         let status = reply.status().as_u16();
+        if let Some(projection) = projection {
+            // Read the raw transport headers before the pack's allowlist or
+            // status handling can discard the source's retention restriction.
+            match reply
+                .selected_host_protocol_response_header_fields(std::iter::once("cache-control"))
+            {
+                Ok(fields) => {
+                    projection.observe_cache_control(fields.iter().map(|(_, value)| value.as_str()))
+                }
+                Err(_) => projection.restrict_retention(),
+            }
+        }
         if (300..400).contains(&status) {
             // A redirect is never followed: the answer raises
             // `upstream.redirect` whatever the reviewed range says, and
@@ -1797,6 +1822,7 @@ impl EndpointEgress {
         outbound: &OutboundHeaders,
         system_headers: ReplaySystemHeaders<'_>,
         link: &PinnedLink,
+        projection: Option<&crate::projection::ProjectionHttpState>,
     ) -> Result<SentReply, EgressError> {
         let ReplaySystemHeaders {
             recovery,
@@ -1872,6 +1898,15 @@ impl EndpointEgress {
             .map_err(EgressError::Refused)?;
         let status = u16::try_from(response.status.get())
             .expect("a recorded status is bounded to an HTTP status");
+        if let Some(projection) = projection {
+            projection.observe_cache_control(
+                response
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
+                    .map(|(_, value)| value.as_str()),
+            );
+        }
         if (300..400).contains(&status) {
             return Err(EgressError::Upstream(UpstreamFailure::new(
                 ErrorClass::UpstreamRedirect,

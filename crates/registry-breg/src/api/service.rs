@@ -824,6 +824,7 @@ pub struct HttpService {
     pub(crate) cursors: Arc<CursorCodec>,
     pub(crate) mutations: Option<Arc<PostgresRecordMutationService>>,
     pub(crate) statistics: Option<Arc<crate::postgres::PostgresStatisticsService>>,
+    pub(crate) external_views: Option<Arc<dyn super::external_views::ExternalViewService>>,
     pub(crate) review_completions: Option<Arc<crate::review_store::ReviewCompletionReceiver>>,
     pub(crate) readiness: Arc<dyn ReadinessProbe>,
     pub(crate) public_origin: Option<crate::runtime_config::PublicOrigin>,
@@ -866,11 +867,20 @@ impl HttpService {
             cursors,
             mutations: None,
             statistics: None,
+            external_views: None,
             review_completions: None,
             readiness,
             public_origin: None,
             field_encryption: None,
         }
+    }
+
+    pub(crate) fn with_external_views(
+        mut self,
+        service: Arc<dyn super::external_views::ExternalViewService>,
+    ) -> Self {
+        self.external_views = Some(service);
+        self
     }
 
     /// Install the package-fenced statistical dataset service.

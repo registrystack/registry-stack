@@ -43,6 +43,7 @@ NAMES = {
     "cli-docs": "registry-cli-docs",
     "evidence": "registry-evidence",
     "casework": "registry-casework",
+    "caseworkctl": "registry-caseworkctl",
     "evidence-core": "registry-evidence-core",
     "coordinator-core": "registry-coordinator-core",
     "axum-alias": "axum",
@@ -68,10 +69,10 @@ INTENDED = {
     "platform-testing": ["platform"],
     "platform-script": ["serde"],
     "serde": [],
-    "breg": ["record", "platform"],
+    "breg": ["record", "platform", "shared-engine", "core"],
     "breg-client": ["record", "platform"],
     "bregctl": ["breg"],
-    "breg-mcp": ["breg-client", ("breg", "dev")],
+    "breg-mcp": ["breg-client"],
     "scheduling": ["platform"],
     "scheduling-client": ["platform"],
     "schedulingctl": ["scheduling"],
@@ -83,7 +84,8 @@ INTENDED = {
     "stack-client": ["breg-client", "coordinator-client"],
     "cli-docs": ["engine", "ctl", "job"],
     "evidence": ["shared-engine", "core", "platform"],
-    "casework": ["platform"],
+    "casework": ["platform", "breg"],
+    "caseworkctl": ["casework"],
     "evidence-core": ["platform"],
     "coordinator-core": ["platform"],
     "axum-alias": ["serde"],
@@ -225,7 +227,7 @@ class EngineTests(unittest.TestCase):
     def test_a_dev_dependency_of_a_reached_platform_crate_is_not_followed(self):
         self.assertEqual(
             MODULE.violations(
-                metadata(platform=["serde", ("casework", "dev")])
+                metadata(platform=["serde", ("scheduling", "dev")])
             ),
             [],
         )
@@ -312,6 +314,16 @@ class DependentTests(unittest.TestCase):
                     failures(**{outside: [*INTENDED[outside], "connectors"]}),
                 )
 
+    def test_breg_projection_host_cannot_reach_the_adapter_facade_or_job_host(self):
+        for edge in ("engine", "job", "ctl", "connectors"):
+            with self.subTest(edge=edge):
+                found = failures(breg=[*INTENDED["breg"], edge])
+                self.assertIn(
+                    "registry-breg depends on Adapter package(s) it is not listed for:",
+                    found,
+                )
+                self.assertIn(NAMES[edge], found)
+
     def test_evidence_cannot_reach_the_facade_host_even_for_tests(self):
         for edge in ("engine", ("engine", "dev")):
             with self.subTest(edge=edge):
@@ -336,6 +348,12 @@ class DependentTests(unittest.TestCase):
                         "registry-adapterctl",
                     }
                 ),
+                "registry-breg": frozenset(
+                    {"registry-adapter-core", "registry-adapter-engine"}
+                ),
+                "registry-bregctl": frozenset(
+                    {"registry-adapter-core", "registry-adapter-engine"}
+                ),
                 "registry-evidence": frozenset(
                     {
                         "registry-adapter-core",
@@ -347,6 +365,9 @@ class DependentTests(unittest.TestCase):
                         "registry-adapter-core",
                         "registry-adapter-engine",
                     }
+                ),
+                "registry-caseworkctl": frozenset(
+                    {"registry-adapter-core", "registry-adapter-engine"}
                 ),
                 "registry-discovery-client": frozenset(
                     {

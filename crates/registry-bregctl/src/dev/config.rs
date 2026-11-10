@@ -2110,14 +2110,20 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         json!(allowed_clients)
     };
     let assertion_issuers = assertion_issuers(state, clients)?;
-    // The local registry serves with the migration role, the one-role mode
-    // a small deployment runs in. The schema-test rehearsal stays split,
-    // because the package fingerprint is defined against a separate runtime
-    // role.
-    let (runtime_url, runtime_role) = if test {
-        ("test-runtime-database-url", RUNTIME_ROLE)
-    } else {
-        ("migration-database-url", MIGRATION_ROLE)
+    // Indexed projections require the bounded cache privileges of the
+    // separate role. The development database already has both roles and
+    // their URLs. Other local registries keep their one-role mode.
+    let indexed = compiled
+        .external_views()
+        .projections
+        .values()
+        .any(|projection| {
+            projection.mode == registry_breg::external_views::ExternalProjectionMode::Indexed
+        });
+    let (runtime_url, runtime_role) = match (test, indexed) {
+        (true, _) => ("test-runtime-database-url", RUNTIME_ROLE),
+        (false, true) => ("runtime-database-url", RUNTIME_ROLE),
+        (false, false) => ("migration-database-url", MIGRATION_ROLE),
     };
     let mut runtime = json!({
         "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1","kind":"BRegRuntimeConfig",

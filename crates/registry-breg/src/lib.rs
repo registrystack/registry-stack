@@ -71,6 +71,10 @@ pub mod evidence_source;
 #[cfg(feature = "tooling")]
 pub mod example_references;
 #[cfg(feature = "runtime")]
+pub mod external_source;
+pub(crate) mod external_view_artifacts;
+pub mod external_views;
+#[cfg(feature = "runtime")]
 pub mod field_encryption;
 #[cfg(feature = "runtime")]
 pub mod field_encryption_backfill;

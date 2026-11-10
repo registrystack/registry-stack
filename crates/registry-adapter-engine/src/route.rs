@@ -3367,6 +3367,9 @@ impl Run<'_, '_> {
             {
                 return Err(RouteFailure::of(ErrorClass::EgressRefused));
             }
+            let projection_acquisition = self
+                .evidence
+                .filter(|acquisition| acquisition.projection_http.is_some());
             let reply = if let Some(prepared) = prepared_protocol.take() {
                 let crate::host_protocol::PreparedHostProtocolParts {
                     body,
@@ -3488,10 +3491,20 @@ impl Run<'_, '_> {
                     )
                 }
             } else {
+                let maximum_response_bytes = if let Some(acquisition) = projection_acquisition {
+                    endpoint
+                        .maximum_response_bytes
+                        .min(acquisition.remaining_response_bytes().await)
+                } else {
+                    endpoint.maximum_response_bytes
+                };
+                if maximum_response_bytes == 0 {
+                    return Err(RouteFailure::of(ErrorClass::BudgetExhausted));
+                }
                 PhysicalSendReply::Ordinary(
                     tokio::time::timeout_at(
                         self.deadline,
-                        endpoint.egress.send_with_system_headers(
+                        endpoint.egress.send_observed(
                             OutboundSend {
                                 link: &link,
                                 exchange_headers: &headers,
@@ -3504,7 +3517,7 @@ impl Run<'_, '_> {
                                 },
                                 authorization: credential.as_ref().map(|c| &c.header),
                                 attempt: endpoint.attempt.min(remaining),
-                                maximum_response_bytes: endpoint.maximum_response_bytes,
+                                maximum_response_bytes,
                                 ok_status_ranges: ok_range.clone(),
                                 throw_exception_on_failure: parameters
                                     .map(|parameters| parameters.throw_exception_on_failure)
@@ -3513,6 +3526,8 @@ impl Run<'_, '_> {
                             recovery_header.as_ref(),
                             system_traceparent.as_ref(),
                             source_idempotency_key.as_ref(),
+                            self.evidence
+                                .and_then(|acquisition| acquisition.projection_http.as_ref()),
                         ),
                     )
                     .await
@@ -3520,6 +3535,14 @@ impl Run<'_, '_> {
                 )
             };
             self.ensure_deadline()?;
+            if let Some(projection) = self
+                .evidence
+                .and_then(|acquisition| acquisition.projection_http.as_ref())
+            {
+                let successful = matches!(&reply, PhysicalSendReply::Ordinary(Ok(reply))
+                    if (200..300).contains(&reply.status) && reply.status != 202);
+                projection.observe_response(successful);
+            }
             if let Some(acquisition) = self.evidence {
                 let response_bytes = reply.response_bytes();
                 if response_bytes != 0 {

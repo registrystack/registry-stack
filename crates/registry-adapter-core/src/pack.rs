@@ -446,11 +446,10 @@ pub struct EvidenceRouteContract {
     pub acquisition_posture: EvidenceAcquisitionPosture,
 }
 
-/// One source route of the governed-ingestion mode
-/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): a route
-/// definition's steps plus the item-contract declaration. A source route
-/// is an entry point of the job mode, never a subroutine: a facade
-/// binding naming it, or a `direct:` send targeting it, refuses
+/// One source entry point for an ingestion, Evidence or projection host.
+/// The host's declaration supplies the operation contract alongside the
+/// steps. A source route is never a subroutine: a facade binding naming it,
+/// or a `direct:` send targeting it, refuses
 /// (`adapter.job.source-bound-refused`,
 /// `adapter.job.source-called-refused`). There is no `from`: the
 /// `from: file:` consumer form was rejected with the job's read step
@@ -459,7 +458,7 @@ pub struct EvidenceRouteContract {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceRouteDecl {
-    /// The source route identifier the job definition names.
+    /// The identifier the embedding host names.
     pub id: LocalId,
     /// Whether the scan ends. Mandatory; the checks refuse its absence
     /// under `adapter.job.source-scan-required`.
@@ -492,6 +491,9 @@ pub struct SourceRouteDecl {
     /// listener-free, read-only Evidence entry point.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidenceRouteContract>,
+    /// Separately governed acquisition for a host that may retain a projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<crate::ProjectionRouteContract>,
     /// The source-neutral read semantics this route explicitly supports. A
     /// facade host maps these native inputs and guarantees to its public
     /// protocol; it never infers them from a route id or source brand.
@@ -567,9 +569,8 @@ pub struct AdapterPack {
     /// The internal `direct:` routes shared sub-flows call.
     #[serde(default)]
     pub routes: UniqueIdList<RouteDefinition>,
-    /// The governed-ingestion source routes the job mode runs
-    /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Entry
-    /// points of the job mode; a facade route never reaches one.
+    /// The source routes of the ingestion, Evidence and projection hosts.
+    /// A facade route never reaches one.
     #[serde(default)]
     pub source_routes: UniqueIdList<SourceRouteDecl>,
     /// The code maps routes convert values through.
@@ -614,6 +615,9 @@ impl AdapterPack {
             )
             .collect();
         for source in &self.source_routes {
+            if let Some(projection) = &source.projection {
+                files.push(&projection.fields_schema);
+            }
             if let Some(evidence) = &source.evidence {
                 files.push(&evidence.inputs_schema);
                 files.push(&evidence.facts_schema);
@@ -861,6 +865,7 @@ mod tests {
                 edits: Some("ordered".to_string()),
                 rescan_delay_seconds: None,
                 evidence: None,
+                projection: None,
                 steps: Vec::new(),
             }])
             .expect("unique"),
@@ -948,6 +953,7 @@ mod tests {
                     edits: None,
                     rescan_delay_seconds: None,
                     evidence: None,
+                    projection: None,
                     steps: Vec::new(),
                 },
                 SourceRouteDecl {
@@ -958,6 +964,7 @@ mod tests {
                     edits: None,
                     rescan_delay_seconds: None,
                     evidence: None,
+                    projection: None,
                     steps: Vec::new(),
                 },
             ])

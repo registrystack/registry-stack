@@ -13,11 +13,12 @@ behind the job host's exact off-by-default `direct-breg` feature, is linked
 by no facade or engine crate, and never reaches a product runtime, adopter tooling,
 supporting service, binding, or database crate.
 
-`registry-adapter-engine` is the listener-free engine the ingestion,
-facade, and Evidence hosts may link. Its resolved closure may reach only
+`registry-adapter-engine` is the listener-free engine used by ingestion,
+the facade, Evidence and BReg external projections. Its resolved closure may reach only
 `registry-adapter-core`, shared platform crates, and non-workspace support.
 The source check separately refuses facade-only dependencies, including
-Axum and PostgreSQL clients. Evidence may reach Adapter core and engine only.
+Axum and PostgreSQL clients. Evidence and BReg may reach only Adapter core
+and engine.
 
 Edges are read with every feature enabled and on every target, so an
 optional dependency no default build enables still cannot escape the
@@ -171,6 +172,15 @@ ALLOWED_DEPENDENTS = {
             "registry-adapterctl",
         }
     ),
+    # BReg owns external-projection grants, storage and disclosure. Its
+    # acquisition host embeds only the listener-free Adapter boundary.
+    "registry-breg": frozenset(
+        {"registry-adapter-core", "registry-adapter-engine"}
+    ),
+    # The BReg authoring tool reaches the same code through registry-breg.
+    "registry-bregctl": frozenset(
+        {"registry-adapter-core", "registry-adapter-engine"}
+    ),
     # Evidence embeds the listener-free engine and core contract, never the
     # facade host, job host, connector, or Adapter tooling.
     "registry-evidence": frozenset(
@@ -187,6 +197,11 @@ ALLOWED_DEPENDENTS = {
             "registry-adapter-core",
             "registry-adapter-engine",
         }
+    ),
+    # Casework's PostgreSQL proof can link BReg, and caseworkctl can reach
+    # that feature-enabled runtime. This adds no new Adapter host edge.
+    "registry-caseworkctl": frozenset(
+        {"registry-adapter-core", "registry-adapter-engine"}
     ),
     "registry-discovery-client": frozenset(
         {

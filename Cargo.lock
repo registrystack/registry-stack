@@ -6115,6 +6115,8 @@ dependencies = [
  "jsonwebtoken",
  "pg_query",
  "rcgen",
+ "registry-adapter-core",
+ "registry-adapter-engine",
  "registry-breg-client",
  "registry-evidence-authoring",
  "registry-evidence-client",

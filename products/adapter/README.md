@@ -36,6 +36,12 @@ source-assigned Create and strong conditional Update with separate domain
 input schemas and transformations. DHIS2 Write remains unavailable until
 its source can preserve those guarantees.
 
+An embedding host such as BReg can run a [reviewed projection
+operation](CONCEPT.md#18-external-projection-acquisition) for an exact read,
+key batch or complete list for one parent. The host owns grants, disclosure
+and any retention. See the [synthetic licensing
+pack](examples/external-projections/README.md) for authoring and replay.
+
 The [product concept](CONCEPT.md) is the contract: artifact model, engine,
 exchange contract, failure semantics, authorization, audit, configuration
 formats, and verification. The

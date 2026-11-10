@@ -1882,6 +1882,11 @@ pub struct CompiledRegistry {
     entities: BTreeMap<String, CompiledEntity>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::external_views::CompiledExternalViews::is_empty"
+    )]
+    external_views: crate::external_views::CompiledExternalViews,
     physical_names: PhysicalNameInventory,
     action_inventory: CompiledActionInventory,
     route_inventory: CompiledRouteInventory,
@@ -1914,6 +1919,7 @@ impl CompiledRegistry {
         module_closure: Vec<CompiledModuleIdentity>,
         entities: BTreeMap<String, CompiledEntity>,
         statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
+        external_views: crate::external_views::CompiledExternalViews,
         physical_names: PhysicalNameInventory,
         action_inventory: CompiledActionInventory,
         route_inventory: CompiledRouteInventory,
@@ -1942,6 +1948,7 @@ impl CompiledRegistry {
             module_closure,
             entities,
             statistical_datasets,
+            external_views,
             physical_names,
             action_inventory,
             route_inventory,
@@ -2067,6 +2074,10 @@ impl CompiledRegistry {
                 .values()
                 .map(move |timer| (record_type.as_str(), timer))
         })
+    }
+
+    pub fn external_views(&self) -> &crate::external_views::CompiledExternalViews {
+        &self.external_views
     }
 
     pub fn statistical_datasets(&self) -> &BTreeMap<String, CompiledStatisticalDataset> {

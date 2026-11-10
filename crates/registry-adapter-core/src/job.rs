@@ -1278,12 +1278,16 @@ fn is_default_csv_trim(value: &bool) -> bool {
 #[must_use]
 pub fn check_job(job: &AdapterJob, pack: &AdapterPack) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    if pack.source_routes.get(job.source.route.as_str()).is_none() {
+    if pack
+        .source_routes
+        .get(job.source.route.as_str())
+        .is_none_or(|route| route.projection.is_some())
+    {
         findings.push(job_finding(
             JobCode::RouteUnknown,
             "/source/route",
-            "the job names no source route its pinned pack declares",
-            "Name a sourceRoutes id of the pinned pack.",
+            "the job names no ingestion source route its pinned pack declares",
+            "Name an ingestion sourceRoutes id of the pinned pack.",
         ));
     }
     findings.extend(profile_consistency_checks(&job.profile));
@@ -2274,6 +2278,32 @@ mod tests {
     fn check_job_refuses_an_unknown_source_route() {
         let findings = check_job(&job("nope"), &pack());
         assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].code, JobCode::RouteUnknown.code());
+        assert_eq!(findings[0].artifact.as_deref(), Some(ADAPTER_JOB_KIND));
+    }
+
+    #[test]
+    fn check_job_cannot_acquire_from_a_projection_route() {
+        let mut value = serde_json::to_value(pack()).expect("pack serializes");
+        let source = value["sourceRoutes"][0]
+            .as_object_mut()
+            .expect("source route");
+        for member in ["scan", "edits", "nextRecovery", "rescanDelaySeconds"] {
+            source.remove(member);
+        }
+        source.insert(
+            "projection".to_owned(),
+            serde_json::json!({
+                "operation":"exact", "operationVersion":"1", "authority":"urn:example:registry",
+                "purpose":"licensing", "scope":"licensing-subjects",
+                "selectorScheme":"urn:example:id", "recordKeyScheme":"urn:example:id",
+                "retention":"retain", "absence":"protected", "localDisclosure":"host-profiles",
+                "fieldsSchema":{"path":"fields.json","digest":DIGEST},
+                "maximumBatchKeys":1, "maximumPages":1, "maximumRows":1
+            }),
+        );
+        let projection_pack = serde_json::from_value(value).expect("projection pack parses");
+        let findings = check_job(&job("kobo-submissions"), &projection_pack);
         assert_eq!(findings[0].code, JobCode::RouteUnknown.code());
         assert_eq!(findings[0].artifact.as_deref(), Some(ADAPTER_JOB_KIND));
     }

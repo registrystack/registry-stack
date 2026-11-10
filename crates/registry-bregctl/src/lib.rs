@@ -626,13 +626,13 @@ struct GenerateArgs {
     #[arg(long)]
     production: bool,
 
-    /// New directory that will receive exactly the generated artifact inventory;
-    /// for identity-facts, a new YAML file.
+    /// Destination directory for generated artifacts. Use a new YAML file for
+    /// identity-facts or a new JSON file for external-source-facts.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
 
-    /// Runtime configuration file (identity-facts only): its authentication
-    /// block states the issuer, audience and admitted clients.
+    /// Runtime configuration file. Identity facts use its authentication block.
+    /// External source facts use its reviewed source bindings.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: Option<PathBuf>,
 
@@ -1632,6 +1632,8 @@ enum ArtifactSelector {
     /// The issuer, audience, clients, claims and access profiles this registry
     /// expects, for the hosted identity generator. Takes --runtime-config; --output is a new file.
     IdentityFacts,
+    /// Verified external-source capabilities and binding digests. Takes --runtime-config and a new JSON output file.
+    ExternalSourceFacts,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -8440,13 +8442,16 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
     if args.artifact == ArtifactSelector::IdentityFacts {
         return generate_identity_facts(args);
     }
+    if args.artifact == ArtifactSelector::ExternalSourceFacts {
+        return generate_external_source_facts(args);
+    }
     if args.runtime_config.is_some() {
         return Err(source_failure(
             "generate",
             diagnostic(
                 "identity-facts.arguments",
                 "arguments",
-                "--runtime-config applies to generate identity-facts only",
+                "--runtime-config applies to generate identity-facts or external-source-facts",
             ),
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
@@ -8530,6 +8535,135 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             json!({"sourceId":options.source_id,"connection":options.connection,"behaviorRevision":export.behavior_revision,"selectorProfiles":export.selector_profiles,"additionalIdentityFields":export.identity_fields}),
         ),
         next_steps: vec![],
+    })
+}
+
+/// Verify the operator's pinned packs and checked bindings without acquiring
+/// records, and export only logical capabilities and configuration digests.
+fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+    let fail = |code: &str, message: &str, artifact, action| {
+        source_failure(
+            "generate",
+            diagnostic(code, "arguments", message),
+            artifact,
+            action,
+        )
+    };
+    let Some(runtime_path) = args
+        .runtime_config
+        .as_ref()
+        .filter(|path| path.is_absolute())
+    else {
+        return Err(fail(
+            "external-source-facts.arguments",
+            "generate external-source-facts requires an absolute --runtime-config path",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    };
+    if args.access_profile.is_some()
+        || args.entity.is_some()
+        || !args.selectors.is_empty()
+        || !args.fields.is_empty()
+        || args.source_id.is_some()
+        || args.connection.is_some()
+        || args.authentication.is_some()
+    {
+        return Err(fail(
+            "external-source-facts.arguments",
+            "generate external-source-facts accepts --runtime-config and --output",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    }
+    let binding_refusal = || {
+        fail(
+            "external-source-facts.binding",
+            "review the runtime binding, source grant and pinned Adapter pack",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        )
+    };
+    let output_refusal = || {
+        fail(
+            "external-source-facts.output",
+            "provide a new output file in a writable directory",
+            DiagnosticArtifact::GeneratedArtifacts,
+            SuggestedAction::RetryArtifactGeneration,
+        )
+    };
+    let config = registry_breg::runtime_config::load_runtime_config(runtime_path)
+        .map_err(|error| runtime_config_failure("generate", error))?;
+    let profile = profile(args.production);
+    let (compiled, project) = compile_with_source(&args.project, profile, "generate")?;
+    let resolver = std::sync::Arc::new(config.secret_resolver().map_err(|_| binding_refusal())?);
+    let bindings = config.external_sources();
+    let service =
+        registry_breg::external_source::ExternalSourceService::load(&compiled, bindings, resolver)
+            .map_err(|_| binding_refusal())?;
+    let inventory = compiled.external_views();
+    let mut projections = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let id = binding.id.as_str();
+        let compiled_projection = inventory.projections.get(id).ok_or_else(binding_refusal)?;
+        let record_type = inventory
+            .record_types
+            .get(compiled_projection.record_type.as_str())
+            .ok_or_else(binding_refusal)?;
+        let bound = service.binding(id).ok_or_else(binding_refusal)?;
+        projections.push(json!({
+            "id": id,
+            "mode": compiled_projection.mode,
+            "recordType": record_type.id,
+            "authority": record_type.authority,
+            "operation": compiled_projection.operation,
+            "operationVersion": compiled_projection.operation_version,
+            "selectorScheme": compiled_projection.selector_scheme,
+            "purpose": compiled_projection.purpose,
+            "scope": compiled_projection.scope,
+            "fields": bound.allowed_fields(),
+            "connection": binding.connection.id,
+            "bindingDigest": bound.binding_fingerprint(),
+            "grantDigest": bound.grant_fingerprint(),
+            "grantValidUntil": bound.grant_valid_until().to_rfc3339(),
+            "cacheTtlSeconds": bound.effective_cache_ttl_seconds(),
+            "maximumRetentionSeconds": bound.maximum_retention_seconds(),
+            "refreshIntervalSeconds": bound.refresh_interval_seconds(),
+        }));
+    }
+    let facts = json!({
+        "apiVersion": "id.registrystack.org/formats/breg/external-source-facts/v1alpha1",
+        "kind": "BRegExternalSourceFacts",
+        "registryId": compiled.registry_id(),
+        "revision": compiled.revision(),
+        "projections": projections,
+    });
+    let bytes = serde_json::to_vec_pretty(&facts).map_err(|_| output_refusal())?;
+    let parent = args
+        .output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut pending = tempfile::NamedTempFile::new_in(parent).map_err(|_| output_refusal())?;
+    pending.write_all(&bytes).map_err(|_| output_refusal())?;
+    pending
+        .persist_noclobber(&args.output)
+        .map_err(|_| output_refusal())?;
+    Ok(SuccessReport {
+        ok: true,
+        command: "generate",
+        profile,
+        revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
+        findings: positioned_compiler_findings(&compiled, &project),
+        artifacts: vec![artifact_report(
+            &args.output.display().to_string(),
+            "application/json",
+            &bytes,
+        )],
+        explanation: Some(json!({"externalSourceFacts":{"projections":bindings.len()}})),
+        next_steps: Vec::new(),
     })
 }
 
@@ -10319,7 +10453,8 @@ impl ArtifactSelector {
             ArtifactSelector::Sql => path == "generated/postgres/schema.sql",
             ArtifactSelector::EvidenceSource
             | ArtifactSelector::Odrl
-            | ArtifactSelector::IdentityFacts => false,
+            | ArtifactSelector::IdentityFacts
+            | ArtifactSelector::ExternalSourceFacts => false,
             ArtifactSelector::Sdk => {
                 path.starts_with("generated/sdk/")
                     || path.starts_with("generated/review-context-schemas/")
@@ -10400,6 +10535,9 @@ fn explain_model(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     inspection["version"] = json!(compiled.version());
     inspection["moduleOrder"] = json!(compiled.module_order());
     inspection["moduleClosure"] = json!(compiled.module_closure());
+    if !compiled.external_views().is_empty() {
+        inspection["externalViews"] = serde_json::to_value(compiled.external_views())?;
+    }
     Ok(inspection)
 }
 

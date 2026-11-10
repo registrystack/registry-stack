@@ -96,6 +96,8 @@ pub(crate) struct EffectiveModel<'a> {
     pub entities: &'a BTreeMap<String, CompiledEntity>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub statistical_datasets: &'a BTreeMap<String, CompiledStatisticalDataset>,
+    #[serde(skip_serializing_if = "crate::external_views::CompiledExternalViews::is_empty")]
+    pub external_views: &'a crate::external_views::CompiledExternalViews,
     pub physical_names: &'a PhysicalNameInventory,
     #[serde(skip_serializing_if = "CompiledActionInventory::is_empty")]
     pub action_inventory: &'a CompiledActionInventory,
@@ -121,6 +123,7 @@ pub(crate) fn generate_artifacts(
     module_closure: &[CompiledModuleIdentity],
     entities: &BTreeMap<String, CompiledEntity>,
     statistical_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
+    external_views: &crate::external_views::CompiledExternalViews,
     physical_names: &PhysicalNameInventory,
     actions: &CompiledActionInventory,
     routes: &CompiledRouteInventory,
@@ -146,6 +149,7 @@ pub(crate) fn generate_artifacts(
         module_closure,
         entities,
         statistical_datasets,
+        external_views,
         physical_names,
         action_inventory: actions,
         metadata_inventory: metadata,
@@ -177,6 +181,13 @@ pub(crate) fn generate_artifacts(
             &mut artifacts,
             "generated/action-contracts.schema.json",
             &action_contracts_schema(),
+        )?;
+    }
+    if !external_views.is_empty() {
+        insert_json(
+            &mut artifacts,
+            "compiled/external-views.json",
+            external_views,
         )?;
     }
     insert_json(&mut artifacts, "compiled/routes.json", routes)?;
@@ -293,6 +304,7 @@ pub(crate) fn generate_artifacts(
         query,
         schemas: &schemas,
         statistical_datasets,
+        external_views,
     });
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
@@ -2015,6 +2027,7 @@ struct OpenApiDocumentInput<'a> {
     query: &'a CompiledQueryInventory,
     schemas: &'a BTreeMap<String, Value>,
     statistical_datasets: &'a BTreeMap<String, CompiledStatisticalDataset>,
+    external_views: &'a crate::external_views::CompiledExternalViews,
 }
 
 fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
@@ -2027,6 +2040,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         query,
         schemas,
         statistical_datasets,
+        external_views,
     } = input;
     let mut paths = Map::new();
     let mut input_schemas = Map::new();
@@ -2136,6 +2150,16 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         );
     }
     append_proposal_openapi(&mut paths, actions, None);
+    crate::external_view_artifacts::append(
+        &mut paths,
+        external_views,
+        |profile, entity, _, operation| {
+            entities
+                .get(entity)
+                .and_then(|entity| entity.access_profiles.get(profile))
+                .is_some_and(|access| access.operations.contains(&operation))
+        },
+    );
     let mut component_schemas: Map<String, Value> = schemas
         .iter()
         .map(|(id, schema)| (id.clone(), schema.clone()))

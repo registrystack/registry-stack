@@ -1358,7 +1358,7 @@ impl EvidenceProgram {
         &self,
         hooks: Arc<dyn EvidenceHostHooks>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
-        self.begin_acquisition_inner(hooks, None, chrono::Utc::now())
+        self.begin_acquisition_inner(hooks, None, chrono::Utc::now(), None)
             .await
     }
 
@@ -1370,7 +1370,7 @@ impl EvidenceProgram {
         hooks: Arc<dyn EvidenceHostHooks>,
         attribution: Arc<HostAccessAttribution>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
-        self.begin_acquisition_inner(hooks, Some(attribution), chrono::Utc::now())
+        self.begin_acquisition_inner(hooks, Some(attribution), chrono::Utc::now(), None)
             .await
     }
 
@@ -1382,7 +1382,7 @@ impl EvidenceProgram {
         hooks: Arc<dyn EvidenceHostHooks>,
         evaluation_instant: chrono::DateTime<chrono::Utc>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
-        self.begin_acquisition_inner(hooks, None, evaluation_instant)
+        self.begin_acquisition_inner(hooks, None, evaluation_instant, None)
             .await
     }
 
@@ -1395,16 +1395,20 @@ impl EvidenceProgram {
         attribution: Arc<HostAccessAttribution>,
         evaluation_instant: chrono::DateTime<chrono::Utc>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
-        self.begin_acquisition_inner(hooks, Some(attribution), evaluation_instant)
+        self.begin_acquisition_inner(hooks, Some(attribution), evaluation_instant, None)
             .await
     }
 
-    async fn begin_acquisition_inner(
+    pub(crate) async fn begin_acquisition_inner(
         &self,
         hooks: Arc<dyn EvidenceHostHooks>,
         attribution: Option<Arc<HostAccessAttribution>>,
         evaluation_instant: chrono::DateTime<chrono::Utc>,
+        maximum_deadline: Option<tokio::time::Instant>,
     ) -> Result<EvidenceAcquisition, EvidenceBeginError> {
+        if maximum_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            return Err(EvidenceTerminalError::Budget.into());
+        }
         let intent = EvidenceAcquisitionIntent {
             pack: self.pack.clone(),
             route: self.route.clone(),
@@ -1419,6 +1423,7 @@ impl EvidenceProgram {
         let deadline = tokio::time::Instant::now()
             .checked_add(self.limits.deadline)
             .ok_or(EvidenceTerminalError::Budget)?;
+        let deadline = maximum_deadline.map_or(deadline, |maximum| deadline.min(maximum));
         let mut endpoints = BTreeMap::new();
         let mut host_protocols = BTreeMap::new();
         for (id, plan) in &self.endpoint_plans {
@@ -1553,6 +1558,22 @@ impl EvidenceProgram {
         acquisition: &EvidenceAcquisition,
         inputs: Value,
     ) -> Result<EvidenceLookup, EvidenceExecutionError> {
+        let body = self.execute_raw(acquisition, inputs).await?;
+        let lookup: EvidenceLookup =
+            serde_json::from_value(body).map_err(|_| EvidenceExecutionError::LookupInvalid)?;
+        if let EvidenceLookup::Matched { facts } = &lookup {
+            if !self.facts_schema.validate(facts) {
+                return Err(EvidenceExecutionError::FactsInvalid);
+            }
+        }
+        Ok(lookup)
+    }
+
+    pub(crate) async fn execute_raw(
+        &self,
+        acquisition: &EvidenceAcquisition,
+        inputs: Value,
+    ) -> Result<Value, EvidenceExecutionError> {
         if acquisition.pack != self.pack || acquisition.route != self.route {
             return Err(EvidenceExecutionError::Terminal(
                 EvidenceTerminalError::Authority,
@@ -1590,14 +1611,7 @@ impl EvidenceProgram {
                 return Err(EvidenceExecutionError::Route(error));
             }
         };
-        let lookup: EvidenceLookup = serde_json::from_value(exchange.message.body)
-            .map_err(|_| EvidenceExecutionError::LookupInvalid)?;
-        if let EvidenceLookup::Matched { facts } = &lookup {
-            if !self.facts_schema.validate(facts) {
-                return Err(EvidenceExecutionError::FactsInvalid);
-            }
-        }
-        Ok(lookup)
+        Ok(exchange.message.body)
     }
 
     #[must_use]
@@ -1686,6 +1700,26 @@ pub fn compile_evidence_pack_with_protocols(
         &contract.facts_schema,
         EvidenceSchemaKind::Facts,
     )?;
+    compile_read_pack_with_schemas(
+        pack,
+        source,
+        pack_artifacts,
+        limits,
+        protocols,
+        input_schema,
+        facts_schema,
+    )
+}
+
+pub(crate) fn compile_read_pack_with_schemas(
+    pack: &AdapterPack,
+    source: &SourceRouteDecl,
+    pack_artifacts: &PackArtifactBytes,
+    limits: EvidenceLimits,
+    protocols: &HostProtocolRegistry,
+    input_schema: CheckedEvidenceSchema,
+    facts_schema: CheckedEvidenceSchema,
+) -> Result<EvidencePackProgram, EvidenceCompileError> {
     check_read_only_closure(pack, source)?;
     let worst_case = registry_adapter_core::evidence_route_worst_case(pack, &source.steps);
     if worst_case.uncountable {
@@ -2005,7 +2039,7 @@ fn authentication_authority_matches(
     }
 }
 
-fn load_schema(
+pub(crate) fn load_schema(
     artifacts: &PackArtifactBytes,
     reference: &registry_adapter_core::ScriptReference,
     kind: EvidenceSchemaKind,
@@ -2145,7 +2179,7 @@ fn ensure_reachable_endpoints_bound(
     Ok(())
 }
 
-fn reachable_endpoint_ids(
+pub(crate) fn reachable_endpoint_ids(
     pack: &AdapterPack,
     source: &SourceRouteDecl,
 ) -> Result<BTreeSet<String>, EvidenceCompileError> {
@@ -2291,6 +2325,7 @@ pub struct EvidenceAcquisition {
     trusted_protocol_metadata: tokio::sync::Mutex<Vec<EvidenceTrustedProtocolMetadata>>,
     trusted_protocol_attachment: tokio::sync::Mutex<Option<HostProtocolAttachment>>,
     pub(crate) token_budget: tokio::sync::Mutex<TokenBudget>,
+    pub(crate) projection_http: Option<crate::projection::ProjectionHttpState>,
 }
 
 struct EvidenceAcquisitionStart {
@@ -2345,6 +2380,7 @@ impl EvidenceAcquisition {
             trusted_protocol_metadata: tokio::sync::Mutex::new(Vec::new()),
             trusted_protocol_attachment: tokio::sync::Mutex::new(None),
             token_budget: tokio::sync::Mutex::new(TokenBudget::new_exchange()),
+            projection_http: None,
         })
     }
 
@@ -2365,6 +2401,7 @@ impl EvidenceAcquisition {
             trusted_protocol_metadata: tokio::sync::Mutex::new(Vec::new()),
             trusted_protocol_attachment: tokio::sync::Mutex::new(None),
             token_budget: tokio::sync::Mutex::new(TokenBudget::new_exchange()),
+            projection_http: None,
         }
     }
 
@@ -2447,13 +2484,23 @@ impl EvidenceAcquisition {
         }
         {
             let mut state = self.state.lock().await;
-            if state.data_operations >= self.limits.maximum_data_operations {
+            if state.data_operations >= self.limits.maximum_data_operations
+                || (self.projection_http.is_some()
+                    && state.response_bytes >= self.limits.maximum_response_bytes)
+            {
                 return Err(EvidenceTerminalError::Budget);
             }
             state.data_operations += 1;
         }
         self.hooks.before_credentials(intent).await?;
         Ok(())
+    }
+
+    pub(crate) async fn remaining_response_bytes(&self) -> usize {
+        let state = self.state.lock().await;
+        self.limits
+            .maximum_response_bytes
+            .saturating_sub(state.response_bytes)
     }
 
     pub(crate) async fn record_response_bytes(

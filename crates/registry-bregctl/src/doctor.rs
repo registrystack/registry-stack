@@ -279,6 +279,16 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database was activated for a separate runtime role but the runtime file names one role: run bregctl apply --package DIR to activate it for one role",
         ),
+        StartupError::ExternalSources => (
+            "startup.external-sources.refused",
+            "externalSources",
+            "review the indexed projection scope and the configured source grant and pinned Adapter pack",
+        ),
+        StartupError::ExternalProjectionRoleMode => (
+            "startup.external-projections.role-mode",
+            "database.roles",
+            "indexed external projections require separate migration and runtime PostgreSQL roles",
+        ),
         StartupError::Audit => (
             "startup.audit.refused",
             "audit",
