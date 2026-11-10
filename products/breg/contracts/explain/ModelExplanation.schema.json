@@ -586,8 +586,10 @@
     "ExternalDeclarations": {
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/LocalId" },
-      "additionalProperties": { "type": "object" },
-      "x-registry-passthrough": "Normalized external view declarations and grants emitted by the compiler."
+      "additionalProperties": {
+        "type": "object",
+        "x-registry-passthrough": "Normalized external view declarations and grants emitted by the compiler."
+      }
     },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",

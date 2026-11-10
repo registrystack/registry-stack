@@ -50,7 +50,7 @@ const MAXIMUM_CLOSURE_BYTES: usize = 16 * 1_048_576;
 const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1_048_576;
 const MAXIMUM_CA_BYTES: usize =
     registry_platform_httputil::destination::MAX_DESTINATION_CA_BUNDLE_BYTES;
-const MAXIMUM_CACHE_TTL_SECONDS: u64 = 31_536_000;
+const MAXIMUM_CACHE_TTL_SECONDS: u64 = crate::external_views::MAXIMUM_CACHE_TTL_SECONDS as u64;
 
 /// Operator binding for one already declared projection. The reviewed pack
 /// provides the acquisition ceiling; runtime configuration can narrow it.
@@ -85,7 +85,7 @@ impl Identified for ExternalSourceBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExternalSourceAcquisition {
     pub maximum_data_operations: BoundedU64<1, 1000>,
-    pub timeout_milliseconds: BoundedU64<1, 60000>,
+    pub attempt_timeout_milliseconds: BoundedU64<1, 60000>,
     pub maximum_response_bytes: BoundedU64<1, MAXIMUM_RESPONSE_BYTES>,
 }
 
@@ -270,7 +270,7 @@ fn bind_one<'a>(
     let (pack, artifacts) = load_pack(Path::new(&binding.pack_file), &binding.pack_digest)?;
     let limits = EvidenceLimits::try_new(
         binding.acquisition.maximum_data_operations.get(),
-        binding.acquisition.timeout_milliseconds.get(),
+        binding.acquisition.attempt_timeout_milliseconds.get(),
         binding.acquisition.maximum_response_bytes.get() as usize,
     )
     .map_err(|_| ExternalSourceError::Configuration)?;
@@ -486,12 +486,10 @@ fn effective_ttl(
     match (projection.mode, projection.cache_ttl_seconds, deployment) {
         (ExternalProjectionMode::Live, None, None) => Ok(None),
         (ExternalProjectionMode::Indexed, Some(authored), deployment) => {
+            let authored = authored.get();
             let shortened = deployment.map_or(authored, |ttl| {
                 u32::try_from(ttl).map_or(authored, |ttl| authored.min(ttl))
             });
-            if shortened == 0 || u64::from(shortened) > MAXIMUM_CACHE_TTL_SECONDS {
-                return Err(ExternalSourceError::Configuration);
-            }
             Ok(Some(shortened))
         }
         _ => Err(ExternalSourceError::Configuration),
@@ -1083,7 +1081,7 @@ pub(crate) mod tests {
         ));
         let mut indexed = live;
         indexed.mode = ExternalProjectionMode::Indexed;
-        indexed.cache_ttl_seconds = Some(300);
+        indexed.cache_ttl_seconds = Some(registry_platform_yaml::BoundedU32::new(300).unwrap());
         assert!(matches!(effective_ttl(&indexed, None), Ok(Some(300))));
         assert!(matches!(effective_ttl(&indexed, Some(60)), Ok(Some(60))));
         assert!(matches!(effective_ttl(&indexed, Some(900)), Ok(Some(300))));
@@ -1116,7 +1114,7 @@ pub(crate) mod tests {
                 "tlsTrustProfile":"source-ca","clientIdentity":"forbidden",
                 "authentication":{"type":"static-api-key"}}],
             "allowedFields":fields,"grantValidUntil":"2030-01-01T00:00:00Z",
-            "acquisition":{"maximumDataOperations":8,"timeoutMilliseconds":8000,"maximumResponseBytes":262144}
+            "acquisition":{"maximumDataOperations":8,"attemptTimeoutMilliseconds":8000,"maximumResponseBytes":262144}
         })
     }
 
@@ -1181,7 +1179,7 @@ pub(crate) mod tests {
         renewed["grantValidUntil"] = json!("2031-06-01T00:00:00Z");
         renewed["connection"]["endpoints"][0]["baseUrl"] = json!("https://renewed.example.test");
         renewed["endpointPolicies"][0]["baseUrl"] = json!("https://renewed.example.test");
-        renewed["acquisition"] = json!({"maximumDataOperations":2,"timeoutMilliseconds":3000,"maximumResponseBytes":65536});
+        renewed["acquisition"] = json!({"maximumDataOperations":2,"attemptTimeoutMilliseconds":3000,"maximumResponseBytes":65536});
         renewed["cacheTtlSeconds"] = json!(120);
         assert_eq!(
             fingerprints(&load_values(&registry, &[renewed]), "person-indexed"),
@@ -1267,7 +1265,7 @@ pub(crate) mod tests {
                 "clientIdentity":"forbidden","authentication":{"type":"static-api-key"}}],
             "allowedFields":["family-name"],"grantValidUntil":"2030-01-01T00:00:00Z",
             "cacheTtlSeconds":60,
-            "acquisition":{"maximumDataOperations":8,"timeoutMilliseconds":8000,"maximumResponseBytes":262144}
+            "acquisition":{"maximumDataOperations":8,"attemptTimeoutMilliseconds":8000,"maximumResponseBytes":262144}
         });
         let parsed: ExternalSourceBinding = serde_json::from_value(binding.clone()).unwrap();
         assert_eq!(parsed.cache_ttl_seconds.map(|ttl| ttl.get()), Some(60));
@@ -1282,5 +1280,18 @@ pub(crate) mod tests {
             retired[member] = value;
             assert!(serde_json::from_value::<ExternalSourceBinding>(retired).is_err());
         }
+    }
+
+    #[test]
+    fn the_acquisition_timeout_is_spelled_as_an_attempt_timeout() {
+        let acquisition = json!({
+            "maximumDataOperations":8,"attemptTimeoutMilliseconds":8000,"maximumResponseBytes":262144
+        });
+        let parsed: ExternalSourceAcquisition = serde_json::from_value(acquisition).unwrap();
+        assert_eq!(parsed.attempt_timeout_milliseconds.get(), 8000);
+        let refused = json!({
+            "maximumDataOperations":8,"timeoutMilliseconds":8000,"maximumResponseBytes":262144
+        });
+        assert!(serde_json::from_value::<ExternalSourceAcquisition>(refused).is_err());
     }
 }

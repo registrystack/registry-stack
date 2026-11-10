@@ -3660,6 +3660,14 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
             ]),
         );
     }
+    for definition in ["RuntimeCredential", "EvidenceAuthenticationPolicy"] {
+        internally_tagged(
+            schema
+                .pointer_mut(&format!("/$defs/{definition}"))
+                .expect("the runtime schema defines each tagged union"),
+            "type",
+        );
+    }
     for pointer in [
         "/properties/destinations",
         "/$defs/RawDestinationsConfig/properties/hooks",
@@ -3672,6 +3680,67 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         remove_schema_default(&mut schema, pointer);
     }
     Ok(schema)
+}
+
+/// Rewrite one union whose serde representation the `registry-platform-yaml`
+/// union macros implement by hand: `schemars` renders the external form
+/// (`{"static-api-key": {...}}`), the reader accepts the internally tagged
+/// form (`{"type": "static-api-key", ...}`). Every variant keeps its
+/// description and fields and gains the required constant tag member.
+#[cfg(feature = "schema")]
+fn internally_tagged(definition: &mut Value, tag: &str) {
+    let object = definition
+        .as_object_mut()
+        .expect("a definition is an object");
+    let Some(Value::Array(variants)) = object.remove("oneOf") else {
+        panic!("schemars renders the tagged union as oneOf");
+    };
+    let tagged = variants
+        .iter()
+        .map(|variant| tagged_variant(variant, tag))
+        .collect();
+    object.insert("oneOf".to_owned(), Value::Array(tagged));
+}
+
+/// The internally tagged form of one externally rendered variant.
+#[cfg(feature = "schema")]
+fn tagged_variant(variant: &Value, tag: &str) -> Value {
+    let properties = variant
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("schemars renders each variant under its kind name");
+    let mut kinds = properties.iter();
+    let (kind, fields) = kinds.next().expect("schemars renders one kind per variant");
+    assert!(
+        kinds.next().is_none(),
+        "schemars renders one kind per variant"
+    );
+    let mut members = serde_json::Map::new();
+    members.insert(
+        tag.to_owned(),
+        serde_json::json!({"const": kind, "type": "string"}),
+    );
+    if let Some(fields) = fields.get("properties").and_then(Value::as_object) {
+        members.extend(
+            fields
+                .iter()
+                .map(|(name, field)| (name.clone(), field.clone())),
+        );
+    }
+    let mut required = vec![tag.to_owned()];
+    if let Some(names) = fields.get("required").and_then(Value::as_array) {
+        required.extend(names.iter().filter_map(Value::as_str).map(str::to_owned));
+    }
+    required.sort();
+    let mut tagged = serde_json::Map::new();
+    if let Some(description) = variant.get("description") {
+        tagged.insert("description".to_owned(), description.clone());
+    }
+    tagged.insert("type".to_owned(), Value::String("object".to_owned()));
+    tagged.insert("additionalProperties".to_owned(), Value::Bool(false));
+    tagged.insert("properties".to_owned(), Value::Object(members));
+    tagged.insert("required".to_owned(), serde_json::json!(required));
+    Value::Object(tagged)
 }
 
 #[cfg(feature = "schema")]
@@ -4205,6 +4274,31 @@ mod schema_tests {
                 "{map}"
             );
             assert!(schema["$defs"][identifier].is_object(), "{identifier}");
+        }
+    }
+
+    #[test]
+    fn schema_renders_the_tagged_unions_the_reader_reads() {
+        let schema = super::runtime_config_schema().unwrap();
+        for (definition, accepted, refused) in [
+            (
+                "RuntimeCredential",
+                json!({"type": "static-api-key", "valueRef": "secret:file/source-key"}),
+                json!({"static-api-key": {"valueRef": "secret:file/source-key"}}),
+            ),
+            (
+                "EvidenceAuthenticationPolicy",
+                json!({"type": "static-api-key"}),
+                json!({"static-api-key": {}}),
+            ),
+        ] {
+            let document = json!({
+                "$defs": schema["$defs"],
+                "$ref": format!("#/$defs/{definition}")
+            });
+            let validator = jsonschema::JSONSchema::compile(&document).unwrap();
+            assert!(validator.is_valid(&accepted), "{definition}: {accepted}");
+            assert!(!validator.is_valid(&refused), "{definition}: {refused}");
         }
     }
 
