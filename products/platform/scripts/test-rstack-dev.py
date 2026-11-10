@@ -9,7 +9,9 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import secrets
+import signal
 import shutil
 import socket
 import subprocess
@@ -239,6 +241,53 @@ def wait_for_stop(bin_dir, env, cwd, run):
     raise RuntimeError("the run did not finish its TTL cleanup")
 
 
+def live_runs(state):
+    """Runs that may still be alive; `failed/` only holds kept logs."""
+    if not state.exists():
+        return []
+    return [path for path in state.iterdir() if path.name != "failed"]
+
+
+def kept_logs(state, error):
+    """The log directory a failed run's error names, after checking it."""
+    marker = "logs kept at "
+    assert marker in error, error
+    logs = Path(error.rsplit(marker, 1)[1].strip())
+    assert logs.name == "logs" and logs.parent.parent == state / "failed", logs
+    assert logs.is_dir() and logs.stat().st_mode & 0o777 == 0o700, logs
+    assert (logs / "supervisor.log").is_file(), logs
+    return logs
+
+
+def eventually(check, message, timeout=10):
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline, message
+        time.sleep(0.1)
+
+
+def accepts_connections(url):
+    parts = urlsplit(url)
+    with socket.socket() as probe:
+        probe.settimeout(2)
+        return probe.connect_ex((parts.hostname, parts.port)) == 0
+
+
+def product_pids(bin_dir):
+    """Processes running this build's BReg or Casework (not their ctl tools)."""
+    pattern = f"{re.escape(str(bin_dir))}/(breg|casework)( |$)"
+    result = command("pgrep", "-f", pattern)
+    assert result.returncode in (0, 1), "pgrep failed"
+    return result.stdout.split()
+
+
+def assert_nothing_listening(bin_dir, urls=()):
+    """No product URL accepts a connection and no product process remains."""
+    for url in urls:
+        eventually(lambda: not accepts_connections(url), f"{url} is still listening")
+    eventually(lambda: not product_pids(bin_dir), "a product process is still alive")
+
+
 def verify_deployment_key(root, bin_dir, env, run_root, headers):
     """Start the real verifier with a separate trust pin and the same issuer."""
     key = root / "deployment-issuer.key"
@@ -309,15 +358,31 @@ def verify_deployment_key(root, bin_dir, env, run_root, headers):
         process.wait(timeout=15)
 
 
+def create_owner(pg, pg_env, url):
+    """A least-privilege administrator: it can create roles and databases only."""
+    password = secrets.token_urlsafe(32)
+    psql(
+        pg,
+        pg_env,
+        f"CREATE ROLE devowner LOGIN CREATEROLE CREATEDB PASSWORD '{password}';",
+    )
+    parts = urlsplit(url)
+    owner_url = (
+        f"postgresql://devowner:{password}@{parts.hostname}:{parts.port}/postgres"
+    )
+    return owner_url, {**pg_env, "PGUSER": "devowner", "PGPASSWORD": password}
+
+
 def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     checkout = root / "licensing"
     shutil.copytree(project, checkout)
     before = files(checkout)
     state = root / "runs"
+    owner_url, owner_env = create_owner(pg, pg_env, url)
     env = {
         **os.environ,
         "RSTACK_DEV_STATE_DIR": str(state),
-        "RSTACK_DEV_DATABASE_URL": url,
+        "RSTACK_DEV_DATABASE_URL": owner_url,
         "RSTACK_DEV_DATABASE_CA": str(ca),
         "RSTACK_BREGCTL_BIN": str(bin_dir / "bregctl"),
         "RSTACK_BREG_BIN": str(bin_dir / "breg"),
@@ -326,14 +391,17 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     }
     try:
         exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env)
+        verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
         verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env)
+        verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env)
         if spatial:
-            verify_spatial(root, bin_dir, pg, env, pg_env)
+            verify_spatial(
+                root, bin_dir, pg, {**env, "RSTACK_DEV_DATABASE_URL": url}, pg_env
+            )
         assert files(checkout) == before
     finally:
-        if state.exists():
-            for run_root in state.iterdir():
-                dev(bin_dir, env, checkout, "stop", run_root.name)
+        for run_root in live_runs(state):
+            dev(bin_dir, env, checkout, "stop", run_root.name)
 
 
 def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
@@ -406,21 +474,32 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
         assert dev(bin_dir, env, checkout, "stop", run["run_id"])["status"] == "stopped"
         assert not (state / run["run_id"]).exists()
     assert inventory(pg, pg_env) == baseline
+    assert_nothing_listening(
+        bin_dir, [url for run in runs for url in run["products"].values()]
+    )
 
     short = dev(bin_dir, env, checkout, "start", ".", "--ttl", "1s")
     wait_for_stop(bin_dir, env, checkout, short["run_id"])
     assert inventory(pg, pg_env) == baseline
-    assert list(state.iterdir()) == []
+    assert live_runs(state) == []
+    assert_nothing_listening(bin_dir, short["products"].values())
 
-    failure_env = {**env, "RSTACK_CASEWORK_BIN": shutil.which("false")}
+    failing = root / "failing-casework"
+    failing.write_text("#!/bin/sh\nprintf 'boom\\n' >&2\nexit 1\n")
+    failing.chmod(0o700)
+    failure_env = {**env, "RSTACK_CASEWORK_BIN": str(failing)}
     report = dev(bin_dir, failure_env, checkout, "start", ".", expected=1)
     assert "casework exited before readiness" in report["error"], report
+    assert "boom" in report["error"], report
+    logs = kept_logs(state, report["error"])
+    assert any("boom" in log.read_text() for log in logs.glob("casework-*.log")), report
     assert inventory(pg, pg_env) == baseline, report
-    assert list(state.iterdir()) == [], report
+    assert live_runs(state) == [], report
+    assert_nothing_listening(bin_dir)
     verify_native_handoff(root, bin_dir, env)
     assert inventory(pg, pg_env) == baseline
     assert administrator_locks(pg, pg_env) == baseline_locks
-    assert list(state.iterdir()) == []
+    assert live_runs(state) == []
     print(
         "Stop, TTL expiry and failed startup cleaned up; authored product files stayed byte-identical"
     )
@@ -468,7 +547,9 @@ def verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env):
         assert psql(pg, pg_env, lock_query).strip() == "t"
         assert inventory(pg, pg_env) == baseline
         assert administrator_locks(pg, pg_env) == baseline_locks
-        assert list(state.iterdir()) == []
+        assert live_runs(state) == []
+        if "logs kept at " in error:
+            kept_logs(state, error)
     finally:
         lock.stdin.close()
         try:
@@ -478,6 +559,90 @@ def verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env):
             lock.wait(timeout=5)
             raise RuntimeError("the PostgreSQL lock fixture did not exit") from None
     print("A blocked PostgreSQL operation timed out and released earlier resources")
+
+
+def listener_pids(url):
+    result = command(
+        "lsof", "-nP", "-Fp", f"-iTCP:{urlsplit(url).port}", "-sTCP:LISTEN"
+    )
+    return {line[1:] for line in result.stdout.decode().split() if line[0] == "p"}
+
+
+def recover_lost_supervisor(pg, owner_env, recovery):
+    """Release a lost run by hand, from the facts `stop` reports.
+
+    Order: stop each process group (TERM, then KILL), drop every database
+    (WITH (FORCE) ends leftover sessions), drop every role, then remove the
+    run directory.
+    """
+    for process in recovery["processes"]:
+        group = process["pgid"]
+        os.killpg(group, signal.SIGTERM)
+
+        def gone(group=group):
+            try:
+                os.killpg(group, 0)
+            except ProcessLookupError:
+                return True
+            return False
+
+        try:
+            eventually(gone, "a process group ignored SIGTERM", timeout=10)
+        except AssertionError:
+            os.killpg(group, signal.SIGKILL)
+            eventually(gone, "a process group survived SIGKILL", timeout=10)
+    objects = recovery["objects"]
+    statements = [
+        f'DROP DATABASE IF EXISTS "{item["database"]}" WITH (FORCE);'
+        for item in objects
+    ] + [f'DROP ROLE IF EXISTS "{role}";' for item in objects for role in item["roles"]]
+    psql(pg, owner_env, "\n".join(statements) + "\n")
+    shutil.rmtree(recovery["run_directory"])
+
+
+def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env):
+    baseline = inventory(pg, pg_env)
+    baseline_locks = administrator_locks(pg, pg_env)
+    report = dev(bin_dir, env, checkout, "start", ".")
+    run = report["run_id"]
+    worker = command(
+        "pgrep", "-f", f"project-dev --worker {re.escape(str(state / run))}"
+    )
+    [supervisor] = worker.stdout.split()
+    os.kill(int(supervisor), signal.SIGKILL)
+    status = dev(bin_dir, env, checkout, "status", run, expected=1)
+    stopped = dev(bin_dir, env, checkout, "stop", run, expected=1)
+    for lost in (status, stopped):
+        assert lost["recovery"]["kind"] == "lost-supervisor", lost
+        assert lost["run_id"] == run, lost
+    recovery = stopped["recovery"]
+    assert recovery["run_directory"] == str(state / run), recovery
+    processes = recovery["processes"]
+    assert sorted(p["product"] for p in processes) == ["breg", "casework"], recovery
+    for process in processes:
+        os.kill(process["pid"], 0)
+        assert os.getpgid(process["pid"]) == process["pgid"], recovery
+        listeners = listener_pids(report["products"][process["product"]])
+        assert str(process["pid"]) in listeners, recovery
+    # The pattern behind assert_nothing_listening sees the live products.
+    assert len(product_pids(bin_dir)) == 2, recovery
+    databases, roles = inventory(pg, pg_env)
+    assert {item["database"] for item in recovery["objects"]} == (
+        databases - baseline[0]
+    ), recovery
+    assert {role for item in recovery["objects"] for role in item["roles"]} == (
+        roles - baseline[1]
+    ), recovery
+    recover_lost_supervisor(pg, owner_env, recovery)
+    assert_nothing_listening(bin_dir, report["products"].values())
+    assert inventory(pg, pg_env) == baseline
+    eventually(
+        lambda: administrator_locks(pg, pg_env) == baseline_locks,
+        "the lost supervisor's administrator lock was not released",
+    )
+    assert live_runs(state) == []
+    assert dev(bin_dir, env, checkout, "status", run)["status"] == "stopped"
+    print("A lost supervisor was recovered by hand from the facts stop reported")
 
 
 def verify_native_handoff(root, bin_dir, env):
@@ -499,11 +664,11 @@ def verify_native_handoff(root, bin_dir, env):
         dev(bin_dir, env, checkout, "stop", report["run_id"])
 
 
-def verify_spatial(root, bin_dir, pg, env, pg_env):
-    checkout = root / "spatial"
+def spatial_project(root, name):
+    """Copy the spatial registry and write a plan that creates and reads a site."""
+    checkout = root / name
     registry = checkout / "registry"
     shutil.copytree(SPATIAL, registry)
-    before = files(registry)
     fixture = json.loads((registry / "tests/journeys.yaml").read_text())
     people = {}
     for journey in fixture["journeys"]:
@@ -566,6 +731,32 @@ def verify_spatial(root, bin_dir, pg, env, pg_env):
         },
     }
     (checkout / "dev.yaml").write_text(json.dumps(plan))
+    return checkout, registry, bbox
+
+
+def verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env):
+    """A spatial start is refused cleanly when the administrator cannot offer PostGIS."""
+    checkout, _, _ = spatial_project(root, "spatial-refusal")
+    baseline = inventory(pg, pg_env)
+    offered = psql(
+        pg,
+        pg_env,
+        "SELECT default_version FROM pg_available_extensions WHERE name = 'postgis';",
+    ).strip()
+    supported = bool(offered) and tuple(map(int, offered.split(".")[:2])) >= (3, 5)
+    report = dev(bin_dir, env, checkout, "start", ".", expected=1)
+    if supported:
+        assert "must be allowed to CREATE EXTENSION postgis" in report["error"], report
+    else:
+        assert "PostGIS 3.5 or later installed" in report["error"], report
+    assert inventory(pg, pg_env) == baseline, report
+    assert live_runs(state) == [], report
+    print("A spatial start without PostGIS rights was refused and left nothing behind")
+
+
+def verify_spatial(root, bin_dir, pg, env, pg_env):
+    checkout, registry, bbox = spatial_project(root, "spatial")
+    before = files(registry)
     baseline = inventory(pg, pg_env)
     report = dev(bin_dir, env, checkout, "start", ".")
     run = report["run_id"]
