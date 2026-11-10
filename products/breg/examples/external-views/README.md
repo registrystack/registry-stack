@@ -21,6 +21,15 @@ disclosure or query permission. The refresh profile uses a dedicated
 service identity, has only the approved refresh scopes, and can list local
 roots only in its assigned jurisdiction.
 
+Write access to a link's `fromField` chooses which outside subject BReg
+fetches. Whoever can set `holder-key` on a licence decides which Person the
+source is asked for, under the deployment's source grant, and which Person
+officers then see beside that licence. The same holds for `business-key`
+and the holdings. Here only the `fixture-editor` profile can write those
+fields. In a deployment, grant write access to a link field only to
+identities trusted to assert that link, and review changes to it as you
+would review a disclosure.
+
 Check the project with the candidate `bregctl`:
 
 ```sh

@@ -19,9 +19,11 @@ The named link reserves `identifierBinding` for a future versioned resolver cont
 That resolver would take the authorised local reference and return a source-scoped handle
 before Adapter acquisition. The current checker refuses unknown binding configuration.
 
+Write access to a link's `fromField` chooses which outside subject BReg fetches. Whoever can set that field on a root decides which subject the source is asked for under the deployment's source grant, and which subject's values readers of that root then see. Grant write access to a link field only to identities trusted to assert that link, and review changes to it as you would review a disclosure.
+
 ## Freshness and purge
 
-`cacheTtlSeconds` is the one cache lifetime of a source result. A deployment binding may set its own `cacheTtlSeconds` to shorten, but never extend, the authored value. The lifetime is measured from the original source observation time, not from refresh completion. The effective expiry is the earlier of that lifetime and the source result's own expiry, and the source must permit storage until then. There is no retention period after expiry: an expired value is purged.
+`cacheTtlSeconds` is the one cache lifetime of a source result. A deployment binding may set its own `cacheTtlSeconds` to shorten, but never extend, the authored value. The lifetime is measured from the original source observation time, not from refresh completion. The effective expiry is the earlier of that lifetime and the deployment binding's source grant cutoff, `grantValidUntil`. From the source response, BReg honours only `no-store`; it reads no other expiry or storage permission there, so set `grantValidUntil` no later than the source permits storage. There is no retention period after expiry: an expired value is purged.
 
 A captured snapshot stores the observation time and a keyed revision reference when the source supplies a revision. The reference is scoped to the bound source.
 
