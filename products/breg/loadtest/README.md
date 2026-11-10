@@ -13,6 +13,10 @@ client to each access profile. The fixture continues to own that authorization
 proof. The load client carries the ordinary `business-operator` claims used by
 the remaining journey and workload.
 
+The external projection scale fixture is separate. It runs paired candidate
+binaries against its own PostgreSQL databases rather than this `bregctl dev`
+environment; see [external-views/SCALE.md](external-views/SCALE.md).
+
 ## Prerequisites
 
 - `cargo`, `docker`, `python3`
