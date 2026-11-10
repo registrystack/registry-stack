@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
+    ops::RangeInclusive,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::Path,
 };
@@ -25,10 +26,14 @@ pub(super) fn check(path: &Path, directory: bool) -> Result<()> {
 }
 
 pub(super) fn check_metadata(metadata: &fs::Metadata, directory: bool) -> Result<()> {
+    check_links(metadata, directory, 1..=1)
+}
+
+fn check_links(metadata: &fs::Metadata, directory: bool, links: RangeInclusive<u64>) -> Result<()> {
     if metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.permissions().mode() & 0o077 != 0
         || (directory && !metadata.is_dir())
-        || (!directory && (!metadata.is_file() || metadata.nlink() != 1))
+        || (!directory && (!metadata.is_file() || !links.contains(&metadata.nlink())))
     {
         bail!("local state must use ordinary owner-only directories and single-link files");
     }
@@ -41,17 +46,30 @@ pub(super) fn read(path: &Path, maximum: u64) -> Result<Vec<u8>> {
         .read(true)
         .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
         .open(path)?;
-    let before = fs::symlink_metadata(path)?;
-    let opened = file.metadata()?;
-    if before.ino() != opened.ino() || before.dev() != opened.dev() {
-        bail!("local state changed while opening it");
+    #[cfg(test)]
+    if let Some(hook) = AFTER_OPEN.take() {
+        hook(path);
     }
+    // Check the file this read opened rather than looking its path up again.
+    // Another writer's atomic replace may rename a successor over the path
+    // after the open: the opened file keeps its complete bytes and has no
+    // link left, so no other path reaches it either.
+    check_links(&file.metadata()?, false, 0..=1)?;
     let mut bytes = Vec::new();
     (&mut file).take(maximum + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > maximum {
         bail!("local state exceeds its size limit");
     }
     Ok(bytes)
+}
+
+// Test-only seam that stands in for another writer acting on the path once
+// `read` has opened it, as a supervisor saving state does while `dev start`
+// polls that state. It runs once.
+#[cfg(test)]
+thread_local! {
+    pub(super) static AFTER_OPEN: std::cell::Cell<Option<fn(&Path)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 pub(super) fn create(path: &Path, bytes: &[u8]) -> Result<()> {
