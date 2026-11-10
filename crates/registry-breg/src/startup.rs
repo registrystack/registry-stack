@@ -853,6 +853,7 @@ pub struct PreparedServer {
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
     postgres_advisories: Vec<BaselineAdvisory>,
     unavailable_external_projections: BTreeMap<String, String>,
+    external_projection_status: Vec<ExternalProjectionStatus>,
     role_mode: RoleMode,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
@@ -942,6 +943,7 @@ impl PreparedServer {
             metrics: None,
             postgres_advisories: Vec::new(),
             unavailable_external_projections: BTreeMap::new(),
+            external_projection_status: Vec::new(),
             role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -984,6 +986,7 @@ impl PreparedServer {
             metrics: None,
             postgres_advisories: Vec::new(),
             unavailable_external_projections: BTreeMap::new(),
+            external_projection_status: Vec::new(),
             role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -1056,18 +1059,34 @@ pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
             role_mode: prepared.role_mode(),
             unbound_review_authorities,
             unavailable_external_projections: prepared.unavailable_external_projections().clone(),
+            external_projections: prepared.external_projection_status.clone(),
         })
 }
 
 /// What a startup check that passed decided without refusing: the
-/// PostgreSQL baseline advisories, the role mode it verified, and the external
-/// projections a server would start without, with the reason.
+/// PostgreSQL baseline advisories, the role mode it verified, the external
+/// projections a server would start without, with the reason, and the status
+/// of each projection it would serve.
 #[derive(Debug, Clone)]
 pub struct CheckedStartup {
     pub postgres_advisories: Vec<BaselineAdvisory>,
     pub role_mode: RoleMode,
     pub unbound_review_authorities: Vec<String>,
     pub unavailable_external_projections: BTreeMap<String, String>,
+    pub external_projections: Vec<ExternalProjectionStatus>,
+}
+
+/// One external projection a server would serve, as a startup check sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalProjectionStatus {
+    pub projection: String,
+    /// Whether the projection serves from cached snapshots rather than live.
+    pub indexed: bool,
+    /// When the source grant this deployment binds expires, in Unix seconds.
+    pub grant_valid_until: i64,
+    /// When the newest snapshot the projection holds was observed, in Unix
+    /// seconds. `None` when it holds none or reads live.
+    pub newest_publication: Option<i64>,
 }
 
 /// Prepare the clean database capability consumed by the production pre-sign
@@ -1630,6 +1649,7 @@ async fn finish_prepared_server(
         None
     };
     let mut unavailable_external_projections = BTreeMap::new();
+    let mut external_projection_status = Vec::new();
     let external_views =
         if registry.external_views().views.is_empty() && config.external_sources().is_empty() {
             None
@@ -1667,6 +1687,12 @@ async fn finish_prepared_server(
                 .await
                 .map_err(|_| StartupError::ExternalSources)?;
             unavailable_external_projections = external.unavailable_projections().clone();
+            if opening == AuditOpening::CheckOnly {
+                external_projection_status = external
+                    .projection_status()
+                    .await
+                    .map_err(|_| StartupError::ExternalSources)?;
+            }
             Some(Arc::new(external))
         };
     let records = PostgresRecordReadService::new(
@@ -1973,6 +1999,7 @@ async fn finish_prepared_server(
         metrics,
         postgres_advisories,
         unavailable_external_projections,
+        external_projection_status,
         role_mode: RoleMode::from_roles(
             config.database().roles().migration(),
             config.database().roles().runtime(),

@@ -12,6 +12,7 @@ use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 use super::{ExpectedRegistryIdentity, GuardedTransaction, RuntimeRevoke, SqlIdentifier};
+use crate::hooks::RetentionFailureReason;
 
 pub(crate) const BIND_ONCE_FUNCTION: &str =
     "registry_internal.bind_external_projection_once(text,uuid,text,text,bigint,text,text,uuid)";
@@ -553,7 +554,7 @@ pub(crate) enum RefreshFailure {
 }
 
 impl RefreshFailure {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Abandoned => "abandoned",
             Self::Unavailable => "unavailable",
@@ -999,28 +1000,110 @@ pub(crate) async fn fail_refresh(
     Ok(())
 }
 
-/// Each lane removes at most `limit` rows, with values cascading only from the
-/// selected bounded snapshot headers. No expired value is made readable.
-pub(crate) async fn purge(
+/// When the newest snapshot the projection's active epoch holds was observed,
+/// if it holds any. Withdrawn and replaced epochs do not count.
+pub(crate) async fn newest_publication(
     transaction: &GuardedTransaction<'_>,
-    limit: u32,
-) -> Result<(u64, u64), ProjectionError> {
-    if !(1..=1000).contains(&limit) {
-        return Err(ProjectionError::InvalidScope);
-    }
-    let limit = i32::try_from(limit).map_err(|_| ProjectionError::InvalidScope)?;
+    projection: &str,
+) -> Result<Option<i64>, ProjectionError> {
     let row = transaction
         .transaction()
         .query_one(
+            "SELECT max(o.observed_at)
+             FROM registry_internal.registry_external_projection_snapshots AS o
+             JOIN registry_internal.registry_external_projection_scopes AS s USING (projection_id)
+             WHERE o.projection_id=$1 AND o.epoch=s.epoch AND s.active",
+            &[&projection],
+        )
+        .await
+        .map_err(|_| ProjectionError::Unavailable)?;
+    Ok(row.get(0))
+}
+
+/// Why the purge removed rows. Only these fixed categories leave the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PurgeReason {
+    /// The cache lifetime or refresh lease ended.
+    Expired,
+    /// A rotation moved the projection to a fresh epoch.
+    Replaced,
+    /// The projection was withdrawn.
+    Withdrawn,
+}
+
+impl PurgeReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+            Self::Replaced => "replaced",
+            Self::Withdrawn => "withdrawn",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "expired" => Some(Self::Expired),
+            "replaced" => Some(Self::Replaced),
+            "withdrawn" => Some(Self::Withdrawn),
+            _ => None,
+        }
+    }
+}
+
+/// Rows one purge batch removed for one projection and reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Purged {
+    pub(crate) projection: String,
+    pub(crate) reason: PurgeReason,
+    pub(crate) snapshots: u64,
+    pub(crate) receipts: u64,
+}
+
+/// Each lane removes at most `limit` rows, with values cascading only from the
+/// selected bounded snapshot headers. No expired value is made readable. A
+/// failure carries only its category, for the retention worker's log.
+pub(crate) async fn purge(
+    transaction: &GuardedTransaction<'_>,
+    limit: u32,
+) -> Result<Vec<Purged>, RetentionFailureReason> {
+    if !(1..=1000).contains(&limit) {
+        return Err(RetentionFailureReason::Database);
+    }
+    let limit = i32::try_from(limit).map_err(|_| RetentionFailureReason::Database)?;
+    let rows = transaction
+        .transaction()
+        .query(
             "SELECT * FROM registry_internal.purge_external_projections($1)",
             &[&limit],
         )
         .await
-        .map_err(|_| ProjectionError::Unavailable)?;
-    Ok((
-        u64::try_from(row.get::<_, i64>(0)).map_err(|_| ProjectionError::Unavailable)?,
-        u64::try_from(row.get::<_, i64>(1)).map_err(|_| ProjectionError::Unavailable)?,
-    ))
+        .map_err(|error| RetentionFailureReason::sqlstate(error.code().map(|code| code.code())))?;
+    let mut purged: Vec<Purged> = Vec::new();
+    for row in rows {
+        let projection: String = row.get(0);
+        let reason =
+            PurgeReason::parse(row.get::<_, &str>(1)).ok_or(RetentionFailureReason::Database)?;
+        let count = |column| {
+            u64::try_from(row.get::<_, i64>(column)).map_err(|_| RetentionFailureReason::Database)
+        };
+        let (snapshots, receipts) = (count(2)?, count(3)?);
+        match purged
+            .iter_mut()
+            .find(|entry| entry.projection == projection && entry.reason == reason)
+        {
+            Some(entry) => {
+                entry.snapshots += snapshots;
+                entry.receipts += receipts;
+            }
+            None => purged.push(Purged {
+                projection,
+                reason,
+                snapshots,
+                receipts,
+            }),
+        }
+    }
+    Ok(purged)
 }
 
 pub(crate) const INSTALL_SQL: &str = r#"
@@ -1218,8 +1301,12 @@ BEGIN
     RETURN FOUND;
 END $body$;
 
+-- One row per projection, reason and lane: the snapshot lane fills
+-- snapshots_pruned, the receipt lane fills refreshes_pruned. The reason is a
+-- fixed category (withdrawn, replaced or expired) and never a stored value.
 CREATE OR REPLACE FUNCTION registry_internal.purge_external_projections(p_limit integer)
-RETURNS TABLE (snapshots_pruned bigint,refreshes_pruned bigint) LANGUAGE plpgsql SECURITY DEFINER
+RETURNS TABLE (pruned_projection text,pruned_reason text,snapshots_pruned bigint,refreshes_pruned bigint)
+LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, registry_internal AS $body$
 DECLARE projection_now bigint;
 BEGIN
@@ -1227,18 +1314,22 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='external projection purge limit is invalid';
     END IF;
     projection_now := floor(extract(epoch FROM clock_timestamp()))::bigint;
-    WITH expired AS MATERIALIZED (
-        SELECT o.projection_id,o.epoch,o.subject_key
+    RETURN QUERY WITH expired AS MATERIALIZED (
+        SELECT o.projection_id,o.epoch,o.subject_key,
+            CASE WHEN NOT s.active THEN 'withdrawn' WHEN o.epoch<>s.epoch THEN 'replaced' ELSE 'expired' END AS reason
         FROM registry_internal.registry_external_projection_snapshots AS o
         JOIN registry_internal.registry_external_projection_scopes AS s USING (projection_id)
         WHERE o.expires_at<=projection_now OR o.epoch<>s.epoch OR NOT s.active
         ORDER BY o.expires_at,o.projection_id,o.epoch,o.subject_key LIMIT p_limit FOR UPDATE OF o SKIP LOCKED
     ), removed AS (
         DELETE FROM registry_internal.registry_external_projection_snapshots AS o USING expired AS e
-        WHERE o.projection_id=e.projection_id AND o.epoch=e.epoch AND o.subject_key=e.subject_key RETURNING 1
-    ) SELECT count(*) INTO snapshots_pruned FROM removed;
-    WITH expired AS MATERIALIZED (
-        SELECT r.projection_id,r.sequence
+        WHERE o.projection_id=e.projection_id AND o.epoch=e.epoch AND o.subject_key=e.subject_key
+        RETURNING e.projection_id,e.reason
+    ) SELECT removed.projection_id,removed.reason,count(*),0::bigint FROM removed
+        GROUP BY removed.projection_id,removed.reason;
+    RETURN QUERY WITH expired AS MATERIALIZED (
+        SELECT r.projection_id,r.sequence,
+            CASE WHEN NOT s.active THEN 'withdrawn' WHEN r.epoch<>s.epoch THEN 'replaced' ELSE 'expired' END AS reason
         FROM registry_internal.registry_external_projection_refreshes AS r
         JOIN registry_internal.registry_external_projection_scopes AS s USING (projection_id)
         WHERE r.epoch<>s.epoch OR NOT s.active OR (r.lease_expires_at<=projection_now
@@ -1250,9 +1341,10 @@ BEGIN
         ORDER BY r.lease_expires_at,r.projection_id,r.sequence LIMIT p_limit FOR UPDATE OF r SKIP LOCKED
     ), removed AS (
         DELETE FROM registry_internal.registry_external_projection_refreshes AS r USING expired AS e
-        WHERE r.projection_id=e.projection_id AND r.sequence=e.sequence RETURNING 1
-    ) SELECT count(*) INTO refreshes_pruned FROM removed;
-    RETURN NEXT;
+        WHERE r.projection_id=e.projection_id AND r.sequence=e.sequence
+        RETURNING e.projection_id,e.reason
+    ) SELECT removed.projection_id,removed.reason,0::bigint,count(*) FROM removed
+        GROUP BY removed.projection_id,removed.reason;
 END $body$;
 
 CREATE OR REPLACE FUNCTION registry_internal.lock_external_projection_generation(
@@ -2292,7 +2384,7 @@ pub(crate) mod postgres_tests {
             // remains live, independently of wall-clock lease ordering.
             migration.execute("UPDATE registry_internal.registry_external_projection_refreshes SET lease_expires_at=999 WHERE projection_id=$1 AND sequence=$2",&[&scope.projection_id,&newer.sequence]).await.unwrap();
             migration
-                .query_one(
+                .query(
                     "SELECT * FROM registry_internal.purge_external_projections(1000)",
                     &[],
                 )
@@ -2341,15 +2433,19 @@ pub(crate) mod postgres_tests {
         assert!(publish_without_eligibility(&migration, &ticket, &observed)
             .await
             .is_err());
-        // Purge removes a value once its one cache lifetime expires.
-        let pruned = migration
-            .query_one(
-                "SELECT * FROM registry_internal.purge_external_projections(100)",
+        // Purge removes a value once its one cache lifetime expires and names
+        // the projection and reason, never the value.
+        let pruned: Vec<(String, String, i64)> = migration
+            .query(
+                "SELECT pruned_projection,pruned_reason,snapshots_pruned FROM registry_internal.purge_external_projections(100) WHERE snapshots_pruned>0",
                 &[],
             )
             .await
-            .unwrap();
-        assert_eq!(pruned.get::<_, i64>(0), 1);
+            .unwrap()
+            .iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect();
+        assert_eq!(pruned, [("projection".to_owned(), "expired".to_owned(), 1)]);
         assert_eq!(
             migration
                 .query_one(
@@ -2696,16 +2792,23 @@ pub(crate) mod postgres_tests {
             ProjectionError::ScopeChanged
         );
 
-        // Purge removes the replaced epoch's cache; the other projection's
-        // cache stays warm.
-        fixture
+        // Purge removes the replaced epoch's cache and says so; the other
+        // projection's cache stays warm.
+        let pruned: Vec<(String, String, i64)> = fixture
             .migration
-            .query_one(
-                "SELECT * FROM registry_internal.purge_external_projections(100)",
+            .query(
+                "SELECT pruned_projection,pruned_reason,snapshots_pruned FROM registry_internal.purge_external_projections(100) WHERE snapshots_pruned>0",
                 &[],
             )
             .await
-            .unwrap();
+            .unwrap()
+            .iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect();
+        assert_eq!(
+            pruned,
+            [("projection".to_owned(), "replaced".to_owned(), 1)]
+        );
         assert_eq!(fixture.cached("projection", first.epoch).await, 0);
         assert_eq!(fixture.cached("other", other.epoch).await, 1);
         fixture.cleanup().await;

@@ -45,11 +45,15 @@ use super::external_view_query::{
 };
 use super::read::{strict_claim_context, ReadRelations};
 use super::{
-    begin_record_transaction, begin_registry_transaction, ClaimContext, ExpectedRegistryIdentity,
-    GuardedTransaction, RegistryLockKey, RuntimePool,
+    begin_record_transaction, begin_registry_transaction, begin_registry_transaction_with_reason,
+    ClaimContext, ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey, RuntimePool,
 };
+use crate::hooks::RetentionFailureReason;
 
 type Result<T> = std::result::Result<T, ExternalViewError>;
+/// Rows one retention tick committed, as (snapshots, receipts) by projection
+/// and reason.
+type PurgeTally = BTreeMap<(String, store::PurgeReason), (u64, u64)>;
 
 pub(crate) struct PostgresExternalViewService {
     pool: RuntimePool,
@@ -253,6 +257,53 @@ impl PostgresExternalViewService {
         self.sources.unavailable_projections()
     }
 
+    /// Each bound projection's grant horizon and, for an indexed projection,
+    /// when the newest snapshot its active epoch holds was observed. Reads
+    /// only, in one transaction that is rolled back.
+    pub(crate) async fn projection_status(
+        &self,
+    ) -> Result<Vec<crate::startup::ExternalProjectionStatus>> {
+        let mut session = self.session().await?;
+        let transaction = begin_registry_transaction(
+            session.client(),
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+        )
+        .await
+        .map_err(|_| ExternalViewError::Unavailable)?;
+        transaction
+            .set_statement_budget(Duration::from_secs(10))
+            .await
+            .map_err(|_| ExternalViewError::Unavailable)?;
+        let mut status = Vec::new();
+        for (id, projection) in &self.registry.external_views().projections {
+            let Some(source) = self.sources.binding(id.as_str()) else {
+                continue;
+            };
+            let indexed = projection.mode == ExternalProjectionMode::Indexed;
+            let newest_publication = if indexed {
+                store::newest_publication(&transaction, id.as_str())
+                    .await
+                    .map_err(|_| ExternalViewError::Unavailable)?
+            } else {
+                None
+            };
+            status.push(crate::startup::ExternalProjectionStatus {
+                projection: id.to_string(),
+                indexed,
+                grant_valid_until: source.grant_valid_until().timestamp(),
+                newest_publication,
+            });
+        }
+        transaction
+            .rollback()
+            .await
+            .map_err(|_| ExternalViewError::Unavailable)?;
+        session.disarm();
+        Ok(status)
+    }
+
     pub(crate) async fn run_retention(
         self: Arc<Self>,
         last_success: Arc<crate::metrics::LastSuccess>,
@@ -266,43 +317,91 @@ impl PostgresExternalViewService {
                     if change.is_err() || *shutdown.borrow() { return; }
                 }
                 _ = interval.tick() => {
-                    match timeout_at(Instant::now() + Duration::from_secs(5), self.purge_tick()).await {
-                        Ok(Ok(())) => last_success.record(),
-                        _ => tracing::error!("external projection retention tick failed"),
+                    if self.retention_tick().await {
+                        last_success.record();
                     }
                 }
             }
         }
     }
 
-    async fn purge_tick(&self) -> Result<()> {
+    /// One bounded purge pass. Logs the committed removals by projection and
+    /// reason, and a failure by category; returns whether the pass completed.
+    async fn retention_tick(&self) -> bool {
+        let mut purged = PurgeTally::new();
+        let outcome = timeout_at(
+            Instant::now() + Duration::from_secs(5),
+            self.purge_tick(&mut purged),
+        )
+        .await;
+        for ((projection, reason), (snapshots, receipts)) in &purged {
+            tracing::info!(
+                projection = projection.as_str(),
+                reason = reason.as_str(),
+                snapshots,
+                receipts,
+                "external projection retention removed cache rows"
+            );
+        }
+        let reason = match outcome {
+            Ok(Ok(())) => return true,
+            Ok(Err(reason)) => reason.as_str(),
+            Err(_) => "deadline",
+        };
+        tracing::error!(reason, "external projection retention tick failed");
+        false
+    }
+
+    async fn purge_tick(
+        &self,
+        purged: &mut PurgeTally,
+    ) -> std::result::Result<(), RetentionFailureReason> {
         const BATCH: u32 = 1000;
-        let mut session = self.session().await?;
-        for _ in 0..8 {
-            let transaction = begin_registry_transaction(
+        const BATCHES: usize = 8;
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| RetentionFailureReason::Database)?;
+        let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
+        for _ in 0..BATCHES {
+            let transaction = begin_registry_transaction_with_reason(
                 session.client(),
                 self.lock_key,
                 self.lock_timeout,
                 &self.expected,
             )
             .await
-            .map_err(|_| ExternalViewError::Unavailable)?;
+            .map_err(RetentionFailureReason::admission)?;
             transaction
                 .set_statement_budget(Duration::from_secs(2))
                 .await
-                .map_err(|_| ExternalViewError::Unavailable)?;
-            let (snapshots, receipts) = store::purge(&transaction, BATCH)
-                .await
-                .map_err(|_| ExternalViewError::Unavailable)?;
+                .map_err(|_| RetentionFailureReason::Database)?;
+            let batch = store::purge(&transaction, BATCH).await?;
             transaction
                 .commit()
                 .await
-                .map_err(|_| ExternalViewError::Unavailable)?;
+                .map_err(|_| RetentionFailureReason::Database)?;
+            let (mut snapshots, mut receipts) = (0, 0);
+            for removed in batch {
+                snapshots += removed.snapshots;
+                receipts += removed.receipts;
+                let entry = purged
+                    .entry((removed.projection, removed.reason))
+                    .or_default();
+                entry.0 += removed.snapshots;
+                entry.1 += removed.receipts;
+            }
             if snapshots < u64::from(BATCH) && receipts < u64::from(BATCH) {
-                break;
+                session.disarm();
+                return Ok(());
             }
         }
         session.disarm();
+        tracing::warn!(
+            batches = BATCHES,
+            "external projection retention reached its per-tick batch bound"
+        );
         Ok(())
     }
 
@@ -532,9 +631,11 @@ impl PostgresExternalViewService {
                     parent_key: key.clone(),
                 },
             };
-            self.acquire(request, plan, source_request, &fields, None, None)
-                .await
-                .ok()
+            live_acquisition(
+                plan.projection.id.as_str(),
+                self.acquire(request, plan, source_request, &fields, None, None)
+                    .await,
+            )
         } else {
             None
         };
@@ -1021,11 +1122,57 @@ impl ExternalViewService for PostgresExternalViewService {
         mode: RefreshMode,
     ) -> ServiceFuture<'_, Result<Value>> {
         Box::pin(async move {
-            timeout_at(request.deadline, self.run(request, Some(mode)))
-                .await
-                .map_err(|_| ExternalViewError::Unavailable)?
+            let projection = self.refresh_projection(&request, mode);
+            let outcome = timeout_at(request.deadline, self.run(request, Some(mode))).await;
+            if let Some(projection) = projection {
+                log_refresh(&projection, &outcome);
+            }
+            outcome.map_err(|_| ExternalViewError::Unavailable)?
         })
     }
+}
+
+impl PostgresExternalViewService {
+    /// The projection a refresh request writes, when its view and link exist.
+    fn refresh_projection(
+        &self,
+        request: &ExternalViewRequest,
+        mode: RefreshMode,
+    ) -> Option<String> {
+        let link = self
+            .registry
+            .external_views()
+            .views
+            .get(&request.view)?
+            .links
+            .iter()
+            .find(|link| link.id.as_str() == request.link)?;
+        match mode {
+            RefreshMode::Projection => Some(link.projection.to_string()),
+            RefreshMode::Labels => link
+                .label
+                .as_ref()
+                .map(|label| label.projection.to_string()),
+        }
+    }
+}
+
+/// A refresh page that fails as a whole is logged by projection and reason
+/// category. Per-key outcomes of a completed page are logged when recorded.
+fn log_refresh(
+    projection: &str,
+    outcome: &std::result::Result<Result<Value>, tokio::time::error::Elapsed>,
+) {
+    let reason = match outcome {
+        Ok(Ok(_)) => return,
+        Ok(Err(ExternalViewError::Concealed)) => "concealed",
+        Ok(Err(ExternalViewError::InvalidCursor)) => "invalid-cursor",
+        Ok(Err(ExternalViewError::Incomplete)) => "incomplete",
+        Ok(Err(ExternalViewError::Unavailable)) => "unavailable",
+        Ok(Err(ExternalViewError::ProjectionUnavailable(_))) => "projection-unavailable",
+        Err(_) => "deadline",
+    };
+    tracing::warn!(projection, reason, "external projection refresh failed");
 }
 
 struct RefreshAuthority {
@@ -1554,6 +1701,7 @@ impl PostgresExternalViewService {
     /// returns how many were published. A publication holds the projection
     /// scope row until it commits, and indexed reads share that row, so one
     /// transaction for the whole page would hold readers back for every key.
+    /// The committed outcomes are logged by reason category, without keys.
     #[allow(clippy::too_many_arguments)] // The page's scope, parent and rows come from its selection transaction.
     async fn record_refresh(
         &self,
@@ -1565,7 +1713,28 @@ impl PostgresExternalViewService {
         page: &RefreshRows,
         results: Vec<(RefreshWork, RefreshResult)>,
     ) -> Result<usize> {
-        let mut published = 0usize;
+        let mut tally = RefreshTally::default();
+        let recorded = self
+            .record_outcomes(
+                request, plan, claims, scope, parent, page, results, &mut tally,
+            )
+            .await;
+        tally.log(plan.projection.id.as_str());
+        recorded.map(|()| tally.published)
+    }
+
+    #[allow(clippy::too_many_arguments)] // See `record_refresh`.
+    async fn record_outcomes(
+        &self,
+        request: &ExternalViewRequest,
+        plan: &Plan<'_>,
+        claims: &ClaimContext,
+        scope: &ProjectionScope,
+        parent: Option<&ProjectionGeneration>,
+        page: &RefreshRows,
+        results: Vec<(RefreshWork, RefreshResult)>,
+        tally: &mut RefreshTally,
+    ) -> Result<()> {
         let mut session = self.session().await?;
         let mut results = results.into_iter();
         while let Some((work, result)) = results.next() {
@@ -1595,20 +1764,23 @@ impl PostgresExternalViewService {
                         .is_some_and(|cutoff| Utc::now().timestamp() >= cutoff)
                 {
                     let abandoned = std::iter::once(work).chain(results.map(|(work, _)| work));
+                    let mut keys = 0usize;
                     for work in abandoned {
                         store::fail_refresh(&transaction, &work.ticket, RefreshFailure::Abandoned)
                             .await
                             .map_err(|_| ExternalViewError::Unavailable)?;
+                        keys += 1;
                     }
                     transaction
                         .commit()
                         .await
                         .map_err(|_| ExternalViewError::Unavailable)?;
                     session.disarm();
+                    tally.failed(RefreshFailure::Abandoned, keys);
                     return Err(ExternalViewError::Unavailable);
                 }
             }
-            let accepted = match result {
+            let failure = match result {
                 RefreshResult::Accepted(snapshot) => {
                     let root_ids = work.roots.into_iter().collect::<Vec<_>>();
                     // The RLS recheck and publication share a statement
@@ -1623,7 +1795,7 @@ impl PostgresExternalViewService {
                     )
                     .await
                     {
-                        Ok(store::Publication::Published | store::Publication::Replay) => true,
+                        Ok(store::Publication::Published | store::Publication::Replay) => None,
                         Ok(store::Publication::Ineligible)
                         | Err(store::ProjectionError::StaleRefresh) => {
                             store::fail_refresh(
@@ -1633,7 +1805,7 @@ impl PostgresExternalViewService {
                             )
                             .await
                             .map_err(|_| ExternalViewError::Unavailable)?;
-                            false
+                            Some(RefreshFailure::Abandoned)
                         }
                         Err(_) => return Err(ExternalViewError::Unavailable),
                     }
@@ -1642,19 +1814,20 @@ impl PostgresExternalViewService {
                     store::fail_refresh(&transaction, &work.ticket, failure)
                         .await
                         .map_err(|_| ExternalViewError::Unavailable)?;
-                    false
+                    Some(failure)
                 }
             };
             transaction
                 .commit()
                 .await
                 .map_err(|_| ExternalViewError::Unavailable)?;
-            if accepted {
-                published += 1;
+            match failure {
+                None => tally.published += 1,
+                Some(failure) => tally.failed(failure, 1),
             }
         }
         session.disarm();
-        Ok(published)
+        Ok(())
     }
 
     async fn fetch_refresh(
@@ -1824,6 +1997,55 @@ fn refresh_lease(deadline: Instant) -> Duration {
         + REFRESH_LEASE_MARGIN
 }
 
+/// Committed outcomes of one refresh page: published keys and failed keys by
+/// reason category.
+#[derive(Default)]
+struct RefreshTally {
+    published: usize,
+    failed: BTreeMap<&'static str, usize>,
+}
+
+impl RefreshTally {
+    fn failed(&mut self, failure: RefreshFailure, keys: usize) {
+        *self.failed.entry(failure.as_str()).or_default() += keys;
+    }
+
+    fn log(&self, projection: &str) {
+        tracing::info!(
+            projection,
+            published = self.published,
+            "external projection refresh recorded"
+        );
+        for (reason, keys) in &self.failed {
+            tracing::warn!(
+                projection,
+                reason,
+                keys,
+                "external projection refresh failed for some keys"
+            );
+        }
+    }
+}
+
+/// A live read that cannot reach its source answers unavailable. The failure
+/// is logged by projection and reason category, never with the key.
+fn live_acquisition(
+    projection: &str,
+    result: std::result::Result<ProjectionResult, ExternalSourceError>,
+) -> Option<ProjectionResult> {
+    match result {
+        Ok(result) => Some(result),
+        Err(error) => {
+            tracing::warn!(
+                projection,
+                reason = acquisition_failure(Some(error)).as_str(),
+                "external projection live acquisition failed"
+            );
+            None
+        }
+    }
+}
+
 fn acquisition_failure(error: Option<ExternalSourceError>) -> RefreshFailure {
     match error {
         Some(ExternalSourceError::Grant) => RefreshFailure::Denied,
@@ -1897,6 +2119,61 @@ mod tests {
             ))),
             RefreshFailure::RetentionRefused
         );
+    }
+
+    #[test]
+    fn a_failed_live_acquisition_is_logged_by_projection_and_reason() {
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let kept = tracing::dispatcher::with_default(&captured.subscriber(), || {
+            live_acquisition("person-live", Err(ExternalSourceError::Grant))
+        });
+        assert!(kept.is_none(), "the view answers unavailable");
+        let logs = captured.text();
+        assert_eq!(logs.lines().count(), 1, "{logs}");
+        for expected in [
+            r#""level":"WARN""#,
+            r#""projection":"person-live""#,
+            r#""reason":"denied""#,
+        ] {
+            assert!(logs.contains(expected), "{logs}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_refresh_is_logged_by_projection_and_reason() {
+        let elapsed = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        tracing::dispatcher::with_default(&captured.subscriber(), || {
+            log_refresh("person-indexed", &Ok(Ok(json!({"published": 1}))));
+            log_refresh("person-indexed", &Ok(Err(ExternalViewError::InvalidCursor)));
+            log_refresh(
+                "person-labels",
+                &Ok(Err(ExternalViewError::ProjectionUnavailable(
+                    "person-labels".to_owned(),
+                ))),
+            );
+            log_refresh("person-indexed", &Err(elapsed));
+        });
+        let logs = captured.text();
+        assert_eq!(
+            logs.lines().count(),
+            3,
+            "a completed page adds no line: {logs}"
+        );
+        for (line, (projection, reason)) in logs.lines().zip([
+            ("person-indexed", "invalid-cursor"),
+            ("person-labels", "projection-unavailable"),
+            ("person-indexed", "deadline"),
+        ]) {
+            assert!(line.contains(r#""level":"WARN""#), "{line}");
+            assert!(
+                line.contains(&format!(r#""projection":"{projection}""#)),
+                "{line}"
+            );
+            assert!(line.contains(&format!(r#""reason":"{reason}""#)), "{line}");
+        }
     }
 
     #[test]
@@ -2648,6 +2925,225 @@ mod postgres_tests {
                 .join("\n");
             assert!(!explained.contains("Sort"), "after {after:?}: {explained}");
         }
+        served.fixture.cleanup().await;
+    }
+
+    /// Source keys, labels and snapshot identities the fixtures below store.
+    /// None of them may reach an operational log line.
+    const FIXTURE_VALUES: [&str; 7] = [
+        "\"first",
+        "\"second",
+        "\"third",
+        "\"hidden",
+        "\"subject",
+        "cached",
+        "canary",
+    ];
+
+    fn assert_value_free(logs: &str) {
+        for value in FIXTURE_VALUES {
+            assert!(!logs.contains(value), "{value} reached the log: {logs}");
+        }
+    }
+
+    fn log_line<'a>(logs: &'a str, projection: &str, reason: &str) -> &'a str {
+        logs.lines()
+            .find(|line| {
+                line.contains(&format!(r#""projection":"{projection}""#))
+                    && line.contains(&format!(r#""reason":"{reason}""#))
+            })
+            .unwrap_or_else(|| panic!("no {projection} {reason} line: {logs}"))
+    }
+
+    #[tokio::test]
+    async fn a_recorded_refresh_page_logs_its_outcomes_by_reason_without_values() {
+        use tracing::instrument::WithSubscriber;
+        let served = Served::new(Duration::from_secs(2)).await;
+        let refresh = request("link");
+        let plan = served.service.plan(&refresh, None).ok().unwrap();
+        let claims = ClaimContext::for_compiled(
+            &served.service.registry,
+            &plan.root.id,
+            Some("reader-principal".to_owned()),
+            "reader",
+            Some("consultation".to_owned()),
+            vec![crate::postgres::context::RowBoundaryContext::Equals {
+                field: "tenant".to_owned(),
+                value: "allowed".to_owned(),
+            }],
+        )
+        .unwrap();
+        let page = RefreshRows {
+            rows: Vec::new(),
+            next: None,
+            eligibility: RootKeys::new(&plan).ok().unwrap().publication_eligibility,
+            supporting_until: None,
+            supporting: Vec::new(),
+        };
+        let outcomes = [
+            None,
+            Some(RefreshFailure::Denied),
+            Some(RefreshFailure::Unavailable),
+        ];
+        let mut results = Vec::new();
+        for ((id, key, _), failure) in ROOTS[..3].iter().zip(outcomes) {
+            let (ticket, snapshot) = served
+                .fixture
+                .label_refresh(&served.scope, key, "canary")
+                .await;
+            results.push((
+                RefreshWork {
+                    key: (*key).to_owned(),
+                    roots: BTreeSet::from([Uuid::parse_str(id).unwrap()]),
+                    ticket,
+                },
+                failure.map_or(RefreshResult::Accepted(snapshot), RefreshResult::Failed),
+            ));
+        }
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let recorded = served
+            .service
+            .record_refresh(
+                &refresh,
+                &plan,
+                &claims,
+                &served.scope,
+                None,
+                &page,
+                results,
+            )
+            .with_subscriber(captured.subscriber())
+            .await;
+        assert_eq!(recorded.ok(), Some(1));
+        let logs = captured.text();
+        let recorded = logs
+            .lines()
+            .find(|line| line.contains(r#""published":1"#))
+            .unwrap_or_else(|| panic!("{logs}"));
+        assert!(recorded.contains(r#""projection":"projection""#), "{logs}");
+        for reason in ["denied", "unavailable"] {
+            let line = log_line(&logs, "projection", reason);
+            assert!(line.contains(r#""level":"WARN""#), "{line}");
+            assert!(line.contains(r#""keys":1"#), "{line}");
+        }
+        assert_eq!(logs.lines().count(), 3, "{logs}");
+        assert_value_free(&logs);
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_retention_tick_logs_what_it_purged_by_projection_and_reason() {
+        use tracing::instrument::WithSubscriber;
+        let served = Served::new(Duration::from_millis(300)).await;
+        served.publish_all().await;
+        let other = bound_scope(&served.fixture, "other").await;
+        served.fixture.cache(&other).await;
+        served
+            .fixture
+            .migration
+            .batch_execute(
+                "UPDATE registry_internal.registry_external_projection_snapshots
+                 SET observed_at=0,expires_at=1 WHERE projection_id='projection';
+                 SELECT registry_internal.withdraw_external_projection(
+                     projection_id,epoch,binding_digest,grant_digest)
+                 FROM registry_internal.registry_external_projection_scopes
+                 WHERE projection_id='other';",
+            )
+            .await
+            .unwrap();
+
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        assert!(
+            served
+                .service
+                .retention_tick()
+                .with_subscriber(captured.subscriber())
+                .await
+        );
+        let logs = captured.text();
+        let expired = log_line(&logs, "projection", "expired");
+        assert!(expired.contains(r#""snapshots":4"#), "{expired}");
+        let withdrawn = log_line(&logs, "other", "withdrawn");
+        assert!(withdrawn.contains(r#""snapshots":1"#), "{withdrawn}");
+        assert!(withdrawn.contains(r#""receipts":1"#), "{withdrawn}");
+        assert_value_free(&logs);
+
+        // A migration holding the registry lock fails the tick by category.
+        let lock_key = RegistryLockKey::derive(served.service.registry.registry_id())
+            .unwrap()
+            .get();
+        served
+            .fixture
+            .migration
+            .execute("SELECT pg_advisory_lock($1)", &[&lock_key])
+            .await
+            .unwrap();
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        assert!(
+            !served
+                .service
+                .retention_tick()
+                .with_subscriber(captured.subscriber())
+                .await
+        );
+        let logs = captured.text();
+        assert_eq!(logs.lines().count(), 1, "{logs}");
+        assert!(logs.contains(r#""level":"ERROR""#), "{logs}");
+        assert!(logs.contains(r#""reason":"lock-timeout""#), "{logs}");
+        served
+            .fixture
+            .migration
+            .execute("SELECT pg_advisory_unlock($1)", &[&lock_key])
+            .await
+            .unwrap();
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_check_reports_each_grant_horizon_and_newest_publication() {
+        let served = Served::new(Duration::from_secs(2)).await;
+        served.publish_all().await;
+        let other = bound_scope(&served.fixture, "other").await;
+        served.fixture.cache(&other).await;
+        // A withdrawn scope's rows are not what the projection serves.
+        served
+            .fixture
+            .migration
+            .batch_execute(
+                "SELECT registry_internal.withdraw_external_projection(
+                     projection_id,epoch,binding_digest,grant_digest)
+                 FROM registry_internal.registry_external_projection_scopes
+                 WHERE projection_id='other'",
+            )
+            .await
+            .unwrap();
+        let status = served.service.projection_status().await.ok().unwrap();
+        assert_eq!(
+            status
+                .iter()
+                .map(|projection| projection.projection.as_str())
+                .collect::<Vec<_>>(),
+            ["other", "projection"]
+        );
+        for projection in &status {
+            assert_eq!(
+                projection.grant_valid_until,
+                served
+                    .service
+                    .sources
+                    .binding(&projection.projection)
+                    .unwrap()
+                    .grant_valid_until()
+                    .timestamp()
+            );
+            assert!(projection.indexed);
+        }
+        assert_eq!(status[0].newest_publication, None);
+        let newest = status[1].newest_publication.unwrap();
+        assert!(
+            (Utc::now().timestamp() - newest).abs() <= 5,
+            "{newest} is the publication time"
+        );
         served.fixture.cleanup().await;
     }
 }
