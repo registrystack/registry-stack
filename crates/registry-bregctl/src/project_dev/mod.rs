@@ -47,6 +47,8 @@ const REQUEST: &str = "RSTACK_PROJECT_DEV_REQUEST";
 const DATABASE_URL: &str = "RSTACK_DEV_DATABASE_URL";
 const CA_FILE: &str = "RSTACK_DEV_DATABASE_CA";
 const REPORT: &str = "report.json";
+const PENDING: &str = "cleanup-pending.json";
+const CLEANUP_CAP: Duration = Duration::from_secs(30 * 60);
 const POLL: Duration = Duration::from_millis(100);
 // A capture can contain the 1 MiB development plan after JSON escaping,
 // selections derived from a second 1 MiB journeys document, facts selected
@@ -143,6 +145,140 @@ struct CleanupPending {
     detail: String,
 }
 
+/// A run that cannot finish by itself: its supervisor is gone, or cleanup
+/// gave up. `facts` carries what an operator needs to release it by hand.
+#[derive(Debug, thiserror::Error)]
+#[error("{}", recovery_message(run_id, facts))]
+struct RecoveryNeeded {
+    run_id: String,
+    facts: Value,
+}
+
+fn recovery_message(run_id: &str, facts: &Value) -> String {
+    let mut text = match facts["kind"].as_str() {
+        Some("cleanup-pending") => {
+            format!("run {run_id} gave up cleanup; release these resources by hand")
+        }
+        _ => format!(
+            "run {run_id} lost its supervisor before cleanup; release these resources by hand"
+        ),
+    };
+    let mut line = |entry: String| {
+        text.push_str("\n  ");
+        text.push_str(&entry);
+    };
+    if let Some(directory) = facts["run_directory"].as_str() {
+        line(format!("run directory {directory}"));
+    }
+    for process in facts["processes"].as_array().into_iter().flatten() {
+        line(format!(
+            "process {} pid {} pgid {}",
+            process["product"], process["pid"], process["pgid"]
+        ));
+    }
+    for object in facts["objects"].as_array().into_iter().flatten() {
+        let roles: Vec<_> = object["roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        line(format!(
+            "{} database {} roles {}",
+            object["label"].as_str().unwrap_or("?"),
+            object["database"].as_str().unwrap_or("?"),
+            roles.join(", ")
+        ));
+    }
+    for name in facts["databases_and_roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        line(format!("database or role {}", name.as_str().unwrap_or("?")));
+    }
+    if let Some(reason) = facts["unavailable"].as_str() {
+        line(format!("some facts are unavailable: {reason}"));
+    }
+    text
+}
+
+/// Everything a lost supervisor leaves behind: the processes it recorded and
+/// every database and role its plan provisions.
+fn lost_supervisor_facts(root: &Path, run_id: &str) -> Value {
+    let mut facts = json!({
+        "kind": "lost-supervisor",
+        "run_directory": root,
+        "processes": recorded_processes(root),
+        "objects": [],
+    });
+    match provisioned_objects(root, run_id) {
+        Ok(objects) => facts["objects"] = json!(objects),
+        Err(error) => facts["unavailable"] = json!(format!("{error:#}")),
+    }
+    facts
+}
+
+fn recorded_processes(root: &Path) -> Value {
+    read_json::<Value>(&root.join("processes.json"), MAXIMUM_RUN_REPORT_BYTES)
+        .ok()
+        .filter(Value::is_array)
+        .unwrap_or_else(|| json!([]))
+}
+
+fn provisioned_objects(root: &Path, run_id: &str) -> Result<Vec<Value>> {
+    let input: RunInput = read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)
+        .context("cannot read the captured development plan")?;
+    let spatial = input
+        .breg_authority
+        .as_ref()
+        .is_some_and(|authority| authority.requires_postgis);
+    let mut labels = Vec::new();
+    for entry in &input.plan.products {
+        match entry.product {
+            Product::Breg => {
+                labels.push(("breg_test", spatial));
+                labels.push(("breg", spatial));
+            }
+            Product::Casework => labels.push(("casework", false)),
+        }
+    }
+    labels
+        .into_iter()
+        .map(|(label, spatial)| {
+            let mut names = database::run_object_names(run_id, label, spatial)?;
+            let database = names.pop().context("run has no database name")?;
+            Ok(json!({"label": label, "database": database, "roles": names}))
+        })
+        .collect()
+}
+
+fn pending_report(run_id: &str, names: Vec<String>, processes: Value) -> Value {
+    json!({"run_id": run_id, "databases_and_roles": names, "processes": processes})
+}
+
+/// The delays between cleanup attempts: 2 s doubling to 30 s, until their
+/// sum reaches the cap.
+fn cleanup_schedule(cap: Duration) -> impl Iterator<Item = Duration> {
+    let mut next = Duration::from_secs(2);
+    let mut total = Duration::ZERO;
+    std::iter::from_fn(move || {
+        if total >= cap {
+            return None;
+        }
+        let delay = next;
+        total += delay;
+        next = (next * 2).min(Duration::from_secs(30));
+        Some(delay)
+    })
+}
+
+/// The wall clock decides expiry, because the monotonic clock stops while a
+/// laptop sleeps.
+fn expired(now_unix: u64, expires_at: u64) -> bool {
+    now_unix >= expires_at
+}
+
 fn startup_error(root: &Path, run_id: &str, error: anyhow::Error) -> anyhow::Error {
     if root.exists() {
         CleanupPending {
@@ -209,6 +345,10 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
                 report["run_id"] = json!(pending.run_id);
                 report["cleanup_pending"] = json!(true);
             }
+            if let Some(recovery) = error.downcast_ref::<RecoveryNeeded>() {
+                report["run_id"] = json!(recovery.run_id);
+                report["recovery"] = recovery.facts.clone();
+            }
             (writeln!(stdout, "{report}"), 1)
         }
         Err(error) => (writeln!(stderr, "rstack dev: {error:#}"), 1),
@@ -227,6 +367,12 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     let run = report["run_id"].as_str().expect("run report");
     let status = report["status"].as_str().expect("run status");
     writeln!(output, "Run {run} {status}")?;
+    if status == "cleanup-pending" {
+        let message = recovery_message(run, &report["recovery"]);
+        for line in message.lines().skip(1) {
+            writeln!(output, "{line}")?;
+        }
+    }
     if let Some(products) = report["products"].as_object() {
         for (product, url) in products {
             writeln!(output, "  {product} {}", url.as_str().expect("product URL"))?;
@@ -245,8 +391,14 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
                     "    {} expected HTTP {}, observed {}",
                     step["id"], step["expected_status"], step["status"]
                 )?;
+                if let Some(reason) = step["reason"].as_str() {
+                    writeln!(output, "      {reason}")?;
+                }
             }
         }
+    }
+    if let Some(logs) = report["logs"].as_str() {
+        writeln!(output, "  Logs {logs}")?;
     }
     if let Some(people) = report["people"].as_array() {
         for name in people {
@@ -393,6 +545,7 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     };
     let preparation = (|| {
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
+        let supervisor_log = open_supervisor_log(&root)?;
         Command::new(env::current_exe()?)
             .arg("project-dev")
             .arg("--worker")
@@ -401,15 +554,16 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
             .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(supervisor_log))
             .spawn()
             .context("cannot start the development run supervisor")
     })();
     let mut child = match preparation {
         Ok(child) => child,
         Err(error) => {
-            fs::remove_dir_all(&root).context("cannot remove unstarted run directory")?;
-            return Err(error);
+            let kept = remove_failed_run(&root, &input.run_id)
+                .context("cannot remove unstarted run directory")?;
+            return Err(note_kept_logs(error, kept));
         }
     };
     let stream = child.stdout.take().expect("startup channel");
@@ -417,7 +571,7 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     thread::spawn(move || {
         let mut line = String::new();
         let result = BufReader::new(stream)
-            .take(512 * 1024)
+            .take(MAXIMUM_RUN_REPORT_BYTES)
             .read_line(&mut line)
             .context("cannot read startup report")
             .and_then(|_| {
@@ -432,6 +586,7 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
             Ok(Ok(WorkerReply::Ready { report })) => return Ok(report),
             Ok(Ok(WorkerReply::Failed { error })) => {
                 let error = anyhow::anyhow!(error);
+                let kept_logs = failed_logs_dir(&base, &input.run_id);
                 if root.join("worker.lock").exists() {
                     if let Err(cleanup) = stop(&input.run_id) {
                         return Err(startup_error(
@@ -443,16 +598,21 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
                         ));
                     }
                 } else if root.exists() {
-                    fs::remove_dir_all(&root).context("cannot remove unstarted run directory")?;
+                    remove_failed_run(&root, &input.run_id)
+                        .context("cannot remove unstarted run directory")?;
                 }
-                return Err(error);
+                return Err(note_kept_logs(
+                    error,
+                    kept_logs.exists().then_some(kept_logs),
+                ));
             }
             Ok(Err(error)) => {
                 if child.try_wait()?.is_some()
                     && root.exists()
                     && !root.join("worker.lock").exists()
                 {
-                    fs::remove_dir_all(&root).context("cannot remove unstarted run directory")?;
+                    remove_failed_run(&root, &input.run_id)
+                        .context("cannot remove unstarted run directory")?;
                 }
                 return Err(startup_error(&root, &input.run_id, error));
             }
@@ -500,6 +660,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         .open(root.join("worker.lock"))?;
     flock(&lock, FlockOperation::LockExclusive)?;
     let mut database = None;
+    let mut expiry = None;
     let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         products.check()?;
         let ca = env::var_os(CA_FILE)
@@ -523,12 +684,13 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             "a product exited during the journey"
         );
         let expires_at = clock()? + input.ttl_seconds;
+        expiry = Some(expires_at);
         let report = json!({
             "schema_version": SCHEMA, "run_id": input.run_id, "status": "ready",
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),
-            "journey": journey, "expires_at": expires_at,
+            "journey": journey, "expires_at": expires_at, "logs": root.join("logs"),
         });
-        write_private(&root.join(REPORT), &serde_json::to_vec(&report)?)?;
+        write_private(&root.join(REPORT), &capture_report(&report)?)?;
         Ok::<_, anyhow::Error>(report)
     }))
     .unwrap_or_else(|_| Err(anyhow::anyhow!("development run startup failed internally")));
@@ -540,7 +702,10 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 failure = Some(format!("cannot report development run readiness: {error}"));
             } else {
                 let deadline = Instant::now() + Duration::from_secs(input.ttl_seconds);
-                while Instant::now() < deadline && !stopping(root, &signals) {
+                while Instant::now() < deadline
+                    && !stopping(root, &signals)
+                    && !expiry.is_some_and(|at| clock().map_or(true, |now| expired(now, at)))
+                {
                     if !products.services_alive().unwrap_or(false) {
                         break;
                     }
@@ -553,6 +718,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let stopped = simple_report(&input.run_id, "stopping");
     let mark_stopping = write_private(&root.join(REPORT), &serde_json::to_vec(&stopped)?);
     let mut told_parent = false;
+    let mut delays = cleanup_schedule(CLEANUP_CAP);
     loop {
         // Keep the exact ownership list until both the supervised processes
         // and their database resources have been released.
@@ -571,9 +737,28 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             );
             told_parent = true;
         }
-        thread::sleep(Duration::from_secs(2));
+        let Some(delay) = delays.next() else {
+            let names = database
+                .as_ref()
+                .map_or_else(Vec::new, Database::pending_names);
+            let pending = pending_report(&input.run_id, names, recorded_processes(root));
+            write_private(&root.join(PENDING), &serde_json::to_vec(&pending)?)?;
+            bail!(
+                "run {} gave up cleanup after {} minutes; run rstack dev status {} for the resources to release",
+                input.run_id,
+                CLEANUP_CAP.as_secs() / 60,
+                input.run_id
+            );
+        };
+        thread::sleep(delay);
     }
-    let removed = fs::remove_dir_all(root).context("cannot remove run scratch files");
+    // A failed run keeps its logs outside the run directory.
+    let removed = if failure.is_some() {
+        keep_logs(root, &input.run_id).map(drop)
+    } else {
+        Ok(())
+    }
+    .and_then(|()| fs::remove_dir_all(root).context("cannot remove run scratch files"));
     if let Some(error) = failure.filter(|_| !told_parent) {
         let error = match removed.as_ref() {
             Ok(()) => error,
@@ -600,10 +785,16 @@ fn status(run_id: &str) -> Result<Value> {
         return Ok(simple_report(run_id, "stopped"));
     }
     let observed = (|| {
-        ensure!(
-            supervisor_running(&root)?,
-            "run {run_id} lost its supervisor before cleanup"
-        );
+        if let Ok(pending) = read_json::<Value>(&root.join(PENDING), MAXIMUM_RUN_REPORT_BYTES) {
+            return Ok(pending_status(&root, run_id, pending));
+        }
+        if supervisor_gone(&root)? {
+            return Err(RecoveryNeeded {
+                run_id: run_id.to_owned(),
+                facts: lost_supervisor_facts(&root, run_id),
+            }
+            .into());
+        }
         let report: Value = read_json(&root.join(REPORT), MAXIMUM_RUN_REPORT_BYTES)
             .context("the development run has not reported readiness")?;
         if report["expires_at"]
@@ -618,6 +809,17 @@ fn status(run_id: &str) -> Result<Value> {
         return Ok(simple_report(run_id, "stopped"));
     }
     observed
+}
+
+fn pending_status(root: &Path, run_id: &str, pending: Value) -> Value {
+    let mut report = simple_report(run_id, "cleanup-pending");
+    report["recovery"] = json!({
+        "kind": "cleanup-pending",
+        "run_directory": root,
+        "databases_and_roles": pending["databases_and_roles"],
+        "processes": pending["processes"],
+    });
+    report
 }
 
 fn token(run_id: &str, person: &str) -> Result<Value> {
@@ -657,7 +859,7 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
     }
     Ok(json!({
         "schema_version": SCHEMA, "run_id": run_id, "status": "token",
-        "alias": person, "credentials": credentials,
+        "alias": person, "credentials": credentials, "expires_at": expires,
     }))
 }
 
@@ -666,7 +868,13 @@ fn stop(run_id: &str) -> Result<Value> {
     if !root.exists() {
         return Ok(simple_report(run_id, "stopped"));
     }
-    ensure_private(&root, false)?;
+    if let Err(error) = ensure_private(&root, false) {
+        // The supervisor can finish and remove the run between the checks.
+        if !root.exists() {
+            return Ok(simple_report(run_id, "stopped"));
+        }
+        return Err(error);
+    }
     match OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -684,14 +892,26 @@ fn stop(run_id: &str) -> Result<Value> {
     while root.exists() {
         ensure!(
             Instant::now() < deadline,
-            "run {run_id} has not completed cleanup; check the PostgreSQL server and retry stop"
+            "run {run_id} is still cleaning up or its cleanup has stalled; run rstack dev status {run_id} to see its state"
         );
         thread::sleep(POLL);
-        if root.exists() && root.join(REPORT).exists() {
-            let alive = supervisor_running(&root);
-            if root.exists() {
-                ensure!(alive?, "run {run_id} lost its supervisor before cleanup");
+        if !root.exists() {
+            break;
+        }
+        if let Ok(pending) = read_json::<Value>(&root.join(PENDING), MAXIMUM_RUN_REPORT_BYTES) {
+            return Err(RecoveryNeeded {
+                run_id: run_id.to_owned(),
+                facts: pending_status(&root, run_id, pending)["recovery"].clone(),
             }
+            .into());
+        }
+        let gone = supervisor_gone(&root);
+        if root.exists() && gone? {
+            return Err(RecoveryNeeded {
+                run_id: run_id.to_owned(),
+                facts: lost_supervisor_facts(&root, run_id),
+            }
+            .into());
         }
     }
     Ok(simple_report(run_id, "stopped"))
@@ -699,6 +919,21 @@ fn stop(run_id: &str) -> Result<Value> {
 
 fn simple_report(run_id: &str, status: &str) -> Value {
     json!({"schema_version": SCHEMA, "run_id": run_id, "status": status})
+}
+
+/// Whether a supervisor that took its lock has since vanished. The lock file
+/// appears just before the lock is taken, so a first sighting is confirmed
+/// after one poll before it counts.
+fn supervisor_gone(root: &Path) -> Result<bool> {
+    for attempt in 0..2 {
+        if !root.join("worker.lock").exists() || supervisor_running(root)? {
+            return Ok(false);
+        }
+        if attempt == 0 {
+            thread::sleep(POLL);
+        }
+    }
+    Ok(true)
 }
 
 fn supervisor_running(root: &Path) -> Result<bool> {
@@ -724,10 +959,13 @@ fn stopping(root: &Path, signals: &AtomicBool) -> bool {
     signals.load(Ordering::Relaxed) || root.join("stop").exists()
 }
 
-fn binary(name: &str) -> Result<PathBuf> {
-    let path = env::var_os(name)
-        .map(PathBuf::from)
-        .with_context(|| format!("{name} is required for the development run"))?;
+fn binary(product: Product, name: &str) -> Result<PathBuf> {
+    let path = env::var_os(name).map(PathBuf::from).with_context(|| {
+        format!(
+            "{name} is not set; run rstack install {} or set {name}",
+            product.name()
+        )
+    })?;
     let path = path
         .canonicalize()
         .with_context(|| format!("cannot resolve {name}"))?;
@@ -736,21 +974,24 @@ fn binary(name: &str) -> Result<PathBuf> {
 }
 
 fn product_tool(product: Product) -> Result<PathBuf> {
-    binary(match product {
-        Product::Breg => "RSTACK_BREGCTL_BIN",
-        Product::Casework => "RSTACK_CASEWORKCTL_BIN",
-    })
+    binary(
+        product,
+        match product {
+            Product::Breg => "RSTACK_BREGCTL_BIN",
+            Product::Casework => "RSTACK_CASEWORKCTL_BIN",
+        },
+    )
 }
 
 fn binaries(product: Product) -> Result<Binaries> {
     Ok(match product {
         Product::Breg => Binaries {
             tool: product_tool(product)?,
-            runtime: binary("RSTACK_BREG_BIN")?,
+            runtime: binary(product, "RSTACK_BREG_BIN")?,
         },
         Product::Casework => Binaries {
             tool: product_tool(product)?,
-            runtime: binary("RSTACK_CASEWORK_BIN")?,
+            runtime: binary(product, "RSTACK_CASEWORK_BIN")?,
         },
     })
 }
@@ -826,6 +1067,82 @@ fn capture_input(input: &RunInput) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn capture_report(report: &Value) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec(report)?;
+    ensure!(
+        bytes.len() as u64 <= MAXIMUM_RUN_REPORT_BYTES,
+        "development run report exceeds the internal size limit"
+    );
+    Ok(bytes)
+}
+
+/// Create `<run>/logs` and the owner-only supervisor log inside it.
+fn open_supervisor_log(root: &Path) -> Result<File> {
+    match private_directory(&root.join("logs")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("cannot create the development log directory"),
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(root.join("logs").join("supervisor.log"))
+        .context("cannot open the supervisor log")
+}
+
+fn failed_logs_dir(base: &Path, run_id: &str) -> PathBuf {
+    base.join("failed").join(run_id).join("logs")
+}
+
+fn has_log_content(logs: &Path) -> Result<bool> {
+    let entries = match fs::read_dir(logs) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("cannot read the development log directory"),
+    };
+    for entry in entries {
+        if entry?.metadata()?.len() > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Move a failed run's non-empty logs to `<state>/failed/<run_id>/logs`.
+fn keep_logs(root: &Path, run_id: &str) -> Result<Option<PathBuf>> {
+    let logs = root.join("logs");
+    if !has_log_content(&logs)? {
+        return Ok(None);
+    }
+    let base = root.parent().context("run directory has no parent")?;
+    let target = failed_logs_dir(base, run_id);
+    let run = target.parent().expect("failed run directory");
+    let failed = run.parent().expect("failed directory");
+    ensure_private(failed, true)?;
+    match private_directory(run) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("cannot create the failed run log directory"),
+    }
+    ensure_private(run, false)?;
+    fs::rename(&logs, &target).context("cannot keep the failed run logs")?;
+    Ok(Some(target))
+}
+
+fn remove_failed_run(root: &Path, run_id: &str) -> Result<Option<PathBuf>> {
+    let kept = keep_logs(root, run_id)?;
+    fs::remove_dir_all(root)?;
+    Ok(kept)
+}
+
+fn note_kept_logs(error: anyhow::Error, kept: Option<PathBuf>) -> anyhow::Error {
+    match kept {
+        Some(path) => anyhow::anyhow!("{error:#}; logs kept at {}", path.display()),
+        None => error,
+    }
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> Result<T> {
     Ok(serde_json::from_slice(&plan::read(path, limit)?)?)
 }
@@ -844,7 +1161,36 @@ fn clock() -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ttl;
+    use super::*;
+
+    const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
+
+    fn fake_run(root: &Path, products: Value, postgis: bool) {
+        let input = json!({
+            "run_id": RUN_ID, "project": "/project", "ttl_seconds": 60,
+            "plan": {
+                "issuer": "https://issuer.example.invalid",
+                "products": products,
+                "people": {"operator": {
+                    "subject": "operator", "client": "operator-client",
+                    "grants": {"breg": {"profile": "operator", "scopes": []}}
+                }},
+                "journey": {"id": "smoke", "steps": [{
+                    "id": "read", "product": "breg", "as": "operator",
+                    "method": "GET", "path": "/v1/records",
+                    "expect": {"status": 200}
+                }]}
+            },
+            "schema_people": [],
+            "breg_authority": {
+                "principal": "p", "purpose": false,
+                "requires_postgis": postgis, "named_clients": []
+            },
+            "casework_principals": {},
+            "binaries": {}
+        });
+        fs::write(root.join("input.json"), input.to_string()).unwrap();
+    }
 
     #[test]
     fn ttl_is_bounded_and_requires_a_unit() {
@@ -854,5 +1200,139 @@ mod tests {
         for invalid in ["", "0s", "3600", "25h", "18446744073709551615h", "é"] {
             assert!(parse_ttl(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn expiry_follows_the_wall_clock() {
+        assert!(!expired(99, 100));
+        assert!(expired(100, 100));
+        assert!(expired(101, 100));
+    }
+
+    #[test]
+    fn cleanup_backs_off_from_two_to_thirty_seconds_and_stops_at_the_cap() {
+        let delays: Vec<_> = cleanup_schedule(CLEANUP_CAP).map(|d| d.as_secs()).collect();
+        assert_eq!(delays[..6], [2, 4, 8, 16, 30, 30]);
+        let total: u64 = delays.iter().sum();
+        assert!(total >= CLEANUP_CAP.as_secs());
+        assert!(total - delays.last().unwrap() < CLEANUP_CAP.as_secs());
+        assert_eq!(cleanup_schedule(Duration::ZERO).count(), 0);
+    }
+
+    #[test]
+    fn lost_supervisor_facts_name_processes_databases_and_roles() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        fake_run(
+            root,
+            json!([
+                {"product": "breg", "project": ".", "audience": "registry"},
+                {"product": "casework", "project": ".", "audience": "casework"}
+            ]),
+            true,
+        );
+        fs::write(
+            root.join("processes.json"),
+            json!([{"product": "breg", "pid": 4242, "pgid": 4242}]).to_string(),
+        )
+        .unwrap();
+        let facts = lost_supervisor_facts(root, RUN_ID);
+        assert_eq!(facts["kind"], "lost-supervisor");
+        assert_eq!(facts["run_directory"], json!(root));
+        assert_eq!(facts["processes"][0]["pgid"], 4242);
+        let labels: Vec<_> = facts["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|object| object["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(labels, ["breg_test", "breg", "casework"]);
+        let breg = &facts["objects"][1];
+        assert_eq!(breg["database"], format!("rstack_{RUN_ID}_breg"));
+        // Migration, runtime and the spatial bbox role.
+        assert_eq!(breg["roles"].as_array().unwrap().len(), 3);
+        assert_eq!(facts["objects"][2]["roles"].as_array().unwrap().len(), 2);
+        let text = recovery_message(RUN_ID, &facts);
+        assert!(
+            text.contains("process \"breg\" pid 4242 pgid 4242"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("breg database rstack_{RUN_ID}_breg")),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn lost_supervisor_facts_survive_missing_files() {
+        let scratch = tempfile::tempdir().unwrap();
+        let facts = lost_supervisor_facts(scratch.path(), RUN_ID);
+        assert_eq!(facts["processes"], json!([]));
+        assert!(facts["unavailable"].is_string());
+    }
+
+    #[test]
+    fn a_dead_supervisor_is_detected_only_once_its_lock_file_exists() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().canonicalize().unwrap();
+        fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+        assert!(!supervisor_gone(&root).unwrap());
+        let lock = File::create(root.join("worker.lock")).unwrap();
+        assert!(supervisor_gone(&root).unwrap());
+        flock(&lock, FlockOperation::NonBlockingLockExclusive).unwrap();
+        assert!(!supervisor_gone(&root).unwrap());
+    }
+
+    #[test]
+    fn pending_cleanup_reports_resources_and_processes() {
+        let report = pending_report(RUN_ID, vec!["db".into(), "role".into()], json!([]));
+        assert_eq!(report["databases_and_roles"], json!(["db", "role"]));
+        let status = pending_status(Path::new("/run"), RUN_ID, report);
+        assert_eq!(status["status"], "cleanup-pending");
+        assert_eq!(status["recovery"]["databases_and_roles"][1], "role");
+        let text = recovery_message(RUN_ID, &status["recovery"]);
+        assert!(text.contains("database or role role"), "{text}");
+    }
+
+    #[test]
+    fn failed_run_logs_move_out_of_the_run_directory() {
+        let scratch = tempfile::tempdir().unwrap();
+        let base = scratch.path().canonicalize().unwrap();
+        let root = base.join(RUN_ID);
+        private_directory(&root).unwrap();
+        open_supervisor_log(&root).unwrap();
+        assert_eq!(keep_logs(&root, RUN_ID).unwrap(), None, "empty logs stay");
+        fs::write(root.join("logs").join("breg-check.log"), "boom").unwrap();
+        let kept = remove_failed_run(&root, RUN_ID).unwrap().unwrap();
+        assert_eq!(kept, failed_logs_dir(&base, RUN_ID));
+        assert!(!root.exists());
+        assert_eq!(
+            fs::read_to_string(kept.join("breg-check.log")).unwrap(),
+            "boom"
+        );
+        assert_eq!(
+            fs::metadata(base.join("failed")).unwrap().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(kept.join("supervisor.log")).unwrap().mode() & 0o777,
+            0o600
+        );
+        // `failed` is not a run.
+        assert!(run_dir("failed").is_err());
+    }
+
+    #[test]
+    fn run_reports_are_bounded() {
+        assert!(capture_report(&json!({"a": 1})).is_ok());
+        let big = json!({"a": "x".repeat(MAXIMUM_RUN_REPORT_BYTES as usize)});
+        assert!(capture_report(&big).is_err());
+    }
+
+    #[test]
+    fn a_missing_binary_names_the_install_command() {
+        let error = binaries(Product::Casework).err().unwrap().to_string();
+        assert!(error.contains("rstack install casework"), "{error}");
+        assert!(error.contains("RSTACK_CASEWORK_BIN"), "{error}");
     }
 }

@@ -520,7 +520,6 @@ impl Database {
     }
 
     /// Names of the databases and roles this run still owns, oldest first.
-    #[allow(dead_code)]
     pub(super) fn pending_names(&self) -> Vec<String> {
         self.acquisitions
             .iter()
@@ -534,7 +533,6 @@ impl Database {
 /// Every database and role name `provision` can create for one label of a
 /// run, in creation order. Recovery after a lost supervisor uses this list,
 /// since the spatial bbox role does not carry the run id.
-#[allow(dead_code)]
 pub(super) fn run_object_names(run_id: &str, label: &str, spatial: bool) -> Result<Vec<String>> {
     validate_run_id(run_id)?;
     validate_label(label)?;
