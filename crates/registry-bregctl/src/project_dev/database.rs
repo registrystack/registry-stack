@@ -518,6 +518,33 @@ impl Database {
     fn product_url(&self, database: &str, user: &str, password: &str) -> Result<String> {
         self.endpoint.product_url(database, user, password)
     }
+
+    /// Names of the databases and roles this run still owns, oldest first.
+    #[allow(dead_code)]
+    pub(super) fn pending_names(&self) -> Vec<String> {
+        self.acquisitions
+            .iter()
+            .map(|acquisition| match acquisition {
+                Acquisition::Database(name) | Acquisition::Role(name) => name.clone(),
+            })
+            .collect()
+    }
+}
+
+/// Every database and role name `provision` can create for one label of a
+/// run, in creation order. Recovery after a lost supervisor uses this list,
+/// since the spatial bbox role does not carry the run id.
+#[allow(dead_code)]
+pub(super) fn run_object_names(run_id: &str, label: &str, spatial: bool) -> Result<Vec<String>> {
+    validate_run_id(run_id)?;
+    validate_label(label)?;
+    let names = Names::new(run_id, label);
+    let mut owned = vec![names.migration_role.clone(), names.runtime_role.clone()];
+    if spatial {
+        owned.push(spatial_bbox_role(&names)?);
+    }
+    owned.push(names.database);
+    Ok(owned)
 }
 
 struct Names {
@@ -984,6 +1011,23 @@ mod tests {
             );
             assert!(!statement.contains("PASSWORD"));
         }
+    }
+
+    #[test]
+    fn run_object_names_list_every_name_provision_creates() {
+        for (label, spatial) in [("breg", true), ("breg_test", false), ("casework", false)] {
+            let names = Names::new(RUN_ID, label);
+            let mut expected = vec![names.migration_role.clone(), names.runtime_role.clone()];
+            if spatial {
+                let bbox = spatial_bbox_role(&names).unwrap();
+                assert!(!bbox.contains(RUN_ID), "the bbox role is not run-scoped");
+                expected.push(bbox);
+            }
+            expected.push(names.database.clone());
+            assert_eq!(run_object_names(RUN_ID, label, spatial).unwrap(), expected);
+        }
+        assert!(run_object_names("not-a-run", "breg", false).is_err());
+        assert!(run_object_names(RUN_ID, "other", false).is_err());
     }
 
     #[test]
