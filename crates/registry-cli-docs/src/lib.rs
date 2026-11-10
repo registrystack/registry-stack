@@ -454,6 +454,7 @@ mod tests {
                     "evidence-source",
                     "sdk",
                     "identity-facts",
+                    "external-source-facts",
                 ]
         }));
         for invocation in [
