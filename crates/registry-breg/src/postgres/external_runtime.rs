@@ -1495,12 +1495,13 @@ impl PostgresExternalViewService {
         .await
         .map_err(|_| ExternalViewError::Unavailable)?;
         let reused = keys.len() - due.len();
+        let lease = refresh_lease(request.deadline);
         let mut work = Vec::with_capacity(due.len());
         for (key, roots) in by_key {
             if !due.contains(&key) {
                 continue;
             }
-            let ticket = store::allocate_refresh(&transaction, &scope, &key)
+            let ticket = store::allocate_refresh(&transaction, &scope, &key, lease)
                 .await
                 .map_err(|_| ExternalViewError::Unavailable)?;
             work.push(RefreshWork { key, roots, ticket });
@@ -1785,6 +1786,19 @@ fn accepted_record(
     )
 }
 
+/// Time a refresh receipt stays live beyond the page deadline. It absorbs
+/// scheduling delay and a publication committing as the deadline passes.
+const REFRESH_LEASE_MARGIN: Duration = Duration::from_secs(10);
+
+/// A refresh page acquires and publishes before its deadline, so its receipts
+/// stay live for the time left plus a margin. A slow page is never treated
+/// as abandoned while it can still publish.
+fn refresh_lease(deadline: Instant) -> Duration {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    Duration::from_secs(remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0))
+        + REFRESH_LEASE_MARGIN
+}
+
 fn acquisition_failure(error: Option<ExternalSourceError>) -> RefreshFailure {
     match error {
         Some(ExternalSourceError::Grant) => RefreshFailure::Denied,
@@ -1848,6 +1862,21 @@ mod tests {
             third.split_once(':').unwrap().1
         );
         assert!(Uuid::parse_str(&snapshot_identity(&codec, "binding-a", None).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn a_refresh_lease_outlives_the_page_deadline() {
+        // The longest configurable request deadline is a minute.
+        let lease = refresh_lease(Instant::now() + Duration::from_secs(60));
+        assert!(
+            lease > Duration::from_secs(60) + Duration::from_secs(5),
+            "{lease:?}"
+        );
+        assert!(
+            lease <= Duration::from_secs(60) + REFRESH_LEASE_MARGIN,
+            "{lease:?}"
+        );
+        assert_eq!(refresh_lease(Instant::now()), REFRESH_LEASE_MARGIN);
     }
 }
 

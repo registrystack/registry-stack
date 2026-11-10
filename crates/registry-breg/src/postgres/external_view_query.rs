@@ -846,7 +846,7 @@ mod postgres_tests {
     ) {
         let sequence: i64 = client
             .query_one(
-                "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5)",
+                "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5,120)",
                 &[
                     &scope.projection_id,
                     &scope.epoch,
@@ -1045,7 +1045,7 @@ mod postgres_tests {
         let subject = relations.field_expression(entity, "subject-key").unwrap();
         let eligibility=format!("SELECT 1 FROM {} WHERE {}=ANY($12::uuid[]) AND ({})::text=$6::text AND current_setting('registry.access_profile',true)='reader'",relations.from_sql,relations.id_expression,subject.sql);
         let sql = super::super::external_projection::publication_statement(&eligibility);
-        let ticket:i64=runtime.query_one("SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'first')",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest]).await.unwrap().get(0);
+        let ticket:i64=runtime.query_one("SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'first',120)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest]).await.unwrap().get(0);
         let fields = serde_json::json!([{"source_key":"first","fields":{"label":"retained"}}]);
         let roots = vec![Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap()];
         let result: String = runtime
@@ -1070,7 +1070,7 @@ mod postgres_tests {
             .unwrap()
             .get(0);
         assert_eq!(result, "published");
-        let ticket:i64=runtime.query_one("SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'first')",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest]).await.unwrap().get(0);
+        let ticket:i64=runtime.query_one("SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,'first',120)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest]).await.unwrap().get(0);
         database.admin.batch_execute(&format!("INSERT INTO registry_data.\"{}\" (record_id,active_package_revision,\"{key}\",\"{tenant}\") VALUES ('00000000-0000-4000-8000-000000000005','fixture','first','allowed'); UPDATE registry_data.\"{}\" SET \"{key}\"='detached' WHERE record_id='00000000-0000-4000-8000-000000000001'; UPDATE registry_data.\"{}\" SET \"{key}\"='first' WHERE record_id='00000000-0000-4000-8000-000000000004';",entity.physical_table,entity.physical_table,entity.physical_table)).await.unwrap();
         for id in [
             "00000000-0000-4000-8000-000000000001",
