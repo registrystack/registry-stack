@@ -1478,7 +1478,12 @@ impl EndpointEgress {
         .map_err(destination_send_outcome)?;
 
         let status = reply.status().as_u16();
-        if let Some(projection) = projection {
+        // Only a successful data response can forbid retention: a no-store on
+        // an error, redirect or credential-refresh response describes that
+        // response alone and must not purge the previous snapshot.
+        if let Some(projection) =
+            projection.filter(|_| crate::projection::ProjectionHttpState::status_successful(status))
+        {
             // Read the raw transport headers before the pack's allowlist or
             // status handling can discard the source's retention restriction.
             match reply
@@ -1898,7 +1903,9 @@ impl EndpointEgress {
             .map_err(EgressError::Refused)?;
         let status = u16::try_from(response.status.get())
             .expect("a recorded status is bounded to an HTTP status");
-        if let Some(projection) = projection {
+        if let Some(projection) =
+            projection.filter(|_| crate::projection::ProjectionHttpState::status_successful(status))
+        {
             projection.observe_cache_control(
                 response
                     .headers
