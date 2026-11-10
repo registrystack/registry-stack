@@ -139,6 +139,7 @@ fn expected_json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::
     })
 }
 
+/// A product the development run can start.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
@@ -156,21 +157,28 @@ impl Product {
     }
 }
 
+/// The development plan: the products to start, the test people who call them, and the journey to run.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Plan {
+    /// HTTPS URL, at most 512 characters and without credentials, query or fragment, that the run's tokens name as their issuer.
     #[cfg_attr(feature = "schema", schemars(with = "PlatformUrl"))]
     pub issuer: String,
+    /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
+    /// The test people, keyed by a lowercase local identifier. Define 1 to 32, and give at least one grant to every started product.
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
     )]
     pub people: BTreeMap<String, TestPerson>,
+    /// The ordered sequence of HTTP requests the run sends to the started products.
     pub journey: Journey,
+    /// Run-local connections between BReg and Casework. Leave empty when the products do not call each other.
     #[serde(default)]
     pub bindings: super::bindings::Bindings,
+    /// Chooses the test person for a BReg fixture step in tests/journeys.yaml, keyed by journey identifier and then step identifier. Needed only when several people could run the step; every named person needs a BReg grant.
     #[serde(default)]
     #[cfg_attr(
         feature = "schema",
@@ -179,24 +187,32 @@ pub(super) struct Plan {
     pub schema_test_people: BTreeMap<String, BTreeMap<String, String>>,
 }
 
+/// One product to start and where its project lives.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProductPlan {
+    /// Which product to start.
     pub product: Product,
+    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg or casework.yaml for Casework.
     pub project: PathBuf,
+    /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub audience: String,
 }
 
+/// A named test identity that signs in to the started products.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct TestPerson {
+    /// Subject claim of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub subject: String,
+    /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
+    /// The authority this person holds in each product, keyed by `breg` or `casework`. Give at least one grant, only for products listed in `products`.
     #[serde(deserialize_with = "deserialize_grants")]
     pub grants: BTreeMap<Product, Grant>,
     /// Forward the same authority to both products. Both grants must declare the same scopes and additional claims.
@@ -204,15 +220,19 @@ pub(super) struct TestPerson {
     pub casework_context: bool,
 }
 
+/// The authority a test person holds in one product.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Grant {
+    /// Local identifier of the product profile this grant uses.
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub profile: String,
+    /// Distinct scopes written into the token, at most 32, each 1 to 256 characters without whitespace or control characters.
     #[serde(deserialize_with = "deserialize_scopes")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "scopes_schema"))]
     pub scopes: Vec<String>,
+    /// Additional token claims, keyed by claim name. Names must not be reserved token claims such as `iss`, `aud`, `sub`, `scope` or any `registry_grant_` claim.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "claims_schema"))]
     pub claims: Map<String, Value>,
@@ -255,40 +275,55 @@ where
     UniqueIdList::<Step>::deserialize(deserializer).map(UniqueIdList::into_vec)
 }
 
+/// An ordered list of requests the run sends and checks.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Journey {
+    /// Local identifier naming this journey.
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
+    /// The steps, run in order. Include 1 to 32 with distinct identifiers. A step may refer to captures from earlier steps only.
     #[serde(deserialize_with = "deserialize_steps")]
     pub steps: Vec<Step>,
 }
 
+/// One HTTP request, what to expect back, and what to remember from the response.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Step {
+    /// Unique step identifier: a local identifier, or a dotted sequence of local identifiers, at most 64 characters.
     #[cfg_attr(feature = "schema", schemars(schema_with = "step_id_schema"))]
     pub id: String,
+    /// The product that receives the request.
     pub product: Product,
+    /// The test person who sends the request. The person needs a grant for this step's product.
     #[serde(rename = "as")]
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub person: String,
+    /// The HTTP method.
     pub method: Method,
+    /// Request path, starting with `/v1/`, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.
     pub path: String,
+    /// JSON request body, at most 1 MiB once encoded. String values may contain `{{name}}` references to earlier captures. Do not combine with `raw`.
     pub body: Option<Value>,
+    /// Non-JSON request body. Allowed only for methods other than GET. Do not combine with `body`.
     pub raw: Option<RawBody>,
+    /// Extra request headers, keyed by header name. Only `If-Match`, `Idempotency-Key` and `Registry-Source-Profile` are supported. Values may contain `{{name}}` references to earlier captures.
     #[serde(default)]
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "keyed_schema::<ExternalId, String>")
     )]
     pub headers: BTreeMap<String, String>,
+    /// What the response must look like for the step to pass.
     pub expect: Expected,
+    /// Values to remember from the response, keyed by a capture name. Later steps refer to a capture as `{{name}}` in paths, headers, bodies and expectations. Names are unique across the journey.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "capture_map_schema"))]
     pub capture: BTreeMap<String, Capture>,
+    /// Repeat a GET request until it passes or the wait runs out. Allowed only for GET.
     pub poll: Option<Poll>,
 }
 
@@ -298,6 +333,7 @@ impl Identified for Step {
     }
 }
 
+/// An HTTP request method.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "UPPERCASE")]
@@ -321,25 +357,33 @@ impl From<&Method> for reqwest::Method {
     }
 }
 
+/// The conditions a response must meet.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Expected {
+    /// Accepted HTTP status: one status, or a list of 1 to 16 distinct statuses, each from 200 to 599.
     pub status: ExpectedStatus,
+    /// Exact values the response body must hold, keyed by JSON pointer (empty for the whole body, otherwise starting with `/`). String values may contain `{{name}}` references to earlier captures.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "expected_json_schema"))]
     pub json: BTreeMap<String, Value>,
+    /// Further assertions about the response body, at most 32. Each one tests a single JSON pointer.
     #[serde(default)]
     pub checks: Vec<Check>,
+    /// Problem code the error response must carry, 1 to 256 characters without whitespace or control characters. It may contain `{{name}}` references to earlier captures.
     pub code: Option<String>,
 }
 
+/// One accepted HTTP status or a list of them.
 #[derive(Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 #[cfg_attr(feature = "schema", schemars(untagged))]
 pub(super) enum ExpectedStatus {
+    /// A single accepted status from 200 to 599.
     One(BoundedU32<200, 599>),
+    /// Several accepted statuses, each from 200 to 599; the response may carry any one of them.
     Many(Vec<BoundedU32<200, 599>>),
 }
 
@@ -373,70 +417,98 @@ impl ExpectedStatus {
     }
 }
 
+/// An assertion about one value in the response body. Set exactly one of `equals`, `length` or `contains`.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Check {
+    /// JSON pointer to the value to test: empty for the whole body, otherwise starting with `/`.
     pub pointer: String,
+    /// The value at the pointer must equal this. String values may contain `{{name}}` references to earlier captures.
     pub equals: Option<Value>,
+    /// The array, object or string at the pointer must have this many items, entries or characters, at most 1048576.
     #[cfg_attr(feature = "schema", schemars(range(min = 0, max = 1_048_576)))]
     pub length: Option<usize>,
+    /// The array at the pointer must hold this item, the string must contain this text, or the object must have this key. String values may contain `{{name}}` references to earlier captures.
     pub contains: Option<Value>,
 }
 
+/// A value remembered from a response, selected by `type`.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) enum Capture {
+    /// Remember the value at a JSON pointer in the response body.
     Pointer {
+        /// JSON pointer into the response body: empty for the whole body, otherwise starting with `/`.
         pointer: String,
     },
+    /// Remember a response header.
     Header {
+        /// The response header to remember.
         header: CapturedHeader,
     },
+    /// Remember a value from the one array item that matches a condition. The step fails if no item or more than one item matches.
     Find {
+        /// JSON pointer to the array in the response body to search.
         find: String,
+        /// The condition an item must meet.
         r#where: FindWhere,
+        /// JSON pointer, relative to the matching item, of the value to remember.
         pointer: String,
     },
+    /// Remember the value at a JSON pointer, optionally reading one query parameter from a URL found there.
     Value {
+        /// JSON pointer into the response body: empty for the whole body, otherwise starting with `/`.
         pointer: String,
+        /// Name of a query parameter. When set, the value at the pointer must be a URL or relative reference, and the parameter's value is remembered instead. At most 256 characters without whitespace or control characters.
         query: Option<String>,
     },
 }
 
+/// A response header a capture can remember.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub(super) enum CapturedHeader {
+    /// The entity tag, usable as an `If-Match` value in a later step.
     Etag,
 }
 
+/// The condition a `find` capture uses to pick an array item.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct FindWhere {
+    /// JSON pointer, relative to each array item, of the value to compare.
     pub pointer: String,
+    /// The value an item must hold at the pointer to match. String values may contain `{{name}}` references to earlier captures.
     pub equals: Value,
 }
 
+/// How long and how often to repeat a GET request. The wait divided by the interval, rounded up, must be below 250 attempts.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Poll {
+    /// Longest total wait in milliseconds, from 1 to 60000.
     #[serde(rename = "maximumWaitMilliseconds")]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 60_000)))]
     pub timeout_ms: u64,
+    /// Pause between attempts in milliseconds, from 50 to 5000 and not above the maximum wait.
     #[serde(rename = "pollIntervalMilliseconds")]
     #[cfg_attr(feature = "schema", schemars(range(min = 50, max = 5_000)))]
     pub interval_ms: u64,
 }
 
+/// A request body sent as given, without JSON encoding.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct RawBody {
+    /// HTTP media type for the Content-Type header, containing a slash, 1 to 256 ASCII characters.
     pub content_type: String,
+    /// The body as standard base64, at most 1 MiB once decoded.
     pub base64: String,
 }
 
@@ -552,7 +624,7 @@ fn read_plan(root: &Path) -> Result<Decoded<Plan>> {
 fn refusal_report(decoded: &Decoded<Plan>, refusal: &SemanticRefusal) -> Report {
     let diagnostic = decoded.document.diagnostic_at_value(
         Severity::Error,
-        "rstack.dev.invalid-plan",
+        "breg.project-dev.invalid-plan",
         &refusal.field,
         &refusal.reason,
         &refusal.remedy,

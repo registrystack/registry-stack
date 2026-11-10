@@ -222,7 +222,7 @@ fn assert_dangling_schema_assignment(
     assert_eq!(report["command"], "dev-check");
     assert_eq!(report["status"], "domain-refusal");
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "rstack.dev.invalid-plan");
+    assert_eq!(diagnostic["code"], "breg.project-dev.invalid-plan");
     assert_eq!(diagnostic["path"], path);
     assert_eq!(diagnostic["message"], message);
     assert_eq!(diagnostic["suggestedAction"], suggested_action);
@@ -595,7 +595,7 @@ fn check_reports_an_actionable_value_free_poll_relationship() {
     assert_eq!(result.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "rstack.dev.invalid-plan");
+    assert_eq!(diagnostic["code"], "breg.project-dev.invalid-plan");
     assert_eq!(
         diagnostic["path"],
         "/journey/steps/0/poll/pollIntervalMilliseconds"
