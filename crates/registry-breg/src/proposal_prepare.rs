@@ -8,7 +8,7 @@ use crate::model::{
     CompiledAction, CompiledActionExecution, CompiledPlanEffect, CompiledPlanFunctionKind,
     CompiledPlanMutation, CompiledPlanTargetBinding, CompiledPlanValue, CompiledRegistry,
 };
-use crate::mutation::MutationError;
+use crate::mutation::{link_key_refused, MutationError};
 use crate::proposal_workflow::{
     ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenApplicationPreconditions,
     FrozenGuardTargetSnapshot, FrozenInputTarget, FrozenPlannerKind, FrozenPlanningBinding,
@@ -209,7 +209,9 @@ pub(crate) fn materialize_create_fields(
                 CompiledPlanMutation::Clear { .. } if !field.required => Value::Null,
                 CompiledPlanMutation::Clear { .. } => return Err(MutationError::InvalidRequest),
             };
-            if !validate_field_value(DataFieldValue::Json(&value), &field.field_type) {
+            if !validate_field_value(DataFieldValue::Json(&value), &field.field_type)
+                || link_key_refused(entity, field_id, &value)
+            {
                 return Err(MutationError::InvalidRequest);
             }
             fields.insert(field_id.clone(), value);
@@ -406,7 +408,9 @@ pub(crate) fn prepare_with_reserved_create_fields(
             let change = match mutation {
                 CompiledPlanMutation::Set { value, .. } => {
                     let value = resolve_plan_value(input, resolved, value)?;
-                    if !validate_field_value(DataFieldValue::Json(&value), &compiled.field_type) {
+                    if !validate_field_value(DataFieldValue::Json(&value), &compiled.field_type)
+                        || link_key_refused(entity, field, &value)
+                    {
                         return Err(MutationError::InvalidRequest);
                     }
                     snapshot.after.insert(field.clone(), value.clone());

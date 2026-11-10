@@ -4146,12 +4146,19 @@ fn written_sql_value(
     field: &CompiledField,
     value: &Value,
 ) -> Result<Option<String>, MutationError> {
-    if entity.external_link_fields.contains(&field.id)
-        && matches!(value, Value::String(key) if !crate::external_views::link_key_acceptable(key))
-    {
+    if link_key_refused(entity, &field.id, value) {
         return Err(MutationError::InvalidRequest);
     }
     sql_value(value, &field.field_type)
+}
+
+/// Whether `value` written to `field_id` is a link key an external view could
+/// not send to its source. Proposal preparation and action input apply it
+/// beside the type check, so a malformed key is refused before anything is
+/// stored rather than at apply time.
+pub(crate) fn link_key_refused(entity: &CompiledEntity, field_id: &str, value: &Value) -> bool {
+    entity.external_link_fields.contains(field_id)
+        && matches!(value, Value::String(key) if !crate::external_views::link_key_acceptable(key))
 }
 
 pub(crate) fn sql_value(

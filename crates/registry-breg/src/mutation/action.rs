@@ -3379,7 +3379,9 @@ fn action_effect_document(
                         Value::String(row.record_id.clone())
                     }
                 };
-                if !validate_field_value(FieldValue::Json(&value), &field_source.field_type) {
+                if !validate_field_value(FieldValue::Json(&value), &field_source.field_type)
+                    || link_key_refused(entity, field, &value)
+                {
                     return Err(MutationError::InvalidRequest);
                 }
                 data.insert(field.clone(), value);
@@ -4313,6 +4315,40 @@ mod tests {
             validate_action_input(action, null),
             Err(MutationError::InvalidRequest)
         ));
+    }
+
+    #[test]
+    fn a_malformed_link_key_is_refused_when_an_action_builds_its_effect_document() {
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../tests/fixtures/fixed-optional-action-input.yaml"
+        ))
+        .unwrap();
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let action = &registry.actions().actions[0];
+        let unlinked = &registry.entities()["entry"];
+        let mut linked = unlinked.clone();
+        linked.external_link_fields.insert("label".to_owned());
+        let effect = &action.effects[0];
+        for malformed in [" padded", "trailing ", "bell\u{7}key"] {
+            let input = Map::from_iter([("label".to_owned(), json!(malformed))]);
+            assert!(
+                matches!(
+                    action_effect_document(action, &linked, effect, &input, &BTreeMap::new(), None),
+                    Err(MutationError::InvalidRequest)
+                ),
+                "{malformed:?} is refused on the linked field"
+            );
+            action_effect_document(action, unlinked, effect, &input, &BTreeMap::new(), None)
+                .expect("the same value is accepted on an unlinked field");
+        }
+        let input = Map::from_iter([("label".to_owned(), json!("key-1"))]);
+        action_effect_document(action, &linked, effect, &input, &BTreeMap::new(), None)
+            .expect("a well-formed key is accepted on the linked field");
     }
 
     #[test]
