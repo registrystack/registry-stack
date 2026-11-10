@@ -1298,7 +1298,8 @@ mod postgres_tests {
             Err(ExternalQueryError::NotPermitted)
         ));
         // Each case: root, complete, found, earliest expiry, member labels.
-        let cases: [(u32, bool, bool, Option<i64>, &[&str]); 6] = [
+        type Case = (u32, bool, bool, Option<i64>, &'static [&'static str]);
+        let cases: [Case; 6] = [
             (1, true, true, Some(1059), &["A", "B"]),
             (2, true, true, None, &[]),
             (3, true, true, None, &[]),
