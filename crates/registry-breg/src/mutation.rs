@@ -4549,6 +4549,46 @@ impl From<HistoryCommitError> for MutationError {
 mod tests {
     use super::*;
 
+    /// Every record write converts its values here. A value a caller never
+    /// submitted (a proposal prepared before a view linked the field, applied
+    /// as stored) reaches the write without the earlier located checks, so this
+    /// is the check that holds for it.
+    #[test]
+    fn the_write_path_refuses_a_malformed_link_key_on_the_linked_field_only() {
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../tests/fixtures/fixed-optional-action-input.yaml"
+        ))
+        .unwrap();
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let unlinked = registry.entities()["entry"].clone();
+        let mut linked = unlinked.clone();
+        linked.external_link_fields.insert("label".to_owned());
+        let field = &unlinked.fields["label"];
+        for malformed in [" padded", "trailing ", "bell\u{7}key"] {
+            let value = Value::String(malformed.to_owned());
+            assert_eq!(
+                written_sql_value(&linked, field, &value),
+                Err(MutationError::InvalidRequest),
+                "{malformed:?} is refused on the linked field"
+            );
+            assert_eq!(
+                written_sql_value(&unlinked, field, &value),
+                Ok(Some(malformed.to_owned())),
+                "the same value is written to an unlinked field"
+            );
+        }
+        assert_eq!(
+            written_sql_value(&linked, field, &Value::String("key-1".to_owned())),
+            Ok(Some("key-1".to_owned()))
+        );
+        assert_eq!(written_sql_value(&linked, field, &Value::Null), Ok(None));
+    }
+
     #[test]
     fn response_etag_binds_package_authority_boundary_and_projection() {
         let profile = AuditProfile::production_from_secret_bytes(vec![0x4d; 32].into())
