@@ -116,6 +116,12 @@ An absent or zero `currentDateOffsetDays` compares with today, preserving the
 earlier `currentDate` behavior. The bounded offset is applied to the same local
 date for advisory availability and commit or Proposal Apply re-evaluation.
 
+A Proposal plan evaluates `today()` once, when the Proposal starts. Its commit
+guards check `currentDate` again when the Proposal is applied. If approval
+crosses midnight or takes days, the date the plan used and the date the guard
+compares against are different days. Write the guard offset with that gap in
+mind.
+
 An invocation commits record effects, revisions, history, audit, idempotency
 receipt, and outbox together. A refused effect leaves no partial record or event.
 The response discloses only granted result effects. Events describe committed
