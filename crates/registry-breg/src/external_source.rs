@@ -238,11 +238,12 @@ impl ExternalSourceService {
         let grant_deadline = tokio::time::Instant::now()
             .checked_add(remaining)
             .ok_or(ExternalSourceError::Grant)?;
-        let result = bound
+        let mut result = bound
             .program
             .acquire_until(hooks, mode, request, fields, Some(grant_deadline))
             .await?;
         check_result(&result, &bound.field_types)?;
+        decimals_to_wire(&mut result, &bound.field_types)?;
         if clock() >= bound.grant_valid_until {
             return Err(ExternalSourceError::Grant);
         }
@@ -520,6 +521,61 @@ fn check_result(result: &ProjectionResult, types: &FieldTypes) -> Result<(), Ext
     }
 }
 
+/// The source contract states a decimal as a JSON number; BReg serves and
+/// stores it as the JSON string its own decimal fields use on the wire. A
+/// number with no plain decimal spelling (an exponent form) is refused.
+fn decimals_to_wire(
+    result: &mut ProjectionResult,
+    types: &FieldTypes,
+) -> Result<(), ExternalSourceError> {
+    let convert = |fields: &mut Map<String, Value>| {
+        for (name, value) in fields.iter_mut() {
+            let is_decimal = types
+                .get(name)
+                .is_some_and(|&(value_type, _)| value_type == ExternalFieldType::Decimal);
+            let Value::Number(number) = value else {
+                continue;
+            };
+            if !is_decimal {
+                continue;
+            }
+            let text = number.to_string();
+            if !plain_decimal(&text) {
+                return Err(ExternalSourceError::Result);
+            }
+            *value = Value::String(text);
+        }
+        Ok(())
+    };
+    match result {
+        ProjectionResult::Exact { record } => match record {
+            ProjectionRecord::Present { fields, .. } => convert(fields),
+            _ => Ok(()),
+        },
+        ProjectionResult::Batch { records } => {
+            records.iter_mut().try_for_each(|record| match record {
+                ProjectionRecord::Present { fields, .. } => convert(fields),
+                _ => Ok(()),
+            })
+        }
+        ProjectionResult::ByParent { rows, .. } => {
+            rows.iter_mut().try_for_each(|row| convert(&mut row.fields))
+        }
+    }
+}
+
+/// Whether `text` is an optional minus sign, digits, and an optional fraction
+/// of digits: the pattern the served decimal schema states.
+fn plain_decimal(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let mut parts = digits.split('.');
+    let digits_only =
+        |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    parts.next().is_some_and(digits_only)
+        && parts.next().is_none_or(digits_only)
+        && parts.next().is_none()
+}
+
 fn typed_value(value_type: ExternalFieldType, nullable: bool, value: &Value) -> bool {
     if value.is_null() {
         return nullable;
@@ -708,6 +764,7 @@ fn read_relative(_: &File, _: &Path, _: usize) -> Result<Vec<u8>, ExternalSource
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use registry_adapter_core::ProjectionRow;
     use registry_adapter_engine::evidence::{EvidenceAcquisitionIntent, EvidenceHookFuture};
     use registry_platform_yaml::ExternalId;
 
@@ -1085,6 +1142,117 @@ pub(crate) mod tests {
         assert!(matches!(effective_ttl(&indexed, None), Ok(Some(300))));
         assert!(matches!(effective_ttl(&indexed, Some(60)), Ok(Some(60))));
         assert!(matches!(effective_ttl(&indexed, Some(900)), Ok(Some(300))));
+    }
+
+    fn decimal_fields(value: Value) -> Map<String, Value> {
+        let Value::Object(fields) = json!({"balance": value, "label": "x"}) else {
+            unreachable!()
+        };
+        fields
+    }
+
+    fn decimal_types() -> FieldTypes {
+        BTreeMap::from([
+            ("balance".to_owned(), (ExternalFieldType::Decimal, true)),
+            ("label".to_owned(), (ExternalFieldType::String, false)),
+        ])
+    }
+
+    fn present(key: &str, value: Value) -> ProjectionRecord {
+        ProjectionRecord::Present {
+            key: key.to_owned(),
+            fields: decimal_fields(value),
+            source_revision: None,
+        }
+    }
+
+    fn balance_of(record: &ProjectionRecord) -> Value {
+        match record {
+            ProjectionRecord::Present { fields, .. } => fields["balance"].clone(),
+            _ => panic!("not present"),
+        }
+    }
+
+    /// Every result shape, the exact (live) and batch and by-parent (indexed)
+    /// ones, serves a decimal as a string the generated schema accepts.
+    #[test]
+    fn decimals_are_served_as_strings_the_generated_schema_accepts() {
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&crate::external_view_artifacts::decimal_schema())
+            .unwrap();
+        let types = decimal_types();
+        let spelled: [(Value, &str); 4] = [
+            (json!(12.5), "12.5"),
+            (json!(-3), "-3"),
+            (json!(0.1), "0.1"),
+            (json!(100), "100"),
+        ];
+        for (number, text) in spelled {
+            let mut exact = ProjectionResult::Exact {
+                record: present("a", number.clone()),
+            };
+            decimals_to_wire(&mut exact, &types).unwrap();
+            let ProjectionResult::Exact { record } = &exact else {
+                unreachable!()
+            };
+            assert_eq!(balance_of(record), json!(text));
+            assert!(validator.is_valid(&balance_of(record)));
+
+            let mut batch = ProjectionResult::Batch {
+                records: vec![present("a", number.clone()), present("b", Value::Null)],
+            };
+            decimals_to_wire(&mut batch, &types).unwrap();
+            let ProjectionResult::Batch { records } = &batch else {
+                unreachable!()
+            };
+            assert_eq!(balance_of(&records[0]), json!(text));
+            assert_eq!(balance_of(&records[1]), Value::Null);
+
+            let Value::Object(fields) = json!({"balance": number}) else {
+                unreachable!()
+            };
+            let mut by_parent = ProjectionResult::ByParent {
+                parent_key: "p".to_owned(),
+                snapshot: "s".to_owned(),
+                rows: vec![ProjectionRow {
+                    key: "r".to_owned(),
+                    parent_key: "p".to_owned(),
+                    fields,
+                    source_revision: None,
+                }],
+            };
+            decimals_to_wire(&mut by_parent, &types).unwrap();
+            let ProjectionResult::ByParent { rows, .. } = &by_parent else {
+                unreachable!()
+            };
+            assert_eq!(rows[0].fields["balance"], json!(text));
+        }
+        assert!(!validator.is_valid(&json!(12.5)));
+    }
+
+    #[test]
+    fn a_decimal_with_no_plain_spelling_is_refused() {
+        let types = decimal_types();
+        for number in [json!(1e30), json!(1.5e-9)] {
+            let mut result = ProjectionResult::Exact {
+                record: present("a", number),
+            };
+            assert!(matches!(
+                decimals_to_wire(&mut result, &types),
+                Err(ExternalSourceError::Result)
+            ));
+        }
+    }
+
+    #[test]
+    fn plain_decimal_accepts_only_the_served_pattern() {
+        for good in ["0", "-1", "12.50", "007"] {
+            assert!(plain_decimal(good), "{good}");
+        }
+        for bad in ["", "-", "1.", ".5", "1e5", "1.2.3", "+1", "--1", "1 "] {
+            assert!(!plain_decimal(bad), "{bad}");
+        }
     }
 
     fn example_registry() -> CompiledRegistry {

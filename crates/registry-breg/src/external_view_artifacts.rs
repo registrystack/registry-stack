@@ -216,6 +216,12 @@ fn read_operation(
     })
 }
 
+/// The wire schema of a decimal field: the string form BReg's own decimal
+/// fields use.
+pub(crate) fn decimal_schema() -> Value {
+    json!({"type":"string","pattern":"^-?[0-9]+(\\.[0-9]+)?$"})
+}
+
 fn fields(external: &ExternalRecordTypeSource, readable: &BTreeSet<&str>) -> Value {
     let properties = external
         .fields
@@ -226,9 +232,7 @@ fn fields(external: &ExternalRecordTypeSource, readable: &BTreeSet<&str>) -> Val
                 ExternalFieldType::String => json!({"type":"string"}),
                 ExternalFieldType::Integer => json!({"type":"integer"}),
                 ExternalFieldType::Boolean => json!({"type":"boolean"}),
-                ExternalFieldType::Decimal => {
-                    json!({"type":"string","pattern":"^-?[0-9]+(\\.[0-9]+)?$"})
-                }
+                ExternalFieldType::Decimal => decimal_schema(),
                 ExternalFieldType::Date => json!({"type":"string","format":"date"}),
                 ExternalFieldType::Uuid => json!({"type":"string","format":"uuid"}),
             };
