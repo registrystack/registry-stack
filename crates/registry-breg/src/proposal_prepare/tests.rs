@@ -583,3 +583,76 @@ fn rhai_plan_refuses_authority_ceiling_escape_before_target_locks() {
         Err(MutationError::InvalidRequest)
     ));
 }
+
+/// Links `target.first` to an external subject, so a value written there must
+/// be a key the view can send to its source.
+fn link_first(source: &mut Value) {
+    source["externalRecordTypes"] = json!([{
+        "id":"external-subject","authority":"urn:example:source","identifierScheme":"urn:example:subject-key",
+        "fields":[{"id":"label","type":"string","classification":"internal"}]
+    }]);
+    source["externalProjections"] = json!([{
+        "id":"approved-subjects","recordType":"external-subject","operation":"subjects-by-key","operationVersion":"1",
+        "purpose":"local-consultation","scope":"approved-subjects","selectorScheme":"urn:example:subject-key",
+        "mode":"indexed","cardinality":"one","cacheTtlSeconds":600,"fields":["label"]
+    }]);
+    source["externalViews"] = json!([{
+        "id":"target-with-subject","recordType":"target",
+        "links":[{"id":"subject","projection":"approved-subjects","fromField":"first",
+            "identifierScheme":"urn:example:subject-key","fields":["label"]}]
+    }]);
+}
+
+const MALFORMED_KEYS: [&str; 3] = [" padded", "trailing ", "bell\u{7}key"];
+
+#[test]
+fn a_malformed_link_key_is_refused_when_a_patch_proposal_is_prepared() {
+    let linked = fixture_with(json!([patch_effect()]), link_first);
+    let unlinked = fixture(json!([patch_effect()]));
+    for malformed in MALFORMED_KEYS {
+        let input = map(json!({"one":TARGET,"value":malformed}));
+        assert!(
+            matches!(
+                existing(&linked, input.clone(), map(json!({"first":"old"}))),
+                Err(MutationError::InvalidRequest)
+            ),
+            "{malformed:?} is refused on the linked field"
+        );
+        existing(&unlinked, input, map(json!({"first":"old"})))
+            .expect("the same value is accepted on an unlinked field");
+    }
+    existing(
+        &linked,
+        map(json!({"one":TARGET,"value":"key-1"})),
+        map(json!({"first":"old"})),
+    )
+    .expect("a well-formed key is accepted on the linked field");
+}
+
+#[test]
+fn a_malformed_link_key_is_refused_when_a_create_proposal_is_prepared() {
+    let linked = fixture_with(create_effects(), link_first);
+    let unlinked = fixture(create_effects());
+    let reserved = BTreeMap::from([
+        ("parent".into(), Uuid::new_v4()),
+        ("child".into(), Uuid::new_v4()),
+    ]);
+    for malformed in MALFORMED_KEYS {
+        let input = map(json!({"value":malformed}));
+        for (registry, accepted) in [(&linked, false), (&unlinked, true)] {
+            let resolved = resolve_targets(
+                registry,
+                action(registry),
+                &input,
+                candidate(registry, &input).unwrap(),
+                &reserved,
+            )
+            .unwrap();
+            assert_eq!(
+                materialize_create_fields(registry, &input, &resolved).is_ok(),
+                accepted,
+                "{malformed:?} on a create"
+            );
+        }
+    }
+}
