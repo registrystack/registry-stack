@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `bregctl project-dev` runs BReg projects, including spatial projects, from a
+  `breg/project-dev` v1alpha1 plan. It is an alpha format and may change.
+  `rstack dev` is its entry point.
+
 ## 0.46.0 - 2026-11-08
 
 - A `record_timer.worker.iteration_failed` warning carries a closed `error`

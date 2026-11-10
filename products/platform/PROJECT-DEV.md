@@ -2,12 +2,9 @@
 
 Use `rstack dev` to start a checkout's BReg and Casework projects together.
 Install matching BReg and Casework components and supply a dedicated development
-PostgreSQL server over TLS. The database administrator needs to create and
-remove roles and databases and install `btree_gist`. PostgreSQL 17 or newer is
-required. Use the platform's trusted roots or set `RSTACK_DEV_DATABASE_CA` to
-your server's CA bundle in PEM format.
-Spatial BReg projects also need PostGIS available on the server and a database
-administrator that can install it in the run's databases.
+PostgreSQL server over TLS. `rstack dev` does not start PostgreSQL and does not
+use Docker: you supply the server. The products' own development modes are
+unchanged by `rstack dev`.
 
 ```sh
 rstack install breg casework
@@ -25,8 +22,7 @@ product authoring tools. The check works with the database offline. With
 `--json`, it writes a `BRegCtlReport` with `command` set to `dev-check`.
 Use `--deny-warnings` to refuse any unaccepted warning.
 
-You can also pass `--database-url`. Use the environment variable when the URL
-includes a password. Start reports the product URLs and the journey result.
+Start reports the product URLs and the journey result.
 A failed journey exits 1 and includes the live run ID so you can inspect the
 result and stop the run. Startup failures clean up or report the run ID if
 cleanup is pending. The TTL starts at readiness and defaults to 30 minutes.
@@ -38,9 +34,80 @@ reviewer's decision. Point `start` at the directory containing `dev.yaml`.
 Product files remain byte-for-byte unchanged. Generated runtime settings, keys,
 and packages live in the run's owner-only scratch directory.
 
+## Supply the PostgreSQL server
+
+The server must be PostgreSQL 17 or newer and must serve TLS. The runner always
+verifies the server certificate and host name. It trusts the platform's roots,
+or the CA bundle in PEM format named by `RSTACK_DEV_DATABASE_CA`.
+
+The administrator role named in the URL needs `LOGIN CREATEROLE CREATEDB`.
+Superuser is not needed for a non-spatial run. The runner sets
+`createrole_self_grant` on its own sessions, so you do not configure it. The
+administrator also installs `btree_gist`, which PostgreSQL treats as a trusted
+extension.
+
+The administrator URL always carries a password. Set it through
+`RSTACK_DEV_DATABASE_URL`, because `--database-url` is visible to other local
+users in the process list. The URL must be a `postgres://` or `postgresql://`
+URL with one TCP host, a user, a password and one database name. Percent-encode
+special characters in the password. The URL accepts these query parameters and
+refuses all others:
+
+- `sslmode`: `require`, `verify-ca` or `verify-full`. The runner verifies the
+  certificate and host name whichever you choose.
+- `connect_timeout` and `application_name`.
+- `sslrootcert` is refused. Set `RSTACK_DEV_DATABASE_CA` instead.
+
+### Spatial projects
+
+A spatial BReg project needs PostGIS 3.5 or later installed on the server. The
+administrator must be allowed to `CREATE EXTENSION postgis`, which normally
+means a superuser or the managed service's equivalent. The run checks that the
+server offers a supported PostGIS before it creates anything.
+
+### A local server
+
+This recipe starts a PostgreSQL 17 or newer server on `127.0.0.1` with a
+private certificate authority, and creates a least-privilege administrator. It
+uses the PostgreSQL and OpenSSL command-line tools. Keep `DEV` outside any
+repository.
+
+```sh
+DEV="$HOME/rstack-dev-postgres"
+mkdir -p "$DEV"
+initdb -D "$DEV/data" -U postgres --auth=scram-sha-256 --pwprompt -E UTF8
+
+openssl req -new -x509 -newkey rsa:2048 -nodes -days 30 -subj /CN=rstack-dev-ca \
+  -addext basicConstraints=critical,CA:TRUE -keyout "$DEV/ca.key" -out "$DEV/ca.pem"
+openssl req -new -newkey rsa:2048 -nodes -subj /CN=localhost \
+  -keyout "$DEV/data/server.key" -out "$DEV/server.csr"
+chmod 600 "$DEV/data/server.key"
+printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' \
+  > "$DEV/server.ext"
+openssl x509 -req -in "$DEV/server.csr" -CA "$DEV/ca.pem" -CAkey "$DEV/ca.key" \
+  -CAcreateserial -days 30 -extfile "$DEV/server.ext" -out "$DEV/data/server.crt"
+
+printf "listen_addresses = '127.0.0.1'\nport = 5432\nssl = on\n" \
+  >> "$DEV/data/postgresql.conf"
+pg_ctl -D "$DEV/data" -l "$DEV/postgres.log" -w start
+
+CONNECTION="host=127.0.0.1 port=5432 user=postgres dbname=postgres sslmode=verify-full sslrootcert=$DEV/ca.pem"
+psql "$CONNECTION" -c "CREATE ROLE devadmin LOGIN CREATEROLE CREATEDB"
+psql "$CONNECTION" -c '\password devadmin'
+
+export RSTACK_DEV_DATABASE_CA="$DEV/ca.pem"
+# Set RSTACK_DEV_DATABASE_URL to
+# postgresql://devadmin:PASSWORD@127.0.0.1:5432/postgres?sslmode=verify-full
+```
+
+For a spatial project, install PostGIS for this server and create the
+administrator as a superuser instead.
+
 ## Write the development plan
 
 Use the [versioned plan schema](../breg/generated/tools/project-dev.v1alpha1.schema.json).
+The plan file starts with the schema modeline that editors read, as the
+[licensing example](examples/licensing/dev.yaml) does.
 List the project's issuer, product directories and audiences in startup order,
 and test people with synthetic subjects and exact product grants. A grant selects
 the access profile, scopes, and additional claims. Each selected profile gets
@@ -49,6 +116,15 @@ ordinary permissions. If several people match a step in the BReg project's
 `tests/journeys.yaml`, select its alias under
 `schemaTestPeople.<journey-id>.<step-id>`. The run obtains the normal
 schema-test receipt before packaging.
+
+Every BReg grant must name an access profile that one of the BReg project's
+entities declares. The run refuses a grant that does not, before it provisions
+anything. The error names the plan pointer, for example
+`/people/NAME/grants/breg/profile`, and lists the profiles the project
+declares. A Casework grant must name an access profile of the Casework project,
+reported at `/people/NAME/grants/casework/profile`. The run does not compare
+scopes with the profile: a profile's required scopes are a per-entity rule, and
+a mismatch appears as a failed journey step.
 
 For a native review handoff, `bindings.bregReviewAuthority` identifies the
 Casework producer, and `bindings.caseworkContextProvider` identifies the BReg
@@ -60,21 +136,50 @@ token subject or the BReg principal claim. The token carries both audiences
 and the authority explicitly shared by both grants.
 See the [native review example](../breg/acceptance/reviewed-evidence-journey/dev.yaml).
 
-Journey steps call relative product API paths and assert the HTTP status and
-optional JSON-pointer values. Capture a string or number with a `pointer`
-capture and refer to it as `{{capture-name}}` in a later path, request body, header, or
-expected value. Use URI-safe characters for values in a path. Each step names
-the test person it runs as.
+### Journey steps
 
-Use a bounded GET poll for asynchronous delivery or result retrieval. Set
+A journey runs 1 to 32 steps in order. Each step names the test person it runs
+as (`as`), the product, the method, and a relative path that starts with `/v1/`.
+A step sends one of two request bodies:
+
+- `body` is a JSON body.
+- `raw` is a non-JSON body for methods other than GET: `contentType` and
+  `base64`.
+
+A step can also set the `If-Match`, `Idempotency-Key` and
+`Registry-Source-Profile` headers. Use URI-safe characters for values in a path.
+
+Each step asserts the response with `expect`:
+
+- `status` is one accepted HTTP status from 200 to 599, or a list of up to 16.
+- `json` maps JSON pointers to exact expected values.
+- `checks` lists up to 32 assertions. Each tests one JSON pointer with exactly
+  one of `equals`, `length` or `contains`.
+- `code` is the problem code an error response must carry.
+
+A step remembers values from its response under `capture`. Refer to a capture
+as `{{capture-name}}` in a later path, request body, header, or expected value.
+Capture names are unique across the journey. A capture has one `type`:
+
+- `pointer` remembers the string or number at a JSON pointer in the body.
+- `header` remembers a response header. `etag` is the supported header.
+- `find` searches the array at a JSON pointer for the one item whose `where`
+  pointer equals a value, and remembers the item's `pointer` value. The step
+  fails if no item or more than one item matches.
+- `value` remembers the value at a pointer. With `query`, the value must be a
+  URL, and the capture is that query parameter's value.
+
+Use a bounded GET `poll` for asynchronous delivery or result retrieval. Set
 `maximumWaitMilliseconds` up to 60 seconds and choose a
-`pollIntervalMilliseconds`. A journey can make at most 512 requests and
-transfer at most 8 MiB of request and response bodies in total.
+`pollIntervalMilliseconds` from 50 to 5000. A journey can make at most 512
+requests and transfer at most 8 MiB of request and response bodies in total.
 
 `token` writes a short-lived bearer header file for each grant. Its JSON report
-gives the file path and the selected profile. Pass the file to curl with
-`--header @HEADER_FILE`. With BReg, include the selected profile as the
-`accessProfile` query parameter. With Casework, the header file carries the profile.
+gives the person's `alias`, an `expires_at` time, and a `credentials` list whose
+entries carry the `product`, the selected `profile` and the `header_file` path.
+Pass the file to curl with `--header @HEADER_FILE`. With BReg, include the
+selected profile as the `accessProfile` query parameter. With Casework, the
+header file carries the profile.
 
 ## Run isolation
 
@@ -85,8 +190,47 @@ Use synthetic test people and keep the issuer's private directory under your
 user account.
 
 Stop and TTL expiry terminate the services and remove the databases, roles,
-keys, and run files. If PostgreSQL temporarily becomes unavailable, the
-supervisor retries cleanup and `stop` reports pending work. Keep the supervisor
-alive to finish cleanup when PostgreSQL returns. After an uncatchable
-supervisor exit or machine failure, identify the exact databases and roles by
-run ID before removing them.
+keys, and run files. A spatial BReg run also creates a `NOLOGIN` role whose name
+starts with `breg_bbox_`; cleanup removes it with the others.
+
+The state directory holds one directory per run. It defaults to
+`rstack-dev-UID` in the system temporary directory. Set `RSTACK_DEV_STATE_DIR`
+to use another location.
+
+### Logs
+
+During a run, `<run>/logs/supervisor.log` holds the supervisor's log and
+`<run>/logs/<product>-<stage>.log` holds each product stage's log, for example
+`breg-check.log`. `status` names the logs directory. When a start fails, the run
+directory is removed but its logs are kept at `<state>/failed/<run_id>/logs`,
+and the error names that path. Delete kept logs yourself.
+
+### Recovery
+
+If PostgreSQL becomes unavailable during cleanup, the supervisor retries with
+backoff for up to 30 minutes. It then writes `cleanup-pending.json` in the run
+directory, and `status` reports `cleanup-pending` with the remaining databases,
+roles and processes. If the supervisor is lost, `stop` and `status` report the
+run directory, the process groups, and the exact database and role names.
+
+Release the listed resources by hand, in this order:
+
+1. Stop each listed process group.
+2. As the administrator, run `DROP DATABASE IF EXISTS "NAME" WITH (FORCE)` for
+   each listed database.
+3. As the administrator, run `DROP ROLE IF EXISTS "NAME"` for each listed role,
+   including a `breg_bbox_*` role from a spatial run.
+4. Remove the run directory.
+
+### Errors and limitations
+
+With `--json`, a failed `rstack dev` command prints one JSON error object with
+`schema_version` (`registry.rstack.dev.v1`), `status` set to `error`, and
+`error`. It adds `run_id` when the run needs cleanup and `recovery` with the
+resources listed above. Failures that occur before the helper starts, such as a
+missing component, print an `registry.rstack.error.v1` object with `status` set
+to `refused` and an `error` object holding `class` and `message`. The reports of
+`rstack dev check` use `BRegCtlReport` instead.
+
+A BReg project with encrypted fields is refused before anything is provisioned:
+`rstack dev does not configure field encryption yet; ENTITY.FIELD is encrypted`.
