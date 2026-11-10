@@ -48,36 +48,47 @@ const TOKEN_LIFETIME_SECONDS: u64 = 300;
 const CLOCK_LEEWAY_SECONDS: u64 = 5;
 const MAXIMUM_REPLAY_ENTRIES: usize = 256;
 
+/// Run-local connections between BReg and Casework. Configuring either one requires both products, with BReg listed before Casework.
 #[derive(Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Bindings {
+    /// Connects BReg to Casework as a review authority. BReg authenticates to Casework as a machine identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) breg_review_authority: Option<BregReviewAuthority>,
+    /// Connects Casework to BReg as a context provider. Casework authenticates to BReg as a machine identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) casework_context_provider: Option<CaseworkContextProvider>,
 }
 
+/// A BReg review authority that the run connects to Casework.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct BregReviewAuthority {
+    /// Local identifier of the review authority.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) id: String,
+    /// Local identifier of the review producer.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) producer: String,
+    /// Name of the test person, in `people`, whose Casework grant BReg uses to authenticate. That grant needs at least one scope.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) identity: String,
 }
 
+/// A Casework context provider that the run connects to BReg.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct CaseworkContextProvider {
+    /// Local identifier of the context provider.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) id: String,
+    /// Name of the test person, in `people`, whose BReg grant Casework uses to authenticate. That grant needs at least one scope.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) identity: String,
+    /// Local identifier of the BReg action that the provider pairs with.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) action: String,
 }

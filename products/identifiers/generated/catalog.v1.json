@@ -4996,7 +4996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/project-dev.v1alpha1.schema.json",
-        "sha256": "e9877be9b1a191c2ca27af5d998698359cbeaa08aba74749ae0a36cc5f7f7e7f",
+        "sha256": "30a0fcc71d24875309ae9cd96f41305add32ad69e89dcc9b4cbd1622478eeb43",
         "mediaType": "application/schema+json"
       }
     },
@@ -5212,7 +5212,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "442c29fe6db3bd93c2a35a5303e341d8aaa70c95d58dcd589fee9fff529fdff4",
+        "sha256": "9d701cf095137be5e1ce0203943626bcf7005597f3e5748527b510fabe180cb4",
         "mediaType": "application/schema+json"
       }
     },
