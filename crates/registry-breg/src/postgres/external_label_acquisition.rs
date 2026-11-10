@@ -165,25 +165,43 @@ impl LabelAcquisition {
         }
         let root_sql=format!("SELECT {} AS root_id,({})::text AS subject_key FROM {} WHERE current_setting('registry.access_profile',true)={} AND current_setting('registry.purpose',true)={}",relations.id_expression,key.sql,relations.from_sql,literal(profile_id),literal(purpose));
         let state_sql=format!("SELECT projection_id,epoch FROM registry_internal.registry_external_projection_scopes WHERE projection_id={} AND epoch={}::uuid AND binding_digest={} AND grant_digest={} AND generation={} AND active",literal(&parent_scope.projection_id),literal(&parent_scope.epoch.to_string()),literal(&parent_scope.binding_digest),literal(&parent_scope.grant_digest),parent_generation.generation);
+        // A page resumes inside the continuation's root, so its roots start
+        // at that root. The base table joins the source view on the record
+        // id, and PostgreSQL does not carry an inequality across that
+        // equality; repeating the bound on the base table lets the primary
+        // key scan start there instead of at the first record. Publication
+        // checks named roots and keeps the whole root set.
+        let page_root_sql = format!(
+            "{root_sql} AND ($1::uuid IS NULL OR ({} >= $1::uuid AND {}.record_id >= $1::uuid))",
+            relations.id_expression, relations.base_alias,
+        );
         Ok(Self::statements(
+            &page_root_sql,
             &root_sql,
             &state_sql,
             label.from_field.as_str(),
         ))
     }
 
-    fn statements(root_sql: &str, state_sql: &str, selector_field: &str) -> Self {
+    fn statements(
+        page_root_sql: &str,
+        root_sql: &str,
+        state_sql: &str,
+        selector_field: &str,
+    ) -> Self {
         // These replacements contain only compiled identifiers, profile names,
         // and scope fingerprints. Member positions and selectors are bound.
-        let eligible = ELIGIBLE_SQL
-            .replace("__ROOT_SQL__", root_sql)
-            .replace("__SELECTOR_FIELD__", &literal(selector_field));
+        let eligible = |roots: &str| {
+            ELIGIBLE_SQL
+                .replace("__ROOT_SQL__", roots)
+                .replace("__SELECTOR_FIELD__", &literal(selector_field))
+        };
         let page_sql = PAGE_SQL
             .replace("__STATE_SQL__", state_sql)
-            .replace("__ELIGIBLE_SQL__", &eligible);
+            .replace("__ELIGIBLE_SQL__", &eligible(page_root_sql));
         let publication_sql = PUBLICATION_SQL
             .replace("__STATE_SQL__", state_sql)
-            .replace("__ELIGIBLE_SQL__", &eligible);
+            .replace("__ELIGIBLE_SQL__", &eligible(root_sql));
         Self {
             page_sql,
             publication_sql,
@@ -260,20 +278,35 @@ fn literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+// A page reads roots in record order and looks up each root's snapshot and
+// members, so its cost follows the page, not the scope. Two details keep that
+// plan available to PostgreSQL:
+// - Root fields carry the generated text collation. Comparing the link key in
+//   the snapshot key's own collation lets the snapshot primary key serve the
+//   lookup; both collations are deterministic, so equality is unchanged.
+// - PostgreSQL keeps no statistics for the selector checks. As separate
+//   conditions their default selectivities multiply to about one member in
+//   the whole scope, which makes sorting every eligible member look cheap.
+//   One nullable selector tested with IS NOT NULL keeps the estimate near the
+//   real member count.
 const ELIGIBLE_SQL: &str = r#"
-SELECT roots.root_id,members.source_key AS member_key,members.fields->>__SELECTOR_FIELD__ AS selector,
+SELECT roots.root_id,members.source_key AS member_key,checked.selector,
     snapshot.subject_key AS parent_key,snapshot.snapshot_id AS parent_snapshot,snapshot.expires_at AS parent_expires_at
 FROM (__ROOT_SQL__) AS roots
 JOIN parent_state AS scope ON true
 JOIN registry_internal.registry_external_projection_snapshots AS snapshot
     ON snapshot.projection_id=scope.projection_id AND snapshot.epoch=scope.epoch
-    AND snapshot.subject_key=roots.subject_key AND snapshot.kind='complete-collection'
+    AND snapshot.subject_key=roots.subject_key COLLATE "default" AND snapshot.kind='complete-collection'
     AND snapshot.expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint
 JOIN registry_internal.registry_external_projection_values AS members
     ON members.projection_id=snapshot.projection_id AND members.epoch=snapshot.epoch AND members.subject_key=snapshot.subject_key
-WHERE jsonb_typeof(members.fields->__SELECTOR_FIELD__)='string'
-    AND octet_length(members.fields->>__SELECTOR_FIELD__) BETWEEN 1 AND 1024
-    AND (members.fields->>__SELECTOR_FIELD__) !~ '[[:cntrl:]]'
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN jsonb_typeof(members.fields->__SELECTOR_FIELD__)='string'
+        AND octet_length(members.fields->>__SELECTOR_FIELD__) BETWEEN 1 AND 1024
+        AND (members.fields->>__SELECTOR_FIELD__) !~ '[[:cntrl:]]'
+        THEN members.fields->>__SELECTOR_FIELD__ END AS selector
+) AS checked
+WHERE checked.selector IS NOT NULL
 "#;
 
 const PAGE_SQL: &str = r#"
@@ -615,5 +648,257 @@ mod postgres_tests {
         drop(runtime);
         drop(migration);
         database.cleanup().await;
+    }
+
+    const CLOCK: &str = "floor(extract(epoch FROM clock_timestamp()))::bigint";
+
+    /// A label plan over an installed store whose clock reads 1000, with a
+    /// runtime connection holding the refresh profile for tenant `allowed`.
+    struct LabelFixture {
+        database: harness::TestDatabase,
+        migration: tokio_postgres::Client,
+        runtime: tokio_postgres::Client,
+        tasks: [tokio::task::JoinHandle<()>; 2],
+        parent: ProjectionScope,
+        page_sql: String,
+        table: String,
+        key: String,
+        tenant: String,
+    }
+
+    impl LabelFixture {
+        async fn new() -> Self {
+            let database = harness::TestDatabase::create(2).await;
+            let (migration, migration_task) = database.connect_migration().await;
+            let registry = super::tests::registry(&["parent", "label"]);
+            super::super::install_compiled_schema(&migration, &registry, &database.runtime_role)
+                .await
+                .unwrap();
+            migration
+                .batch_execute(&INSTALL_SQL.replace(CLOCK, "1000"))
+                .await
+                .unwrap();
+            let parent =
+                ProjectionScope::new("parent", Uuid::new_v4(), "binding", "grant", 60).unwrap();
+            configure_scope(&migration, &parent).await.unwrap();
+            let entity = &registry.entities()["local-record"];
+            let column = |id: &str| {
+                entity
+                    .stored_fields
+                    .iter()
+                    .find(|field| field.logical.id == id)
+                    .unwrap()
+                    .physical_name
+                    .clone()
+            };
+            let (runtime, connection) = database
+                .runtime_config
+                .postgres()
+                .connect(NoTls)
+                .await
+                .unwrap();
+            let runtime_task = tokio::spawn(async move {
+                connection.await.unwrap();
+            });
+            runtime.batch_execute("SET registry.access_profile='refresh'; SET registry.principal='worker'; SET registry.purpose='consultation'; SET registry.row_boundaries='[{\"field\":\"tenant\",\"operator\":\"equals\",\"values\":[\"allowed\"]}]';").await.unwrap();
+            let plan = LabelAcquisition::new(
+                &registry,
+                "refresh",
+                "consultation",
+                "view",
+                "members",
+                &parent,
+                ProjectionGeneration {
+                    epoch: parent.epoch,
+                    generation: 0,
+                },
+            )
+            .unwrap();
+            Self {
+                page_sql: plan.page_sql.replace(CLOCK, "1000"),
+                table: entity.physical_table.clone(),
+                key: column("subject-key"),
+                tenant: column("tenant"),
+                database,
+                migration,
+                runtime,
+                tasks: [migration_task, runtime_task],
+                parent,
+            }
+        }
+
+        /// Add roots `first..=last`, each with a fresh complete collection
+        /// of `members`. Root `g` has record id `g` in its last digits and
+        /// subject key `parent-g`; every twentieth root is another tenant's.
+        async fn add_roots(&self, first: i32, last: i32, members: &[&str]) {
+            let members = members
+                .iter()
+                .map(|member| format!("('{member}')"))
+                .collect::<Vec<_>>()
+                .join(",");
+            self.database
+                .admin
+                .batch_execute(&format!(
+                    "INSERT INTO registry_data.\"{table}\" (record_id,active_package_revision,\"{key}\",\"{tenant}\")
+                     SELECT ('00000000-0000-4000-8000-'||lpad(to_hex(g),12,'0'))::uuid,'fixture','parent-'||g,
+                            CASE WHEN g % 20 = 0 THEN 'other' ELSE 'allowed' END
+                     FROM generate_series({first},{last}) AS g;
+                     INSERT INTO registry_internal.registry_external_projection_snapshots
+                         (projection_id,epoch,subject_key,snapshot_id,observed_at,expires_at,refresh_sequence,kind)
+                     SELECT 'parent','{epoch}'::uuid,'parent-'||g,'members-'||g,990,1050,g,'complete-collection'
+                     FROM generate_series({first},{last}) AS g;
+                     INSERT INTO registry_internal.registry_external_projection_values
+                         (projection_id,epoch,subject_key,source_key,fields)
+                     SELECT 'parent','{epoch}'::uuid,'parent-'||g,m,jsonb_build_object('holder','person-'||g||'-'||m)
+                     FROM generate_series({first},{last}) AS g CROSS JOIN (VALUES {members}) AS members(m);
+                     ANALYZE registry_data.\"{table}\";
+                     ANALYZE registry_internal.registry_external_projection_snapshots;
+                     ANALYZE registry_internal.registry_external_projection_values;",
+                    table = self.table,
+                    key = self.key,
+                    tenant = self.tenant,
+                    epoch = self.parent.epoch,
+                ))
+                .await
+                .unwrap();
+        }
+
+        async fn page(&self, after: Option<&LabelAfter>, limit: u16) -> LabelSelectorPage {
+            let root = after.map(|position| position.root_id);
+            let member = after.map(|position| position.member_key.clone());
+            let result = self
+                .runtime
+                .query_one(&self.page_sql, &[&root, &member, &(i64::from(limit) + 1)])
+                .await
+                .unwrap();
+            assert!(result.get::<_, bool>(0));
+            bounded_page(serde_json::from_value(result.get(1)).unwrap(), limit)
+        }
+
+        async fn cleanup(self) {
+            for task in self.tasks {
+                task.abort();
+            }
+            drop(self.runtime);
+            drop(self.migration);
+            self.database.cleanup().await;
+        }
+    }
+
+    fn root(g: u32) -> Uuid {
+        Uuid::parse_str(&format!("00000000-0000-4000-8000-{g:012x}")).unwrap()
+    }
+
+    fn positions(page: &LabelSelectorPage) -> Vec<(Uuid, String)> {
+        page.rows
+            .iter()
+            .map(|row| (row.root_id, row.member_key.clone()))
+            .collect()
+    }
+
+    fn plan_nodes<'a>(plan: &'a Value, nodes: &mut Vec<&'a Value>) {
+        nodes.push(plan);
+        for child in plan["Plans"].as_array().into_iter().flatten() {
+            plan_nodes(child, nodes);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_label_page_reads_about_one_page_of_a_dense_scope_at_any_continuation() {
+        let fixture = LabelFixture::new().await;
+        // Most of a large scope is eligible, so a page that started its root
+        // scan at the first record would read up to the whole scope.
+        fixture.add_roots(1, 20_000, &["a", "b"]).await;
+        let middle = LabelAfter {
+            root_id: root(10_001),
+            member_key: "a".to_owned(),
+        };
+        for after in [None, Some(&middle)] {
+            let page = fixture.page(after, 101).await;
+            assert_eq!(page.rows.len(), 101);
+            if after.is_some() {
+                assert_eq!(page.rows[0].root_id, root(10_001));
+                assert_eq!(page.rows[0].member_key, "b");
+            }
+            let root_id = after.map(|position| position.root_id);
+            let member = after.map(|position| position.member_key.clone());
+            let explained: Value = fixture
+                .runtime
+                .query_one(
+                    &format!(
+                        "EXPLAIN (ANALYZE, FORMAT JSON, COSTS OFF, TIMING OFF, SUMMARY OFF) {}",
+                        fixture.page_sql
+                    ),
+                    &[&root_id, &member, &102_i64],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            let mut nodes = Vec::new();
+            plan_nodes(&explained[0]["Plan"], &mut nodes);
+            // Rows arrive in root order; only the members of one root are
+            // put in key order.
+            assert!(
+                !nodes.iter().any(|node| node["Node Type"] == "Sort"),
+                "after {after:?}: {explained}"
+            );
+            for node in &nodes {
+                let loops = node["Actual Loops"].as_f64().unwrap_or(1.0);
+                let rows = node["Actual Rows"].as_f64().unwrap_or(0.0) * loops;
+                let removed = node["Rows Removed by Filter"].as_f64().unwrap_or(0.0) * loops;
+                assert!(
+                    rows + removed <= 3.0 * 101.0,
+                    "after {after:?} reads about one page at every node: {explained}"
+                );
+            }
+        }
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn a_label_continuation_returns_each_key_once_in_order_past_an_insert_behind_it() {
+        let fixture = LabelFixture::new().await;
+        fixture.add_roots(3, 3, &["a", "b", "c"]).await;
+        fixture.add_roots(5, 5, &["a", "b"]).await;
+        fixture.add_roots(7, 7, &["a"]).await;
+        // Root 20 belongs to another tenant and is never selected.
+        fixture.add_roots(20, 20, &["a"]).await;
+        let mut seen = Vec::new();
+        let first = fixture.page(None, 2).await;
+        seen.extend(positions(&first));
+        let mut after = first.continuation;
+        // Records behind the continuation, and members added behind it in
+        // the root it stopped in, are not read again or late.
+        fixture.add_roots(1, 1, &["a"]).await;
+        fixture
+            .database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_external_projection_values
+                     (projection_id,epoch,subject_key,source_key,fields)
+                 VALUES ('parent',$1,'parent-3','0','{\"holder\":\"person-3-0\"}')",
+                &[&fixture.parent.epoch],
+            )
+            .await
+            .unwrap();
+        // A root ahead of the continuation is read in its place.
+        fixture.add_roots(4, 4, &["a"]).await;
+        while let Some(position) = after {
+            let page = fixture.page(Some(&position), 2).await;
+            seen.extend(positions(&page));
+            after = page.continuation;
+        }
+        let expected = [
+            (3, "a"),
+            (3, "b"),
+            (3, "c"),
+            (4, "a"),
+            (5, "a"),
+            (5, "b"),
+            (7, "a"),
+        ]
+        .map(|(g, member)| (root(g), member.to_owned()));
+        assert_eq!(seen, expected);
+        fixture.cleanup().await;
     }
 }
