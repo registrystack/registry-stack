@@ -789,6 +789,40 @@ pub(crate) mod tests {
         );
     }
 
+    /// Add an indexed binding over the example pack's batch route with a
+    /// sixty-second cache lifetime. Each source call must match the next
+    /// `transcript` exchange.
+    #[cfg(feature = "postgres-test")]
+    pub(crate) fn add_indexed_binding(
+        service: &mut ExternalSourceService,
+        projection: &str,
+        field: &str,
+        transcript: Arc<registry_adapter_engine::replay::ReplayTranscript>,
+    ) {
+        let (pack, artifacts) = example();
+        let program =
+            compile_projection_pack(&pack, "person-batch", &artifacts, EvidenceLimits::default())
+                .unwrap()
+                .bind_replay(transcript)
+                .unwrap();
+        service.bindings.insert(
+            projection.to_owned(),
+            BoundExternalSource {
+                program,
+                fields: BTreeSet::from([field.to_owned()]),
+                mode: ExternalProjectionMode::Indexed,
+                grant_valid_until: Utc::now() + chrono::Duration::days(1),
+                binding_fingerprint: "indexed-binding".to_owned(),
+                grant_fingerprint: "indexed-grant".to_owned(),
+                cache_ttl_seconds: Some(60),
+                field_types: BTreeMap::from([(
+                    field.to_owned(),
+                    (ExternalFieldType::String, false),
+                )]),
+            },
+        );
+    }
+
     struct Hooks;
     impl EvidenceHostHooks for Hooks {
         fn before_acquisition<'a>(

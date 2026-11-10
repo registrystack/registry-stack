@@ -568,7 +568,8 @@ impl RefreshFailure {
     }
 }
 
-fn valid_key(value: &str) -> bool {
+/// Whether the store accepts `value` as a subject or source key.
+pub(crate) fn valid_key(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_KEY_BYTES && !value.chars().any(char::is_control)
 }
 
