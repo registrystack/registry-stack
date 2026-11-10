@@ -7,7 +7,9 @@
   `caseworkctl explain` lists them. A stage that omits the list offers every
   policy outcome.
 
-- `caseworkctl explain` adds a top-level `accessProfiles` list, sorted by `id`, with each access profile's `id` and `principalClaim`, so a caller no longer reads them from a review policy's `dependencies`. The member is additive.
+- `caseworkctl explain` adds a top-level `accessProfiles` list, sorted by `id`,
+  with each access profile's `id` and `principalClaim`, so a caller no longer
+  reads them from a review policy's `dependencies`. The member is additive.
 
 ## 0.46.0 - 2026-11-08
 

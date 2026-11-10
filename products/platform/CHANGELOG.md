@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `rstack dev check|start|status|token|stop` runs a checkout's BReg and Casework
+  projects together against a PostgreSQL server you supply. See
+  [PROJECT-DEV.md](PROJECT-DEV.md). It is an alpha developer tool and may
+  change.
+
 ## 0.46.0 - 2026-11-08
 
 - `registry-platform-text`: `TextStep::StripNonspacingMarksIn` replaces
