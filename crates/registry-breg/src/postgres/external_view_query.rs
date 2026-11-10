@@ -562,6 +562,13 @@ const MAXIMUM_FILTER_STRING_BYTES: usize = 4096;
 /// request's key, query and binding) is the effective limit above this.
 pub(crate) const MAXIMUM_CURSOR_SORT_VALUE_BYTES: usize = 6144;
 
+/// Whether a continuation may resume from `value`. The server applies it when
+/// it issues a cursor and again when it opens one, so a cursor it issues is
+/// always one it accepts.
+pub(crate) fn sort_value_resumable(value: &str) -> bool {
+    value.len() <= MAXIMUM_CURSOR_SORT_VALUE_BYTES
+}
+
 fn scalar(value: &Value, kind: ExternalFieldType) -> Result<Option<String>, ExternalQueryError> {
     bounded_scalar(value, kind, MAXIMUM_FILTER_STRING_BYTES)
 }
@@ -637,6 +644,9 @@ fn continuation_sql(
     match &after.sort_value {
         None => Ok(format!("{column} IS NULL AND {tie}")),
         Some(value) => {
+            if !sort_value_resumable(value) {
+                return Err(ExternalQueryError::InvalidQuery);
+            }
             let parsed = match kind {
                 ExternalFieldType::Integer => value
                     .parse::<i64>()

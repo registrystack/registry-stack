@@ -1108,15 +1108,33 @@ impl PostgresExternalViewService {
                 .timestamp()
                 .saturating_add(self.cursors.max_age().as_secs() as i64),
         );
-        self.cursors
-            .seal_external(&Continuation {
+        seal_continuation(
+            &self.cursors,
+            &Continuation {
                 binding,
                 query,
                 position,
                 expires_at,
-            })
-            .map_err(|_| ExternalViewError::Unavailable)
+            },
+        )
     }
+}
+
+/// Seal a continuation, refusing a sort value the next page would refuse, so
+/// every cursor the server issues is one it accepts.
+fn seal_continuation(cursors: &CursorCodec, continuation: &Continuation) -> Result<String> {
+    if let Position::Read {
+        sort_value: Some(value),
+        ..
+    } = &continuation.position
+    {
+        if !indexed::sort_value_resumable(value) {
+            return Err(ExternalViewError::Unavailable);
+        }
+    }
+    cursors
+        .seal_external(continuation)
+        .map_err(|_| ExternalViewError::Unavailable)
 }
 
 impl ExternalViewService for PostgresExternalViewService {
@@ -2152,6 +2170,62 @@ mod tests {
             panic!("position changed");
         };
         assert_eq!(opened, sort_value);
+    }
+
+    fn continuation_at(sort_value: String) -> Continuation {
+        Continuation {
+            binding: "binding".to_owned(),
+            expires_at: Utc::now().timestamp() + 60,
+            query: ExternalQuery::default(),
+            position: Position::Read {
+                root_id: Uuid::nil(),
+                source_key: "row".to_owned(),
+                sort_value: Some(sort_value),
+            },
+        }
+    }
+
+    /// The server never issues a cursor it would refuse: a sort value past the
+    /// resume bound fails when the cursor is issued, and every cursor that is
+    /// issued opens and carries a value the continuation accepts.
+    #[test]
+    fn a_cursor_is_issued_only_for_a_sort_value_it_will_accept() {
+        let codec = CursorCodec::new(
+            zeroize::Zeroizing::new(vec![42; 32]),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        let bound = indexed::MAXIMUM_CURSOR_SORT_VALUE_BYTES;
+        for value in [
+            "a".repeat(bound),
+            "\"".repeat(1000),
+            "\u{7}".repeat(500),
+            "\u{e9}".repeat(bound / 2),
+        ] {
+            let token = seal_continuation(&codec, &continuation_at(value.clone()))
+                .unwrap_or_else(|_| panic!("a {}-byte value is issued", value.len()));
+            let opened: Continuation = codec.open_external(&token).unwrap();
+            let Position::Read {
+                sort_value: Some(opened),
+                ..
+            } = opened.position
+            else {
+                panic!("position changed");
+            };
+            assert_eq!(opened, value);
+            assert!(indexed::sort_value_resumable(&opened));
+        }
+        // Past the bound, and a value whose JSON escaping overflows the 8 KiB
+        // payload, fail when issued rather than on the next page.
+        for value in ["a".repeat(bound + 1), "\"".repeat(bound)] {
+            assert!(
+                matches!(
+                    seal_continuation(&codec, &continuation_at(value)),
+                    Err(ExternalViewError::Unavailable)
+                ),
+                "an oversized sort value is refused when the cursor is issued"
+            );
+        }
     }
 
     #[test]
