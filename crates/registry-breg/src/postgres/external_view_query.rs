@@ -866,7 +866,17 @@ mod postgres_tests {
         fields: Option<Value>,
         id: &str,
     ) {
-        let sequence: i64 = client
+        let sequence = allocate(client, scope, key).await;
+        let kind = if fields.is_some() { "one" } else { "absent" };
+        let rows = fields
+            .map(|fields| serde_json::json!([{"source_key":key,"fields":fields}]))
+            .unwrap_or_else(|| serde_json::json!([]));
+        let result:String=client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,999,1059,$8,$9)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&sequence,&key,&id,&kind,&rows]).await.unwrap().get(0);
+        assert_eq!(result, "published");
+    }
+
+    async fn allocate(client: &Client, scope: &ProjectionScope, key: &str) -> i64 {
+        client
             .query_one(
                 "SELECT registry_internal.allocate_external_projection_refresh($1,$2,$3,$4,$5,120)",
                 &[
@@ -879,12 +889,25 @@ mod postgres_tests {
             )
             .await
             .unwrap()
-            .get(0);
-        let kind = if fields.is_some() { "one" } else { "absent" };
-        let rows = fields
-            .map(|fields| serde_json::json!([{"source_key":key,"fields":fields}]))
-            .unwrap_or_else(|| serde_json::json!([]));
-        let result:String=client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,999,1059,$8,$9)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&sequence,&key,&id,&kind,&rows]).await.unwrap().get(0);
+            .get(0)
+    }
+
+    async fn publish_collection(
+        client: &Client,
+        scope: &ProjectionScope,
+        key: &str,
+        members: &[(&str, &str)],
+    ) {
+        let sequence = allocate(client, scope, key).await;
+        let rows = Value::Array(
+            members
+                .iter()
+                .map(|(member, label)| {
+                    serde_json::json!({"source_key": member, "fields": {"label": label}})
+                })
+                .collect(),
+        );
+        let result:String=client.query_one("SELECT registry_internal.publish_external_projection($1,$2,$3,$4,$5,$6,$7,999,1059,'complete-collection',$8)",&[&scope.projection_id,&scope.epoch,&scope.binding_digest,&scope.grant_digest,&sequence,&key,&key,&rows]).await.unwrap().get(0);
         assert_eq!(result, "published");
     }
 
@@ -1214,6 +1237,98 @@ mod postgres_tests {
         let second = run(&runtime, &registry, &request).await;
         let rows: Vec<ExternalViewRow> = serde_json::from_value(second.get(5)).unwrap();
         assert_eq!(rows[0].fields["label"], "B");
+        runtime_task.abort();
+        migration_task.abort();
+        drop(runtime);
+        drop(migration);
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn an_unlinked_root_reads_as_a_complete_empty_related_collection() {
+        let database = harness::TestDatabase::create(2).await;
+        let (migration, migration_task) = database.connect_migration().await;
+        let mut project = super::tests::project();
+        project["externalProjections"][0]["cardinality"] = Value::from("many");
+        let registry = super::tests::compile_project(&project);
+        super::super::install_compiled_schema(&migration, &registry, &database.runtime_role)
+            .await
+            .unwrap();
+        install(&migration, &database.runtime_role).await.unwrap();
+        migration
+            .batch_execute(&INSTALL_SQL.replace(
+                "floor(extract(epoch FROM clock_timestamp()))::bigint",
+                "1000",
+            ))
+            .await
+            .unwrap();
+        let scope =
+            ProjectionScope::new("projection", Uuid::new_v4(), "binding", "grant", 60).unwrap();
+        configure_scope(&migration, &scope).await.unwrap();
+        let entity = &registry.entities()["local-record"];
+        let column = |id: &str| {
+            entity
+                .stored_fields
+                .iter()
+                .find(|field| field.logical.id == id)
+                .unwrap()
+                .physical_name
+                .clone()
+        };
+        // Roots 2 and 3 name no outside subject: one leaves the link field
+        // unset, the other empty. Root 6 is unlinked too, but outside the
+        // caller's rows.
+        database.admin.batch_execute(&format!("INSERT INTO registry_data.\"{}\" (record_id,active_package_revision,\"{}\",\"{}\") VALUES ('{}','fixture','family','allowed'),('{}','fixture',NULL,'allowed'),('{}','fixture','','allowed'),('{}','fixture','pending','allowed'),('{}','fixture','empty','allowed'),('{}','fixture',NULL,'other')",entity.physical_table,column("subject-key"),column("tenant"),root(1),root(2),root(3),root(4),root(5),root(6))).await.unwrap();
+        publish_collection(&migration, &scope, "family", &[("m2", "B"), ("m1", "A")]).await;
+        publish_collection(&migration, &scope, "empty", &[]).await;
+        let (runtime, connection) = database
+            .runtime_config
+            .postgres()
+            .connect(NoTls)
+            .await
+            .unwrap();
+        let runtime_task = tokio::spawn(async move {
+            connection.await.expect("query fixture connection");
+        });
+        runtime.batch_execute("SET registry.access_profile='reader'; SET registry.principal='staff'; SET registry.purpose='consultation'; SET registry.row_boundaries='[{\"field\":\"tenant\",\"operator\":\"equals\",\"values\":[\"allowed\"]}]';").await.unwrap();
+        let mut request = super::tests::request(&scope, 0);
+        // A related collection is read for one root at a time.
+        assert!(matches!(
+            compile(&registry, &request),
+            Err(ExternalQueryError::NotPermitted)
+        ));
+        // Each case: root, complete, found, earliest expiry, member labels.
+        let cases: [(u32, bool, bool, Option<i64>, &[&str]); 6] = [
+            (1, true, true, Some(1059), &["A", "B"]),
+            (2, true, true, None, &[]),
+            (3, true, true, None, &[]),
+            (4, false, true, None, &[]),
+            (5, true, true, Some(1059), &[]),
+            (6, true, false, None, &[]),
+        ];
+        for (id, complete, found, expires_at, labels) in cases {
+            let id = root(id);
+            request.root_id = Some(id);
+            let result = run(&runtime, &registry, &request).await;
+            assert!(result.get::<_, bool>(0), "{id}: the generation holds");
+            assert_eq!(result.get::<_, bool>(1), complete, "{id}: complete");
+            assert_eq!(result.get::<_, bool>(2), found, "{id}: found");
+            assert_eq!(result.get::<_, Option<i64>>(3), expires_at, "{id}: expiry");
+            let rows: Vec<ExternalViewRow> = serde_json::from_value(result.get(5)).unwrap();
+            assert!(
+                rows.iter()
+                    .all(|row| row.root_id == id
+                        && row.availability == ExternalAvailability::Available),
+                "{id}"
+            );
+            assert_eq!(
+                rows.iter()
+                    .map(|row| row.fields["label"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                labels,
+                "{id}: members"
+            );
+        }
         runtime_task.abort();
         migration_task.abort();
         drop(runtime);
