@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fs, process::Command};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
 fn project(root: &std::path::Path, extra: &str) {
     fs::write(root.join("registry.yaml"), "fixture\n").unwrap();
@@ -155,4 +156,86 @@ fn a_run_id_cannot_name_a_path() {
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert!(report["error"].as_str().unwrap().contains("run ID"));
     assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn worker_restores_a_valid_plan_whose_captured_input_exceeds_512_kib() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project_root = scratch.path().join("project");
+    fs::create_dir(&project_root).unwrap();
+    fs::write(project_root.join("registry.yaml"), "fixture\n").unwrap();
+    let raw = BASE64.encode(vec![b'x'; 400 * 1024]);
+    let mut plan = serde_json::json!({
+        "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
+        "kind": "BRegProjectDev",
+        "issuer": "https://issuer.example.invalid",
+        "products": [{"product": "breg", "project": ".", "audience": "registry"}],
+        "people": {"operator": {
+            "subject": "operator", "client": "operator-client",
+            "grants": {"breg": {"profile": "operator", "scopes": []}}
+        }},
+        "journey": {"id": "smoke", "steps": [{
+            "id": "send-raw", "product": "breg", "as": "operator", "method": "POST",
+            "path": "/v1/records",
+            "raw": {"contentType": "application/octet-stream", "base64": raw},
+            "expect": {"status": 200}
+        }]}
+    });
+    let document = serde_json::to_vec(&plan).unwrap();
+    assert!(
+        document.len() <= registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES,
+        "the regression fixture must remain a valid-size development plan"
+    );
+    fs::write(project_root.join("dev.yaml"), &document).unwrap();
+
+    let checked = check(&project_root, &scratch.path().join("check-state"), true);
+    assert!(
+        checked.status.success(),
+        "the substantial development plan was refused"
+    );
+
+    let members = plan.as_object_mut().unwrap();
+    members.remove("apiVersion");
+    members.remove("kind");
+    let run_id = "0123456789abcdef0123456789abcdef";
+    let state = scratch.path().join("state");
+    let root = state.join(run_id);
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let root = root.canonicalize().unwrap();
+    let false_binary = ["/usr/bin/false", "/bin/false"]
+        .into_iter()
+        .map(std::path::Path::new)
+        .find(|path| path.is_file())
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let input = serde_json::to_vec(&serde_json::json!({
+        "run_id": run_id,
+        "project": project_root,
+        "plan": plan,
+        "ttl_seconds": 1,
+        "schema_people": [],
+        "breg_authority": {
+            "principal": "sub", "purpose": false, "requires_postgis": false,
+            "named_clients": []
+        },
+        "casework_principals": {},
+        "binaries": {"breg": {"tool": false_binary, "runtime": false_binary}}
+    }))
+    .unwrap();
+    assert!(input.len() > 512 * 1024, "captured input: {}", input.len());
+    fs::write(root.join("input.json"), input).unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["project-dev", "--worker"])
+        .arg(&root)
+        .env("RSTACK_DEV_STATE_DIR", &state)
+        .env_remove("RSTACK_DEV_DATABASE_URL")
+        .output()
+        .unwrap();
+    let reply: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let error = reply["error"].as_str().unwrap();
+    assert!(error.contains("breg check failed"), "{error}");
+    assert!(!error.contains("cannot restore the captured development plan"));
 }

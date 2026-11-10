@@ -22,6 +22,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 STACK = Path(__file__).resolve().parents[3]
 NATIVE_REVIEW = STACK / "products/breg/acceptance/reviewed-evidence-journey"
+SPATIAL = STACK / "products/breg/acceptance/spatial-service-sites"
 HTTP = build_opener(ProxyHandler({}))
 
 
@@ -152,7 +153,11 @@ def inventory(pg, env):
     databases = psql(
         pg, env, "SELECT datname FROM pg_database WHERE datname LIKE 'rstack%';"
     )
-    roles = psql(pg, env, "SELECT rolname FROM pg_roles WHERE rolname LIKE 'rstack%';")
+    roles = psql(
+        pg,
+        env,
+        "SELECT rolname FROM pg_roles WHERE rolname LIKE 'rstack%' OR rolname LIKE 'breg_bbox_%';",
+    )
     return set(databases.splitlines()), set(roles.splitlines())
 
 
@@ -292,7 +297,7 @@ def verify_deployment_key(root, bin_dir, env, run_root, headers):
         process.wait(timeout=15)
 
 
-def exercise(root, bin_dir, pg, project, ca, url, pg_env):
+def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     checkout = root / "licensing"
     shutil.copytree(project, checkout)
     before = files(checkout)
@@ -309,6 +314,8 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env):
     }
     try:
         exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env)
+        if spatial:
+            verify_spatial(root, bin_dir, pg, env, pg_env)
         assert files(checkout) == before
     finally:
         if state.exists():
@@ -422,11 +429,133 @@ def verify_native_handoff(root, bin_dir, env):
         dev(bin_dir, env, checkout, "stop", report["run_id"])
 
 
+def verify_spatial(root, bin_dir, pg, env, pg_env):
+    checkout = root / "spatial"
+    registry = checkout / "registry"
+    shutil.copytree(SPATIAL, registry)
+    before = files(registry)
+    fixture = json.loads((registry / "tests/journeys.yaml").read_text())
+    people = {}
+    for journey in fixture["journeys"]:
+        for step in journey["steps"]:
+            profile = step["accessProfile"]
+            claims = step["claims"]
+            people[profile] = {
+                "subject": claims["principal"],
+                "client": "spatial-smoke",
+                "grants": {
+                    "breg": {
+                        "profile": profile,
+                        "scopes": claims["scopes"],
+                        "claims": {
+                            **claims.get("directClaims", {}),
+                            "registry_actor_kind": claims.get("actorKind", "human"),
+                            "registry_purpose": claims["purpose"],
+                        },
+                    }
+                },
+            }
+    with (registry / "fixtures/seed-service-sites.jsonl").open() as records:
+        site = json.loads(next(records))["data"]
+    longitude, latitude = site["location"]["coordinates"]
+    bbox = (
+        f"{longitude - 0.01:.6f},{latitude - 0.01:.6f},"
+        f"{longitude + 0.01:.6f},{latitude + 0.01:.6f}"
+    )
+    plan = {
+        "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
+        "kind": "BRegProjectDev",
+        "issuer": "https://spatial-smoke.example.invalid",
+        "products": [{"product": "breg", "project": "registry", "audience": "breg"}],
+        "people": people,
+        "journey": {
+            "id": "spatial-smoke",
+            "steps": [
+                {
+                    "id": "create-site",
+                    "product": "breg",
+                    "as": "service-site-admin",
+                    "method": "POST",
+                    "path": "/v1/records/service-sites",
+                    "headers": {"Idempotency-Key": "spatial-smoke"},
+                    "body": {"data": site},
+                    "expect": {"status": 201},
+                },
+                {
+                    "id": "read-bbox",
+                    "product": "breg",
+                    "as": "map-reader",
+                    "method": "GET",
+                    "path": f"/v1/records/service-sites?bbox={bbox}",
+                    "expect": {
+                        "status": 200,
+                        "checks": [{"pointer": "/items", "length": 1}],
+                    },
+                },
+            ],
+        },
+    }
+    (checkout / "dev.yaml").write_text(json.dumps(plan))
+    baseline = inventory(pg, pg_env)
+    report = dev(bin_dir, env, checkout, "start", ".")
+    run = report["run_id"]
+    try:
+        assert report["journey"]["result"] == "passed"
+        origin = report["products"]["breg"]
+        collection = f"{origin}/v1/gis/collections/service-site.map-reader"
+        headers = credential(bin_dir, env, checkout, run, "map-reader")
+        with HTTP.open(Request(collection, headers=headers), timeout=5) as response:
+            metadata = json.load(response)
+        items = next(
+            link["href"] for link in metadata["links"] if link["rel"] == "items"
+        )
+        assert items == f"{collection}/items"
+        request = Request(f"{items}?bbox={bbox}&f=json", headers=headers)
+        with HTTP.open(request, timeout=5) as response:
+            features = json.load(response)
+        assert features["type"] == "FeatureCollection"
+        assert len(features["features"]) == 1
+        owners = set()
+        for label in ("breg_test", "breg"):
+            prefix = f"rstack_{run}_{label}"
+            db_env = {**pg_env, "PGDATABASE": prefix}
+            extension = psql(
+                pg,
+                db_env,
+                """SELECT n.nspname
+                FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+                WHERE e.extname = 'postgis';""",
+            ).strip()
+            assert extension == "registry_spatial_ext"
+            owner = psql(
+                pg,
+                db_env,
+                f"""SELECT granted.rolname
+                FROM pg_auth_members membership
+                JOIN pg_roles grantee ON grantee.oid = membership.member
+                JOIN pg_roles granted ON granted.oid = membership.roleid
+                WHERE grantee.rolname = '{prefix}_migration'
+                AND granted.rolname LIKE 'breg_bbox_%' AND NOT granted.rolcanlogin
+                AND membership.set_option AND NOT membership.inherit_option
+                AND NOT membership.admin_option
+                AND NOT pg_has_role('{prefix}_runtime', granted.oid, 'MEMBER');""",
+            ).strip()
+            assert owner.startswith("breg_bbox_") and "\n" not in owner
+            owners.add(owner)
+        assert len(owners) == 2
+        assert files(registry) == before
+    finally:
+        assert dev(bin_dir, env, checkout, "stop", run)["status"] == "stopped"
+    assert inventory(pg, pg_env) == baseline
+    print("Spatial BReg bbox journey passed with distinct, cleaned-up spatial roles")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--postgres-bin-dir", type=Path, required=True)
     parser.add_argument("--scratch-parent", type=Path)
+    parser.add_argument("--spatial", action="store_true", help="also verify PostGIS")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(
         prefix="rstack-dev-", dir=args.scratch_parent
@@ -470,6 +599,7 @@ def main():
                 ca,
                 url,
                 pg_env,
+                args.spatial,
             )
         finally:
             checked(pg / "pg_ctl", "-D", cluster, "-m", "fast", "-w", "stop")

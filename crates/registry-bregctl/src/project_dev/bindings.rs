@@ -740,6 +740,7 @@ mod tests {
             breg_authority: Some(BregAuthority {
                 principal: "sub".to_owned(),
                 purpose: false,
+                requires_postgis: false,
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),
