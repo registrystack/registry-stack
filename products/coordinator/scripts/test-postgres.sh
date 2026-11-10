@@ -35,6 +35,7 @@ cargo test --locked -p registry-coordinator --features postgres-test --lib \
 	--test deployment_postgres --test review_wait_postgres \
 	--test external_wait_postgres --test external_command_postgres \
 	--test standalone_review_postgres --test compare_worker_postgres \
-	--test read_in_force_postgres --test breg_proposal_wait_postgres
+	--test read_in_force_postgres --test breg_proposal_wait_postgres \
+	--test calendar_trigger_authoring
 cargo test --locked -p registry-coordinator --features postgres-test \
 	--test scheduling_event_native -- --ignored --nocapture
