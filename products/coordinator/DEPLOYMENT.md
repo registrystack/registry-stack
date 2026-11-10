@@ -670,21 +670,28 @@ must retain each live run's original binding. New admissions repeat that check
 inside their insertion transaction; worker polls keep their per-job fences
 without rescanning history every poll.
 
-The serving process checks its one reviewed calendar trigger per Workflow at
-most once per second. PostgreSQL transaction time, not the process clock,
+The serving process checks each reviewed calendar trigger once a second, in a
+loop beside the worker. PostgreSQL transaction time, not the process clock,
 decides which occurrence is due. A trigger's first check seeds its cursor at
-that database time. A changed Workflow revision also advances the cursor
-monotonically to its first observed database time and admits nothing on that
-check. Later checks hold the ordinary admission lock and cursor row, admit only
-the latest due occurrence, add older due occurrences to the skipped count,
-and advance the cursor in the Run admission transaction. An idle check
-performs no cursor update, so a backward database clock cannot rewind it. Lock
-acquisition has a 50 millisecond database timeout and the full calendar sweep
-has a 250 millisecond process deadline. A competing replica observes the same
-row; a changed activation, restore hold or admission hold refuses the calendar
-check before it advances. A refusal or bounded timeout is logged with its
-bounded code and does not stop the ordinary worker from progressing Runs
-already admitted. Recovery-only mode performs no calendar checks.
+that database time. Each check locks only its own cursor row and skips a row
+another replica holds, so replicas share the triggers without waiting on each
+other. A due check holds the cursor row and the ordinary admission lock,
+admits only the latest due occurrence, adds older due occurrences to the
+skipped count, and advances the cursor in the Run admission transaction. An
+idle check performs no cursor update, so a backward database clock cannot
+rewind it. A new Workflow revision keeps the cursor while the trigger's cron
+and timezone are unchanged, so an occurrence already due still runs under the
+new revision. Changing the cron or timezone moves the cursor to the database
+time of the first check under the new schedule and admits nothing on it. The
+occurrences of the previous schedule that were due and not run are added to
+the skipped count, logged as a warning with that count, and audited as
+`calendar-reschedule` with it. Each admission and reschedule writes its audit
+record first; without durable audit the check changes nothing. A changed
+activation, restore hold or admission hold refuses a due check before it
+advances. A refusal is logged with its bounded
+code; after one, the loop pauses for one second, doubling to 30 seconds, and
+the ordinary worker keeps progressing Runs already admitted. Recovery-only
+mode performs no calendar checks.
 
 A live run whose retained definition this version does not restore does not
 stop startup, readiness, admissions or apply. The service holds that run alone:
@@ -749,7 +756,9 @@ Apply does not adopt or rewrite them. Settle retained work with its matching
 binary, then create a fresh namespace and database identity for this version.
 Keep the original keys, packages, and audit history until retention permits
 erasure. This source compatibility boundary does not promise an in-place state
-migration.
+migration. The fresh namespace seeds each calendar cursor at the service's
+first check, so a calendar occurrence that falls due while Coordinator is
+drained for this reset is not run after it.
 
 Startup does not migrate or activate. The service reads its runtime file from
 an absolute path; `coordinatorctl` also accepts a path relative to the current

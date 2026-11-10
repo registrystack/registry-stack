@@ -508,20 +508,27 @@ Coordinator owns the reviewed cron subset and admission policy.
 
 Each workflow and trigger has one PostgreSQL cursor. The serving process seeds
 a new cursor at its first observation, so it does not manufacture historical
-Runs. A later sweep advances from the durable cursor through the transaction's
+Runs. A later check advances from the durable cursor through the transaction's
 database time. When several occurrences became due, it admits the latest only
 and adds every earlier due occurrence to the cursor's skipped count. The
 cursor update, Run, first job and start identity commit in one ordinary
-admission transaction. The admission lock, cursor row lock, active package
+admission transaction. The cursor row lock, admission lock, active package
 digest, key custody, restore hold and admission hold fence restart and
-competing replicas. The start identity binds workflow, trigger and exact
+competing replicas; a check skips a cursor another replica holds rather than
+waiting for it. The start identity binds workflow, trigger and exact
 occurrence instant, so replay cannot create another Run for that occurrence.
-When the checked Workflow revision changes, its first check advances the
-cursor monotonically to the new revision's observation time and admits
-nothing, so an earlier instant is not reinterpreted under a changed schedule.
-Calendar lock acquisition and the full serving-process sweep are short and
-bounded, so a contended admission fence cannot starve work already admitted.
-Calendar admission adds no HTTP API and grants no downstream product authority.
+A new Workflow revision keeps the cursor while the trigger's cron and timezone
+are unchanged, so an occurrence already due is admitted under the new
+revision. The cron is compared in its canonical form, so the same schedule
+written differently is not a change. When the cron or timezone changes, the
+next check moves the cursor monotonically to its database time, admits
+nothing, and adds the previous schedule's due occurrences to the skipped
+count, so an earlier instant is not reinterpreted under a changed schedule.
+An admission or reschedule writes its audit record before it changes state;
+without durable audit it changes nothing. Calendar checks run in their own
+loop beside the worker, so a slow or refused check does not delay work
+already admitted. Calendar admission adds no HTTP API and grants no
+downstream product authority.
 
 An authored `workflow.eventTriggers` entry accepts a logical source, exact event type and
 data-schema identity, a schema for the full event and an ordinary typed input mapping.
@@ -578,6 +585,8 @@ receiver over HTTP.
 |---|---|
 | A reviewed monthly calendar start resolves one named-zone instant, catches up with the latest occurrence only, and supplies only `scheduledAt`. | `calendar_trigger::tests::first_and_last_day_schedules_resolve_in_the_named_zone`, `catch_up_selects_only_the_latest_due_instant_and_counts_every_skipped_one`, and `calendar_trigger_authoring::a_calendar_trigger_is_checked_explained_and_restored` |
 | First observation creates no historical Run; restart, a competing replica, cursor replay, restore hold and activation replacement cannot create a second Run for one workflow and occurrence. | `calendar_trigger_authoring::calendar_admission_is_latest_only_atomic_and_fenced` |
+| A new Workflow revision keeps an already due occurrence unless the trigger's cron or timezone changed; a changed schedule admits nothing, and its skipped count is stored and audited. | `calendar_trigger_authoring::a_revision_keeps_due_occurrences_unless_its_schedule_changed` |
+| Without durable audit, a calendar check admits and reschedules nothing. | `calendar_trigger_authoring::an_audit_outage_admits_and_reschedules_nothing` |
 | A signature binds the destination, source, event contract and canonical body. | `event_trigger_tests::substituted_signature_destination_source_and_contract_are_refused` |
 | Delivery attempt time is fresh; an old event commit time alone does not prevent recovery. | `event_trigger_tests::stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused` and `exact_event_identity_survives_retry_replay_and_old_commit_time` |
 | Concurrent delivery, restart, package activation and local source alias renaming recover one original Run; changed event bytes conflict. | `event_trigger_tests::postgres::event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation` and `source_alias_rename_recovers_one_original_run_after_restart` |
