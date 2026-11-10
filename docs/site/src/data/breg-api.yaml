@@ -98,6 +98,7 @@
     - ['`source.unavailable`', '503', 'The database refused or timed out while the request held it.']
     - ['`service.unavailable`', '503', 'The runtime could not complete the mutation for a reason other than the request itself.']
     - ['`runtime.not_ready`', '503', 'The readiness probe before the package and database are usable.']
+    - ['`external_view.incomplete`', '503', 'An indexed external view does not hold a fresh snapshot for every eligible root the request covers, so it cannot answer a filter, an order, a count, a collection, or a continuation. A projection refresh restores coverage.']
     - ['`runtime.field_encryption.unavailable`', '503', 'The route reaches a Record type with encrypted fields while the field-encryption key state is not usable. Record types without encrypted fields keep serving.']
     - ['`statistical_dataset.domain_violation`', '500', 'A non-null source value falls outside a declared dimension domain; the value is not disclosed.']
     - ['`statistical_dataset.release_refused`', '422', 'The period or lifecycle state is ineligible; `refusalCode` names a closed reason.']

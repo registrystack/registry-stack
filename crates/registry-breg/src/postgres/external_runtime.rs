@@ -587,7 +587,10 @@ impl PostgresExternalViewService {
             .await
         {
             Ok(scope) => scope,
-            Err(_)
+            // A withdrawn or rebound projection still answers a plain detail
+            // read with its root, as unavailable. Database and lock failures
+            // are never reported as incomplete coverage or a bad cursor.
+            Err(ExternalViewError::ProjectionUnavailable(_))
                 if request.root.is_some()
                     && matches!(&request.query,
                 ExternalQueryMode::First(query) if query.equality.is_none()
@@ -612,10 +615,12 @@ impl PostgresExternalViewService {
                     expires_at: i64::MAX,
                 });
             }
-            Err(_) if matches!(&request.query, ExternalQueryMode::Continue(_)) => {
+            Err(ExternalViewError::ProjectionUnavailable(_))
+                if matches!(&request.query, ExternalQueryMode::Continue(_)) =>
+            {
                 return Err(ExternalViewError::InvalidCursor);
             }
-            Err(_) => return Err(ExternalViewError::Incomplete),
+            Err(error) => return Err(error),
         };
         let grant = plan.read_grant()?;
         let label = if grant.label_fields.is_empty() {
@@ -627,13 +632,19 @@ impl PostgresExternalViewService {
                 .as_ref()
                 .ok_or(ExternalViewError::Unavailable)?;
             match self.sources.binding(label.projection.as_str()) {
-                Some(source) => self
-                    .lock_scope(&transaction, source, label.projection.as_str())
-                    .await
-                    .ok()
-                    .map(|(scope, generation)| {
-                        (scope, generation, source.grant_valid_until().timestamp())
-                    }),
+                Some(source) => {
+                    match self
+                        .lock_scope(&transaction, source, label.projection.as_str())
+                        .await
+                    {
+                        Ok((scope, generation)) => {
+                            Some((scope, generation, source.grant_valid_until().timestamp()))
+                        }
+                        // Labels from an unavailable projection read as unavailable.
+                        Err(ExternalViewError::ProjectionUnavailable(_)) => None,
+                        Err(error) => return Err(error),
+                    }
+                }
                 None => None,
             }
         };
@@ -776,7 +787,12 @@ impl PostgresExternalViewService {
         let scope = active_scope(transaction, source, projection).await?;
         let generation = store::lock_generation(transaction, &scope)
             .await
-            .map_err(|_| ExternalViewError::Unavailable)?;
+            .map_err(|error| match error {
+                store::ProjectionError::ScopeChanged => {
+                    ExternalViewError::ProjectionUnavailable(projection.to_owned())
+                }
+                _ => ExternalViewError::Unavailable,
+            })?;
         Ok((scope, generation))
     }
 
@@ -1812,14 +1828,25 @@ mod postgres_tests {
     use crate::postgres::external_projection::postgres_tests::{two_projection_project, Activated};
 
     fn service(registry: &CompiledRegistry, fixture: &Activated) -> PostgresExternalViewService {
+        service_with(registry, fixture, Duration::from_secs(2))
+    }
+
+    fn service_with(
+        registry: &CompiledRegistry,
+        fixture: &Activated,
+        lock_timeout: Duration,
+    ) -> PostgresExternalViewService {
         PostgresExternalViewService::new(
             fixture.pool.clone(),
             Arc::new(registry.clone()),
             fixture.expected.clone(),
             RegistryLockKey::derive(registry.registry_id()).unwrap(),
-            Duration::from_secs(2),
+            lock_timeout,
             crate::audit::test_support::capturing(
-                registry_platform_audit::AuditProfile::unkeyed_dev_only(),
+                registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                    vec![0x81; 32].into(),
+                )
+                .unwrap(),
             )
             .0,
             Arc::new(
@@ -1924,5 +1951,233 @@ mod postgres_tests {
             )
         );
         fixture.cleanup().await;
+    }
+
+    const ROOTS: [(&str, &str, &str); 4] = [
+        ("00000000-0000-4000-8000-000000000001", "first", "allowed"),
+        ("00000000-0000-4000-8000-000000000002", "second", "allowed"),
+        ("00000000-0000-4000-8000-000000000003", "third", "allowed"),
+        ("00000000-0000-4000-8000-000000000004", "hidden", "other"),
+    ];
+
+    /// A bound, keyed runtime behind the in-process HTTP router. Three roots
+    /// sit in the `allowed` tenant and one outside it.
+    struct Served {
+        fixture: Activated,
+        router: axum::Router,
+        scope: ProjectionScope,
+    }
+
+    impl Served {
+        async fn new(lock_timeout: Duration) -> Self {
+            let registry = Arc::new(super::super::external_view_query::tests::compile_project(
+                &two_projection_project(),
+            ));
+            let fixture = Activated::new(&registry).await;
+            let mut service = service_with(&registry, &fixture, lock_timeout);
+            service.bind_configured_scopes(true).await.ok().unwrap();
+            let row = fixture
+                .migration
+                .query_one(
+                    "SELECT epoch,binding_digest,grant_digest,cache_ttl_seconds
+                     FROM registry_internal.registry_external_projection_scopes
+                     WHERE projection_id='projection'",
+                    &[],
+                )
+                .await
+                .unwrap();
+            let scope = ProjectionScope::new(
+                "projection",
+                row.get(0),
+                row.get::<_, String>(1).as_str(),
+                row.get::<_, String>(2).as_str(),
+                row.get(3),
+            )
+            .unwrap();
+            let entity = &registry.entities()["local-record"];
+            let column = |id: &str| {
+                entity
+                    .stored_fields
+                    .iter()
+                    .find(|field| field.logical.id == id)
+                    .unwrap()
+                    .physical_name
+                    .clone()
+            };
+            let values = ROOTS
+                .iter()
+                .map(|(id, key, tenant)| format!("('{id}','fixture','{key}','{tenant}')"))
+                .collect::<Vec<_>>()
+                .join(",");
+            fixture
+                .database
+                .admin
+                .batch_execute(&format!(
+                    "INSERT INTO registry_data.\"{}\" (record_id,active_package_revision,\"{}\",\"{}\") VALUES {values}",
+                    entity.physical_table,
+                    column("subject-key"),
+                    column("tenant"),
+                ))
+                .await
+                .unwrap();
+            let http = crate::api::HttpService::new(
+                Arc::clone(&registry),
+                crate::api::ReadRuntimeIdentity {
+                    package_revision: "package-revision".to_owned(),
+                    schema_fingerprint: "schema-fingerprint".to_owned(),
+                },
+                Arc::new(NoRecords),
+                Arc::new(Ready),
+                Arc::new(
+                    CursorCodec::new(
+                        zeroize::Zeroizing::new(vec![9; 32]),
+                        Duration::from_secs(60),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .with_external_views(Arc::new(service));
+            Self {
+                router: crate::api::router(Arc::new(http)),
+                fixture,
+                scope,
+            }
+        }
+
+        async fn publish_all(&self) {
+            for (_, key, _) in ROOTS {
+                self.fixture.publish_label(&self.scope, key, key).await;
+            }
+        }
+
+        async fn get(
+            &self,
+            query: &str,
+            claims: crate::api::VerifiedRequestClaims,
+        ) -> (axum::http::StatusCode, Value) {
+            use tower::ServiceExt;
+            let mut request = axum::http::Request::builder()
+                .uri(format!(
+                    "/v1/external-views/view/link/records?accessProfile=reader{query}"
+                ))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            request.extensions_mut().insert(claims);
+            let response = self.router.clone().oneshot(request).await.unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap())
+        }
+    }
+
+    fn reader(principal: &str, tenants: &[&str]) -> crate::api::VerifiedRequestClaims {
+        crate::api::VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            principal,
+            BTreeSet::from(["registry.read".to_owned()]),
+            Some("consultation".to_owned()),
+            BTreeMap::from([(
+                "tenant".to_owned(),
+                crate::api::VerifiedClaimValue::direct_string_set(tenants.iter().copied()).unwrap(),
+            )]),
+        )
+        .unwrap()
+    }
+
+    fn labels(body: &Value) -> Vec<String> {
+        body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| record["fields"]["label"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    struct Ready;
+    impl crate::api::ReadinessProbe for Ready {
+        fn is_ready(&self) -> ServiceFuture<'_, bool> {
+            Box::pin(async { true })
+        }
+    }
+
+    struct NoRecords;
+    impl crate::api::RecordReadService for NoRecords {
+        fn get(
+            &self,
+            _: crate::api::RecordReadRequest,
+        ) -> ServiceFuture<
+            '_,
+            std::result::Result<Option<crate::api::HeldReadResponse>, crate::api::ReadServiceError>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+        fn list(
+            &self,
+            _: crate::api::RecordReadRequest,
+        ) -> ServiceFuture<
+            '_,
+            std::result::Result<crate::api::HeldReadResponse, crate::api::ReadServiceError>,
+        > {
+            Box::pin(async { Err(crate::api::ReadServiceError::Unavailable) })
+        }
+        fn lookup(
+            &self,
+            _: crate::api::RecordReadRequest,
+        ) -> ServiceFuture<
+            '_,
+            std::result::Result<Option<crate::api::HeldReadResponse>, crate::api::ReadServiceError>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+        fn refusal(
+            &self,
+            _: crate::api::RecordReadRefusal,
+        ) -> ServiceFuture<'_, std::result::Result<(), crate::api::ReadServiceError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scope_lock_timeout_is_unavailable_never_incomplete_or_an_invalid_cursor() {
+        let served = Served::new(Duration::from_millis(300)).await;
+        served.publish_all().await;
+        let caller = reader("reader-principal", &["allowed"]);
+        let (status, first) = served.get("&$top=1", caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_owned();
+
+        // Another session holds the scope row, as a long publication would.
+        served
+            .fixture
+            .database
+            .admin
+            .batch_execute(
+                "BEGIN; SELECT 1 FROM registry_internal.registry_external_projection_scopes
+                 WHERE projection_id='projection' FOR UPDATE",
+            )
+            .await
+            .unwrap();
+        let (status, problem) = served.get("&$top=1", caller.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(problem["code"], "source.unavailable", "{problem}");
+        let (status, problem) = served
+            .get(&format!("&$skiptoken={cursor}"), caller.clone())
+            .await;
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(problem["code"], "source.unavailable", "{problem}");
+        served
+            .fixture
+            .database
+            .admin
+            .batch_execute("COMMIT")
+            .await
+            .unwrap();
+
+        let (status, next) = served.get(&format!("&$skiptoken={cursor}"), caller).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{next}");
+        assert_eq!(labels(&next).len(), 1);
+        served.fixture.cleanup().await;
     }
 }
