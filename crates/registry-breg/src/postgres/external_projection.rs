@@ -326,11 +326,11 @@ impl ProjectionScope {
     }
 }
 
+/// A source response marked no-store never reaches the store: the Adapter
+/// refuses it for an indexed acquisition, and the refresh records a
+/// retention refusal that removes the previous snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetentionPermission {
-    // Retain an explicit refusal variant even though the source adapter also rejects it.
-    #[allow(dead_code)]
-    NoStore,
     /// Source-approved absolute last retention time, as Unix seconds.
     PermittedUntil(i64),
 }
@@ -471,9 +471,7 @@ impl AcceptedSnapshot {
     ) -> Result<Self, ProjectionError> {
         // The source must permit storage until its own expiry. The cache
         // never keeps a value past that expiry, so no later deadline is held.
-        let RetentionPermission::PermittedUntil(retain_until) = retention else {
-            return Err(ProjectionError::RetentionRefused);
-        };
+        let RetentionPermission::PermittedUntil(retain_until) = retention;
         if retain_until < source_expires_at {
             return Err(ProjectionError::RetentionRefused);
         }
@@ -1398,19 +1396,7 @@ mod tests {
     }
 
     #[test]
-    fn no_store_and_unbounded_retention_are_refused() {
-        assert_eq!(
-            AcceptedSnapshot::one(
-                "key",
-                "snapshot",
-                100,
-                160,
-                RetentionPermission::NoStore,
-                row("key")
-            )
-            .unwrap_err(),
-            ProjectionError::RetentionRefused
-        );
+    fn short_and_unbounded_retention_are_refused() {
         assert!(ProjectionScope::new("people", Uuid::nil(), "binding", "grant", 0).is_err());
         assert!(
             ProjectionScope::new("people", Uuid::nil(), "binding", "grant", 31_536_001).is_err()
