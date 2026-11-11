@@ -167,6 +167,7 @@ fn external_openapi_uses_named_view_and_field_grants() {
     assert!(fields.get("code").is_none());
     assert!(schema["properties"].get("count").is_none());
     assert!(document["paths"]["/v1/external-views/local-with-subject/subject/refresh"].is_null());
+    assert!(document["paths"]["/v1/external-refresh-plans/{plan}/step"].is_null());
 }
 
 #[test]
@@ -181,5 +182,60 @@ fn the_field_a_view_links_from_is_marked_on_its_root_entity() {
             .collect::<Vec<_>>(),
         ["subject-key"],
         "only the linked field carries the link-key rule"
+    );
+}
+
+#[test]
+fn refresh_link_gets_a_managed_index_matching_its_row_policy() {
+    let source = format!(
+        "{PROJECT}\n{}",
+        r#"  - id: refresh
+    principalClaim: registry_principal
+    actorKind: service
+    requesterClients: [refresh-worker]
+    requiredScopes: [registry.refresh]
+    requiredPurposes: [local-consultation]
+    permissions:
+      records:
+        - recordType: local-record
+          operations: [list]
+          rowBoundaries:
+            - {field: local-title, claim: zone, operator: equals}
+      refreshExternalProjections: [approved-subjects]"#
+    );
+    let registry = compile(&source).expect("a scoped refresh profile compiles");
+    let entity = &registry.entities()["local-record"];
+    let managed = entity
+        .indexes
+        .iter()
+        .find(|(id, _)| id.starts_with("external-link:"))
+        .expect("refresh link has a compiler-owned index");
+    assert_eq!(
+        managed.1.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["subject-key", "local-title"]
+    );
+    let statement = registry
+        .ddl()
+        .statements
+        .iter()
+        .find(|statement| statement.id == format!("entity.local-record.index.{}", managed.0))
+        .expect("managed index is emitted in reviewed DDL");
+    assert!(statement.sql.contains("record_id"));
+    let document: serde_json::Value = serde_json::from_slice(
+        &registry
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let paths = &document["paths"];
+    assert_eq!(
+        paths["/v1/external-refresh-plans/{plan}/step"]["post"]["operationId"],
+        "external-refresh-plan-step",
+    );
+    assert_eq!(
+        paths["/v1/external-refresh-plans/{plan}/hints"]["post"]["responses"]["202"]["description"],
+        "Hint accepted or already admitted, without checking local matches",
     );
 }

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Governed HTTP reads and bounded refresh of external views.
 
+mod managed;
+mod targeted;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,15 +23,19 @@ use tokio::time::{timeout_at, Instant};
 use uuid::Uuid;
 
 use crate::api::external_views::{
-    ExternalQuery, ExternalQueryMode, ExternalViewError, ExternalViewRequest, ExternalViewService,
-    RefreshMode,
+    ExternalQuery, ExternalQueryMode, ExternalRefreshHint, ExternalViewError, ExternalViewRequest,
+    ExternalViewService, HintAdmission, RefreshMode,
 };
-use crate::api::{RowBoundaryOperator, ServiceFuture};
+use crate::api::{
+    AuthorizedRequestContext, RowBoundaryOperator, ServiceFuture, VerifiedRequestClaims,
+};
 use crate::audit::{
     begin_pre_io_audit, profile_is_keyed, read_terminal_entry, PreIoAudit, PreIoAuditKind,
     ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
+use crate::correlation::RequestCorrelation;
 use crate::cursor::CursorCodec;
+use crate::external_refresh_config::ResolvedExternalRefreshPlan;
 use crate::external_source::{BoundExternalSource, ExternalSourceError, ExternalSourceService};
 use crate::external_views::{
     ExternalCardinality, ExternalLinkPermissionSource, ExternalLinkSource, ExternalProjectionMode,
@@ -42,6 +49,7 @@ use super::external_projection::{
     self as store, AcceptedSnapshot, ProjectionGeneration, ProjectionRow, ProjectionScope,
     RefreshFailure, RefreshTicket, RetentionPermission,
 };
+use super::external_refresh_queue as queue;
 use super::external_view_query::{
     self as indexed, ExternalAvailability, IndexedViewQuery, LabelScope, PageAfter, SortDirection,
 };
@@ -66,6 +74,7 @@ pub(crate) struct PostgresExternalViewService {
     audit: RegistryAudit,
     cursors: Arc<CursorCodec>,
     sources: ExternalSourceService,
+    managed_refresh: BTreeMap<String, ResolvedExternalRefreshPlan>,
 }
 
 struct Plan<'a> {
@@ -119,7 +128,7 @@ enum Position {
     },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 enum RefreshAfter {
     Root { root_id: Uuid },
@@ -171,6 +180,7 @@ impl PostgresExternalViewService {
             audit,
             cursors,
             sources,
+            managed_refresh: BTreeMap::new(),
         }
     }
 
@@ -394,7 +404,45 @@ impl PostgresExternalViewService {
                 entry.0 += removed.snapshots;
                 entry.1 += removed.receipts;
             }
-            if snapshots < u64::from(BATCH) && receipts < u64::from(BATCH) {
+            // The cache and queue have different lock orders. Commit the
+            // cache purge before taking any queue locks.
+            let transaction = begin_registry_transaction_with_reason(
+                session.client(),
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+            )
+            .await
+            .map_err(RetentionFailureReason::admission)?;
+            transaction
+                .set_statement_budget(Duration::from_secs(2))
+                .await
+                .map_err(|_| RetentionFailureReason::Database)?;
+            let queued = queue::purge_expired(&transaction, BATCH)
+                .await
+                .map_err(|_| RetentionFailureReason::Database)?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| RetentionFailureReason::Database)?;
+            if queued.work != 0 || queued.receipts != 0 || queued.plans != 0 {
+                tracing::info!(
+                    work = queued.work,
+                    receipts = queued.receipts,
+                    plans = queued.plans,
+                    "external refresh retention removed queue state"
+                );
+            }
+            if [
+                snapshots,
+                receipts,
+                queued.work,
+                queued.receipts,
+                queued.plans,
+            ]
+            .into_iter()
+            .all(|count| count < u64::from(BATCH))
+            {
                 session.disarm();
                 return Ok(());
             }
@@ -952,11 +1000,34 @@ impl PostgresExternalViewService {
         method: HttpMethod,
         permitted: bool,
     ) -> Result<()> {
+        self.terminal_for(
+            &request.context,
+            &request.correlation,
+            Some(&plan.root.id),
+            request.root,
+            operation,
+            method,
+            permitted,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)] // The audit entry records the admitted context and fixed operation.
+    async fn terminal_for(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        entity: Option<&str>,
+        root: Option<Uuid>,
+        operation: &str,
+        method: HttpMethod,
+        permitted: bool,
+    ) -> Result<()> {
         let entry = read_terminal_entry(
             self.audit.profile(),
             ReadTerminalAudit {
                 terminal: TerminalAudit {
-                    context: request.context.audit_context().cloned(),
+                    context: context.audit_context().cloned(),
                     outcome: if permitted {
                         TerminalAuditOutcome::Returned
                     } else {
@@ -964,17 +1035,17 @@ impl PostgresExternalViewService {
                     },
                     method,
                     operation_id: operation.to_owned(),
-                    entity_id: Some(plan.root.id.clone()),
+                    entity_id: entity.map(str::to_owned),
                     action_id: None,
                     package_revision: self.expected.activation_id.clone(),
-                    selected_access_profile: request.context.selected_profile().to_owned(),
-                    purpose_present: request.context.purpose().is_some(),
-                    principal_reference: request.context.principal().map(str::to_owned),
-                    record_reference: request.root.map(|root| root.to_string()),
+                    selected_access_profile: context.selected_profile().to_owned(),
+                    purpose_present: context.purpose().is_some(),
+                    principal_reference: context.principal().map(str::to_owned),
+                    record_reference: root.map(|root| root.to_string()),
                     record_revision: None,
                     result_count: None,
                     field_set_reference: None,
-                    correlation: request.correlation.clone(),
+                    correlation: correlation.clone(),
                 },
                 query_reference: None,
                 row_boundary_reference: None,
@@ -1150,6 +1221,44 @@ fn seal_continuation(cursors: &CursorCodec, continuation: &Continuation) -> Resu
 }
 
 impl ExternalViewService for PostgresExternalViewService {
+    fn managed_plan(&self, plan: &str) -> Option<&ResolvedExternalRefreshPlan> {
+        self.managed_refresh.get(plan)
+    }
+
+    fn managed_step(
+        &self,
+        plan: String,
+        request: ExternalViewRequest,
+        start_sweep: bool,
+    ) -> ServiceFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            timeout_at(
+                request.deadline,
+                self.run_managed_step(&plan, request, start_sweep),
+            )
+            .await
+            .map_err(|_| ExternalViewError::Unavailable)?
+        })
+    }
+
+    fn admit_hint(
+        &self,
+        plan: String,
+        claims: VerifiedRequestClaims,
+        correlation: RequestCorrelation,
+        deadline: Instant,
+        hint: ExternalRefreshHint,
+    ) -> ServiceFuture<'_, Result<HintAdmission>> {
+        Box::pin(async move {
+            timeout_at(
+                deadline,
+                self.run_hint(&plan, claims, correlation, deadline, hint),
+            )
+            .await
+            .map_err(|_| ExternalViewError::Unavailable)?
+        })
+    }
+
     fn read(&self, request: ExternalViewRequest) -> ServiceFuture<'_, Result<Value>> {
         Box::pin(async move {
             timeout_at(request.deadline, self.run(request, None))
@@ -1217,6 +1326,7 @@ fn log_refresh(
     tracing::warn!(projection, reason, "external projection refresh failed");
 }
 
+#[derive(Clone)]
 struct RefreshAuthority {
     pool: RuntimePool,
     expected: ExpectedRegistryIdentity,
@@ -1226,6 +1336,7 @@ struct RefreshAuthority {
     parent: Option<(ProjectionScope, ProjectionGeneration)>,
     /// The parent snapshots that supplied this page's label selectors.
     supporting: Vec<SupportingSnapshot>,
+    managed: Option<managed::AcquisitionAuthority>,
 }
 
 impl RefreshAuthority {
@@ -1236,13 +1347,24 @@ impl RefreshAuthority {
             .await
             .map_err(|_| EvidenceHookError::Authority)?;
         let mut session = QueryCancellationGuard::new(self.pool.clone(), client);
-        let transaction = begin_registry_transaction(
-            session.client(),
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-        )
-        .await
+        let transaction = if let Some(managed) = &self.managed {
+            begin_record_transaction(
+                session.client(),
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                &managed.claims,
+            )
+            .await
+        } else {
+            begin_registry_transaction(
+                session.client(),
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+            )
+            .await
+        }
         .map_err(|_| EvidenceHookError::Authority)?;
         let budget = deadline
             .saturating_duration_since(Instant::now())
@@ -1264,6 +1386,12 @@ impl RefreshAuthority {
         .map_err(|_| EvidenceHookError::Authority)?;
         if current.epoch != self.scope.epoch {
             return Err(EvidenceHookError::Authority);
+        }
+        if let Some(managed) = &self.managed {
+            managed
+                .check(&transaction)
+                .await
+                .map_err(|_| EvidenceHookError::Authority)?;
         }
         if let Some((parent, generation)) = &self.parent {
             let current = store::lock_generation(&transaction, parent)
@@ -1297,6 +1425,17 @@ impl RefreshAuthority {
             .map_err(|_| EvidenceHookError::Authority)?;
         session.disarm();
         Ok(())
+    }
+
+    fn for_work(self: &Arc<Self>, work: &[RefreshWork]) -> Arc<Self> {
+        if let Some(managed) = &self.managed {
+            Arc::new(Self {
+                managed: Some(managed.for_work(work)),
+                ..self.as_ref().clone()
+            })
+        } else {
+            Arc::clone(self)
+        }
     }
 }
 
@@ -1404,6 +1543,15 @@ impl RootKeys {
         after: Option<Uuid>,
         limit: u16,
     ) -> Result<Vec<(Uuid, Option<String>)>> {
+        // PostgreSQL can underestimate the population behind the RLS
+        // predicates and pick a parallel scan plus a sort for every page.
+        // Prefer the ordered primary-key path for this bounded selection
+        // transaction. RLS still filters before LIMIT.
+        transaction
+            .transaction()
+            .batch_execute("SET LOCAL enable_seqscan = off; SET LOCAL enable_sort = off;")
+            .await
+            .map_err(|_| ExternalViewError::Unavailable)?;
         let rows = transaction
             .transaction()
             .query(&self.page_sql(), &[&after, &i64::from(limit)])
@@ -1513,6 +1661,7 @@ fn view_response(
     body
 }
 
+#[derive(Clone)]
 struct RefreshRows {
     rows: Vec<(Uuid, Option<String>)>,
     next: Option<RefreshAfter>,
@@ -1525,6 +1674,7 @@ struct RefreshWork {
     key: String,
     roots: BTreeSet<Uuid>,
     ticket: RefreshTicket,
+    managed_targets: Vec<(i64, i64)>,
 }
 
 enum RefreshResult {
@@ -1663,6 +1813,66 @@ impl PostgresExternalViewService {
                 query.page_size,
             )
             .await?;
+        let (work, reused, invalid) = self
+            .prepare_refresh(
+                &transaction,
+                request,
+                plan,
+                &scope,
+                &page,
+                minimum_sequence,
+                &BTreeSet::new(),
+            )
+            .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ExternalViewError::Unavailable)?;
+        session.disarm();
+        drop(session);
+
+        let attempted = work.len();
+        let tally = self
+            .execute_refresh(
+                request,
+                plan,
+                claims,
+                &scope,
+                parent.as_ref(),
+                &page,
+                work,
+                None,
+            )
+            .await?;
+        let published = tally.published;
+        let unavailable = invalid + attempted - published;
+        let expires_at = plan.grant_valid_until().timestamp();
+        let mut body = json!({"processed": page.rows.len(), "published": published, "reused": reused, "unavailable": unavailable});
+        if let Some(after) = page.next {
+            body["nextCursor"] = json!(self.next_cursor(
+                binding,
+                query,
+                Position::Refresh {
+                    after,
+                    minimum_sequence
+                },
+                expires_at
+            )?);
+        }
+        Ok(HeldResponse { body, expires_at })
+    }
+
+    #[allow(clippy::too_many_arguments)] // Selection, per-key tickets and sweep baseline share a transaction.
+    async fn prepare_refresh(
+        &self,
+        transaction: &GuardedTransaction<'_>,
+        request: &ExternalViewRequest,
+        plan: &Plan<'_>,
+        scope: &ProjectionScope,
+        page: &RefreshRows,
+        minimum_sequence: i64,
+        required_keys: &BTreeSet<String>,
+    ) -> Result<(Vec<RefreshWork>, usize, usize)> {
         // A root without a link key is covered with no outside value, so it
         // needs no acquisition. A key the store or the source contract would
         // refuse is never sent: its root stays unavailable, and the rest of
@@ -1686,17 +1896,22 @@ impl PostgresExternalViewService {
                 "external projection refresh failed for some keys"
             );
         }
-        let mut unavailable = invalid;
         let keys = by_key.keys().cloned().collect::<Vec<_>>();
-        let due = store::refresh_due_keys(
-            &transaction,
-            &scope,
+        let mut due = store::refresh_due_keys(
+            transaction,
+            scope,
             &keys,
             minimum_sequence,
             Utc::now().timestamp(),
         )
         .await
         .map_err(|_| ExternalViewError::Unavailable)?;
+        due.extend(
+            required_keys
+                .iter()
+                .filter(|key| by_key.contains_key(*key))
+                .cloned(),
+        );
         let reused = keys.len() - due.len();
         let lease = refresh_lease(request.deadline);
         let mut work = Vec::with_capacity(due.len());
@@ -1704,64 +1919,62 @@ impl PostgresExternalViewService {
             if !due.contains(&key) {
                 continue;
             }
-            let ticket = store::allocate_refresh(&transaction, &scope, &key, lease)
+            let ticket = store::allocate_refresh(transaction, scope, &key, lease)
                 .await
                 .map_err(|_| ExternalViewError::Unavailable)?;
-            work.push(RefreshWork { key, roots, ticket });
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|_| ExternalViewError::Unavailable)?;
-        session.disarm();
-        drop(session);
-
-        let mut published = 0usize;
-        if !work.is_empty() {
-            let authority = Arc::new(RefreshAuthority {
-                pool: self.pool.clone(),
-                expected: self.expected.clone(),
-                lock_key: self.lock_key,
-                lock_timeout: self.lock_timeout,
-                scope: scope.clone(),
-                parent: parent.clone(),
-                supporting: page.supporting.clone(),
+            work.push(RefreshWork {
+                key,
+                roots,
+                ticket,
+                managed_targets: Vec::new(),
             });
-            let outcomes = self
-                .fetch_refresh(request, plan, &work, page.supporting_until, authority)
-                .await;
-            let attempted = work.len();
-            published = self
-                .record_refresh(
-                    request,
-                    plan,
-                    claims,
-                    &scope,
-                    parent.as_ref().map(|(_, generation)| generation),
-                    &page,
-                    work.into_iter().zip(outcomes).collect(),
-                )
-                .await?;
-            unavailable += attempted - published;
         }
-        let expires_at = plan.grant_valid_until().timestamp();
-        let mut body = json!({"processed": page.rows.len(), "published": published, "reused": reused, "unavailable": unavailable});
-        if let Some(after) = page.next {
-            body["nextCursor"] = json!(self.next_cursor(
-                binding,
-                query,
-                Position::Refresh {
-                    after,
-                    minimum_sequence
-                },
-                expires_at
-            )?);
+        Ok((work, reused, invalid))
+    }
+
+    #[allow(clippy::too_many_arguments)] // Both manual and managed pages carry the selected authority.
+    async fn execute_refresh(
+        &self,
+        request: &ExternalViewRequest,
+        plan: &Plan<'_>,
+        claims: &ClaimContext,
+        scope: &ProjectionScope,
+        parent: Option<&(ProjectionScope, ProjectionGeneration)>,
+        page: &RefreshRows,
+        work: Vec<RefreshWork>,
+        managed: Option<&managed::LeaseFence>,
+    ) -> Result<RefreshTally> {
+        if work.is_empty() {
+            return Ok(RefreshTally::default());
         }
-        Ok(HeldResponse { body, expires_at })
+        let authority = Arc::new(RefreshAuthority {
+            pool: self.pool.clone(),
+            expected: self.expected.clone(),
+            lock_key: self.lock_key,
+            lock_timeout: self.lock_timeout,
+            scope: scope.clone(),
+            parent: parent.cloned(),
+            supporting: page.supporting.clone(),
+            managed: managed.map(|lease| managed::AcquisitionAuthority::new(lease, claims, page)),
+        });
+        let outcomes = self
+            .fetch_refresh(request, plan, &work, page.supporting_until, authority)
+            .await;
+        self.record_refresh(
+            request,
+            plan,
+            claims,
+            scope,
+            parent.map(|(_, generation)| generation),
+            page,
+            work.into_iter().zip(outcomes).collect(),
+            managed,
+        )
+        .await
     }
 
     /// Records each acquisition outcome in its own short transaction and
-    /// returns how many were published. A publication holds the projection
+    /// returns their internal outcomes. A publication holds the projection
     /// scope row until it commits, and indexed reads share that row, so one
     /// transaction for the whole page would hold readers back for every key.
     /// The committed outcomes are logged by reason category, without keys.
@@ -1775,15 +1988,16 @@ impl PostgresExternalViewService {
         parent: Option<&ProjectionGeneration>,
         page: &RefreshRows,
         results: Vec<(RefreshWork, RefreshResult)>,
-    ) -> Result<usize> {
+        managed: Option<&managed::LeaseFence>,
+    ) -> Result<RefreshTally> {
         let mut tally = RefreshTally::default();
         let recorded = self
             .record_outcomes(
-                request, plan, claims, scope, parent, page, results, &mut tally,
+                request, plan, claims, scope, parent, page, results, &mut tally, managed,
             )
             .await;
         tally.log(plan.projection.id.as_str());
-        recorded.map(|()| tally.published)
+        recorded.map(|()| tally)
     }
 
     #[allow(clippy::too_many_arguments)] // See `record_refresh`.
@@ -1797,6 +2011,7 @@ impl PostgresExternalViewService {
         page: &RefreshRows,
         results: Vec<(RefreshWork, RefreshResult)>,
         tally: &mut RefreshTally,
+        managed: Option<&managed::LeaseFence>,
     ) -> Result<()> {
         let mut session = self.session().await?;
         let mut results = results.into_iter();
@@ -1804,6 +2019,9 @@ impl PostgresExternalViewService {
             let transaction = self
                 .transaction(&mut session, claims, request.deadline)
                 .await?;
+            if let Some(lease) = managed {
+                lease.check(&transaction, &work.managed_targets).await?;
+            }
             let current =
                 active_scope(&transaction, plan.source, plan.projection.id.as_str()).await?;
             if current.epoch != scope.epoch {
@@ -1843,7 +2061,7 @@ impl PostgresExternalViewService {
                     return Err(ExternalViewError::Unavailable);
                 }
             }
-            let failure = match result {
+            let outcome = match result {
                 RefreshResult::Accepted(snapshot) => {
                     let root_ids = work.roots.into_iter().collect::<Vec<_>>();
                     // The RLS recheck and publication share a statement
@@ -1858,7 +2076,15 @@ impl PostgresExternalViewService {
                     )
                     .await
                     {
-                        Ok(store::Publication::Published | store::Publication::Replay) => None,
+                        Ok(store::Publication::Published | store::Publication::Replay) => {
+                            RefreshOutcome::Published(if snapshot.is_authorised_absence() {
+                                queue::Settlement::AuthorizedAbsence
+                            } else if snapshot.is_empty_collection() {
+                                queue::Settlement::EmptyCollection
+                            } else {
+                                queue::Settlement::Published
+                            })
+                        }
                         Ok(store::Publication::Ineligible)
                         | Err(store::ProjectionError::StaleRefresh) => {
                             store::fail_refresh(
@@ -1868,7 +2094,7 @@ impl PostgresExternalViewService {
                             )
                             .await
                             .map_err(|_| ExternalViewError::Unavailable)?;
-                            Some(RefreshFailure::Abandoned)
+                            RefreshOutcome::Failed(RefreshFailure::Abandoned)
                         }
                         Err(_) => return Err(ExternalViewError::Unavailable),
                     }
@@ -1877,16 +2103,19 @@ impl PostgresExternalViewService {
                     store::fail_refresh(&transaction, &work.ticket, failure)
                         .await
                         .map_err(|_| ExternalViewError::Unavailable)?;
-                    Some(failure)
+                    RefreshOutcome::Failed(failure)
                 }
             };
             transaction
                 .commit()
                 .await
                 .map_err(|_| ExternalViewError::Unavailable)?;
-            match failure {
-                None => tally.published += 1,
-                Some(failure) => tally.failed(failure, 1),
+            match outcome {
+                RefreshOutcome::Published(_) => tally.published += 1,
+                RefreshOutcome::Failed(failure) => tally.failed(failure, 1),
+            }
+            if managed.is_some() {
+                tally.by_key.insert(work.key, outcome);
             }
         }
         session.disarm();
@@ -1922,7 +2151,7 @@ impl PostgresExternalViewService {
                             },
                             &approved_fields,
                             supporting_until,
-                            Some(Arc::clone(&authority)),
+                            Some(authority.for_work(chunk)),
                         )
                         .await;
                     match acquired {
@@ -1965,7 +2194,7 @@ impl PostgresExternalViewService {
                             },
                             &approved_fields,
                             supporting_until,
-                            Some(Arc::clone(&authority)),
+                            Some(authority.for_work(std::slice::from_ref(item))),
                         )
                         .await;
                     let result = match acquired {
@@ -2066,6 +2295,29 @@ fn refresh_lease(deadline: Instant) -> Duration {
 struct RefreshTally {
     published: usize,
     failed: BTreeMap<&'static str, usize>,
+    by_key: BTreeMap<String, RefreshOutcome>,
+}
+
+#[derive(Clone, Copy)]
+enum RefreshOutcome {
+    Published(queue::Settlement),
+    Failed(RefreshFailure),
+}
+
+impl RefreshOutcome {
+    fn failure(self) -> Option<RefreshFailure> {
+        match self {
+            Self::Failed(failure) => Some(failure),
+            Self::Published(_) => None,
+        }
+    }
+
+    fn settlement(self) -> Option<queue::Settlement> {
+        match self {
+            Self::Published(outcome) => Some(outcome),
+            Self::Failed(_) => None,
+        }
+    }
 }
 
 impl RefreshTally {
@@ -2538,12 +2790,27 @@ mod postgres_tests {
             sources: crate::external_source::ExternalSourceService,
             lock_timeout: Duration,
         ) -> Self {
+            Self::with_refresh(project, sources, lock_timeout, None).await
+        }
+
+        async fn with_refresh(
+            project: &Value,
+            sources: crate::external_source::ExternalSourceService,
+            lock_timeout: Duration,
+            refresh: Option<crate::external_refresh_config::ExternalRefreshResolution>,
+        ) -> Self {
             let registry = Arc::new(super::super::external_view_query::tests::compile_project(
                 project,
             ));
             let fixture = Activated::new(&registry).await;
             let mut service = service_from(&registry, &fixture, lock_timeout, sources);
             service.bind_configured_scopes(true).await.ok().unwrap();
+            if let Some(refresh) = refresh {
+                service
+                    .configure_managed_refresh(refresh, true)
+                    .await
+                    .unwrap();
+            }
             let service = Arc::new(service);
             let scope = bound_scope(&fixture, "projection").await;
             let entity = &registry.entities()["local-record"];
@@ -2823,6 +3090,7 @@ mod postgres_tests {
                 subject_key: "first".to_owned(),
                 snapshot_id: "first-first".to_owned(),
             }],
+            managed: None,
         };
         let deadline = Instant::now() + Duration::from_secs(5);
         authority.check(deadline).await.unwrap();
@@ -2933,6 +3201,7 @@ mod postgres_tests {
                     key: (*key).to_owned(),
                     roots: BTreeSet::from([Uuid::parse_str(id).unwrap()]),
                     ticket,
+                    managed_targets: Vec::new(),
                 },
                 RefreshResult::Accepted(snapshot),
             ));
@@ -2989,7 +3258,8 @@ mod postgres_tests {
                 &served.scope,
                 None,
                 &page,
-                results
+                results,
+                None,
             ),
             read_during_refresh,
         );
@@ -2998,7 +3268,7 @@ mod postgres_tests {
         assert_eq!(status, axum::http::StatusCode::OK, "{during}");
         assert_eq!(labels(&during), ["renewed", "second", "third"]);
         assert_eq!(during["count"], 3);
-        assert_eq!(recorded.ok(), Some(3));
+        assert_eq!(recorded.ok().map(|tally| tally.published), Some(3));
         let (status, after) = served.get("&$count=true", caller).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{after}");
         assert_eq!(labels(&after), ["renewed", "renewed", "renewed"]);
@@ -3251,7 +3521,7 @@ mod postgres_tests {
                  (record_id,active_package_revision,\"{key}\",\"{tenant}\")
                  SELECT gen_random_uuid(),'fixture','bulk-'||g,
                         CASE WHEN g % 20 = 0 THEN 'other' ELSE 'allowed' END
-                 FROM generate_series(1,20000) AS g;
+                 FROM generate_series(1,120000) AS g;
                  ANALYZE registry_data.\"{table}\";",
                 table = entity.physical_table,
                 key = column("subject-key"),
@@ -3730,6 +4000,456 @@ mod postgres_tests {
         project
     }
 
+    fn managed_person_plan() -> crate::external_refresh_config::ExternalRefreshResolution {
+        use crate::external_refresh_config::*;
+        let plan = ResolvedExternalRefreshPlan {
+            id: "holders".to_owned(),
+            worker: ResolvedExternalRefreshWorker {
+                id: "worker".to_owned(),
+                access_profile: "refresh".to_owned(),
+                requester_client: "worker".to_owned(),
+                principal: "worker-principal".to_owned(),
+                principal_claim: "registry_principal".to_owned(),
+                required_scopes: BTreeSet::from(["registry.refresh".to_owned()]),
+                required_purposes: BTreeSet::from(["consultation".to_owned()]),
+                row_claims: BTreeMap::from([(
+                    "tenant".to_owned(),
+                    BTreeSet::from(["allowed".to_owned()]),
+                )]),
+            },
+            target: ResolvedExternalRefreshTarget {
+                view: "view".to_owned(),
+                link: "people-link".to_owned(),
+                root_record_type: "local-record".to_owned(),
+                from_field: "subject-key".to_owned(),
+                row_boundaries: Vec::new(),
+                row_boundary_fields: BTreeSet::from(["tenant".to_owned()]),
+                target_claim_names: BTreeSet::from(["tenant".to_owned()]),
+                primary_projection: ResolvedExternalRefreshProjection {
+                    projection: "people".to_owned(),
+                    operation: "person-batch".to_owned(),
+                    operation_version: "1".to_owned(),
+                    purpose: "consultation".to_owned(),
+                    scope: "eligible".to_owned(),
+                    selector_scheme: "urn:test:keys".to_owned(),
+                    effective_cache_ttl_seconds: 60,
+                    grant_valid_until: Utc::now() + chrono::Duration::hours(1),
+                    binding_digest: "fixture-binding".to_owned(),
+                },
+                label_projection: None,
+            },
+            notifiers: BTreeMap::from([(
+                "people".to_owned(),
+                ResolvedExternalRefreshNotifier {
+                    requester_client: "people-notifier".to_owned(),
+                    required_scope: "people.changed".to_owned(),
+                },
+            )]),
+            interval: Duration::from_secs(30),
+            page_size: 2,
+            refresh_labels: false,
+            authority_digest: "fixture-authority".to_owned(),
+        };
+        ExternalRefreshResolution {
+            available: BTreeMap::from([(plan.id.clone(), plan)]),
+            unavailable: BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_refresh_resumes_sweeps_and_rereads_only_the_notified_subject() {
+        use axum::http::StatusCode;
+        use registry_platform_oidc::ActorKind;
+        use tower::ServiceExt;
+        let batch = |keys: &[&str], revision: &str| {
+            json!({
+                "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                    "type":"batch","keys":keys,"fields":["family-name"]
+                }},
+                "response":{"status":200,"body":{"records":keys.iter().map(|key| json!({
+                    "subject":key,"state":"found","properties":{"family-name":format!("family-{key}-{revision}")}
+                })).collect::<Vec<_>>()}}
+            })
+        };
+        let mut denied_http = batch(&["first"], "discarded");
+        denied_http["response"] = json!({"status":403,"body":{"error":"fixture-refusal"}});
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                serde_json::from_value(
+                    json!([{"type":"endpoint","endpoint":"synthetic-registry"}]),
+                )
+                .unwrap(),
+                serde_json::from_value(json!([
+                    batch(&["first", "second"], "initial"),
+                    batch(&["third"], "initial"),
+                    denied_http,
+                    batch(&["first"], "corrected"),
+                    batch(&["first", "second"], "corrected"),
+                    batch(&["third"], "missed-notification"),
+                ]))
+                .unwrap(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        let served = Served::with_refresh(
+            &labelled_members_project(),
+            sources,
+            Duration::from_secs(2),
+            Some(managed_person_plan()),
+        )
+        .await;
+        let actor = |client: &str, principal: &str, scope: &str, tenant: &str| {
+            crate::api::VerifiedRequestClaims::authenticated(
+                "registry_principal",
+                principal,
+                BTreeSet::from([scope.to_owned()]),
+                Some("consultation".to_owned()),
+                BTreeMap::from([(
+                    "tenant".to_owned(),
+                    crate::api::VerifiedClaimValue::direct_string_set([tenant]).unwrap(),
+                )]),
+            )
+            .unwrap()
+            .with_contextual_authority(
+                Some(ActorKind::Service),
+                Some(client.to_owned()),
+                None,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()
+        };
+        let worker = actor("worker", "worker-principal", "registry.refresh", "allowed");
+        let wrong_worker = actor("worker", "worker-principal", "registry.refresh", "denied");
+        let notifier = actor(
+            "people-notifier",
+            "notifier-principal",
+            "people.changed",
+            "allowed",
+        );
+        let post = |action: &str, claims: crate::api::VerifiedRequestClaims, body: Value| {
+            let router = served.router.clone();
+            let mut request =
+                axum::http::Request::post(format!("/v1/external-refresh-plans/holders/{action}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap();
+            request.extensions_mut().insert(claims);
+            async move {
+                let response = router.oneshot(request).await.unwrap();
+                let status = response.status();
+                let body = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                (
+                    status,
+                    serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+                )
+            }
+        };
+        let hint = |id: &str, selector: &str| {
+            json!({
+                "hintId":id, "projection":"people", "selectorScheme":"urn:test:keys", "selector":selector
+            })
+        };
+        assert_eq!(
+            post("step", wrong_worker, json!({})).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            post("step", notifier.clone(), json!({})).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            post("hints", worker.clone(), hint("invalid", "first"))
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+
+        let (status, first) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(first["published"], 2, "{first}");
+        assert_eq!(first["moreWork"], true, "{first}");
+        let (status, second) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        assert_eq!(second["published"], 1, "{second}");
+        assert_eq!(second["sweepCompleted"], true, "{second}");
+        let (_, idle) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(idle["processed"], 0, "{idle}");
+        let expiry = || async {
+            served.fixture.migration.query_one(
+                "SELECT expires_at FROM registry_internal.registry_external_projection_snapshots
+                 WHERE projection_id='people' AND subject_key='first'",
+                &[],
+            ).await.unwrap().get::<_,i64>(0)
+        };
+        let original_expiry = expiry().await;
+
+        let accepted = post("hints", notifier.clone(), hint("event-person", "first")).await;
+        assert_eq!(accepted.0, StatusCode::ACCEPTED);
+        assert_eq!(
+            post("hints", notifier.clone(), hint("event-person", "first")).await,
+            accepted
+        );
+        assert_eq!(
+            post("hints", notifier.clone(), hint("event-person", "second"))
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        // The protected fixture root is indistinguishable from the eligible
+        // one at admission, but never causes a source request.
+        assert_eq!(
+            post("hints", notifier, hint("event-protected", ROOTS[3].1)).await,
+            accepted
+        );
+        let (_, targeted) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(targeted["processed"], 2, "{targeted}");
+        assert_eq!(targeted["published"], 0, "{targeted}");
+        assert_eq!(targeted["settled"], 1, "{targeted}");
+        assert_eq!(targeted["retried"], 1, "{targeted}");
+        assert_eq!(targeted["moreWork"], false, "{targeted}");
+        // An upstream HTTP 403 is an unavailable source response. It
+        // leaves the accepted cache expiry intact and retries this key.
+        assert_eq!(expiry().await, original_expiry);
+        served
+            .fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_work
+             SET ready_at=clock_timestamp() WHERE plan_id='holders'",
+                &[],
+            )
+            .await
+            .unwrap();
+        let (_, retried) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(retried["published"], 1, "{retried}");
+        assert_eq!(retried["settled"], 1, "{retried}");
+        let caller = reader("reader-principal", &["allowed"]);
+        let lookup = |root| {
+            format!("/v1/external-views/view/people-link/records/{root}?accessProfile=reader")
+        };
+        let (_, _, corrected) = served.send(&lookup(ROOTS[0].0), caller.clone()).await;
+        assert_eq!(
+            corrected["records"][0]["fields"]["family-name"], "family-first-corrected",
+            "{corrected}"
+        );
+        let (_, _, unchanged) = served.send(&lookup(ROOTS[2].0), caller.clone()).await;
+        assert_eq!(
+            unchanged["records"][0]["fields"]["family-name"], "family-third-initial",
+            "{unchanged}"
+        );
+
+        // Move the fixture clock's due point instead of waiting for a
+        // production-sized interval. No source hint arrives for the third root.
+        served.fixture.migration.execute(
+            "UPDATE registry_internal.registry_external_refresh_plans SET next_due_at=clock_timestamp() WHERE plan_id='holders'", &[],
+        ).await.unwrap();
+        let (_, page) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(page["published"], 2, "{page}");
+        let (_, page) = post("step", worker, json!({})).await;
+        assert_eq!(page["sweepCompleted"], true, "{page}");
+        let (_, _, reconciled) = served.send(&lookup(ROOTS[2].0), caller).await;
+        assert_eq!(
+            reconciled["records"][0]["fields"]["family-name"], "family-third-missed-notification",
+            "{reconciled}"
+        );
+        transcript.finish().unwrap();
+        served.fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn managed_related_labels_require_a_current_parent_and_local_change_reuses_it() {
+        use axum::http::StatusCode;
+        use registry_platform_oidc::ActorKind;
+        use tower::ServiceExt;
+        let endpoints = || {
+            serde_json::from_value(json!([{"type":"endpoint","endpoint":"synthetic-registry"}]))
+                .unwrap()
+        };
+        let label_exchange = |key: &str| {
+            json!({
+                "request":{"endpoint":"synthetic-registry","method":"POST","path":"/people/batch","body":{
+                    "type":"batch","keys":[key],"fields":["family-name"]
+                }},
+                "response":{"status":200,"body":{"records":[{
+                    "subject":key,"state":"found","properties":{"family-name":"current-label"}
+                }]}}
+            })
+        };
+        let transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                endpoints(),
+                serde_json::from_value(json!([label_exchange("alpha"), label_exchange("beta")]))
+                    .unwrap(),
+            ),
+        );
+        let parent_transcript = Arc::new(
+            registry_adapter_engine::replay::ReplayTranscript::from_exchanges(
+                endpoints(),
+                Vec::new(),
+            ),
+        );
+        let mut sources = indexed_sources();
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "people",
+            "family-name",
+            Arc::clone(&transcript),
+        );
+        crate::external_source::tests::add_indexed_binding(
+            &mut sources,
+            "members",
+            "holder",
+            Arc::clone(&parent_transcript),
+        );
+        let mut config = managed_person_plan();
+        let plan = config.available.get_mut("holders").unwrap();
+        plan.target.link = "members-link".to_owned();
+        plan.target.label_projection = Some(plan.target.primary_projection.clone());
+        plan.target.primary_projection.projection = "members".to_owned();
+        plan.target.primary_projection.operation = "members".to_owned();
+        plan.refresh_labels = true;
+        let served = Served::with_refresh(
+            &labelled_members_project(),
+            sources,
+            Duration::from_secs(2),
+            Some(config),
+        )
+        .await;
+        let parent = bound_scope(&served.fixture, "members").await;
+        served
+            .fixture
+            .publish_collection(&parent, "first", &[("member", json!({"holder":"alpha"}))])
+            .await;
+        served
+            .fixture
+            .publish_collection(
+                &parent,
+                ROOTS[3].1,
+                &[("member", json!({"holder":"hidden"}))],
+            )
+            .await;
+        served
+            .fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_plans
+             SET reconciliation_due=false,next_due_at=clock_timestamp()+interval '30 seconds'
+             WHERE plan_id='holders'",
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let actor = |client: &str, principal: &str, scope: &str| {
+            crate::api::VerifiedRequestClaims::authenticated(
+                "registry_principal",
+                principal,
+                BTreeSet::from([scope.to_owned()]),
+                Some("consultation".to_owned()),
+                BTreeMap::from([(
+                    "tenant".to_owned(),
+                    crate::api::VerifiedClaimValue::direct_string_set(["allowed"]).unwrap(),
+                )]),
+            )
+            .unwrap()
+            .with_contextual_authority(
+                Some(ActorKind::Service),
+                Some(client.to_owned()),
+                None,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()
+        };
+        let worker = actor("worker", "worker-principal", "registry.refresh");
+        let notifier = actor("people-notifier", "notifier-principal", "people.changed");
+        let post = |action: &str, claims: crate::api::VerifiedRequestClaims, body: Value| {
+            let router = served.router.clone();
+            let mut request =
+                axum::http::Request::post(format!("/v1/external-refresh-plans/holders/{action}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap();
+            request.extensions_mut().insert(claims);
+            async move {
+                let response = router.oneshot(request).await.unwrap();
+                let status = response.status();
+                let body = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                (
+                    status,
+                    serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+                )
+            }
+        };
+        let hint = |id: &str, selector: &str| {
+            json!({
+                "hintId":id, "projection":"people", "selectorScheme":"urn:test:keys", "selector":selector
+            })
+        };
+        for (id, selector) in [("label-approved", "alpha"), ("label-protected", "hidden")] {
+            assert_eq!(
+                post("hints", notifier.clone(), hint(id, selector)).await.0,
+                StatusCode::ACCEPTED
+            );
+        }
+        let (status, first) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(first["settled"], 2, "{first}");
+        assert_eq!(first["published"], 1, "{first}");
+        served
+            .fixture
+            .publish_collection(&parent, "first", &[("member", json!({"holder":"beta"}))])
+            .await;
+
+        let mut client = served.fixture.pool.get().await.unwrap();
+        let transaction = begin_registry_transaction(
+            &mut client,
+            served.service.lock_key,
+            Duration::from_secs(2),
+            &served.fixture.expected,
+        )
+        .await
+        .unwrap();
+        queue::capture_local_record(
+            transaction.transaction(),
+            "local-record",
+            Uuid::parse_str(ROOTS[0].0).unwrap(),
+            &BTreeSet::from(["subject-key".to_owned()]),
+        )
+        .await
+        .unwrap();
+        transaction.commit().await.unwrap();
+        drop(client);
+        let (status, parent_step) = post("step", worker.clone(), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{parent_step}");
+        assert_eq!(parent_step["reused"], 1, "{parent_step}");
+        assert_eq!(parent_step["moreWork"], true, "{parent_step}");
+        assert_eq!(
+            post("hints", notifier, hint("label-detached", "alpha"))
+                .await
+                .0,
+            StatusCode::ACCEPTED
+        );
+        let (status, label_step) = post("step", worker, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{label_step}");
+        assert_eq!(label_step["settled"], 2, "{label_step}");
+        assert_eq!(label_step["published"], 1, "{label_step}");
+        transcript.finish().unwrap();
+        parent_transcript.finish().unwrap();
+        served.fixture.cleanup().await;
+    }
+
     #[tokio::test]
     async fn invalid_link_keys_are_counted_without_failing_the_rest_of_the_refresh_page() {
         use tracing::instrument::WithSubscriber;
@@ -4182,6 +4902,7 @@ mod postgres_tests {
                     key: (*key).to_owned(),
                     roots: BTreeSet::from([Uuid::parse_str(id).unwrap()]),
                     ticket,
+                    managed_targets: Vec::new(),
                 },
                 failure.map_or(RefreshResult::Accepted(snapshot), RefreshResult::Failed),
             ));
@@ -4197,10 +4918,11 @@ mod postgres_tests {
                 None,
                 &page,
                 results,
+                None,
             )
             .with_subscriber(captured.subscriber())
             .await;
-        assert_eq!(recorded.ok(), Some(1));
+        assert_eq!(recorded.ok().map(|tally| tally.published), Some(1));
         let logs = captured.text();
         let recorded = logs
             .lines()

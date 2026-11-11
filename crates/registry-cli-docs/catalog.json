@@ -8230,6 +8230,88 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "refresh",
+              "invocation": "bregctl external-projection refresh",
+              "about": "Run bounded ready work for one managed refresh plan through its authenticated HTTP route",
+              "long_about": null,
+              "usage": "bregctl external-projection refresh [OPTIONS] --breg-url <URL> --plan <ID> --access-token-file <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--breg-url <URL>",
+                  "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--plan <ID>",
+                  "description": "Managed external refresh plan ID",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-token-file <ABSOLUTE_FILE>",
+                  "description": "Absolute file containing one bearer access token and no other credential material. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--start-sweep",
+                  "description": "Mark one full sweep due before processing ready work",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--maximum-run-seconds <SECONDS>",
+                  "description": "Maximum wall-clock time spent stepping the plan in this invocation",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "50"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },

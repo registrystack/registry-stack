@@ -2,10 +2,15 @@
 //! Explicit external views and machine-only refresh over an authorised local root.
 
 use super::*;
+use crate::external_refresh_config::ResolvedExternalRefreshPlan;
 use crate::external_views::{
     ExternalCardinality, ExternalFieldType, ExternalLinkPermissionSource, ExternalProjectionMode,
+    ExternalViewSource,
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal, OrderDirection};
+use registry_platform_oidc::ActorKind;
+
+const MAX_REFRESH_BODY_BYTES: usize = 4096;
 
 pub(crate) struct ExternalViewRequest {
     pub(crate) context: AuthorizedRequestContext,
@@ -45,7 +50,7 @@ pub(crate) struct ExternalOrder {
     pub(crate) descending: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum ExternalViewError {
     Concealed,
     InvalidCursor,
@@ -62,6 +67,28 @@ pub(crate) enum RefreshMode {
     Labels,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ManagedRefreshStep {
+    #[serde(default)]
+    start_sweep: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ExternalRefreshHint {
+    pub(crate) hint_id: String,
+    pub(crate) projection: String,
+    pub(crate) selector_scheme: String,
+    pub(crate) selector: String,
+}
+
+pub(crate) enum HintAdmission {
+    Accepted,
+    Conflict,
+    AtCapacity,
+}
+
 pub(crate) trait ExternalViewService: Send + Sync {
     fn read(
         &self,
@@ -72,6 +99,30 @@ pub(crate) trait ExternalViewService: Send + Sync {
         request: ExternalViewRequest,
         mode: RefreshMode,
     ) -> ServiceFuture<'_, Result<Value, ExternalViewError>>;
+
+    fn managed_plan(&self, _plan: &str) -> Option<&ResolvedExternalRefreshPlan> {
+        None
+    }
+
+    fn managed_step(
+        &self,
+        _plan: String,
+        _request: ExternalViewRequest,
+        _start_sweep: bool,
+    ) -> ServiceFuture<'_, Result<Value, ExternalViewError>> {
+        Box::pin(async { Err(ExternalViewError::Concealed) })
+    }
+
+    fn admit_hint(
+        &self,
+        _plan: String,
+        _claims: VerifiedRequestClaims,
+        _correlation: RequestCorrelation,
+        _deadline: tokio::time::Instant,
+        _hint: ExternalRefreshHint,
+    ) -> ServiceFuture<'_, Result<HintAdmission, ExternalViewError>> {
+        Box::pin(async { Err(ExternalViewError::Concealed) })
+    }
 }
 
 pub(super) fn routes(registry: &CompiledRegistry) -> Router<Arc<HttpService>> {
@@ -88,8 +139,231 @@ pub(super) fn routes(registry: &CompiledRegistry) -> Router<Arc<HttpService>> {
                 "/v1/external-views/{view}/{link}/refresh-labels",
                 post(refresh_labels),
             );
+        if registry
+            .external_views()
+            .projections
+            .values()
+            .any(|projection| projection.mode == ExternalProjectionMode::Indexed)
+        {
+            app = app
+                .route("/v1/external-refresh-plans/{plan}/step", post(managed_step))
+                .route("/v1/external-refresh-plans/{plan}/hints", post(admit_hint));
+        }
     }
     app
+}
+
+fn decode_refresh_body<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+    serde_json::from_value(parse_json_strict(bytes).ok()?).ok()
+}
+
+async fn refresh_body<T: serde::de::DeserializeOwned>(
+    request: axum::extract::Request,
+) -> Option<T> {
+    if !single_content_type(request.headers(), "application/json")
+        || request.uri().query().is_some()
+    {
+        return None;
+    }
+    let bytes = to_bytes(request.into_body(), MAX_REFRESH_BODY_BYTES)
+        .await
+        .ok()?;
+    decode_refresh_body(&bytes)
+}
+
+fn verified_worker<'a>(
+    claims: &VerifiedRequestClaims,
+    principal_claim: &str,
+    principal: &str,
+    requester_client: &str,
+    row_claims: impl IntoIterator<Item = (&'a str, &'a BTreeSet<String>)>,
+) -> bool {
+    claims.actor_kind() == Some(ActorKind::Service)
+        && claims.principal_claim() == Some(principal_claim)
+        && claims.principal() == Some(principal)
+        && claims.requester_client() == Some(requester_client)
+        && row_claims.into_iter().all(|(name, expected)| {
+            claims
+                .direct_claim(name)
+                .is_some_and(|value| value.values() == *expected)
+        })
+}
+
+fn root_context(
+    service: &HttpService,
+    view: &ExternalViewSource,
+    operation: Operation,
+    access_profile: Option<String>,
+    claims: &VerifiedRequestClaims,
+    headers: &HeaderMap,
+) -> Option<AuthorizedRequestContext> {
+    let route = service.registry.routes().routes.iter().find(|route| {
+        route.entity_id == view.record_type.as_str()
+            && route.operation == operation
+            && read_path_for_route(service, route).is_none()
+    })?;
+    let mut options = QueryOptions::default();
+    options.parsed.access_profile = access_profile;
+    let authorised = authorize_route(service, route, claims, &options)?;
+    let mut context = authorised.context;
+    context
+        .bind_access_attribution(authorised.response_entity, headers)
+        .ok()?;
+    Some(context)
+}
+
+fn refresh_deadline(
+    deadline: Option<Extension<crate::correlation::RequestDeadline>>,
+) -> tokio::time::Instant {
+    deadline
+        .map(|Extension(value)| value.0)
+        .unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(10))
+}
+
+fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn managed_step(
+    State(service): State<Arc<HttpService>>,
+    Authenticated(claims): Authenticated,
+    Extension(correlation): Extension<RequestCorrelation>,
+    deadline: Option<Extension<crate::correlation::RequestDeadline>>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(backend) = service.external_views.as_ref() else {
+        return concealed();
+    };
+    let Some(plan) = backend.managed_plan(&id) else {
+        return concealed();
+    };
+    let worker = &plan.worker;
+    if !verified_worker(
+        &claims,
+        &worker.principal_claim,
+        &worker.principal,
+        &worker.requester_client,
+        worker
+            .row_claims
+            .iter()
+            .filter(|(name, _)| plan.target.target_claim_names.contains(*name))
+            .map(|(name, values)| (name.as_str(), values)),
+    ) || !worker
+        .required_scopes
+        .iter()
+        .all(|scope| claims.has_scope(scope))
+        || (!worker.required_purposes.is_empty()
+            && !claims
+                .purpose()
+                .is_some_and(|purpose| worker.required_purposes.contains(purpose)))
+    {
+        return concealed();
+    }
+    let Some(view) = service
+        .registry
+        .external_views()
+        .views
+        .get(&plan.target.view)
+    else {
+        return concealed();
+    };
+    let Some(context) = root_context(
+        &service,
+        view,
+        Operation::List,
+        Some(worker.access_profile.clone()),
+        &claims,
+        request.headers(),
+    ) else {
+        return concealed();
+    };
+    let Some(body) = refresh_body::<ManagedRefreshStep>(request).await else {
+        return invalid_request();
+    };
+    let result = backend
+        .managed_step(
+            id,
+            ExternalViewRequest {
+                context,
+                correlation,
+                view: plan.target.view.clone(),
+                link: plan.target.link.clone(),
+                root: None,
+                query: ExternalQueryMode::First(ExternalQuery {
+                    page_size: plan.page_size,
+                    ..ExternalQuery::default()
+                }),
+                deadline: refresh_deadline(deadline),
+            },
+            body.start_sweep,
+        )
+        .await;
+    no_store(match result {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => external_view_problem(error),
+    })
+}
+
+async fn admit_hint(
+    State(service): State<Arc<HttpService>>,
+    Authenticated(claims): Authenticated,
+    Extension(correlation): Extension<RequestCorrelation>,
+    deadline: Option<Extension<crate::correlation::RequestDeadline>>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(backend) = service.external_views.as_ref() else {
+        return concealed();
+    };
+    let Some(plan) = backend.managed_plan(&id) else {
+        return concealed();
+    };
+    let permits = |notifier: &crate::external_refresh_config::ResolvedExternalRefreshNotifier| {
+        claims.actor_kind() == Some(ActorKind::Service)
+            && claims.principal().is_some()
+            && claims.requester_client() == Some(notifier.requester_client.as_str())
+            && claims.has_scope(&notifier.required_scope)
+    };
+    if !plan.notifiers.values().any(permits) {
+        return concealed();
+    }
+    let Some(hint) = refresh_body::<ExternalRefreshHint>(request).await else {
+        return invalid_request();
+    };
+    if !plan.notifiers.get(&hint.projection).is_some_and(permits) {
+        return concealed();
+    }
+    let Some(projection) = service
+        .registry
+        .external_views()
+        .projections
+        .get(&hint.projection)
+    else {
+        return concealed();
+    };
+    if !valid_idempotency_key(&hint.hint_id)
+        || projection.selector_scheme.as_str() != hint.selector_scheme
+        || !registry_adapter_core::projection_token_valid(&hint.selector)
+    {
+        return invalid_request();
+    }
+    let result = backend
+        .admit_hint(id, claims, correlation, refresh_deadline(deadline), hint)
+        .await;
+    no_store(match result {
+        Ok(HintAdmission::Accepted) => StatusCode::ACCEPTED.into_response(),
+        Ok(HintAdmission::Conflict) => fixed_problem(ProblemCode::IdempotencyConflict),
+        Ok(HintAdmission::AtCapacity) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "30")],
+        )
+            .into_response(),
+        Err(error) => external_view_problem(error),
+    })
 }
 
 struct ReadTarget {
@@ -232,25 +506,17 @@ async fn handle(
     } else {
         Operation::List
     };
-    let Some(root_route) = service.registry.routes().routes.iter().find(|route| {
-        route.entity_id == view.record_type.as_str()
-            && route.operation == root_operation
-            && read_path_for_route(service, route).is_none()
-    }) else {
+    let profile_selection = admission_profile(raw.as_deref());
+    let Some(context) = root_context(
+        service,
+        view,
+        root_operation,
+        profile_selection.clone(),
+        claims,
+        headers,
+    ) else {
         return concealed();
     };
-    let mut root_options = QueryOptions::default();
-    root_options.parsed.access_profile = admission_profile(raw.as_deref());
-    let Some(authorised) = authorize_route(service, root_route, claims, &root_options) else {
-        return concealed();
-    };
-    let mut context = authorised.context;
-    if context
-        .bind_access_attribution(authorised.response_entity, headers)
-        .is_err()
-    {
-        return concealed();
-    }
     let profile = context.selected_profile();
     if context.purpose() != Some(projection.purpose.as_str()) {
         return concealed();
@@ -300,9 +566,7 @@ async fn handle(
         Ok(value) => value,
         Err(error) => return error.problem(),
     };
-    if options.parsed.as_of.is_some()
-        || options.parsed.access_profile != root_options.parsed.access_profile
-    {
+    if options.parsed.as_of.is_some() || options.parsed.access_profile != profile_selection {
         return invalid_query_at("query");
     }
     let Some(record_type) = inventory.record_types.get(projection.record_type.as_str()) else {
@@ -323,9 +587,6 @@ async fn handle(
     let Some(backend) = &service.external_views else {
         return unavailable();
     };
-    let deadline = deadline
-        .map(|Extension(value)| value.0)
-        .unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(10));
     let request = ExternalViewRequest {
         context,
         correlation,
@@ -333,21 +594,17 @@ async fn handle(
         link: target.link,
         root,
         query,
-        deadline,
+        deadline: refresh_deadline(deadline),
     };
     let result = if let Some(mode) = target.refresh {
         backend.refresh(request, mode).await
     } else {
         backend.read(request).await
     };
-    let mut response = match result {
+    no_store(match result {
         Ok(value) => Json(value).into_response(),
         Err(error) => external_view_problem(error),
-    };
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+    })
 }
 
 fn external_view_problem(error: ExternalViewError) -> Response {
@@ -503,6 +760,70 @@ fn literal_value(field_type: ExternalFieldType, literal: Literal) -> Option<Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_worker_requires_the_verified_actor_and_exact_row_claim() {
+        let claims = |tenant: &str, client: &str, kind| {
+            VerifiedRequestClaims::authenticated(
+                "registry_principal",
+                "worker-principal",
+                BTreeSet::from(["registry.refresh".to_owned()]),
+                Some("consultation".to_owned()),
+                BTreeMap::from([(
+                    "tenant".to_owned(),
+                    VerifiedClaimValue::direct_string(tenant).unwrap(),
+                )]),
+            )
+            .unwrap()
+            .with_contextual_authority(
+                Some(kind),
+                Some(client.to_owned()),
+                None,
+                None,
+                BTreeMap::new(),
+            )
+            .unwrap()
+        };
+        let expected = BTreeSet::from(["allowed".to_owned()]);
+        let permits = |claims: &VerifiedRequestClaims| {
+            verified_worker(
+                claims,
+                "registry_principal",
+                "worker-principal",
+                "worker-client",
+                [("tenant", &expected)],
+            )
+        };
+        assert!(permits(&claims(
+            "allowed",
+            "worker-client",
+            ActorKind::Service
+        )));
+        assert!(!permits(&claims(
+            "outside",
+            "worker-client",
+            ActorKind::Service
+        )));
+        assert!(!permits(&claims(
+            "allowed",
+            "other-client",
+            ActorKind::Service
+        )));
+        assert!(!permits(&claims(
+            "allowed",
+            "worker-client",
+            ActorKind::Human
+        )));
+    }
+
+    #[test]
+    fn managed_step_body_is_closed_and_rejects_duplicate_instructions() {
+        let parse = decode_refresh_body::<ManagedRefreshStep>;
+        assert!(!parse(b"{}").unwrap().start_sweep);
+        assert!(parse(br#"{"startSweep":true}"#).unwrap().start_sweep);
+        assert!(parse(br#"{"scope":"outside"}"#).is_none());
+        assert!(parse(br#"{"startSweep":true,"startSweep":false}"#).is_none());
+    }
 
     async fn body(response: Response) -> Value {
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()

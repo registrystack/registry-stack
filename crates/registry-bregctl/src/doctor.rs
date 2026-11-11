@@ -6,7 +6,7 @@ use std::path::Path;
 use registry_breg::postgres::DatabaseConnectionCause;
 use registry_breg::runtime_config::load_runtime_config;
 use registry_breg::startup::{check_loaded, CheckedStartup, StartupError};
-use registry_breg::{Diagnostic, DiagnosticSeverity};
+use registry_breg::{Diagnostic, DiagnosticSeverity, RelatedDiagnostic};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
 /// Doctor only reports success once every one of these has passed, so this is
@@ -36,6 +36,7 @@ pub(crate) struct DoctorRefusal {
 pub(crate) struct DoctorSuccess {
     pub(crate) checked: CheckedStartup,
     pub(crate) insecure_http_warning: Option<&'static str>,
+    pub(crate) external_refresh_timings: Vec<registry_breg::runtime_config::ExternalRefreshTiming>,
 }
 
 /// Run the startup dependency check without binding a listener, keeping only
@@ -75,12 +76,61 @@ pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal>
             runtime_configuration: false,
         })?;
     let checked = runtime
-        .block_on(check_loaded(config))
+        .block_on(check_loaded(config.clone()))
         .map_err(startup_refusal)?;
+    let package = config.load_active_package().map_err(|_| DoctorRefusal {
+        diagnostics: vec![diagnostic(
+            "startup.package.refused",
+            "package",
+            "the active runtime package could not be verified",
+        )],
+        runtime_configuration: false,
+    })?;
+    let plan_diagnostics = config.external_refresh_diagnostics(package.registry());
+    if !plan_diagnostics.is_empty() {
+        return Err(DoctorRefusal {
+            diagnostics: plan_diagnostics
+                .into_iter()
+                .map(runtime_diagnostic)
+                .collect(),
+            runtime_configuration: true,
+        });
+    }
+    let external_refresh_timings = config.external_refresh_timings(package.registry());
     Ok(DoctorSuccess {
         checked,
         insecure_http_warning,
+        external_refresh_timings,
     })
+}
+
+/// Preserve the runtime check's safe field diagnosis in doctor's compiler
+/// diagnostic envelope. The compiler envelope has no separate suggested
+/// action member, so keep that fixed recovery sentence in the message.
+fn runtime_diagnostic(diagnostic: registry_platform_yaml::Diagnostic) -> Diagnostic {
+    let severity = match diagnostic.severity {
+        registry_platform_yaml::Severity::Error => DiagnosticSeverity::Error,
+        registry_platform_yaml::Severity::Warning => DiagnosticSeverity::Finding,
+    };
+    let message = format!(
+        "{}; {}",
+        diagnostic.message.trim_end_matches('.'),
+        diagnostic.suggested_action
+    );
+    Diagnostic {
+        severity,
+        code: diagnostic.code,
+        path: diagnostic.path,
+        message,
+        related: diagnostic
+            .related
+            .into_iter()
+            .map(|related| RelatedDiagnostic {
+                path: related.path,
+                message: related.message,
+            })
+            .collect(),
+    }
 }
 
 /// A refused runtime file reports every reader diagnostic, or the one rule

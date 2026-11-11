@@ -383,6 +383,10 @@ pub enum RuntimeConfigError {
         "runtime configuration reviewAuthorities contains identifiers that differ only by `-` versus `_`"
     )]
     ReviewAuthorityIdCollision,
+    #[error(
+        "runtime configuration externalRefresh contains identifiers that differ only by `-` versus `_`"
+    )]
+    ExternalRefreshIdCollision,
     #[error("runtime configuration contains an invalid attachment storage binding")]
     InvalidAttachmentStorage,
     #[error("runtime configuration contains an invalid attachment verification binding")]
@@ -434,6 +438,7 @@ impl RuntimeConfigError {
             Self::EventDestinationIdCollision => "breg.runtime.hook-destination-id-collision",
             Self::EvidenceProviderIdCollision => "breg.runtime.evidence-provider-id-collision",
             Self::ReviewAuthorityIdCollision => "breg.runtime.review-authority-id-collision",
+            Self::ExternalRefreshIdCollision => "breg.runtime.external-refresh-id-collision",
             Self::InvalidAttachmentStorage => "breg.runtime.invalid-attachment-storage",
             Self::InvalidAttachmentVerification => "breg.runtime.invalid-attachment-verification",
             Self::AttachmentAttemptBudgetExceeded => {
@@ -475,6 +480,7 @@ impl RuntimeConfigError {
             Self::EventDestinationIdCollision => "/destinations/hooks",
             Self::EvidenceProviderIdCollision => "/evidenceProviders",
             Self::ReviewAuthorityIdCollision => "/reviewAuthorities",
+            Self::ExternalRefreshIdCollision => "/externalRefresh",
             Self::InvalidAttachmentStorage => "/attachmentStorage",
             Self::InvalidAttachmentVerification => "/attachmentVerification",
             Self::AttachmentAttemptBudgetExceeded => {
@@ -551,7 +557,8 @@ impl RuntimeConfigError {
             }
             Self::EventDestinationIdCollision
             | Self::EvidenceProviderIdCollision
-            | Self::ReviewAuthorityIdCollision => {
+            | Self::ReviewAuthorityIdCollision
+            | Self::ExternalRefreshIdCollision => {
                 "Rename one identifier so the two definitions remain distinct after separator normalization."
             }
             Self::InvalidAttachmentStorage => {
@@ -680,6 +687,15 @@ pub struct RuntimeConfigCheck {
     pub unavailable: bool,
 }
 
+/// Static timing inputs doctor can assess without reading refresh queue state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalRefreshTiming {
+    pub plan: String,
+    pub interval_seconds: u64,
+    pub effective_cache_ttl_seconds: u32,
+    pub grant_valid_until: i64,
+}
+
 /// Check the runtime file at the absolute `path` as `breg` reads it at
 /// startup, with no package, database, network, or secret material
 /// (CFG-CHECK-1).
@@ -777,6 +793,15 @@ pub fn check_runtime_config(
                             ));
                         }
                     }
+                    for problem in config.external_refresh_diagnostics(registry) {
+                        diagnostics.push(check.error_at(
+                            RUNTIME_CONFIG_KIND,
+                            &problem.code,
+                            &problem.path,
+                            problem.message,
+                            problem.suggested_action,
+                        ));
+                    }
                 }
             }
         }
@@ -814,6 +839,24 @@ fn runtime_definition_id_diagnostics(
             "reviewAuthorities",
             "breg.runtime.review-authority-id-collision",
             raw.review_authorities
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "externalRefresh/workers",
+            "breg.runtime.external-refresh-id-collision",
+            raw.external_refresh
+                .workers()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "externalRefresh/plans",
+            "breg.runtime.external-refresh-id-collision",
+            raw.external_refresh
+                .plans()
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
@@ -932,6 +975,7 @@ pub struct RuntimeConfig {
     cursor: CursorConfig,
     event_destinations: EventDestinationConfigs,
     external_sources: Vec<crate::external_source::ExternalSourceBinding>,
+    external_refresh: crate::external_refresh_config::ExternalRefreshConfig,
     evidence_providers:
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     review_authorities: BTreeMap<String, ReviewAuthorityConfig>,
@@ -1044,6 +1088,7 @@ impl RuntimeConfig {
             cursor,
             event_destinations,
             external_sources: raw.external_sources.into_vec(),
+            external_refresh: raw.external_refresh,
             evidence_providers: raw.evidence_providers,
             review_authorities,
             retention,
@@ -1377,6 +1422,71 @@ impl RuntimeConfig {
         &self.external_sources
     }
 
+    /// Resolve managed external refresh plans against one compiled package.
+    /// Each plan resolves independently so one bad operator binding does not
+    /// disable unrelated external views or plans.
+    pub(crate) fn resolve_external_refresh(
+        &self,
+        registry: &CompiledRegistry,
+    ) -> crate::external_refresh_config::ExternalRefreshResolution {
+        self.external_refresh
+            .resolve(registry, &self.external_sources)
+    }
+
+    /// Field-specific plan binding refusals for offline check and doctor.
+    #[must_use]
+    pub fn external_refresh_diagnostics(&self, registry: &CompiledRegistry) -> Vec<Diagnostic> {
+        self.resolve_external_refresh(registry)
+            .unavailable
+            .values()
+            .map(|problem| {
+                Diagnostic::error(
+                    problem.code,
+                    &problem.path,
+                    problem.message,
+                    problem.suggested_action,
+                )
+            })
+            .collect()
+    }
+
+    /// Static cadence, TTL and grant cutoff inputs for every available plan.
+    /// Queue age and measured sweep duration remain database-backed runtime
+    /// status and are deliberately absent here.
+    #[must_use]
+    pub fn external_refresh_timings(
+        &self,
+        registry: &CompiledRegistry,
+    ) -> Vec<ExternalRefreshTiming> {
+        self.resolve_external_refresh(registry)
+            .available
+            .values()
+            .map(|plan| {
+                let primary = &plan.target.primary_projection;
+                let (ttl, cutoff) = plan.target.label_projection.as_ref().map_or(
+                    (
+                        primary.effective_cache_ttl_seconds,
+                        primary.grant_valid_until,
+                    ),
+                    |label| {
+                        (
+                            primary
+                                .effective_cache_ttl_seconds
+                                .min(label.effective_cache_ttl_seconds),
+                            primary.grant_valid_until.min(label.grant_valid_until),
+                        )
+                    },
+                );
+                ExternalRefreshTiming {
+                    plan: plan.id.clone(),
+                    interval_seconds: plan.interval.as_secs(),
+                    effective_cache_ttl_seconds: ttl,
+                    grant_valid_until: cutoff.timestamp(),
+                }
+            })
+            .collect()
+    }
+
     pub fn secret_resolver(&self) -> Result<SecretResolver> {
         self.secret_providers.resolver()
     }
@@ -1499,6 +1609,22 @@ fn validate_runtime_definition_ids(raw: &RawRuntimeConfig) -> Result<()> {
                 .collect::<Vec<_>>(),
             RuntimeConfigError::ReviewAuthorityIdCollision,
         ),
+        (
+            raw.external_refresh
+                .workers()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            RuntimeConfigError::ExternalRefreshIdCollision,
+        ),
+        (
+            raw.external_refresh
+                .plans()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            RuntimeConfigError::ExternalRefreshIdCollision,
+        ),
     ] {
         if !lookalike_local_id_pairs(ids).is_empty() {
             return Err(error);
@@ -1524,6 +1650,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("audit", &self.audit)
             .field("cursor", &self.cursor)
             .field("event_destinations", &self.event_destinations)
+            .field("external_refresh", &self.external_refresh)
             .field("retention", &self.retention)
             .field("operational_timeouts", &self.operational_timeouts)
             .field("wasm_execution", &self.wasm_execution)
@@ -3014,6 +3141,10 @@ struct RawRuntimeConfig {
     #[serde(default)]
     external_sources:
         registry_platform_yaml::UniqueIdList<crate::external_source::ExternalSourceBinding>,
+    /// Managed scheduled and targeted refresh plans. Omission starts no
+    /// refresh worker and admits no source-change notifier.
+    #[serde(default)]
+    external_refresh: crate::external_refresh_config::ExternalRefreshConfig,
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",
@@ -4393,6 +4524,16 @@ mod schema_tests {
         let schema = super::runtime_config_schema().unwrap();
         for (map, identifier) in [
             ("/$defs/RawDestinationsConfig/properties/hooks", "LocalId"),
+            ("/$defs/ExternalRefreshConfig/properties/workers", "LocalId"),
+            ("/$defs/ExternalRefreshConfig/properties/plans", "LocalId"),
+            (
+                "/$defs/ExternalRefreshPlan/properties/sourceChanges",
+                "LocalId",
+            ),
+            (
+                "/$defs/ExternalRefreshWorker/properties/rowClaims",
+                "ExternalId",
+            ),
             (
                 "/$defs/RawAuthorityClaimsConfig/properties/trustedActors",
                 "ExternalId",

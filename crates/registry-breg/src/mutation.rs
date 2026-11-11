@@ -375,6 +375,7 @@ pub struct MutationPlan {
     /// A create item of an `import` route. Change control does not count it
     /// as a direct write: an operator-opened import authority bounds it.
     imported_item: bool,
+    external_refresh_enabled: bool,
 }
 
 impl MutationPlan {
@@ -437,6 +438,7 @@ impl MutationPlan {
             constraint_names: inventory.constraints.clone(),
             temporal_exclusion_constraints,
             imported_item: false,
+            external_refresh_enabled: crate::postgres::external_projection::enabled(registry),
         })
     }
 
@@ -499,6 +501,7 @@ impl MutationPlan {
             constraint_names: self.constraint_names.clone(),
             temporal_exclusion_constraints: self.temporal_exclusion_constraints.clone(),
             imported_item: self.route.operation == Operation::Import,
+            external_refresh_enabled: self.external_refresh_enabled,
         })
     }
 }
@@ -1277,6 +1280,13 @@ impl MutationTransaction {
             self.field_encryption.as_deref(),
         )
         .await?;
+        let refresh_captures = [external_refresh_capture(&request.plan.entity.id, &current)];
+        capture_external_refresh_rows(
+            transaction.transaction(),
+            &refresh_captures,
+            request.plan.external_refresh_enabled,
+        )
+        .await?;
         let record_reference = match request.record_id {
             Some(_) => binding.record_reference.clone(),
             None => record_reference(
@@ -1976,6 +1986,16 @@ impl MutationTransaction {
             self.field_encryption.as_deref(),
         )
         .await?;
+        let refresh_captures = timer_rows
+            .iter()
+            .map(|current| external_refresh_capture(&request.plan.entity.id, current))
+            .collect::<Vec<_>>();
+        capture_external_refresh_rows(
+            transaction.transaction(),
+            &refresh_captures,
+            request.plan.external_refresh_enabled,
+        )
+        .await?;
         let result_count =
             u16::try_from(held_items.len()).map_err(|_| MutationError::Unavailable)?;
         let committed = allocate_revision_commit(
@@ -2660,6 +2680,58 @@ pub(crate) struct CurrentRow {
     record_lifecycle: String,
     before_data: Option<Map<String, Value>>,
     data: Map<String, Value>,
+}
+
+/// Capture only local Record identity and the changed configured field names.
+/// The durable plan inventory decides which changes matter. Creates and
+/// tombstones pass an empty field set, which deliberately matches every plan
+/// for the Record type. The call is skipped entirely for packages without an
+/// indexed projection, including packages created before the queue existed.
+pub(super) struct ExternalRefreshCapture {
+    entity_id: String,
+    record_id: Uuid,
+    changed_fields: BTreeSet<String>,
+}
+
+pub(super) fn external_refresh_capture(
+    entity_id: &str,
+    current: &CurrentRow,
+) -> ExternalRefreshCapture {
+    let changed_fields = match (&current.before_data, current.record_lifecycle.as_str()) {
+        (Some(before), "active") => before
+            .keys()
+            .chain(current.data.keys())
+            .filter(|field| before.get(*field) != current.data.get(*field))
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        _ => BTreeSet::new(),
+    };
+    ExternalRefreshCapture {
+        entity_id: entity_id.to_owned(),
+        record_id: current.record_uuid,
+        changed_fields,
+    }
+}
+
+pub(super) async fn capture_external_refresh_rows(
+    transaction: &Transaction<'_>,
+    captures: &[ExternalRefreshCapture],
+    enabled: bool,
+) -> Result<(), MutationError> {
+    if !enabled {
+        return Ok(());
+    }
+    for capture in captures {
+        crate::postgres::external_refresh_queue::capture_local_record(
+            transaction,
+            &capture.entity_id,
+            capture.record_id,
+            &capture.changed_fields,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    }
+    Ok(())
 }
 
 /// Acquire every existing batch target in canonical UUID order before the

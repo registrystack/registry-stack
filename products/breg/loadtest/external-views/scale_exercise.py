@@ -3,6 +3,7 @@
 
 """Scale corpus, independent oracle and native HTTP acceptance driver."""
 
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 import os
@@ -30,6 +31,8 @@ RELATED_REQUEST_BUDGET = 6
 RELATED_PAGE_ROWS = 40
 RELATED_ROWS = 120
 FRESHNESS_SECONDS = 600
+MANAGED_TTL_SECONDS = 1_800
+MANAGED_INTERVAL_SECONDS = 900
 QUERY_SECONDS = 5
 READ_PAGE_SIZE = 50
 MAX_PLAN_BYTES = 16 * 1024 * 1024
@@ -37,13 +40,46 @@ PERSON_VIEW = "/v1/external-views/licence-holder-indexed/holder"
 HOLDINGS_VIEW = "/v1/external-views/business-holdings-indexed/holdings"
 
 
+@dataclass(frozen=True)
+class Corpus:
+    roots: int
+    denied: int
+    keys: int
+    person_request_budget: int
+
+
+SCALE_CORPUS = Corpus(ELIGIBLE_ROOTS, DENIED_ROOTS, HOLDER_KEYS, PERSON_REQUEST_BUDGET)
+SMOKE_CORPUS = Corpus(2_000, 200, 100, 3)
+
+
+def managed_runtime():
+    return {
+        "workers": {"zone-a": {"accessProfile": "projection-refresh",
+                               "requesterClient": "licensing-refresh",
+                               "principal": "synthetic-licensing-refresh",
+                               "rowClaims": {"jurisdiction": "zone-a"}}},
+        "plans": {
+            "holders": {"target": {"view": "licence-holder-indexed", "link": "holder"},
+                        "worker": "zone-a", "intervalSeconds": MANAGED_INTERVAL_SECONDS,
+                        "pageSize": REFRESH_PAGE_SIZE,
+                        "sourceChanges": {"person-indexed": {
+                            "requesterClient": "population-change-notifier",
+                            "requiredScope": "registry:licensing:person-change-hint",
+                        }}},
+            "holdings": {"target": {"view": "business-holdings-indexed", "link": "holdings"},
+                         "worker": "zone-a", "intervalSeconds": MANAGED_INTERVAL_SECONDS,
+                         "pageSize": REFRESH_PAGE_SIZE},
+        },
+    }
+
+
 def root_id(index, business=False):
     family = "4001" if business else "4000"
     return f"00000000-0000-{family}-8000-{index:012x}"
 
 
-def key_for_root(index):
-    return (index - 1) % HOLDER_KEYS + 1
+def key_for_root(index, corpus=SCALE_CORPUS):
+    return (index - 1) % corpus.keys + 1
 
 
 def person_fields(key):
@@ -53,24 +89,25 @@ def person_fields(key):
     return {"family-name": surname, "given-name": f"Given-{key:06d}"}
 
 
-def exact_oracle(surname):
+def exact_oracle(surname, corpus=SCALE_CORPUS):
     matches = {
-        key for key in range(1, HOLDER_KEYS + 1)
+        key for key in range(1, corpus.keys + 1)
         if (person_fields(key) or {}).get("family-name") == surname
     }
-    return [root_id(i) for i in range(1, ELIGIBLE_ROOTS + 1) if key_for_root(i) in matches]
+    return [root_id(i) for i in range(1, corpus.roots + 1) if key_for_root(i, corpus) in matches]
 
 
-def ordered_oracle(descending=False, roots=ELIGIBLE_ROOTS, limit=None):
+def ordered_oracle(descending=False, roots=None, limit=None, corpus=SCALE_CORPUS):
+    roots = corpus.roots if roots is None else roots
     groups = {}
-    for key in range(1, HOLDER_KEYS + 1):
+    for key in range(1, corpus.keys + 1):
         surname = (person_fields(key) or {}).get("family-name")
         groups.setdefault(surname, set()).add(key)
     surnames = sorted((name for name in groups if name is not None), reverse=descending)
     ordered = []
     for surname in [*surnames, None]:
         keys = sorted(groups[surname])
-        for offset in range(0, roots, HOLDER_KEYS):
+        for offset in range(0, roots, corpus.keys):
             for key in keys:
                 if offset + key > roots:
                     break
@@ -90,9 +127,15 @@ def holding_class(count):
 
 
 class ScaleFixture(Fixture):
+    def __init__(self, corpus=SCALE_CORPUS):
+        self.corpus = corpus
+        super().__init__()
+
     def _reset(self):
         super()._reset()
         self._seen_people = set()
+        self._person_selector_reads = 0
+        self._renamed_people = {}
         self._collection_calls = {}
         self._largest_batch = 0
         self._denied_selectors = 0
@@ -110,12 +153,15 @@ class ScaleFixture(Fixture):
 
     def _one_person(self, key, fields):
         match = re.fullmatch(r"scale-person-([0-9]{6})", key) if isinstance(key, str) else None
-        if not match or not 1 <= int(match[1]) <= HOLDER_KEYS + 1:
+        if not match or not 1 <= int(match[1]) <= self.corpus.keys + 1:
             self._denied_selectors += 1
             require(False, "selector outside the approved scale scope", 403)
         number = int(match[1])
         self._seen_people.add(number)
+        self._person_selector_reads += 1
         data = person_fields(number)
+        if number in self._renamed_people:
+            data["family-name"] = self._renamed_people[number]
         if data is None:
             return {"subject": key, "state": "confirmed-absent"}
         return {"subject": key, "state": "found", "revision": digest(data),
@@ -147,20 +193,27 @@ class ScaleFixture(Fixture):
                 self._largest_batch = max(self._largest_batch, len(body["keys"]))
         return result
 
+    def rename_person(self, key, surname):
+        with self._lock:
+            expect(1 <= key <= self.corpus.keys and person_fields(key) is not None,
+                   "the fixture cannot rename an absent or out-of-scope person")
+            self._renamed_people[key] = surname
+
     def status(self):
         with self._lock:
             return {**super().status(), "uniquePersonKeys": len(self._seen_people),
                     "largestBatch": self._largest_batch, "deniedSelectors": self._denied_selectors,
+                    "personSelectorReads": self._person_selector_reads,
                     "collections": dict(self._collection_calls)}
 
 
-def scale_project(project, work):
+def scale_project(project, work, ttl=FRESHNESS_SECONDS):
     target = work / "scale-project"
     (target / "tests").mkdir(parents=True)
     authored = (project / "registry.yaml").read_text()
     expect(authored.count("cacheTtlSeconds: 300") == 2, "the fixture TTL declarations changed")
     (target / "registry.yaml").write_text(
-        authored.replace("cacheTtlSeconds: 300", f"cacheTtlSeconds: {FRESHNESS_SECONDS}")
+        authored.replace("cacheTtlSeconds: 300", f"cacheTtlSeconds: {ttl}")
     )
     shutil.copyfile(project / "tests/journeys.yaml", target / "tests/journeys.yaml")
     return target
@@ -171,7 +224,7 @@ def quoted(identifier):
     return f'"{identifier}"'
 
 
-def seed_sql(inventory):
+def seed_sql(inventory, corpus=SCALE_CORPUS):
     licence = inventory["entities"]["licence"]
     business = inventory["entities"]["licensed-business"]
 
@@ -199,10 +252,10 @@ DO $fixture$ BEGIN
 END; $fixture$;
 INSERT INTO {licences} (record_id,{licence_columns})
 SELECT ('00000000-0000-4000-8000-'||lpad(to_hex(i),12,'0'))::uuid, 'L-scale-'||i,
-       CASE WHEN i<={ELIGIBLE_ROOTS} THEN 'scale-person-'||lpad((((i-1)%{HOLDER_KEYS})+1)::text,6,'0')
-            ELSE 'scale-denied-'||lpad((i-{ELIGIBLE_ROOTS})::text,6,'0') END,
-       CASE WHEN i<={ELIGIBLE_ROOTS} THEN 'zone-a' ELSE 'zone-b' END
-FROM generate_series(1, {ELIGIBLE_ROOTS + DENIED_ROOTS}) AS i;
+       CASE WHEN i<={corpus.roots} THEN 'scale-person-'||lpad((((i-1)%{corpus.keys})+1)::text,6,'0')
+            ELSE 'scale-denied-'||lpad((i-{corpus.roots})::text,6,'0') END,
+       CASE WHEN i<={corpus.roots} THEN 'zone-a' ELSE 'zone-b' END
+FROM generate_series(1, {corpus.roots + corpus.denied}) AS i;
 INSERT INTO {businesses} (record_id,{business_columns})
 SELECT ('00000000-0000-4001-8000-'||lpad(to_hex(i),12,'0'))::uuid,
        'B-scale-'||i,'scale-business-'||i,CASE WHEN i<=2 THEN 'zone-a' ELSE 'zone-b' END
@@ -282,12 +335,12 @@ def observe(origin, path, query, headers, timings, name):
     return result
 
 
-def person_page(response, expected):
+def person_page(response, expected, corpus=SCALE_CORPUS):
     rows = records(response)
     expect([row["rootId"] for row in rows] == expected, "native Person page differed from the local-id oracle")
     for row in rows:
         index = int(row["rootId"][-12:], 16)
-        fields = person_fields(key_for_root(index))
+        fields = person_fields(key_for_root(index, corpus))
         expect(row["fields"] == (fields or {}) and row["availability"] == ("available" if fields else "absent"),
                "native Person value or absence differed from the fixture oracle")
     return response[1]
@@ -308,6 +361,156 @@ def sweep_counts():
     return dict.fromkeys(("httpRequests", "processed", "published", "reused", "unavailable"), 0)
 
 
+def step_counts():
+    return {**sweep_counts(), "retried": 0, "settled": 0, "sweepAcquisitionFailures": 0}
+
+
+def managed_step(origin, plan, actor, measured, force=False):
+    status, document = request(origin, f"/v1/external-refresh-plans/{plan}/step", actor,
+                               method="POST", body={"startSweep": True} if force else {})
+    measured["httpRequests"] += 1
+    expect(status == 200 and isinstance(document, dict), f"managed refresh step for {plan} failed (HTTP {status})")
+    for field in ("processed", "published", "reused", "unavailable", "retried", "settled"):
+        value = document.get(field)
+        expect(type(value) is int and value >= 0, f"managed refresh returned an invalid {field} count")
+        measured[field] += value
+    for field in ("moreWork", "sweepCompleted"):
+        expect(type(document.get(field)) is bool, f"managed refresh omitted {field}")
+    failures = document.get("sweepAcquisitionFailures")
+    expect(type(failures) is int and failures >= 0, "managed refresh returned an invalid sweep failure count")
+    measured["sweepAcquisitionFailures"] = failures
+    return document
+
+
+def managed_sweep(origin, plan, actor, measured, step_budget, force=False, during=None):
+    start = time.monotonic()
+    for step in range(step_budget):
+        expect(time.monotonic() - start < FRESHNESS_SECONDS, "managed refresh exceeded its sweep budget")
+        document = managed_step(origin, plan, actor, measured, force and step == 0)
+        if document["sweepCompleted"]:
+            measured["stepSeconds"] = round(time.monotonic() - start, 6)
+            expect(measured["stepSeconds"] < FRESHNESS_SECONDS, "managed refresh exceeded its sweep budget")
+            expect(measured["sweepAcquisitionFailures"] == measured["unavailable"] == 0,
+                   "managed refresh completed with unavailable acquisitions")
+            return
+        expect(document["moreWork"], "managed refresh became idle before its sweep completed")
+        if step == 0 and during is not None:
+            during()
+        if (step + 1) % 1_000 == 0:
+            print(f"Managed {plan} sweep processed {measured['processed']:,} roots", flush=True)
+    expect(False, "managed refresh exceeded its predeclared step budget")
+
+
+def source_delta(before, after):
+    return {operation: total - before["operations"].get(operation, 0)
+            for operation, total in after["operations"].items()
+            if total != before["operations"].get(operation, 0)}
+
+
+def freshness(work, name):
+    # Only aggregate timestamps and counts leave the disposable fixture database.
+    return json.loads(postgres(work, "runtime-url", """
+SELECT jsonb_object_agg(projection_id, metrics) FROM (
+    SELECT s.projection_id,
+           jsonb_build_object('freshSnapshots',count(*),
+                              'oldestObservedAtEpochSeconds',min(o.observed_at),
+                              'oldestObservationAgeSeconds',
+                                  floor(extract(epoch FROM statement_timestamp()))::bigint-min(o.observed_at),
+                              'minimumRemainingTtlSeconds',
+                                  min(o.expires_at)-floor(extract(epoch FROM statement_timestamp()))::bigint)
+               AS metrics
+    FROM registry_internal.registry_external_projection_scopes AS s
+    JOIN registry_internal.registry_external_projection_snapshots AS o USING (projection_id)
+    WHERE s.active AND s.epoch=o.epoch
+      AND o.expires_at > floor(extract(epoch FROM statement_timestamp()))::bigint
+    GROUP BY s.projection_id
+) AS stats;
+""", "scale-freshness-" + name))
+
+
+def managed_repeat(work, origin, tokens, source, report, actor, officer, initial, exact_count, local_admitted):
+    corpus = source.corpus
+    timing = report["queries"]
+    managed = report["managedRefresh"]
+
+    def targeted(name, admitted):
+        counts = managed[name] = step_counts()
+        before = source.status()
+        started = time.monotonic()
+        document = managed_step(origin, "holders", actor, counts)
+        counts["admissionToStepStartSeconds"] = round(started - admitted, 6)
+        counts["admissionToStepCompletionSeconds"] = round(time.monotonic() - admitted, 6)
+        after = source.status()
+        counts["sourceRequests"] = source_delta(before, after)
+        counts["sourceSelectorReads"] = after["personSelectorReads"] - before["personSelectorReads"]
+        expect(not document["moreWork"] and counts["settled"] == counts["published"] == 1
+               and counts["unavailable"] == counts["retried"] == 0
+               and counts["sourceRequests"] == {"person-batch": 1} and counts["sourceSelectorReads"] == 1,
+               f"managed {name} did not settle with only its target acquisition")
+        return counts
+
+    local = targeted("localLink", local_admitted)
+    response = observe(origin, PERSON_VIEW + "/records", initial, officer, timing, "local-link-ready")
+    expect(response[0] == 200 and response[1]["count"] == exact_count,
+           "local link work did not restore indexed coverage")
+    local["admissionToIndexedReadySeconds"] = round(time.monotonic() - local_admitted, 6)
+
+    for repeat in range(1, 3):
+        print(f"Running managed repeat {repeat} with indexed reads between steps", flush=True)
+        run = step_counts()
+        managed["warmSweeps"].append(run)
+        started = time.monotonic()
+        before = source.status()
+
+        def read_ready(operation):
+            source_before_read = source.status()
+            status, doc = observe(origin, PERSON_VIEW + "/records", initial, officer, timing, operation)
+            expect(status == 200 and doc["count"] == exact_count,
+                   "an indexed read lost coverage during a managed repeat")
+            expect(source.status() == source_before_read, "an indexed read contacted the source")
+
+        managed_sweep(origin, "holders", actor, run, (corpus.roots // REFRESH_PAGE_SIZE) + 3,
+                      force=True, during=lambda: read_ready(f"warm-{repeat}-in-progress"))
+        read_ready(f"warm-{repeat}-ready")
+        run["startToIndexedReadySeconds"] = round(time.monotonic() - started, 6)
+        run["sourceRequests"] = source_delta(before, source.status())
+        run["freshness"] = freshness(work, f"warm-{repeat}")
+        person = run["freshness"]["person-indexed"]
+        run["intervalPlusReadySeconds"] = MANAGED_INTERVAL_SECONDS + run["startToIndexedReadySeconds"]
+        expect(run["processed"] == corpus.roots + 1 and run["published"] == corpus.keys + 1
+               and run["reused"] == corpus.roots - corpus.keys
+               and set(run["sourceRequests"]) == {"person-batch"}
+               and 0 < run["sourceRequests"]["person-batch"] <= corpus.person_request_budget
+               and source.status()["personSelectorReads"] - before["personSelectorReads"] == corpus.keys + 1
+               and person["freshSnapshots"] == corpus.keys + 1
+               and person["minimumRemainingTtlSeconds"] > MANAGED_INTERVAL_SECONDS
+               and run["intervalPlusReadySeconds"] < MANAGED_TTL_SECONDS,
+               "managed repeat exceeded its predeclared population, source or freshness budget")
+
+    print("Checking a source hint updates all links sharing one holder", flush=True)
+    notifier = {"Authorization": "Bearer " + fixture_credential(tokens["population-change-notifier"])}
+    key, surname = 5, "Corrected-Scale-Holder"
+    source.rename_person(key, surname)
+    submitted = time.monotonic()
+    status, _ = request(origin, "/v1/external-refresh-plans/holders/hints", notifier, method="POST", body={
+        "hintId": "scale-correction-5", "projection": "person-indexed",
+        "selectorScheme": "urn:example:person-number", "selector": f"scale-person-{key:06}",
+    })
+    admitted = time.monotonic()
+    expect(status == 202, "managed source hint was not durably admitted")
+    hint = targeted("personHint", admitted)
+    hint["submissionToAdmissionSeconds"] = round(admitted - submitted, 6)
+    query = {**initial, "$filter": f"family-name eq '{surname}'"}
+    response = observe(origin, PERSON_VIEW + "/records", query, officer, timing, "person-hint-ready")
+    rows = records(response)
+    expected = [root_id(index) for index in range(key, corpus.roots + 1, corpus.keys)]
+    expect(response[1]["count"] == len(expected) and [row["rootId"] for row in rows] == expected
+           and all(row["fields"]["family-name"] == surname for row in rows),
+           "managed source hint did not update every root linked to its holder")
+    hint["verifiedRoots"] = len(expected)
+    hint["admissionToIndexedReadySeconds"] = round(time.monotonic() - admitted, 6)
+
+
 def file_digest(path):
     digestor = sha256()
     with path.open("rb") as stream:
@@ -316,21 +519,27 @@ def file_digest(path):
     return digestor.hexdigest()
 
 
-def run_scale(work, package, origin, tokens, source, plan_log, binaries):
+def run_scale(work, package, origin, tokens, source, plan_log, binaries, managed=False):
+    corpus = source.corpus
     report = {
         "passed": False, "environment": {"host": platform.platform(), "cpuCount": os.cpu_count()},
         "candidateBinarySha256": {
             name: file_digest(binary) for name, binary in binaries.items()
         },
-        "corpus": {"eligibleRoots": ELIGIBLE_ROOTS, "deniedRoots": DENIED_ROOTS,
-                   "distinctHolderKeys": HOLDER_KEYS, "authorizedAbsentKeys": ABSENT_KEYS,
+        "corpus": {"eligibleRoots": corpus.roots, "deniedRoots": corpus.denied,
+                   "distinctHolderKeys": corpus.keys, "authorizedAbsentKeys": corpus.keys // 20,
                    "authorizedRelatedRows": RELATED_ROWS * 2, "deniedRelatedRows": RELATED_ROWS * 2},
         "budgets": {"freshnessSeconds": FRESHNESS_SECONDS,
-                    "querySeconds": QUERY_SECONDS, "personSourceRequests": PERSON_REQUEST_BUDGET,
+                    "querySeconds": QUERY_SECONDS, "personSourceRequests": corpus.person_request_budget,
                     "relatedSourceRequests": RELATED_REQUEST_BUDGET, "adapterBatchKeys": BATCH_KEYS},
         "personRefresh": sweep_counts(), "holdingsRefresh": sweep_counts(), "queries": [],
         "seeding": "Migration role inserted only fixture-owned base rows under fixture-editor RLS. No projection cache or revision history was fabricated.",
     }
+    if managed:
+        report["managedRefresh"] = {"cacheTtlSeconds": MANAGED_TTL_SECONDS,
+                                    "intervalSeconds": MANAGED_INTERVAL_SECONDS,
+                                    "warmSweeps": []}
+        report["personRefresh"], report["holdingsRefresh"] = step_counts(), step_counts()
     started = None
     log_start = None
     try:
@@ -351,29 +560,35 @@ SELECT jsonb_build_object('version',current_setting('server_version'),
         names = json.loads((package / "inventories/physical-names.json").read_text())
         print("Loading the scale corpus into its fixture-owned PostgreSQL tables", flush=True)
         seeded_at = time.monotonic()
-        postgres(work, "migration-url", seed_sql(names), "scale-seed")
+        postgres(work, "migration-url", seed_sql(names, corpus), "scale-seed")
         report["seedSeconds"] = round(time.monotonic() - seeded_at, 6)
         officer = {"Authorization": "Bearer " + fixture_credential(tokens["officer"])}
         refresh_actor = {"Authorization": "Bearer " + fixture_credential(tokens["licensing-refresh"])}
         editor = {"Authorization": "Bearer " + fixture_credential(tokens["fixture-editor"])}
-        exact = exact_oracle("Cohort")
-        absent = exact_oracle(None)
-        ascending = ordered_oracle(limit=2 * READ_PAGE_SIZE)
-        descending = ordered_oracle(descending=True, limit=2 * READ_PAGE_SIZE)
+        exact = exact_oracle("Cohort", corpus)
+        absent = exact_oracle(None, corpus)
+        ascending = ordered_oracle(limit=2 * READ_PAGE_SIZE, corpus=corpus)
+        descending = ordered_oracle(descending=True, limit=2 * READ_PAGE_SIZE, corpus=corpus)
 
         print("Refreshing indexed projections through the candidate HTTP service", flush=True)
         started = time.monotonic()
-        refresh(origin, PERSON_VIEW, refresh_actor, report["personRefresh"], started, ELIGIBLE_ROOTS // REFRESH_PAGE_SIZE)
-        refresh(origin, HOLDINGS_VIEW, refresh_actor, report["holdingsRefresh"], started, 1)
+        if managed:
+            managed_sweep(origin, "holders", refresh_actor, report["personRefresh"],
+                          corpus.roots // REFRESH_PAGE_SIZE + 2)
+            managed_sweep(origin, "holdings", refresh_actor, report["holdingsRefresh"], 2, force=True)
+        else:
+            refresh(origin, PERSON_VIEW, refresh_actor, report["personRefresh"], started,
+                    ELIGIBLE_ROOTS // REFRESH_PAGE_SIZE)
+            refresh(origin, HOLDINGS_VIEW, refresh_actor, report["holdingsRefresh"], started, 1)
         report["refreshSeconds"] = round(time.monotonic() - started, 6)
         before = source.status()
         report["sourceAtEndOfRefresh"] = before
-        expect(report["personRefresh"]["processed"] == ELIGIBLE_ROOTS
-               and report["personRefresh"]["published"] == HOLDER_KEYS
+        expect(report["personRefresh"]["processed"] == corpus.roots
+               and report["personRefresh"]["published"] == corpus.keys
                and report["personRefresh"]["unavailable"] == 0
-               and report["personRefresh"]["reused"] == ELIGIBLE_ROOTS - HOLDER_KEYS
-               and before["uniquePersonKeys"] == HOLDER_KEYS and before["largestBatch"] == BATCH_KEYS
-               and before["operations"].get("person-batch", 0) <= PERSON_REQUEST_BUDGET,
+               and report["personRefresh"]["reused"] == corpus.roots - corpus.keys
+               and before["uniquePersonKeys"] == corpus.keys and before["largestBatch"] == BATCH_KEYS
+               and before["operations"].get("person-batch", 0) <= corpus.person_request_budget,
                "Person refresh did not meet the predeclared population or source budget")
         expect(report["holdingsRefresh"]["processed"] == 2 and report["holdingsRefresh"]["published"] == 2
                and report["holdingsRefresh"]["unavailable"] == 0
@@ -387,29 +602,38 @@ SELECT jsonb_build_object('version',current_setting('server_version'),
         print("Checking native indexed queries against the independent oracle", flush=True)
         initial = {"$filter": "family-name eq 'Cohort'", "$orderby": "family-name",
                    "$count": "true", "$top": str(READ_PAGE_SIZE)}
-        for _ in range(3):
+        for repetition in range(3):
             document = person_page(observe(origin, PERSON_VIEW + "/records", initial, officer, timing, "exact-first"),
-                                   exact[:READ_PAGE_SIZE])
+                                   exact[:READ_PAGE_SIZE], corpus)
             expect(document.get("count") == len(exact), "native surname count differed from the oracle")
+            if managed and repetition == 0:
+                cold = report["managedRefresh"]["cold"] = {
+                    "startToIndexedReadySeconds": round(time.monotonic() - started, 6),
+                    "freshness": freshness(work, "cold"),
+                }
+                person = cold["freshness"]["person-indexed"]
+                expect(person["freshSnapshots"] == corpus.keys
+                       and person["minimumRemainingTtlSeconds"] > MANAGED_INTERVAL_SECONDS,
+                       "managed cold fill did not meet its freshness budget")
         for offset in range(READ_PAGE_SIZE, len(exact), READ_PAGE_SIZE):
             document = person_page(observe(origin, PERSON_VIEW + "/records", {"$skiptoken": document["nextCursor"]},
                                            officer, timing, "exact-continuation"),
-                                   exact[offset:offset + READ_PAGE_SIZE])
+                                   exact[offset:offset + READ_PAGE_SIZE], corpus)
         expect("nextCursor" not in document, "native surname results have additional rows")
         for direction, expected in (("asc", ascending), ("desc", descending)):
             query = {"$orderby": f"family-name {direction}", "$top": str(READ_PAGE_SIZE), "$count": "true"}
             document = person_page(observe(origin, PERSON_VIEW + "/records", query, officer, timing, "ordered-first"),
-                                   expected[:READ_PAGE_SIZE])
-            expect(document.get("count") == ELIGIBLE_ROOTS, "the native root count included denied roots")
+                                   expected[:READ_PAGE_SIZE], corpus)
+            expect(document.get("count") == corpus.roots, "the native root count included denied roots")
             person_page(observe(origin, PERSON_VIEW + "/records", {"$skiptoken": document["nextCursor"]},
-                                officer, timing, "ordered-continuation"), expected[READ_PAGE_SIZE:])
+                                officer, timing, "ordered-continuation"), expected[READ_PAGE_SIZE:], corpus)
         document = person_page(observe(origin, PERSON_VIEW + "/records", {
             "$filter": "family-name eq null", "$orderby": "family-name desc",
             "$top": str(READ_PAGE_SIZE), "$count": "true",
-        }, officer, timing, "missing-sort-first"), absent[:READ_PAGE_SIZE])
+        }, officer, timing, "missing-sort-first"), absent[:READ_PAGE_SIZE], corpus)
         expect(document.get("count") == len(absent), "authorized missing-value count differed from the oracle")
         person_page(observe(origin, PERSON_VIEW + "/records", {"$skiptoken": document["nextCursor"]},
-                            officer, timing, "missing-sort-continuation"), absent[READ_PAGE_SIZE:2 * READ_PAGE_SIZE])
+                            officer, timing, "missing-sort-continuation"), absent[READ_PAGE_SIZE:2 * READ_PAGE_SIZE], corpus)
 
         for parent in (1, 2):
             path = HOLDINGS_VIEW + "/records/" + root_id(parent, business=True)
@@ -440,16 +664,22 @@ SELECT jsonb_build_object('version',current_setting('server_version'),
 
         status, _ = request(origin, "/v1/records/licences", {**editor, "Idempotency-Key": "external-scale-deficit"},
                             method="POST", query={"accessProfile": "fixture-editor"}, body={"data": {
-                                "licenceNumber": "L-scale-deficit", "holderKey": f"scale-person-{HOLDER_KEYS + 1:06}",
+                                "licenceNumber": "L-scale-deficit", "holderKey": f"scale-person-{corpus.keys + 1:06}",
                                 "jurisdiction": "zone-a",
                             }})
+        local_admitted = time.monotonic()
         expect(status == 201, "the native fixture could not insert the uncovered root")
-        expect(observe(origin, PERSON_VIEW + "/records", initial, officer, timing, "coverage-deficit")
-               == (503, {"status": "incomplete"}), "the native predicate masked missing coverage")
+        status, problem = observe(origin, PERSON_VIEW + "/records", initial, officer, timing, "coverage-deficit")
+        expect(status == 503 and isinstance(problem, dict) and problem.get("status") == 503
+               and problem.get("code") == "external_view.incomplete",
+               "the native predicate did not report incomplete indexed coverage")
         expect(source.status() == before, "indexed or concealed reads contacted the upstream source")
         expect(time.monotonic() - started < FRESHNESS_SECONDS, "indexed verification exceeded the freshness window")
         report["nativePlans"] = capture_plans(plan_log, log_start, database, role, work)
-        expect(report["nativePlans"] >= 3, "the plan log lacks native coverage and page plans with buffers")
+        if corpus == SCALE_CORPUS:
+            expect(report["nativePlans"] >= 3, "the plan log lacks native coverage and page plans with buffers")
+        if managed:
+            managed_repeat(work, origin, tokens, source, report, refresh_actor, officer, initial, len(exact), local_admitted)
         report["passed"] = True
     except JourneyError as error:
         report["failure"] = str(error)

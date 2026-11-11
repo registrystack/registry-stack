@@ -4,15 +4,18 @@
 """Deterministic checks for the native scale fixture and independent oracle."""
 
 import unittest
+from unittest.mock import patch
 
 import fixture_path
 fixture_path.ensure_importable()
 from scale_exercise import (
     ABSENT_KEYS, BATCH_KEYS, DENIED_ROOTS, ELIGIBLE_ROOTS, HOLDER_KEYS,
-    MATCH_KEYS, PERSON_REQUEST_BUDGET, REFRESH_PAGE_SIZE, ScaleFixture,
-    exact_oracle, holding_oracle, native_plans, ordered_oracle, root_id, seed_sql,
+    MATCH_KEYS, PERSON_REQUEST_BUDGET, REFRESH_PAGE_SIZE, ScaleFixture, SMOKE_CORPUS,
+    exact_oracle, holding_oracle, managed_sweep, native_plans, ordered_oracle, root_id, seed_sql,
+    step_counts,
 )
 from synthetic_source import FixtureFault
+from journey import JourneyError
 
 
 class ScaleFixtureTests(unittest.TestCase):
@@ -25,6 +28,35 @@ class ScaleFixtureTests(unittest.TestCase):
         self.assertEqual(PERSON_REQUEST_BUDGET, 1_100)
         self.assertEqual(len(exact_oracle("Cohort")), len(MATCH_KEYS) * 20)
         self.assertEqual(len(exact_oracle(None)), 50_000)
+
+    def test_smoke_corpus_still_checks_reused_absent_and_denied_subjects(self):
+        source = ScaleFixture(SMOKE_CORPUS)
+        self.assertEqual(SMOKE_CORPUS.roots // SMOKE_CORPUS.keys, 20)
+        self.assertEqual(len(exact_oracle("Cohort", SMOKE_CORPUS)), 40)
+        self.assertEqual(len(exact_oracle(None, SMOKE_CORPUS)), 100)
+        source.rename_person(5, "Renamed")
+        query = {"type": "batch", "fields": ["family-name"], "keys": ["scale-person-000005"]}
+        body, _ = source.acquire("person-batch", query)
+        self.assertEqual(body["records"][0]["properties"]["family-name"], "Renamed")
+        self.assertEqual(source.status()["personSelectorReads"], 1)
+        with self.assertRaises(FixtureFault):
+            source.acquire("person-batch", {**query, "keys": ["scale-person-000102"]})
+
+    def test_managed_driver_requests_one_sweep_and_stops_on_completion(self):
+        def report(processed, finished):
+            return (200, {**dict.fromkeys(("processed", "published", "reused", "unavailable",
+                                            "retried", "settled", "sweepAcquisitionFailures"), 0),
+                          "processed": processed, "sweepCompleted": finished, "moreWork": not finished})
+        with patch("scale_exercise.request", side_effect=[report(100, False), report(20, True)]) as call:
+            measured = step_counts()
+            managed_sweep("http://localhost:1", "holders", {}, measured, 2, force=True)
+        self.assertEqual(measured["processed"], 120)
+        self.assertEqual(measured["httpRequests"], 2)
+        self.assertEqual([c.kwargs["body"] for c in call.call_args_list], [{"startSweep": True}, {}])
+        self.assertEqual(call.call_args.args[1], "/v1/external-refresh-plans/holders/step")
+        with patch("scale_exercise.request", return_value=report(100, False)):
+            with self.assertRaisesRegex(JourneyError, "step budget"):
+                managed_sweep("http://localhost:1", "holders", {}, step_counts(), 1)
 
     def test_oracle_orders_by_source_value_then_immutable_local_id(self):
         ascending = ordered_oracle(roots=500)

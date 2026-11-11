@@ -38,6 +38,7 @@ IDENTITIES = {
     "licensing-refresh": ("refresh", "service", "refresh"),
     "fixture-editor": ("editor", "service", "write"),
 }
+MANAGED_NOTIFIER = {"population-change-notifier": ("notifier", "service", "person-change-hint")}
 URL_FILES = ("rehearsal-migration-url", "rehearsal-runtime-url", "migration-url", "runtime-url")
 
 
@@ -98,7 +99,7 @@ def b64(data):
     return base64.urlsafe_b64encode(data).rstrip(b"=")
 
 
-def create_fixture_identity(work, keys):
+def create_fixture_identity(work, keys, identities=IDENTITIES, token_lifetime=1800):
     signer = work / "fixture-signing-key.pem"
     command(work, "generate-fixture-key", ["openssl", "genpkey", "-algorithm", "ED25519", "-out", signer])
     signer.chmod(0o600)
@@ -112,11 +113,11 @@ def create_fixture_identity(work, keys):
     }]})
     tokens = {}
     now = int(time.time())
-    for client, (person, actor, scope) in IDENTITIES.items():
+    for client, (person, actor, scope) in identities.items():
         principal = f"synthetic-licensing-{person}"
         claims = {
             "iss": ISSUER, "aud": AUDIENCE, "sub": principal, "client_id": client,
-            "iat": now, "exp": now + 1800, "jti": token_hex(12),
+            "iat": now, "exp": now + token_lifetime, "jti": token_hex(12),
             "scope": f"registry:licensing:{scope}", "registry_actor_kind": actor,
             "registry_principal": principal, "registry_purpose": "licensing", "jurisdiction": "zone-a",
         }
@@ -135,7 +136,7 @@ def create_fixture_identity(work, keys):
     return tokens
 
 
-def runtime_config(work, roles, pack, listener, prefix="", **source):
+def runtime_config(work, roles, pack, listener, prefix="", identities=IDENTITIES, token_lifetime=1800, **source):
     return {
         "apiVersion": "id.registrystack.org/formats/breg/runtime/v1alpha1", "kind": "BRegRuntimeConfig",
         "listener": {"bind": listener},
@@ -155,7 +156,7 @@ def runtime_config(work, roles, pack, listener, prefix="", **source):
             "oidc": {
                 "issuer": ISSUER, "audience": AUDIENCE, "allowedAlgorithm": "EdDSA",
                 "accessTokenType": "JWT", "scopeClaim": "scope", "scopeSeparator": " ",
-                "allowedClients": sorted(IDENTITIES), "maximumTokenLifetimeSeconds": 1800,
+                "allowedClients": sorted(identities), "maximumTokenLifetimeSeconds": token_lifetime,
                 "leewayMilliseconds": 30000,
                 "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
             },
@@ -295,7 +296,10 @@ def run(options):
     os.umask(0o077)
     project = stage_project(options.project_dir, work) if options.project_dir is not None else PROJECT
     if scale:
-        project = scale.scale_project(project, work)
+        ttl = scale.MANAGED_TTL_SECONDS if options.managed_refresh else scale.FRESHNESS_SECONDS
+        project = scale.scale_project(project, work, ttl)
+    else:
+        ttl = 300
     keys = work / "secrets"
     keys.mkdir()
     (work / "audit").mkdir()
@@ -308,10 +312,13 @@ def run(options):
     for name in ("audit-key", "cursor-key", "source-key", "control-key"):
         private_write(keys / name, token_hex(32).encode("ascii"))
 
-    tokens = create_fixture_identity(work, keys)
+    identities = {**IDENTITIES, **MANAGED_NOTIFIER} if options.managed_refresh else IDENTITIES
+    token_lifetime = 3600 if options.managed_refresh else 1800
+    tokens = create_fixture_identity(work, keys, identities, token_lifetime)
     print("Rehearsing the fixture and building its checked package", flush=True)
     rehearsal = work / "rehearsal-runtime.json"
-    write_json(rehearsal, runtime_config(work, roles, work / "empty-package", "127.0.0.1:0", prefix="rehearsal-"))
+    write_json(rehearsal, runtime_config(work, roles, work / "empty-package", "127.0.0.1:0",
+                                        prefix="rehearsal-", token_lifetime=token_lifetime))
     credentials = work / "rehearsal-credentials.json"
     write_json(credentials, {
         "apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
@@ -327,7 +334,10 @@ def run(options):
 
     source_key = (keys / "source-key").read_text(encoding="ascii")
     control_key = (keys / "control-key").read_text(encoding="ascii")
-    fixture = scale.ScaleFixture() if scale else Fixture()
+    if scale:
+        fixture = scale.ScaleFixture(scale.SMOKE_CORPUS if options.managed_refresh_smoke else scale.SCALE_CORPUS)
+    else:
+        fixture = Fixture()
     recovery = None
     with ThreadingHTTPServer(("127.0.0.1", 0), handler(fixture, source_key, control_key)) as source:
         thread = Thread(target=source.serve_forever, kwargs={"poll_interval": 0.05})
@@ -341,14 +351,17 @@ def run(options):
             runtime = work / "runtime.json"
             package = work / "build/package"
             bindings = runtime_fragment(source_origin, "source-key", cutoff)
-            write_json(runtime, runtime_config(work, roles, package, address, **bindings))
+            if options.managed_refresh:
+                bindings["externalRefresh"] = scale.managed_runtime()
+            write_json(runtime, runtime_config(work, roles, package, address, identities=identities,
+                                               token_lifetime=token_lifetime, **bindings))
             facts_path = work / "external-source-facts.json"
             before_facts = fixture.status()
             command(work, "source-facts", [*ctl, "generate", "external-source-facts", project,
                                           "--runtime-config", runtime, "--output", facts_path])
             expect(facts_path.stat().st_mode & 0o077 == 0, "source facts were not owner-only")
             facts = json.loads(facts_path.read_text())
-            verify_source_facts(facts, bindings, scale.FRESHNESS_SECONDS if scale else 300)
+            verify_source_facts(facts, bindings, ttl)
             expect(fixture.status() == before_facts, "source facts generation contacted the source")
             print("Verified all four source bindings before activation", flush=True)
             print("Activating the package with split PostgreSQL roles", flush=True)
@@ -358,7 +371,7 @@ def run(options):
             with serving(breg, runtime, work, "breg.log", origin):
                 if scale:
                     scale.run_scale(work, package, origin, tokens, fixture, options.postgres_plan_log,
-                                    {"breg": breg, "bregctl": ctl[0]})
+                                    {"breg": breg, "bregctl": ctl[0]}, managed=options.managed_refresh)
                     return
                 print("Seeding ordinary records and checking the HTTP journey", flush=True)
                 licence, business = seed(origin, tokens["fixture-editor"].read_text(encoding="ascii"))
@@ -394,8 +407,15 @@ def main():
     parser.add_argument("--project-dir", type=Path, help="saved native project for the small fixture")
     parser.add_argument("--recovery", action="store_true", help="exercise small fixture scope withdrawal and restart")
     parser.add_argument("--scale", action="store_true", help="run the million-record acceptance fixture")
+    parser.add_argument("--managed-refresh", action="store_true", help="exercise managed refresh with --scale")
+    parser.add_argument("--managed-refresh-smoke", action="store_true",
+                        help="use a 2,000-root corpus with --scale --managed-refresh")
     parser.add_argument("--postgres-plan-log", type=Path, help="dedicated PostgreSQL auto_explain log for --scale")
     options = parser.parse_args()
+    if options.managed_refresh and not options.scale:
+        parser.error("--managed-refresh requires --scale")
+    if options.managed_refresh_smoke and not options.managed_refresh:
+        parser.error("--managed-refresh-smoke requires --managed-refresh")
     if options.project_dir is not None and options.scale:
         parser.error("--project-dir applies to the small fixture")
     if options.recovery and options.scale:
