@@ -2759,6 +2759,15 @@ pub(crate) fn parse_secret_reference(
     SecretReference::parse(value).map_err(|_| error)
 }
 
+/// Checks one `reviewAuthorities` entry with the reader the runtime uses, so
+/// a caller that renders the entry can refuse it before the runtime starts.
+/// Secret references are checked for shape only; nothing is resolved.
+pub fn check_review_authority(id: &str, authority: &serde_json::Value) -> Result<()> {
+    let raw = RawReviewAuthorityConfig::deserialize(authority)
+        .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+    ReviewAuthorityConfig::from_raw(id, raw).map(|_| ())
+}
+
 #[derive(Clone)]
 struct ReviewAuthorityConfig {
     endpoint: reqwest::Url,
@@ -4202,6 +4211,46 @@ fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
 mod tests {
     use super::RuntimeConfigError;
     use crate::attachment_verification_worker::ATTEMPT_BUDGET;
+
+    fn review_authority_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "endpoint": "https://casework.example/reviews/",
+            "profile": "producer",
+            "producerId": "registry-producer",
+            "recoveryDays": 7,
+            "privateKeyJwt": {
+                "tokenEndpoint": "https://issuer.example/oauth2/token",
+                "clientIdRef": "secret:file/review-client-id",
+                "clientAssertionKeyRef": "secret:file/review-client-key",
+                "assertionAudience": "https://issuer.example",
+                "resource": "urn:casework:primary",
+                "scopes": ["casework:reviews:request"]
+            }
+        })
+    }
+
+    #[test]
+    fn check_review_authority_applies_the_runtime_reader() {
+        super::check_review_authority("casework-a", &review_authority_fragment())
+            .expect("a well-formed review authority is accepted");
+
+        let mut bad_endpoint = review_authority_fragment();
+        bad_endpoint["endpoint"] = "https://casework.example/reviews/?q=1".into();
+        let mut bad_profile = review_authority_fragment();
+        bad_profile["profile"] = "not a profile".into();
+        let mut unknown_member = review_authority_fragment();
+        unknown_member["surprise"] = true.into();
+        for fragment in [bad_endpoint, bad_profile, unknown_member] {
+            assert!(
+                matches!(
+                    super::check_review_authority("casework-a", &fragment),
+                    Err(RuntimeConfigError::InvalidBinding)
+                ),
+                "{fragment}"
+            );
+        }
+        assert!(super::check_review_authority("", &review_authority_fragment()).is_err());
+    }
 
     #[test]
     fn the_attempt_budget_action_states_the_worker_budget() {

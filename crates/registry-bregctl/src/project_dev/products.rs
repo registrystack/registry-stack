@@ -745,6 +745,7 @@ pub(super) fn inspect(
     plan: &Plan,
     terminate: &AtomicBool,
 ) -> Result<ProductInspection> {
+    super::bindings::check_with_product_readers(plan)?;
     let breg_authority = breg_authority(root, plan)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
     Ok(ProductInspection {
@@ -986,7 +987,14 @@ fn casework_principals(
             ).into());
         }
     };
-    validate_casework_binding_ids(&plan.bindings, &facts)?;
+    let status_profile = plan
+        .bindings
+        .casework_context_provider
+        .as_ref()
+        .and_then(|binding| plan.people.get(&binding.identity))
+        .and_then(|person| person.grants.get(&Product::Breg))
+        .map(|grant| grant.profile.as_str());
+    validate_casework_binding_ids(&plan.bindings, &facts, status_profile)?;
     Ok(casework_principals_from_facts(plan, breg, &facts)?)
 }
 
@@ -1112,7 +1120,9 @@ struct InvalidCaseworkProject;
 struct CaseworkFacts {
     profiles: BTreeMap<String, String>,
     trusted_producers: BTreeSet<String>,
-    context_providers: BTreeSet<String>,
+    /// Each context provider's ID with the profile its policy names for the
+    /// `service-status` capability, when it names one.
+    context_providers: BTreeMap<String, Option<String>>,
 }
 
 fn casework_report_facts(report: &Value) -> Result<CaseworkFacts> {
@@ -1145,8 +1155,28 @@ fn casework_report_facts(report: &Value) -> Result<CaseworkFacts> {
     Ok(CaseworkFacts {
         profiles: principals,
         trusted_producers: casework_report_ids(report, "trustedProducers")?,
-        context_providers: casework_report_ids(report, "contextProviders")?,
+        context_providers: casework_context_providers(report)?,
     })
+}
+
+fn casework_context_providers(report: &Value) -> Result<BTreeMap<String, Option<String>>> {
+    let entries = report["contextProviders"]
+        .as_array()
+        .context("caseworkctl explain did not report contextProviders")?;
+    let mut providers = BTreeMap::new();
+    for entry in entries {
+        let id = entry["id"]
+            .as_str()
+            .context("a caseworkctl explain contextProviders entry has no ID")?;
+        let status_profile = entry["serviceProfiles"]["service-status"]
+            .as_str()
+            .map(str::to_owned);
+        ensure!(
+            providers.insert(id.to_owned(), status_profile).is_none(),
+            "caseworkctl explain returned duplicate contextProviders IDs"
+        );
+    }
+    Ok(providers)
 }
 
 fn casework_report_ids(report: &Value, member: &str) -> Result<BTreeSet<String>> {
@@ -1169,6 +1199,7 @@ fn casework_report_ids(report: &Value, member: &str) -> Result<BTreeSet<String>>
 fn validate_casework_binding_ids(
     bindings: &Bindings,
     facts: &CaseworkFacts,
+    status_profile: Option<&str>,
 ) -> plan::SemanticResult<()> {
     if let Some(binding) = &bindings.breg_review_authority {
         plan::require(
@@ -1180,10 +1211,23 @@ fn validate_casework_binding_ids(
     }
     if let Some(binding) = &bindings.casework_context_provider {
         plan::require(
-            facts.context_providers.contains(&binding.id),
+            facts.context_providers.contains_key(&binding.id),
             "/bindings/caseworkContextProvider/id",
             "The Casework context provider ID does not name a context provider in the Casework project.",
             "Set id to a context provider defined by the Casework project.",
+        )?;
+        // The run writes the identity's BReg grant profile as the provider's
+        // status profile, and Casework refuses a provider whose binding and
+        // policy disagree. Refusing here keeps that from surfacing at start.
+        let policy_profile = facts.context_providers[&binding.id].as_deref();
+        plan::require(
+            policy_profile == status_profile,
+            &format!(
+                "/people/{}/grants/breg/profile",
+                registry_platform_yaml::escape_pointer_segment(&binding.identity)
+            ),
+            "The BReg grant profile is not the service-status profile the Casework context provider names.",
+            "Set the grant profile to the service-status profile in the Casework context provider's serviceProfiles.",
         )?;
     }
     Ok(())
@@ -1608,7 +1652,7 @@ mod tests {
         let facts = |principal: &str| CaseworkFacts {
             profiles: BTreeMap::from([("reviewer".to_owned(), principal.to_owned())]),
             trusted_producers: BTreeSet::new(),
-            context_providers: BTreeSet::new(),
+            context_providers: BTreeMap::new(),
         };
 
         let plan = authority_plan(json!({}), json!({}), false);
@@ -1713,10 +1757,13 @@ mod tests {
             "reviewPolicies": [],
             "accessProfiles": [{"id": "reviewer", "principalClaim": "sub"}],
             "trustedProducers": [{"id": "review-producer"}],
-            "contextProviders": [{"id": "proposal-context"}]
+            "contextProviders": [{
+                "id": "proposal-context",
+                "serviceProfiles": {"service-status": "status-reader"}
+            }]
         });
         let facts = casework_report_facts(&report).unwrap();
-        validate_casework_binding_ids(&bindings, &facts).unwrap();
+        validate_casework_binding_ids(&bindings, &facts, Some("status-reader")).unwrap();
 
         for (member, field, reason, action) in [
             (
@@ -1734,7 +1781,7 @@ mod tests {
         ] {
             report[member] = json!([]);
             let facts = casework_report_facts(&report).unwrap();
-            let error = validate_casework_binding_ids(&bindings, &facts)
+            let error = validate_casework_binding_ids(&bindings, &facts, Some("status-reader"))
                 .unwrap_err()
                 .to_string();
             assert!(error.contains(field), "{error}");
@@ -1744,9 +1791,41 @@ mod tests {
             assert!(!error.contains("proposal-context"), "{error}");
             report[member] = match member {
                 "trustedProducers" => json!([{"id": "review-producer"}]),
-                "contextProviders" => json!([{"id": "proposal-context"}]),
+                "contextProviders" => json!([{
+                    "id": "proposal-context",
+                    "serviceProfiles": {"service-status": "status-reader"}
+                }]),
                 _ => unreachable!(),
             };
+        }
+    }
+
+    #[test]
+    fn the_status_profile_the_run_writes_must_match_the_context_provider_policy() {
+        let bindings = product_bindings();
+        let report = |service_profiles: Value| {
+            json!({
+                "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
+                "kind": "CaseworkReport", "command": "explain", "status": "complete", "ok": true,
+                "accessProfiles": [], "trustedProducers": [{"id": "review-producer"}],
+                "contextProviders": [{"id": "proposal-context", "serviceProfiles": service_profiles}]
+            })
+        };
+        for (profiles, written) in [
+            (json!({"service-status": "other-profile"}), "status-reader"),
+            (json!({}), "status-reader"),
+            (json!({"service-status": "status-reader"}), "other-profile"),
+        ] {
+            let facts = casework_report_facts(&report(profiles)).unwrap();
+            let error = validate_casework_binding_ids(&bindings, &facts, Some(written))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("/people/context-reader/grants/breg/profile"),
+                "{error}"
+            );
+            assert!(error.contains("service-status profile"), "{error}");
+            assert!(!error.contains("other-profile"), "{error}");
         }
     }
 
