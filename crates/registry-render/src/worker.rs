@@ -9,7 +9,7 @@
 //! panic is a process exit).
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -451,7 +451,29 @@ async fn exchange_with(
     let response = match frame.await {
         Ok(Ok(bytes)) => bytes,
         Ok(Err(err)) => {
+            if matches!(err.kind(), ErrorKind::UnexpectedEof | ErrorKind::BrokenPipe) {
+                // Pipe closure can precede the OS publishing an exit status.
+                // Reap within the existing deadline, before any supervisor kill.
+                if let Ok(Ok(status)) = tokio::time::timeout_at(deadline, child.wait()).await {
+                    drain.abort();
+                    let configured_address_space_cap_bytes =
+                        cfg!(target_os = "linux").then_some(request.memory_limit_bytes);
+                    tracing::warn!(
+                        exit_status = %status,
+                        configured_address_space_cap_bytes,
+                        "render worker exited before sending a complete response frame"
+                    );
+                    let mut detail = format!(
+                        "render worker exited before sending a complete response frame ({status})"
+                    );
+                    if let Some(cap) = configured_address_space_cap_bytes {
+                        detail.push_str(&format!("; configured address-space cap: {cap} bytes"));
+                    }
+                    return Err(RenderProblem::new(ProblemKind::RenderPanicked, detail));
+                }
+            }
             let _ = child.kill().await;
+            drain.abort();
             return Err(RenderProblem::new(
                 ProblemKind::RenderPanicked,
                 format!("render worker failed: {err}"),
@@ -459,6 +481,7 @@ async fn exchange_with(
         }
         Err(_) => {
             let _ = child.kill().await;
+            drain.abort();
             return Err(RenderProblem::new(
                 ProblemKind::RenderTimeout,
                 format!("render exceeded {}s and was killed", timeout.as_secs()),
@@ -499,8 +522,8 @@ fn worker_command(exe: &Path) -> tokio::process::Command {
         .stdout(Stdio::piped())
         // Worker stderr is piped and drained, never inherited: a panic
         // message can carry host paths or data fragments, and the operator
-        // log is value-free by contract. The parent's problem documents are
-        // the diagnosis surface.
+        // log is value-free by contract. The parent reports only bounded
+        // process metadata for a premature exit.
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     isolate_environment(&mut command, std::env::vars_os());
@@ -631,8 +654,16 @@ mod tests {
     fn framing_stand_in(dir: &std::path::Path, body: &[u8], after: &str) -> std::path::PathBuf {
         let mut frame = (body.len() as u32).to_le_bytes().to_vec();
         frame.extend_from_slice(body);
+        stand_in_with_output(dir, &frame, after)
+    }
+
+    fn stand_in_with_output(
+        dir: &std::path::Path,
+        stdout: &[u8],
+        after: &str,
+    ) -> std::path::PathBuf {
         let frame_file = dir.join("answer.frame");
-        std::fs::write(&frame_file, frame).expect("write frame");
+        std::fs::write(&frame_file, stdout).expect("write frame");
         let stand_in = dir.join("answering-worker");
         std::fs::write(
             &stand_in,
@@ -650,6 +681,80 @@ mod tests {
         std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o700))
             .expect("make stand-in executable");
         stand_in
+    }
+
+    #[tokio::test]
+    async fn a_worker_that_exits_before_answering_reports_only_bounded_process_details() {
+        use tracing::instrument::WithSubscriber as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (terminate, expected) in [
+            ("exit 23", "exit status: 23"),
+            ("kill -TERM $$", "signal: 15"),
+        ] {
+            let stand_in = stand_in_with_output(
+                dir.path(),
+                b"",
+                &format!(
+                    "printf '%s\\n' worker-stderr-canary >&2\n\
+                     dd if=/dev/zero bs=4096 count=32 >&2 2>/dev/null\n{terminate}"
+                ),
+            );
+            let mut request = super::seal_tests::receipt_request(None);
+            request.memory_limit_bytes = 314_572_800;
+            let log = tempfile::NamedTempFile::new().expect("worker operator log");
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_writer(log.reopen().expect("open worker operator log"))
+                .finish();
+            let problem = exchange_with(
+                worker_command(&stand_in),
+                request,
+                std::time::Duration::from_secs(5),
+            )
+            .with_subscriber(subscriber)
+            .await
+            .expect_err("worker sent no response");
+            assert_eq!(problem.kind, crate::problem::ProblemKind::RenderPanicked);
+            assert!(problem.detail.contains(expected), "{}", problem.detail);
+            #[cfg(target_os = "linux")]
+            assert!(problem
+                .detail
+                .contains("configured address-space cap: 314572800 bytes"));
+            #[cfg(not(target_os = "linux"))]
+            assert!(!problem.detail.contains("address-space cap"));
+            assert!(!problem.detail.contains("worker-stderr-canary"));
+
+            let log = std::fs::read_to_string(log.path()).expect("read worker operator log");
+            assert!(!log.contains("worker-stderr-canary"));
+            let event: serde_json::Value = serde_json::from_str(&log).expect("one log event");
+            assert_eq!(event["level"], "WARN");
+            assert!(event["fields"]["exit_status"]
+                .as_str()
+                .is_some_and(|status| status.contains(expected)));
+            #[cfg(target_os = "linux")]
+            assert_eq!(
+                event["fields"]["configured_address_space_cap_bytes"],
+                314_572_800
+            );
+            #[cfg(not(target_os = "linux"))]
+            assert!(event["fields"]["configured_address_space_cap_bytes"].is_null());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_worker_that_closes_its_response_pipe_is_not_reported_as_killed_by_a_signal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stand_in = stand_in_with_output(dir.path(), b"", "exec 1>&-\nexec sleep 10");
+        let problem = exchange_with(
+            worker_command(&stand_in),
+            super::seal_tests::receipt_request(None),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .expect_err("worker closed its response pipe");
+        assert_eq!(problem.kind, crate::problem::ProblemKind::RenderPanicked);
+        assert!(!problem.detail.contains("signal"), "{}", problem.detail);
     }
 
     /// The render deadline bounds the whole exchange: a worker that answers

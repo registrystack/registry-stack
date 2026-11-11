@@ -39,7 +39,10 @@ Rules worth internalizing:
 
 - **`labels` is bundle-owned content** — one label table per
   `labels/<locale>.yaml` (`kind: RenderLabels`), whose `labels` map of key
-  to text the template receives flat. Label values use the shared display-text
+  to text the template receives flat. Label keys must match
+  `^[a-z][a-z0-9_-]{0,63}$` (for example, `example_title`). See the
+  [generated labels schema](schemas/labels.schema.json).
+  Label values use the shared display-text
   rules: multilingual joiners and direction marks remain valid, while controls
   that can invisibly reorder text are refused. The manifest lists the locales in
   `labels: [...]`. The template receives every declared table, so a bilingual document consumes
