@@ -171,6 +171,7 @@ impl CompiledExternalViews {
 pub(crate) fn mark_link_fields(
     views: &CompiledExternalViews,
     entities: &mut BTreeMap<String, crate::model::CompiledEntity>,
+    physical_names: &mut crate::physical_names::PhysicalNameInventory,
 ) {
     for view in views.views.values() {
         let Some(entity) = entities.get_mut(view.record_type.as_str()) else {
@@ -180,6 +181,60 @@ pub(crate) fn mark_link_fields(
             entity
                 .external_link_fields
                 .insert(link.from_field.as_str().to_owned());
+            for (profile_id, projections) in &views.refresh {
+                if !projections.contains(&link.projection) {
+                    continue;
+                }
+                let Some(profile) = entity.access_profiles.get(profile_id) else {
+                    continue;
+                };
+                let mut fields = vec![link.from_field.as_str().to_owned()];
+                for boundary in &profile.row_boundaries {
+                    if !fields.contains(&boundary.field) {
+                        fields.push(boundary.field.clone());
+                    }
+                }
+                let unique_link = entity.constraints.values().any(|constraint| {
+                    matches!(
+                        constraint,
+                        crate::contract::ConstraintSource::Unique {
+                            fields,
+                            when: None,
+                            ..
+                        } if fields.len() == 1 && fields[0] == link.from_field.as_str()
+                    )
+                });
+                if unique_link
+                    || entity
+                        .indexes
+                        .values()
+                        .any(|index| index.starts_with(fields.as_slice()))
+                {
+                    continue;
+                }
+                let id = format!(
+                    "{}{}:{}:{}",
+                    crate::model::EXTERNAL_LINK_INDEX_PREFIX,
+                    view.id,
+                    link.id,
+                    profile_id
+                );
+                entity.indexes.insert(id.clone(), fields);
+                physical_names
+                    .entities
+                    .get_mut(&entity.id)
+                    .expect("compiled entity has physical names")
+                    .indexes
+                    .insert(
+                        id,
+                        crate::physical_names::external_link_index_name(
+                            &entity.id,
+                            view.id.as_str(),
+                            link.id.as_str(),
+                            profile_id,
+                        ),
+                    );
+            }
         }
     }
 }

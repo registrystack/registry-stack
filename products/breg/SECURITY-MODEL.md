@@ -143,9 +143,10 @@ For the invariants to hold, a deployment must do the following.
     change to it as you would review a disclosure. See
     [External projection storage](external-projection-storage.md).
 18. **Keep the external projection cache out of logical backups.** Dump with
-    the four `--exclude-table-data` options for the
-    `registry_external_projection_*` tables, so a restore starts with no
-    source values, old bindings, or refresh receipts. Physical backups and
+    the seven `--exclude-table-data` options for the
+    `registry_external_projection_*` and `registry_external_refresh_*` tables,
+    so a restore starts with no source values, old bindings, queued selectors,
+    or refresh receipts. Physical backups and
     storage snapshots cannot exclude them and need a separately approved
     erasure and restore procedure
     ([logical backups](external-projection-storage.md#logical-backups)).
@@ -157,6 +158,25 @@ For the invariants to hold, a deployment must do the following.
     deployment configuration or at the source authority so it also holds after
     a restore
     ([stop acquisition](external-projection-storage.md#stop-acquisition-withdraw-and-renew)).
+20. **Give each refresh plan a scoped service identity.** Match the
+    configured requester client, principal, profile and relevant row
+    claims against the verified token before acquiring external values.
+    Give a change notifier a separate service client and scope. It may
+    submit an approved selector for a configured projection. A queued
+    hint grants no right to read a root or disclose a source value.
+    Verify signed webhook deliveries before forwarding their selectors.
+    See [managed refresh](external-projection-storage.md#schedule-refresh-and-inspect-coverage).
+
+The refresh path extends BREG-SEC-204 through 207. The
+`managed_refresh_resumes_sweeps_and_rereads_only_the_notified_subject`
+PostgreSQL journey exercises worker and notifier separation, identical
+admission for an eligible and protected selector, and current-scope
+reconciliation. `selector_lookup_skips_a_large_excluded_prefix_and_exhausts_no_witness`
+verifies row policy before a targeted lookup can settle no match.
+`durable_queue_fences_newer_enqueues_and_authority_changes` checks
+queue generations and leases in addition to the existing per-key
+publication tests. The excluded backup restore test verifies the new
+operational tables also restore empty.
 
 ## 3. Accepted residuals
 

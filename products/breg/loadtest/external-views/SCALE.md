@@ -82,6 +82,37 @@ on failure after the scale run begins. `scale-native-plans.log` contains the
 matching native plans. Record the candidate repository revision and the
 command beside these files.
 
+Add `--managed-refresh` to the same command to use BReg's managed step
+endpoint. The fixture declares two plans on one service identity, with a
+900-second interval and a 1,800-second indexed lifetime. The initial
+holder sweep is due on startup. The runner then requests two holder
+sweeps back to back, without waiting for the timer. It makes an indexed
+read between steps and again at completion of each repeat. Each repeat
+must traverse the million-root population and reacquire all distinct keys
+within 600 seconds, using at most 1,100 Person batch requests. The report
+checks that the oldest valid observation still has more than one interval
+remaining after each sweep, using counts and timestamps from the fresh
+snapshots in the disposable database.
+
+In the managed run, the ordinary Record creation that exposes missing
+coverage must also enqueue and acquire just that new holder key. The
+runner then changes a surname in the synthetic source, submits an
+authenticated hint and verifies the correction through all 20 roots
+sharing the key. Each targeted step must read exactly one selector in one
+Person batch request. The report includes source request counts, step
+counts and retries, time from submission to step start and settlement,
+and time to indexed readiness. Those times reflect immediate test
+polling. They do not include a scheduler's polling delay. This lane
+does not exercise collection or label hints, retries under injected
+faults, or query plans for the targeted witness lookup.
+
+Add `--managed-refresh-smoke` alongside `--scale --managed-refresh` for
+the same HTTP and freshness checks on 2,000 authorized and 200 denied
+licence roots. The smoke still requires the dedicated plan log but does
+not require any minimum number of logged plans at the scale threshold.
+Use fresh databases and a new work directory for either run. Only the
+full corpus establishes the scale timing and source budget.
+
 Test the deterministic corpus, source bounds and oracle without starting a
 candidate or PostgreSQL:
 

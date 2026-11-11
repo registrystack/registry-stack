@@ -2730,6 +2730,16 @@ impl MutationTransaction {
             self.field_encryption.as_deref(),
         )
         .await?;
+        let refresh_captures = timer_rows
+            .iter()
+            .map(|(entity, current)| super::external_refresh_capture(&entity.id, current))
+            .collect::<Vec<_>>();
+        super::capture_external_refresh_rows(
+            tx,
+            &refresh_captures,
+            crate::postgres::external_projection::enabled(registry),
+        )
+        .await?;
         let members = rows
             .iter()
             .map(|(entity, id, revision)| RevisionCommitMember {

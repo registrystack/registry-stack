@@ -27,6 +27,7 @@ const MAX_TOKEN_BYTES: usize = ((1 + NONCE_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES
 const MAX_AGE_SECONDS: u64 = 86_400;
 const CURSOR_AAD: &[u8] = b"breg-cursor-v3";
 const EXTERNAL_CURSOR_AAD: &[u8] = b"breg-external-cursor-v1";
+const MANAGED_REFRESH_AAD: &[u8] = b"breg-managed-refresh-v1";
 const AEAD_LABEL: &[u8] = b"breg-cursor-aead-key-v3";
 const BINDING_LABEL: &[u8] = b"breg-cursor-binding-key-v3";
 
@@ -71,6 +72,21 @@ impl CursorCodec {
         token: &str,
     ) -> Result<T, CursorError> {
         let plaintext = self.open(EXTERNAL_CURSOR_AAD, token)?;
+        serde_json::from_slice(&plaintext).map_err(|_| CursorError::Invalid)
+    }
+
+    pub(crate) fn seal_managed_refresh<T: Serialize>(
+        &self,
+        payload: &T,
+    ) -> Result<String, CursorError> {
+        self.seal(MANAGED_REFRESH_AAD, payload)
+    }
+
+    pub(crate) fn open_managed_refresh<T: serde::de::DeserializeOwned>(
+        &self,
+        token: &str,
+    ) -> Result<T, CursorError> {
+        let plaintext = self.open(MANAGED_REFRESH_AAD, token)?;
         serde_json::from_slice(&plaintext).map_err(|_| CursorError::Invalid)
     }
 

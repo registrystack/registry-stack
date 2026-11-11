@@ -1,5 +1,5 @@
 import http.client
-import importlib.util
+import http.server
 import json
 import sqlite3
 import sys
@@ -10,20 +10,14 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 BINDING_TESTS = HERE.parents[3] / "crates/registry-breg-client-py/tests/python"
-
-
-def load(name):
-    spec = importlib.util.spec_from_file_location(name, HERE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader
-    spec.loader.exec_module(module)
-    return module
 
 
 # Build the in-tree binding and serve it as `registry_client.breg`, the import
@@ -40,8 +34,55 @@ REGISTRY_CLIENT = types.ModuleType("registry_client")
 REGISTRY_CLIENT.breg = registry_breg_client
 sys.modules["registry_client"] = REGISTRY_CLIENT
 sys.modules["registry_client.breg"] = registry_breg_client
-RECEIVER = load("receiver")
-SIGNER = load("sign_delivery")
+sys.path.insert(0, str(HERE))
+try:
+    import receiver as RECEIVER
+    import refresh_hints as REFRESH
+    import sign_delivery as SIGNER
+finally:
+    sys.path.remove(str(HERE))
+
+
+def signed_event(key, contract, values, event_id=None, generation=1, attempt=1, delivery_key=None):
+    event_id = event_id or str(uuid.uuid4())
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    source = f"urn:registrystack:registry:{contract['registry_id']}:instance:{contract['instance_id']}"
+    schema = (
+        f"urn:breg:event-schema:{contract['registry_id']}:{contract['record_type']}:"
+        f"{contract['event_id']}:sha256:" + "a" * 64
+    )
+    document = {
+        "id": event_id, "type": contract["event_id"], "source": source,
+        "time": now, "dataschema": schema,
+        "subject": {"recordReference": "hmac-sha256:" + "d" * 64, "recordRevision": 1},
+        "causation": {"root": event_id, "hop": 0},
+        "data": {"recordType": contract["record_type"], "recordId": str(uuid.uuid4()),
+                 "revision": 1, "trigger": contract.get("trigger", "created"),
+                 "packageRevision": "sha256:" + "b" * 64, "values": values},
+    }
+    body = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    headers = {
+        "accept": "application/json", "content-type": "application/json",
+        "ce-specversion": "1.0", "ce-id": event_id, "ce-source": source,
+        "ce-type": document["type"], "ce-time": now, "ce-dataschema": schema,
+        "x-registry-event-generation": str(generation),
+        "x-registry-delivery-attempt": str(attempt), "x-registry-delivery-time": now,
+        "idempotency-key": delivery_key or "sha256:" + uuid.uuid4().hex * 2,
+    }
+    headers["x-registry-signature"] = SIGNER.webhook_signature(key, headers, body)
+    return headers, body
+
+
+def post_event(server, headers, body):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_port}/events", body, headers
+    )
+    try:
+        response = urllib.request.urlopen(request, timeout=3)
+    except urllib.error.HTTPError as error:
+        response = error
+    with response:
+        return response.status, response.read()
 
 
 class WebhookAcceptanceTests(unittest.TestCase):
@@ -70,44 +111,15 @@ class WebhookAcceptanceTests(unittest.TestCase):
             self.server.server_close()
 
     def event(self, event_id=None, generation=1, attempt=1, delivery_key=None, name="Contact"):
-        event_id = event_id or str(uuid.uuid4())
-        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        source = "urn:registrystack:registry:example-registry:instance:local"
-        schema = "urn:breg:event-schema:example-registry:contact:contact-created-v1:sha256:" + "a" * 64
-        document = {
-            "id": event_id, "type": "contact-created-v1", "source": source,
-            "time": now, "dataschema": schema,
-            "subject": {"recordReference": "hmac-sha256:" + "d" * 64, "recordRevision": 1},
-            "causation": {"root": event_id, "hop": 0},
-            "data": {"recordType": "contact", "recordId": str(uuid.uuid4()), "revision": 1,
-                     "trigger": "created", "packageRevision": "sha256:" + "b" * 64,
-                     "values": {"name": name}},
-        }
-        body = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-        headers = {
-            "accept": "application/json", "content-type": "application/json",
-            "ce-specversion": "1.0", "ce-id": event_id, "ce-source": source,
-            "ce-type": document["type"], "ce-time": now, "ce-dataschema": schema,
-            "x-registry-event-generation": str(generation),
-            "x-registry-delivery-attempt": str(attempt), "x-registry-delivery-time": now,
-            "idempotency-key": delivery_key or "sha256:" + uuid.uuid4().hex * 2,
-        }
-        self.sign(headers, body)
-        return headers, body
+        return signed_event(
+            self.key, self.contract, {"name": name}, event_id, generation, attempt, delivery_key
+        )
 
     def sign(self, headers, body):
         headers["x-registry-signature"] = SIGNER.webhook_signature(self.key, headers, body)
 
     def post(self, headers, body):
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{self.server.server_port}/events", body, headers
-        )
-        try:
-            response = urllib.request.urlopen(request, timeout=3)
-        except urllib.error.HTTPError as error:
-            response = error
-        with response:
-            return response.status
+        return post_event(self.server, headers, body)[0]
 
     def post_pairs(self, headers, body):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
@@ -191,7 +203,7 @@ class WebhookAcceptanceTests(unittest.TestCase):
 
     def test_storage_failure_refuses_acknowledgement_then_recovers(self):
         headers, body = self.event()
-        with patch.object(self.server.webhook_inbox, "accept", side_effect=sqlite3.OperationalError):
+        with patch.object(self.server.webhook_acceptance, "accept", side_effect=sqlite3.OperationalError):
             self.assertEqual(self.post(headers, body), 503)
         self.assertEqual(self.counts(), (0, 0))
         self.assertEqual(self.post(headers, body), 204)
@@ -205,6 +217,145 @@ class WebhookAcceptanceTests(unittest.TestCase):
         link.symlink_to(self.inbox_path)
         with self.assertRaises(RECEIVER.ReceiverError):
             RECEIVER.WebhookInbox(link)
+
+
+class RefreshHintTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.token_file = Path(temporary.name) / "notifier-token"
+        self.token_file.touch(mode=0o600)
+        self.token_file.write_text("notifier-token-canary\n", encoding="ascii")
+        self.key = b"receiver-test-key-material-32-bytes"
+        self.id_key = b"notifier-test-hint-identity-key-material"
+        self.attempts = []
+        self.accepted = {}
+        self.responses = []
+        test = self
+
+        class Destination(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                return
+
+            def do_POST(self):
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                test.attempts.append((self.path, self.headers["Authorization"], request))
+                result = test.responses.pop(0) if test.responses else 202
+                if result in (202, None):
+                    test.accepted.setdefault(request["hintId"], request)
+                if result is None:
+                    return  # Lose the response after recording admission.
+                self.send_response(result)
+                self.end_headers()
+                self.wfile.write(b"destination-diagnostic-canary")
+
+        self.destination = self.start(http.server.HTTPServer(("127.0.0.1", 0), Destination))
+
+    def start(self, server):
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        thread.start()
+
+        def stop():
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+        self.addCleanup(stop)
+        return server
+
+    def configure(self, record_type, event_id, fields):
+        self.contract = {
+            "registry_id": "example-registry", "instance_id": "local", "record_type": record_type,
+            "event_id": event_id, "trigger": "patched", "event_values": fields,
+            "data_schema": (
+                f"urn:breg:event-schema:example-registry:{record_type}:{event_id}:sha256:" + "a" * 64
+            ),
+        }
+        self.sink = REFRESH.RefreshHints(
+            origin=f"http://127.0.0.1:{self.destination.server_port}",
+            plan="licensing-holders", projection="authority-indexed", scheme="urn:example:authority-key",
+            fields=fields, token_file=self.token_file, id_key=self.id_key,
+        )
+        self.server = self.start(RECEIVER.make_server(0, self.key, self.contract, self.sink))
+
+    def post(self, headers, body):
+        return post_event(self.server, headers, body)
+
+    def resign(self, headers, body):
+        headers["x-registry-signature"] = SIGNER.webhook_signature(self.key, headers, body)
+
+    def test_person_correction_sends_only_the_approved_selector(self):
+        self.configure("person", "person-corrected-v1", ["person-key"])
+        selector = "approved-person-selector-canary"
+        headers, body = signed_event(self.key, self.contract, {"person-key": selector})
+        self.assertEqual(self.post(headers, body), (204, b""))
+        path, authorization, hint = self.attempts[0]
+        self.assertEqual(path, "/v1/external-refresh-plans/licensing-holders/hints")
+        self.assertEqual(authorization, "Bearer notifier-token-canary")
+        self.assertRegex(hint["hintId"], r"^[0-9a-f]{64}$")
+        self.assertEqual(hint, {
+            "hintId": hint["hintId"], "projection": "authority-indexed",
+            "selectorScheme": "urn:example:authority-key", "selector": selector,
+        })
+
+    def test_invalid_signature_schema_and_unapproved_fields_make_no_request(self):
+        self.configure("person", "person-corrected-v1", ["person-key"])
+        fields = {"person-key": "approved-person-selector-canary"}
+        headers, body = signed_event(self.key, self.contract, fields)
+        self.assertEqual(self.post(headers, body.replace(b"approved-person", b"changed-person")), (400, b""))
+        changed = json.loads(body)
+        changed["dataschema"] = headers["ce-dataschema"] = headers["ce-dataschema"][:-1] + "b"
+        body = json.dumps(changed, sort_keys=True, separators=(",", ":")).encode()
+        self.resign(headers, body)
+        self.assertEqual(self.post(headers, body), (400, b""))
+        headers, body = signed_event(
+            self.key, self.contract, {**fields, "family-name": "unapproved-family-name-canary"}
+        )
+        self.assertEqual(self.post(headers, body), (400, b""))
+        self.assertEqual(self.attempts, [])
+
+    def test_two_parent_move_retries_partial_admission_and_lost_response(self):
+        fields = ["previous-parent", "current-parent"]
+        self.configure("holding", "holding-moved-v1", fields)
+        previous, current = "previous-parent-canary", "current-parent-canary"
+        headers, body = signed_event(self.key, self.contract, dict(zip(fields, [previous, current])))
+        self.responses.extend([202, 429, 202, None])
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            self.assertEqual(self.post(headers, body), (503, b""))
+            self.assertEqual(len(self.accepted), 1)
+            headers["x-registry-delivery-attempt"] = "2"
+            self.resign(headers, body)
+            self.assertEqual(self.post(headers, body), (503, b""))
+            self.assertEqual(len(self.accepted), 2)
+            headers["x-registry-event-generation"] = "2"
+            headers["idempotency-key"] = "sha256:" + "c" * 64
+            self.resign(headers, body)
+            self.assertEqual(self.post(headers, body), (204, b""))
+        hints = [attempt[2] for attempt in self.attempts]
+        self.assertEqual([hint["selector"] for hint in hints], [previous, current] * 3)
+        self.assertEqual(hints, hints[:2] * 3)
+        self.assertEqual(len(self.accepted), 2)
+        self.assertEqual(output.getvalue(), "")
+
+    def test_all_selectors_must_be_valid_before_any_delivery(self):
+        fields = ["previous-parent", "current-parent"]
+        self.configure("holding", "holding-moved-v1", fields)
+        headers, body = signed_event(
+            self.key, self.contract, {"previous-parent": "approved", "current-parent": "bad\nkey"}
+        )
+        self.assertEqual(self.post(headers, body), (409, b""))
+        self.assertEqual(self.attempts, [])
+
+    def test_non_202_success_response_is_retried(self):
+        self.configure("person", "person-corrected-v1", ["person-key"])
+        headers, body = signed_event(self.key, self.contract, {"person-key": "approved"})
+        self.responses.append(200)
+        self.assertEqual(self.post(headers, body), (503, b""))
+        self.assertEqual(self.accepted, {})
+        self.assertEqual(self.post(headers, body), (204, b""))
+        self.assertEqual(len(self.accepted), 1)
+        self.assertEqual(self.attempts[0], self.attempts[1])
 
 
 class SignatureContractTests(unittest.TestCase):

@@ -49,6 +49,7 @@ mod data_lifecycle;
 mod dev;
 mod doctor;
 mod explain_report;
+mod external_refresh;
 mod field_encryption;
 mod field_encryption_lifecycle;
 mod file_check;
@@ -465,6 +466,27 @@ enum ExternalProjectionCommand {
     Withdraw(ExternalProjectionTargetArgs),
     /// Start a fresh epoch under the configured binding, grant and cache lifetime, and purge cached rows.
     Rotate(ExternalProjectionTargetArgs),
+    /// Run bounded ready work for one managed refresh plan through its authenticated HTTP route.
+    Refresh(ExternalProjectionRefreshArgs),
+}
+
+#[derive(Debug, Args)]
+struct ExternalProjectionRefreshArgs {
+    /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
+    #[arg(long, value_name = "URL")]
+    breg_url: String,
+    /// Managed external refresh plan ID.
+    #[arg(long, value_name = "ID")]
+    plan: String,
+    /// Absolute file containing one bearer access token and no other credential material.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    access_token_file: PathBuf,
+    /// Mark one full sweep due before processing ready work.
+    #[arg(long)]
+    start_sweep: bool,
+    /// Maximum wall-clock time spent stepping the plan in this invocation.
+    #[arg(long, value_name = "SECONDS", default_value_t = 50, value_parser = clap::value_parser!(u64).range(1..=300))]
+    maximum_run_seconds: u64,
 }
 
 #[derive(Debug, Args)]
@@ -3063,6 +3085,8 @@ where
                     &success.checked.unbound_review_authorities,
                     &success.checked.unavailable_external_projections,
                     &success.checked.external_projections,
+                    &success.checked.external_refresh_plans,
+                    &success.external_refresh_timings,
                     format,
                     stdout,
                     stderr,
@@ -3272,6 +3296,47 @@ where
             };
         }
         Command::ExternalProjection(args) => {
+            if let ExternalProjectionCommand::Refresh(refresh) = &args.command {
+                let outcome = external_refresh::run(external_refresh::ExternalRefreshRequest {
+                    breg_url: &refresh.breg_url,
+                    plan: &refresh.plan,
+                    access_token_file: &refresh.access_token_file,
+                    start_sweep: refresh.start_sweep,
+                    maximum_run: Duration::from_secs(refresh.maximum_run_seconds),
+                });
+                return match outcome {
+                    Ok(outcome) => {
+                        let result = if format == OutputFormat::Json {
+                            write_ctl_report(
+                                &mut *stdout,
+                                &json!({
+                                    "ok": true,
+                                    "command": "external-projection refresh",
+                                    "plan": outcome.plan,
+                                    "steps": outcome.steps,
+                                    "result": outcome.result,
+                                }),
+                            )
+                            .map_err(io::Error::other)
+                            .and_then(|()| writeln!(stdout))
+                        } else {
+                            render_report(
+                                "Ran bounded external projection refresh work.",
+                                &[
+                                    ("plan", outcome.plan),
+                                    ("steps", outcome.steps.to_string()),
+                                    ("moreWork", outcome.result.more_work().to_string()),
+                                ],
+                                stdout,
+                            )
+                        };
+                        write_result(result, stderr)
+                    }
+                    Err(error) => {
+                        write_failure(&external_refresh_failure(error), format, stdout, stderr)
+                    }
+                };
+            }
             use registry_breg::external_projection_maintenance as maintenance;
             let (command, lead, target) = match &args.command {
                 ExternalProjectionCommand::Inspect(target) => (
@@ -3289,6 +3354,9 @@ where
                     "Rotated the external projection scope to a fresh epoch.",
                     target,
                 ),
+                ExternalProjectionCommand::Refresh(_) => {
+                    unreachable!("refresh returned before database maintenance dispatch")
+                }
             };
             let path = target.runtime_config.as_path();
             let projection = target.projection.as_str();
@@ -3322,6 +3390,9 @@ where
                     }
                     ExternalProjectionCommand::Rotate(_) => {
                         maintenance::rotate(path, projection).await
+                    }
+                    ExternalProjectionCommand::Refresh(_) => {
+                        unreachable!("refresh returned before database maintenance dispatch")
                     }
                 }
             });
@@ -3860,6 +3931,67 @@ fn external_projection_pairs(scope: &Value) -> Vec<(&'static str, String)> {
         pairs.push(("invalidated snapshots", text(&counts["invalidated"])));
     }
     pairs
+}
+
+fn external_refresh_failure(error: external_refresh::ExternalRefreshError) -> FailureReport {
+    use external_refresh::ExternalRefreshError as Error;
+    let (code, path, message, artifact, action) = match error {
+        Error::BRegUrl => (
+            "external-projection.refresh.breg-url-refused",
+            "--breg-url",
+            "the BReg URL must be an HTTPS service base URL, or loopback HTTP, without credentials, query, or fragment",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ),
+        Error::Plan => (
+            "external-projection.refresh.plan-refused",
+            "--plan",
+            "the refresh plan must be a local identifier",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ),
+        Error::Token => (
+            "external-projection.refresh.token-refused",
+            "--access-token-file",
+            "the access-token file must be an absolute, bounded regular file containing one bearer token",
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ),
+        Error::Runtime => (
+            "external-projection.refresh.runtime-unavailable",
+            "runtime",
+            "the bounded refresh client runtime is unavailable",
+            DiagnosticArtifact::ExternalProjectionOperation,
+            SuggestedAction::VerifyExternalProjectionOperation,
+        ),
+        Error::Transport => (
+            "external-projection.refresh.transport-failed",
+            "externalRefresh",
+            "the refresh step could not reach BReg or finish within its bounded request time",
+            DiagnosticArtifact::DataTransport,
+            SuggestedAction::VerifyDataTransport,
+        ),
+        Error::Refused => (
+            "external-projection.refresh.refused",
+            "externalRefresh",
+            "BReg refused the refresh step; verify the plan and the service token's worker authority",
+            DiagnosticArtifact::ExternalProjectionOperation,
+            SuggestedAction::VerifyExternalProjectionOperation,
+        ),
+        Error::Response => (
+            "external-projection.refresh.response-invalid",
+            "externalRefresh",
+            "BReg returned an invalid or oversized refresh step response",
+            DiagnosticArtifact::ExternalProjectionOperation,
+            SuggestedAction::VerifyExternalProjectionOperation,
+        ),
+    };
+    source_failure(
+        "external-projection refresh",
+        diagnostic(code, path, message),
+        artifact,
+        action,
+    )
 }
 
 fn external_projection_failure(
@@ -13051,6 +13183,8 @@ fn write_doctor_success(
     unbound_review_authorities: &[String],
     unavailable_external_projections: &BTreeMap<String, String>,
     external_projections: &[registry_breg::startup::ExternalProjectionStatus],
+    external_refresh_plans: &[registry_breg::startup::ExternalRefreshPlanStatus],
+    external_refresh_timings: &[registry_breg::runtime_config::ExternalRefreshTiming],
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -13105,6 +13239,62 @@ fn write_doctor_success(
         doctor_advisories.push(DoctorAdvisory {
             code: "external-projection.status".to_owned(),
             severity: "information",
+            message,
+            observed: ObservedNumbers(observed),
+        });
+    }
+    let refresh_status_reports = external_refresh_plans
+        .iter()
+        .map(external_refresh_status_report)
+        .collect::<Vec<_>>();
+    for (message, observed) in &refresh_status_reports {
+        doctor_advisories.push(DoctorAdvisory {
+            code: "external-refresh.status".to_owned(),
+            severity: "information",
+            message,
+            observed: ObservedNumbers(observed),
+        });
+    }
+    let now = chrono::Utc::now().timestamp();
+    let refresh_reports = external_refresh_timings
+        .iter()
+        .flat_map(|timing| {
+            let remaining = timing.grant_valid_until.saturating_sub(now);
+            let effective_horizon = i64::from(timing.effective_cache_ttl_seconds).min(remaining);
+            let mut reports = Vec::new();
+            if remaining <= 0 {
+                reports.push((
+                    "external-refresh.grant-expired",
+                    format!(
+                        "External refresh plan `{}` has an expired source grant; renew or replace the source authority before running it.",
+                        timing.plan
+                    ),
+                    vec![("grantRemainingSeconds", remaining)],
+                ));
+            }
+            if i64::try_from(timing.interval_seconds)
+                .map_or(true, |interval| interval >= effective_horizon)
+            {
+                reports.push((
+                    "external-refresh.ttl-headroom",
+                    format!(
+                        "External refresh plan `{}` has no static TTL headroom: its interval reaches the shorter cache lifetime or remaining grant horizon.",
+                        timing.plan
+                    ),
+                    vec![
+                        ("intervalSeconds", i64::try_from(timing.interval_seconds).unwrap_or(i64::MAX)),
+                        ("effectiveCacheTtlSeconds", i64::from(timing.effective_cache_ttl_seconds)),
+                        ("grantRemainingSeconds", remaining),
+                    ],
+                ));
+            }
+            reports
+        })
+        .collect::<Vec<_>>();
+    for (code, message, observed) in &refresh_reports {
+        doctor_advisories.push(DoctorAdvisory {
+            code: (*code).to_owned(),
+            severity: "warning",
             message,
             observed: ObservedNumbers(observed),
         });
@@ -13191,6 +13381,42 @@ fn external_projection_status_report(
             "External projection `{}`: its source grant is valid until {}. {holding}",
             status.projection,
             instant(status.grant_valid_until)
+        ),
+        observed,
+    )
+}
+
+/// One managed refresh plan's aggregate, value-free queue state.
+fn external_refresh_status_report(
+    status: &registry_breg::startup::ExternalRefreshPlanStatus,
+) -> (String, Vec<(&'static str, i64)>) {
+    let bounded = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+    let mut observed = vec![
+        ("registered", if status.registered { 1 } else { 0 }),
+        ("due", if status.due { 1 } else { 0 }),
+        ("leased", if status.leased { 1 } else { 0 }),
+        ("pending", bounded(status.pending)),
+        ("ready", bounded(status.ready)),
+    ];
+    if let Some(age) = status.oldest_ready_age_seconds {
+        observed.push(("oldestReadyAgeSeconds", bounded(age)));
+    }
+    if let Some(at) = status.last_attempt_at {
+        observed.push(("lastAttemptAtUnixSeconds", at));
+    }
+    if let Some(at) = status.last_completed_at {
+        observed.push(("lastCompletedAtUnixSeconds", at));
+    }
+    let outcome = status.last_outcome.as_deref().unwrap_or("none");
+    (
+        format!(
+            "External refresh plan `{}`: registered={}, due={}, leased={}, pending={}, ready={}; last outcome: {outcome}.",
+            status.plan,
+            status.registered,
+            status.due,
+            status.leased,
+            status.pending,
+            status.ready,
         ),
         observed,
     )
@@ -17186,7 +17412,7 @@ mod tests {
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], RoleMode::Split, None, &[], &BTreeMap::new(), &[], format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, None, &[], &BTreeMap::new(), &[], &[], &[], format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(
@@ -17208,6 +17434,8 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
+                &[],
                 &[],
                 OutputFormat::Human,
                 &mut stdout,
@@ -17234,6 +17462,8 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
+                &[],
                 &[],
                 OutputFormat::Json,
                 &mut stdout,
@@ -17269,6 +17499,8 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
+                &[],
                 &[],
                 OutputFormat::Human,
                 &mut stdout,
@@ -17310,6 +17542,8 @@ mod tests {
                 None,
                 &[],
                 &BTreeMap::new(),
+                &[],
+                &[],
                 &[],
                 OutputFormat::Json,
                 &mut stdout,
@@ -17370,6 +17604,8 @@ mod tests {
                     &["local-review".into()],
                     &BTreeMap::new(),
                     &[],
+                    &[],
+                    &[],
                     format,
                     &mut stdout,
                     &mut stderr
@@ -17410,6 +17646,8 @@ mod tests {
                     None,
                     &[],
                     &unavailable,
+                    &[],
+                    &[],
                     &[],
                     format,
                     &mut stdout,
@@ -17469,6 +17707,8 @@ mod tests {
                     &[],
                     &BTreeMap::new(),
                     &projections,
+                    &[],
+                    &[],
                     format,
                     &mut stdout,
                     &mut stderr,
@@ -17514,6 +17754,103 @@ mod tests {
     }
 
     #[test]
+    fn doctor_reports_value_free_external_refresh_queue_status() {
+        let status = [registry_breg::startup::ExternalRefreshPlanStatus {
+            plan: "licensing-holders".to_owned(),
+            registered: true,
+            due: true,
+            leased: false,
+            pending: 7,
+            ready: 3,
+            oldest_ready_age_seconds: Some(42),
+            last_attempt_at: Some(1_794_355_200),
+            last_completed_at: Some(1_794_355_000),
+            last_outcome: Some("sweep-page".to_owned()),
+        }];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_doctor_success(
+                &[],
+                RoleMode::Split,
+                None,
+                &[],
+                &BTreeMap::new(),
+                &[],
+                &status,
+                &[],
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr,
+            ),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        let advisory = &report["advisories"][0];
+        assert_eq!(advisory["code"], "external-refresh.status");
+        assert_eq!(advisory["severity"], "information");
+        assert_eq!(
+            advisory["observed"],
+            json!({
+                "registered": 1,
+                "due": 1,
+                "leased": 0,
+                "pending": 7,
+                "ready": 3,
+                "oldestReadyAgeSeconds": 42,
+                "lastAttemptAtUnixSeconds": 1_794_355_200_i64,
+                "lastCompletedAtUnixSeconds": 1_794_355_000_i64,
+            })
+        );
+        let message = advisory["message"].as_str().unwrap();
+        for expected in ["licensing-holders", "sweep-page", "pending=7", "ready=3"] {
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[test]
+    fn doctor_flags_expired_refresh_grants_and_missing_static_ttl_headroom() {
+        let timings = [registry_breg::runtime_config::ExternalRefreshTiming {
+            plan: "licensing-holders".to_owned(),
+            interval_seconds: 900,
+            effective_cache_ttl_seconds: 600,
+            grant_valid_until: chrono::Utc::now().timestamp().saturating_sub(1),
+        }];
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_doctor_success(
+                &[],
+                RoleMode::Split,
+                None,
+                &[],
+                &BTreeMap::new(),
+                &[],
+                &[],
+                &timings,
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr,
+            ),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        let codes = report["advisories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|advisory| advisory["code"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert!(codes.contains("external-refresh.grant-expired"));
+        assert!(codes.contains("external-refresh.ttl-headroom"));
+        assert!(stdout
+            .windows("licensing-holders".len())
+            .any(|window| window == b"licensing-holders"));
+    }
+
+    #[test]
     fn doctor_reports_the_plain_http_issuer_opt_in_as_a_value_free_advisory() {
         const WARNING: &str =
             "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration";
@@ -17527,6 +17864,8 @@ mod tests {
                     Some(WARNING),
                     &[],
                     &BTreeMap::new(),
+                    &[],
+                    &[],
                     &[],
                     format,
                     &mut stdout,

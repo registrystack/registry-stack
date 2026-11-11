@@ -1857,6 +1857,16 @@ impl MutationTransaction {
             self.field_encryption.as_deref(),
         )
         .await?;
+        let refresh_captures = timer_rows
+            .iter()
+            .map(|((entity_id, _), current)| super::external_refresh_capture(entity_id, current))
+            .collect::<Vec<_>>();
+        super::capture_external_refresh_rows(
+            transaction.transaction(),
+            &refresh_captures,
+            crate::postgres::external_projection::enabled(registry),
+        )
+        .await?;
 
         // Several effects may share one final record revision. Index each
         // distinct revision once, under the action transaction's one commit,

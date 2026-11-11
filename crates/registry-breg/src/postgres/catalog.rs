@@ -244,6 +244,11 @@ pub async fn catalog_drift_objects(
                 .iter()
                 .map(|name| (*name).to_owned()),
         );
+        expected_indexes.extend(
+            super::external_refresh_queue::INDEXES
+                .iter()
+                .map(|name| (*name).to_owned()),
+        );
     }
     let index_rows = client
         .query(
@@ -587,6 +592,23 @@ impl ExpectedManagedCatalog {
             }
             for (identity, _, _, _, runtime_execute) in
                 super::external_projection::MANAGED_FUNCTIONS
+            {
+                catalog.function(identity, runtime_execute.then_some("EXECUTE"), None);
+            }
+            for (table, privileges) in super::external_refresh_queue::TABLE_PRIVILEGES {
+                catalog.table(
+                    table,
+                    privileges.iter().copied(),
+                    std::iter::empty::<&str>(),
+                    Some((false, false)),
+                );
+            }
+            catalog.sequence(
+                super::external_refresh_queue::WORK_SEQUENCE,
+                ["SELECT", "USAGE"],
+            );
+            for (identity, _, _, _, runtime_execute) in
+                super::external_refresh_queue::MANAGED_FUNCTIONS
             {
                 catalog.function(identity, runtime_execute.then_some("EXECUTE"), None);
             }
@@ -1437,6 +1459,8 @@ async fn verify_closed_ambient_catalog(
     let mut projection_definers = Vec::<bool>::new();
     for (identity, result, returns_set, security_definer, _) in
         super::external_projection::MANAGED_FUNCTIONS
+            .iter()
+            .chain(super::external_refresh_queue::MANAGED_FUNCTIONS.iter())
     {
         if expected_catalog
             .objects

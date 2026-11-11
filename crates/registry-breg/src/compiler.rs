@@ -353,7 +353,7 @@ pub fn compile_project_with_assets(
         return Err(CompileFailure::from_errors(diagnostics).with_findings(&findings));
     }
 
-    let (mut entities, physical_names) =
+    let (mut entities, mut physical_names) =
         compile_entities(&sources, &origins, assets).map_err(|failure| {
             stopped_compile_failure(failure, &findings, "compiled model construction")
         })?;
@@ -378,7 +378,7 @@ pub fn compile_project_with_assets(
             "external view compilation",
         )
     })?;
-    crate::external_views::mark_link_fields(&external_views, &mut entities);
+    crate::external_views::mark_link_fields(&external_views, &mut entities, &mut physical_names);
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
     crate::event_record::compile(&sources, &mut entities);

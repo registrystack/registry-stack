@@ -928,6 +928,10 @@ pub struct CompiledMembershipBoundary {
 /// [`CompiledEntity::indexes`]. Authored index ids cannot contain `:`.
 pub const REFERENCE_INDEX_PREFIX: &str = "reference:";
 
+/// Member-id prefix of a compiler-owned current-link index used by targeted
+/// external projection refresh. Authored index ids cannot contain `:`.
+pub const EXTERNAL_LINK_INDEX_PREFIX: &str = "external-link:";
+
 /// Whether an index or a whole-table unique constraint leads with `field`,
 /// so an equality match or an ordered scan on it can use a btree index. A
 /// partial unique index covers only the rows its predicate admits.

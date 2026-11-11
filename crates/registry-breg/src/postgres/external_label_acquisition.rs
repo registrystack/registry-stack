@@ -69,6 +69,8 @@ pub(crate) struct LabelSelectorPage {
 
 pub(crate) struct LabelAcquisition {
     page_sql: String,
+    target_sql: String,
+    root_page_sql: String,
     publication_sql: String,
 }
 
@@ -191,19 +193,40 @@ impl LabelAcquisition {
     ) -> Self {
         // These replacements contain only compiled identifiers, profile names,
         // and scope fingerprints. Member positions and selectors are bound.
-        let eligible = |roots: &str| {
+        let eligible = |roots: &str, selector_predicate: &str| {
             ELIGIBLE_SQL
                 .replace("__ROOT_SQL__", roots)
                 .replace("__SELECTOR_FIELD__", &literal(selector_field))
+                .replace("__SELECTOR_PREDICATE__", selector_predicate)
         };
-        let page_sql = PAGE_SQL
+        let page_sql = PAGE_SQL.replace("__STATE_SQL__", state_sql).replace(
+            "__ELIGIBLE_SQL__",
+            &eligible(page_root_sql, "checked.selector IS NOT NULL"),
+        );
+        let target_sql = TARGET_SQL
             .replace("__STATE_SQL__", state_sql)
-            .replace("__ELIGIBLE_SQL__", &eligible(page_root_sql));
-        let publication_sql = PUBLICATION_SQL
-            .replace("__STATE_SQL__", state_sql)
-            .replace("__ELIGIBLE_SQL__", &eligible(root_sql));
+            .replace(
+                "__ELIGIBLE_SQL__",
+                &eligible(
+                    root_sql,
+                    &format!(
+                        "members.fields @> jsonb_build_object({}, $1::text) AND checked.selector=$1::text",
+                        literal(selector_field)
+                    ),
+                ),
+            );
+        let root_page_sql = ROOT_PAGE_SQL.replace("__STATE_SQL__", state_sql).replace(
+            "__ELIGIBLE_SQL__",
+            &eligible(root_sql, "checked.selector IS NOT NULL"),
+        );
+        let publication_sql = PUBLICATION_SQL.replace("__STATE_SQL__", state_sql).replace(
+            "__ELIGIBLE_SQL__",
+            &eligible(root_sql, "checked.selector IS NOT NULL"),
+        );
         Self {
             page_sql,
+            target_sql,
+            root_page_sql,
             publication_sql,
         }
     }
@@ -236,6 +259,57 @@ impl LabelAcquisition {
             .query_one(&self.page_sql, &[&root, &member, &bound])
             .await
             .map_err(|_| ExternalQueryError::Unavailable)?;
+        if !result.get::<_, bool>(0) {
+            return Err(ExternalQueryError::GenerationChanged);
+        }
+        let rows: Vec<LabelSelector> =
+            serde_json::from_value(result.get(1)).map_err(|_| ExternalQueryError::Unavailable)?;
+        Ok(bounded_page(rows, limit))
+    }
+
+    /// Find one approved current membership for a source selector. The
+    /// containment predicate is the managed reverse-index probe; the equality
+    /// keeps the extracted scalar contract exact.
+    pub(crate) async fn selector(
+        &self,
+        transaction: &GuardedTransaction<'_>,
+        selector: &str,
+    ) -> Result<LabelSelectorPage> {
+        if selector.is_empty() || !crate::external_views::link_key_acceptable(selector) {
+            return Err(ExternalQueryError::InvalidQuery);
+        }
+        let result = transaction
+            .transaction()
+            .query_one(&self.target_sql, &[&selector])
+            .await
+            .map_err(|_| ExternalQueryError::Unavailable)?;
+        self.selected_page(result, 1)
+    }
+
+    /// Page selectors from one exact RLS-visible parent root after its
+    /// complete collection has been refreshed.
+    pub(crate) async fn page_for_root(
+        &self,
+        transaction: &GuardedTransaction<'_>,
+        root_id: Uuid,
+        after_member: Option<&str>,
+        limit: u16,
+    ) -> Result<LabelSelectorPage> {
+        if !(1..=1000).contains(&limit)
+            || after_member.is_some_and(|member| member.is_empty() || member.len() > 1024)
+        {
+            return Err(ExternalQueryError::InvalidQuery);
+        }
+        let bound = i64::from(limit) + 1;
+        let result = transaction
+            .transaction()
+            .query_one(&self.root_page_sql, &[&root_id, &after_member, &bound])
+            .await
+            .map_err(|_| ExternalQueryError::Unavailable)?;
+        self.selected_page(result, limit)
+    }
+
+    fn selected_page(&self, result: tokio_postgres::Row, limit: u16) -> Result<LabelSelectorPage> {
         if !result.get::<_, bool>(0) {
             return Err(ExternalQueryError::GenerationChanged);
         }
@@ -310,7 +384,7 @@ CROSS JOIN LATERAL (
     SELECT CASE WHEN jsonb_typeof(members.fields->__SELECTOR_FIELD__)='string'
         THEN left(members.fields->>__SELECTOR_FIELD__,513) END AS selector
 ) AS checked
-WHERE checked.selector IS NOT NULL
+WHERE __SELECTOR_PREDICATE__
 "#;
 
 const PAGE_SQL: &str = r#"
@@ -324,6 +398,31 @@ WITH parent_state AS MATERIALIZED (__STATE_SQL__), selected AS (
 SELECT EXISTS(SELECT 1 FROM parent_state),COALESCE((SELECT jsonb_agg(jsonb_build_object(
     'root_id',root_id,'member_key',member_key,'selector',selector,'parent_key',parent_key,
     'parent_snapshot',parent_snapshot,'parent_expires_at',parent_expires_at) ORDER BY root_id,member_key COLLATE "C") FROM page),'[]'::jsonb)
+"#;
+
+const TARGET_SQL: &str = r#"
+WITH parent_state AS MATERIALIZED (__STATE_SQL__), selected AS (
+    __ELIGIBLE_SQL__
+), witness AS MATERIALIZED (
+    SELECT root_id,member_key,selector,parent_key,parent_snapshot,parent_expires_at FROM selected
+    LIMIT 1
+)
+SELECT EXISTS(SELECT 1 FROM parent_state),COALESCE((SELECT jsonb_agg(jsonb_build_object(
+    'root_id',root_id,'member_key',member_key,'selector',selector,'parent_key',parent_key,
+    'parent_snapshot',parent_snapshot,'parent_expires_at',parent_expires_at)) FROM witness),'[]'::jsonb)
+"#;
+
+const ROOT_PAGE_SQL: &str = r#"
+WITH parent_state AS MATERIALIZED (__STATE_SQL__), selected AS (
+    __ELIGIBLE_SQL__
+), page AS MATERIALIZED (
+    SELECT root_id,member_key,selector,parent_key,parent_snapshot,parent_expires_at FROM selected
+    WHERE root_id=$1::uuid AND ($2::text IS NULL OR member_key COLLATE "C">$2::text COLLATE "C")
+    ORDER BY member_key COLLATE "C" LIMIT $3::bigint
+)
+SELECT EXISTS(SELECT 1 FROM parent_state),COALESCE((SELECT jsonb_agg(jsonb_build_object(
+    'root_id',root_id,'member_key',member_key,'selector',selector,'parent_key',parent_key,
+    'parent_snapshot',parent_snapshot,'parent_expires_at',parent_expires_at) ORDER BY member_key COLLATE "C") FROM page),'[]'::jsonb)
 "#;
 
 const PUBLICATION_SQL: &str = r#"
@@ -467,6 +566,32 @@ mod tests {
         };
         assert!(!format!("{position:?} {selector:?} {supporting:?}").contains("CANARY"));
     }
+
+    #[test]
+    fn targeted_label_sql_seeks_the_selector_and_one_exact_root() {
+        let scope = ProjectionScope::new("parent", Uuid::new_v4(), "binding", "grant", 60).unwrap();
+        let plan = LabelAcquisition::new(
+            &registry(&["parent", "label"]),
+            "refresh",
+            "consultation",
+            "view",
+            "members",
+            &scope,
+            ProjectionGeneration {
+                epoch: scope.epoch,
+                generation: 0,
+            },
+        )
+        .unwrap();
+        assert!(plan.target_sql.contains("fields @> jsonb_build_object"));
+        assert!(plan.target_sql.contains("checked.selector=$1::text"));
+        assert!(plan.target_sql.contains("LIMIT 1"));
+        assert!(plan.root_page_sql.contains("root_id=$1::uuid"));
+        assert!(plan
+            .root_page_sql
+            .contains("member_key COLLATE \"C\">$2::text COLLATE \"C\""));
+        assert!(plan.root_page_sql.contains("LIMIT $3::bigint"));
+    }
 }
 
 #[cfg(test)]
@@ -570,6 +695,27 @@ mod postgres_tests {
             "floor(extract(epoch FROM clock_timestamp()))::bigint",
             "1000",
         );
+        let target_sql = plan.target_sql.replace(
+            "floor(extract(epoch FROM clock_timestamp()))::bigint",
+            "1000",
+        );
+        let target = runtime
+            .query_one(&target_sql, &[&"indirect-person"])
+            .await
+            .unwrap();
+        assert!(target.get::<_, bool>(0));
+        let targeted: Value = target.get(1);
+        assert_eq!(targeted.as_array().unwrap().len(), 1);
+        assert_eq!(
+            targeted[0]["root_id"],
+            "00000000-0000-4000-8000-000000000001"
+        );
+        assert_eq!(targeted[0]["parent_key"], "allowed-parent");
+        let unmatched = runtime
+            .query_one(&target_sql, &[&"missing-person"])
+            .await
+            .unwrap();
+        assert_eq!(unmatched.get::<_, Value>(1), json!([]));
         let page = runtime
             .query_one(&page_sql, &[&None::<Uuid>, &None::<String>, &2_i64])
             .await

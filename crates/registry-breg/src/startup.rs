@@ -854,6 +854,7 @@ pub struct PreparedServer {
     postgres_advisories: Vec<BaselineAdvisory>,
     unavailable_external_projections: BTreeMap<String, String>,
     external_projection_status: Vec<ExternalProjectionStatus>,
+    external_refresh_status: Vec<ExternalRefreshPlanStatus>,
     role_mode: RoleMode,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
@@ -944,6 +945,7 @@ impl PreparedServer {
             postgres_advisories: Vec::new(),
             unavailable_external_projections: BTreeMap::new(),
             external_projection_status: Vec::new(),
+            external_refresh_status: Vec::new(),
             role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -987,6 +989,7 @@ impl PreparedServer {
             postgres_advisories: Vec::new(),
             unavailable_external_projections: BTreeMap::new(),
             external_projection_status: Vec::new(),
+            external_refresh_status: Vec::new(),
             role_mode: RoleMode::Split,
             #[cfg(feature = "wasm")]
             wasm_runtime: None,
@@ -1060,6 +1063,7 @@ pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
             unbound_review_authorities,
             unavailable_external_projections: prepared.unavailable_external_projections().clone(),
             external_projections: prepared.external_projection_status.clone(),
+            external_refresh_plans: prepared.external_refresh_status.clone(),
         })
 }
 
@@ -1074,6 +1078,22 @@ pub struct CheckedStartup {
     pub unbound_review_authorities: Vec<String>,
     pub unavailable_external_projections: BTreeMap<String, String>,
     pub external_projections: Vec<ExternalProjectionStatus>,
+    pub external_refresh_plans: Vec<ExternalRefreshPlanStatus>,
+}
+
+/// Value-free operational state for one configured refresh plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalRefreshPlanStatus {
+    pub plan: String,
+    pub registered: bool,
+    pub due: bool,
+    pub leased: bool,
+    pub pending: u64,
+    pub ready: u64,
+    pub oldest_ready_age_seconds: Option<u64>,
+    pub last_attempt_at: Option<i64>,
+    pub last_completed_at: Option<i64>,
+    pub last_outcome: Option<String>,
 }
 
 /// One external projection a server would serve, as a startup check sees it.
@@ -1651,6 +1671,7 @@ async fn finish_prepared_server(
     };
     let mut unavailable_external_projections = BTreeMap::new();
     let mut external_projection_status = Vec::new();
+    let mut external_refresh_status = Vec::new();
     let external_views =
         if registry.external_views().views.is_empty() && config.external_sources().is_empty() {
             None
@@ -1687,10 +1708,21 @@ async fn finish_prepared_server(
                 .bind_configured_scopes(opening == AuditOpening::Serve)
                 .await
                 .map_err(|_| StartupError::ExternalSources)?;
+            external
+                .configure_managed_refresh(
+                    config.resolve_external_refresh(&registry),
+                    opening == AuditOpening::Serve,
+                )
+                .await
+                .map_err(|_| StartupError::ExternalSources)?;
             unavailable_external_projections = external.unavailable_projections().clone();
             if opening == AuditOpening::CheckOnly {
                 external_projection_status = external
                     .projection_status()
+                    .await
+                    .map_err(|_| StartupError::ExternalSources)?;
+                external_refresh_status = external
+                    .managed_refresh_status()
                     .await
                     .map_err(|_| StartupError::ExternalSources)?;
             }
@@ -2001,6 +2033,7 @@ async fn finish_prepared_server(
         postgres_advisories,
         unavailable_external_projections,
         external_projection_status,
+        external_refresh_status,
         role_mode: RoleMode::from_roles(
             config.database().roles().migration(),
             config.database().roles().runtime(),

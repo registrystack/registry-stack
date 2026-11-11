@@ -450,6 +450,139 @@
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
+    "ExternalRefreshConfig": {
+      "additionalProperties": false,
+      "description": "The optional `externalRefresh` runtime block. Empty is the omission default.",
+      "properties": {
+        "plans": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ExternalRefreshPlan"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "workers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ExternalRefreshWorker"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "ExternalRefreshNotifier": {
+      "additionalProperties": false,
+      "properties": {
+        "requesterClient": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "requiredScope": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "requesterClient",
+        "requiredScope"
+      ],
+      "type": "object"
+    },
+    "ExternalRefreshPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "intervalSeconds": {
+          "format": "uint32",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pageSize": {
+          "default": 50,
+          "format": "uint32",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "refreshLabels": {
+          "default": false,
+          "type": "boolean"
+        },
+        "sourceChanges": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ExternalRefreshNotifier"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "target": {
+          "$ref": "#/$defs/ExternalRefreshTarget"
+        },
+        "worker": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "target",
+        "worker",
+        "intervalSeconds"
+      ],
+      "type": "object"
+    },
+    "ExternalRefreshTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "link": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "view": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "view",
+        "link"
+      ],
+      "type": "object"
+    },
+    "ExternalRefreshWorker": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "principal": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "requesterClient": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "rowClaims": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RawRowClaimValues"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "accessProfile",
+        "requesterClient",
+        "principal"
+      ],
+      "type": "object"
+    },
     "ExternalSourceAcquisition": {
       "additionalProperties": false,
       "properties": {
@@ -1722,6 +1855,20 @@
       ],
       "type": "object"
     },
+    "RawRowClaimValues": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExternalId"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      ]
+    },
     "RawSqlRoles": {
       "additionalProperties": false,
       "properties": {
@@ -2133,6 +2280,14 @@
         "$ref": "#/$defs/LocalId"
       },
       "type": "object"
+    },
+    "externalRefresh": {
+      "$ref": "#/$defs/ExternalRefreshConfig",
+      "default": {
+        "plans": {},
+        "workers": {}
+      },
+      "description": "Managed scheduled and targeted refresh plans. Omission starts no\nrefresh worker and admits no source-change notifier."
     },
     "externalSources": {
       "default": [],

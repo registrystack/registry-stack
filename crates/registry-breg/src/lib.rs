@@ -73,6 +73,8 @@ pub mod example_references;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod external_projection_maintenance;
 #[cfg(feature = "runtime")]
+pub(crate) mod external_refresh_config;
+#[cfg(feature = "runtime")]
 pub mod external_source;
 pub(crate) mod external_view_artifacts;
 pub mod external_views;

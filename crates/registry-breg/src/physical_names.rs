@@ -96,6 +96,22 @@ pub(crate) fn spatial_geometry_index_name(entity_id: &str, field_id: &str) -> St
     )
 }
 
+pub(crate) fn external_link_index_name(
+    entity_id: &str,
+    view_id: &str,
+    link_id: &str,
+    profile_id: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"breg/external-link-index/v1");
+    for value in [entity_id, view_id, link_id, profile_id] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    let digest = hasher.finalize();
+    format!("breg_elink_{}", hex_prefix(&digest, 8))
+}
+
 pub(crate) fn spatial_candidate_view_name(entity_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"breg/spatial-candidate-view/v1");

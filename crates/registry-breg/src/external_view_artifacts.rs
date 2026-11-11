@@ -16,6 +16,7 @@ pub(crate) fn append(
     inventory: &CompiledExternalViews,
     admitted: impl Fn(&str, &str, &str, Operation) -> bool,
 ) {
+    let mut managed_refresh_possible = false;
     for view in inventory.views.values() {
         for link in &view.links {
             let projection = &inventory.projections[link.projection.as_str()];
@@ -88,6 +89,7 @@ pub(crate) fn append(
                             )
                     })
             };
+            managed_refresh_possible |= refresh_admitted(false);
             for (suffix, summary, labels) in [
                 (
                     "refresh",
@@ -112,6 +114,67 @@ pub(crate) fn append(
             }
         }
     }
+    if managed_refresh_possible {
+        append_managed_refresh_paths(paths);
+    }
+}
+
+fn append_managed_refresh_paths(paths: &mut Map<String, Value>) {
+    let plan =
+        json!({"name": "plan", "in": "path", "required": true, "schema": {"type": "string"}});
+    let body = |schema: Value| {
+        json!({
+            "required": true, "content": {"application/json": {"schema": schema}}
+        })
+    };
+    paths.insert("/v1/external-refresh-plans/{plan}/step".to_owned(), json!({"post": {
+        "operationId": "external-refresh-plan-step",
+        "summary": "Advance a deployment-configured external refresh plan",
+        "security": [{"bearerAuth": []}],
+        "parameters": [plan],
+        "requestBody": body(json!({"type": "object", "additionalProperties": false,
+            "properties": {"startSweep": {"type": "boolean", "default": false}}})),
+        "responses": {
+            "200": {"description": "Value-free step report", "content": {"application/json": {"schema": {
+                "type": "object", "additionalProperties": false,
+                "required": ["moreWork", "processed", "published", "reused", "unavailable",
+                    "retried", "settled", "sweepCompleted", "sweepAcquisitionFailures"],
+                "properties": {
+                    "moreWork": {"type": "boolean"}, "processed": count_schema(),
+                    "published": count_schema(), "reused": count_schema(), "unavailable": count_schema(),
+                    "retried": count_schema(), "settled": count_schema(),
+                    "sweepCompleted": {"type": "boolean"}, "sweepAcquisitionFailures": count_schema()
+                }
+            }}}},
+            "400": {"description": "Invalid step request"},
+            "404": {"description": "Plan is unavailable to the caller"},
+            "503": {"description": "The current plan or source is unavailable"}
+        }
+    }}));
+    paths.insert("/v1/external-refresh-plans/{plan}/hints".to_owned(), json!({"post": {
+        "operationId": "external-refresh-plan-hint",
+        "summary": "Admit an authenticated source change hint",
+        "security": [{"bearerAuth": []}],
+        "parameters": [plan],
+        "requestBody": body(json!({"type": "object", "additionalProperties": false,
+            "required": ["hintId", "projection", "selectorScheme", "selector"],
+            "properties": {
+                "hintId": {"type": "string", "minLength": 1, "maxLength": 256},
+                "projection": {"type": "string", "minLength": 1},
+                "selectorScheme": {"type": "string", "minLength": 1},
+                "selector": {"type": "string", "minLength": 1, "maxLength": 512}
+            }})),
+        "responses": {
+            "202": {"description": "Hint accepted or already admitted, without checking local matches"},
+            "400": {"description": "Invalid hint"},
+            "404": {"description": "Plan or projection is unavailable to the notifier"},
+            "409": {"description": "Hint ID conflicts with an accepted hint"},
+            "429": {"description": "Hint admission is at capacity", "headers": {
+                "Retry-After": {"schema": {"type": "integer", "minimum": 1}}
+            }},
+            "503": {"description": "The current plan or source is unavailable"}
+        }
+    }}));
 }
 
 fn refresh_operation(operation_id: String, summary: &str) -> Value {

@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from registry_client import breg
 
@@ -19,6 +19,10 @@ WEBHOOK_RECEIVER_MAX_BODY_BYTES = 1024 * 1024
 
 class ReceiverError(RuntimeError):
     pass
+
+
+class WebhookAcceptance(Protocol):
+    def accept(self, headers: dict[str, str], body: bytes) -> None: ...
 
 
 def _verify_webhook_request(
@@ -77,7 +81,8 @@ def _verify_webhook_request(
         f"urn:breg:event-schema:{contract['registry_id']}:{contract['record_type']}:"
         f"{contract['event_id']}:sha256:"
     )
-    if not headers["ce-dataschema"].startswith(expected_schema_prefix):
+    schema = headers["ce-dataschema"]
+    if not schema.startswith(expected_schema_prefix) or schema != contract.get("data_schema", schema):
         raise ReceiverError("the receiver refused the CloudEvents data schema")
     event_time = datetime.fromisoformat(headers["ce-time"].replace("Z", "+00:00"))
     delivery_time = datetime.fromisoformat(
@@ -135,7 +140,7 @@ def _verify_webhook_request(
         raise ReceiverError("the receiver refused the webhook body shape")
     if (
         document["recordType"] != contract["record_type"]
-        or document["trigger"] != "created"
+        or document["trigger"] != contract.get("trigger", "created")
         or not isinstance(document["revision"], int)
         or document["revision"] < 1
         or not isinstance(document["packageRevision"], str)
@@ -258,7 +263,7 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
             status = 400
         else:
             try:
-                self.server.webhook_inbox.accept(headers, body)
+                self.server.webhook_acceptance.accept(headers, body)
             except ReceiverError:
                 status = 409
             except (OSError, sqlite3.Error):
@@ -269,11 +274,11 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def make_server(port: int, key: bytes, contract: dict[str, Any], inbox: WebhookInbox):
+def make_server(port: int, key: bytes, contract: dict[str, Any], acceptance: WebhookAcceptance):
     server = http.server.HTTPServer(("127.0.0.1", port), WebhookReceiver)
     server.webhook_key = key
     server.contract = contract
-    server.webhook_inbox = inbox
+    server.webhook_acceptance = acceptance
     return server
 
 

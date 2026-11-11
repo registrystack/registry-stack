@@ -44,6 +44,7 @@ pub(crate) const INDEXES: &[&str] = &[
     "registry_internal.registry_external_projection_refresh_expiry_idx",
     "registry_internal.registry_external_projection_refresh_subject_idx",
     "registry_internal.registry_external_projection_allocated_idx",
+    "registry_internal.registry_external_projection_values_fields_idx",
 ];
 
 pub(crate) fn enabled(registry: &crate::model::CompiledRegistry) -> bool {
@@ -83,14 +84,21 @@ pub(crate) fn scope_contract_digest(
 }
 
 /// Migration-only reconciliation under the existing exclusive package guard.
-/// Featureless registries install no store. Removing the feature removes only
-/// its rebuildable cache and fixed runtime authority in the same transaction.
+/// Featureless registries install no store. Do not remove a provisioned
+/// managed queue as a side effect of retiring the last indexed projection.
 pub(crate) async fn reconcile(
     migration: &impl GenericClient,
     registry: &crate::model::CompiledRegistry,
     runtime_role: &SqlIdentifier,
 ) -> Result<(), ProjectionError> {
     if !enabled(registry) {
+        let queue_installed: bool = migration.query_one(
+            "SELECT pg_catalog.to_regclass('registry_internal.registry_external_refresh_plans') IS NOT NULL",
+            &[],
+        ).await.map_err(|_| ProjectionError::Unavailable)?.get(0);
+        if queue_installed {
+            return Err(ProjectionError::RefreshQueueRetained);
+        }
         let exists: bool=migration.query_one("SELECT to_regclass('registry_internal.registry_external_projection_scopes') IS NOT NULL",&[]).await.map_err(|_|ProjectionError::Unavailable)?.get(0);
         if exists {
             for function in RUNTIME_FUNCTIONS.iter().copied().chain([
@@ -113,6 +121,14 @@ pub(crate) async fn reconcile(
         return Ok(());
     }
     install(migration, runtime_role).await?;
+    super::external_refresh_queue::install(migration, runtime_role)
+        .await
+        .map_err(|error| match error {
+            super::external_refresh_queue::QueueError::RoleSeparationRequired => {
+                ProjectionError::RoleSeparationRequired
+            }
+            _ => ProjectionError::Unavailable,
+        })?;
     let mut allowlist = serde_json::Map::new();
     for (id, projection) in &registry.external_views().projections {
         if projection.mode != crate::external_views::ExternalProjectionMode::Indexed {
@@ -262,6 +278,8 @@ pub(crate) const RUNTIME_FUNCTIONS: &[&str] = &[
 pub(crate) enum ProjectionError {
     #[error("indexed external projections require separate migration and runtime database roles")]
     RoleSeparationRequired,
+    #[error("the managed external refresh queue requires a separate retirement migration")]
+    RefreshQueueRetained,
     #[error("external projection scope is invalid")]
     InvalidScope,
     #[error("external projection snapshot is invalid")]
@@ -280,6 +298,9 @@ pub(crate) fn kernel_error(error: ProjectionError) -> super::PostgresKernelError
     match error {
         ProjectionError::RoleSeparationRequired => super::PostgresKernelError::Configuration(
             "indexed external projections require separate migration and runtime database roles",
+        ),
+        ProjectionError::RefreshQueueRetained => super::PostgresKernelError::Configuration(
+            "removing the last indexed projection requires a separate refresh queue retirement migration; keep its declaration and remove its source binding to stop acquisition",
         ),
         _ => super::PostgresKernelError::Connection,
     }
@@ -399,6 +420,14 @@ impl fmt::Debug for AcceptedSnapshot {
 }
 
 impl AcceptedSnapshot {
+    pub(crate) fn is_authorised_absence(&self) -> bool {
+        self.kind == SnapshotKind::Absent
+    }
+
+    pub(crate) fn is_empty_collection(&self) -> bool {
+        self.kind == SnapshotKind::CompleteCollection && self.rows.is_empty()
+    }
+
     pub(crate) fn one(
         subject_key: &str,
         snapshot_id: &str,
@@ -1162,6 +1191,8 @@ CREATE INDEX IF NOT EXISTS registry_external_projection_refresh_subject_idx
 CREATE INDEX IF NOT EXISTS registry_external_projection_allocated_idx
     ON registry_internal.registry_external_projection_refreshes(projection_id,lease_expires_at)
     WHERE state='allocated';
+CREATE INDEX IF NOT EXISTS registry_external_projection_values_fields_idx
+    ON registry_internal.registry_external_projection_values USING gin(fields jsonb_path_ops);
 
 CREATE OR REPLACE FUNCTION registry_internal.allocate_external_projection_refresh(
     p_projection text,p_epoch uuid,p_binding text,p_grant text,p_subject text,p_lease bigint
@@ -1605,6 +1636,14 @@ mod tests {
             assert!(table.starts_with("registry_internal.registry_external_projection_"));
             assert!(INSTALL_SQL.contains(table));
         }
+        assert_eq!(
+            super::super::external_refresh_queue::BACKUP_EXCLUDED_TABLES.len(),
+            3
+        );
+        for table in super::super::external_refresh_queue::BACKUP_EXCLUDED_TABLES {
+            assert!(table.starts_with("registry_internal.registry_external_refresh_"));
+            assert!(super::super::external_refresh_queue::INSTALL_SQL.contains(table));
+        }
     }
 }
 
@@ -2032,13 +2071,18 @@ pub(crate) mod postgres_tests {
             .get(0);
         assert_eq!(withdrawn["active"], false);
         let without = super::super::external_view_query::tests::registry_with_external(false);
-        reconcile(&migration, &without, &database.runtime_role)
-            .await
-            .unwrap();
-        assert!(!migration.query_one("SELECT to_regclass('registry_internal.registry_external_projection_scopes') IS NOT NULL",&[]).await.unwrap().get::<_,bool>(0));
-        reconcile(&migration, &without, &database.runtime_role)
-            .await
-            .unwrap();
+        // Queue retirement is a separate operation. Removing the last
+        // projection cannot modify this catalog or its retained state.
+        assert_eq!(
+            reconcile(&migration, &without, &database.runtime_role).await,
+            Err(ProjectionError::RefreshQueueRetained),
+        );
+        let intact: bool = migration.query_one(
+            "SELECT to_regclass('registry_internal.registry_external_refresh_plans') IS NOT NULL
+                AND to_regclass('registry_internal.registry_external_projection_scopes') IS NOT NULL",
+            &[],
+        ).await.unwrap().get(0);
+        assert!(intact);
         drop(pool);
         migration_task.abort();
         drop(migration);
@@ -2469,7 +2513,18 @@ pub(crate) mod postgres_tests {
         install(&restore_migration, &restored.runtime_role)
             .await
             .unwrap();
+        super::super::external_refresh_queue::install(&restore_migration, &restored.runtime_role)
+            .await
+            .unwrap();
         for table in BACKUP_EXCLUDED_TABLES {
+            let count = restore_migration
+                .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+                .await
+                .unwrap()
+                .get::<_, i64>(0);
+            assert_eq!(count, 0);
+        }
+        for table in super::super::external_refresh_queue::BACKUP_EXCLUDED_TABLES {
             let count = restore_migration
                 .query_one(&format!("SELECT count(*) FROM {table}"), &[])
                 .await
@@ -2660,7 +2715,7 @@ pub(crate) mod postgres_tests {
             let ticket = allocate_inner(&self.migration, scope, key).await.unwrap();
             let snapshot = AcceptedSnapshot::complete_collection(
                 key,
-                &format!("{key}-members"),
+                &Uuid::new_v4().to_string(),
                 now,
                 now + scope.cache_ttl_seconds,
                 RetentionPermission::PermittedUntil(now + scope.cache_ttl_seconds),

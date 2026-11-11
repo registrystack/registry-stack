@@ -10,7 +10,9 @@ The migration-installed binding function contains the compiled projection allowl
 
 The binding and source grant fingerprints cover only what grants authority over cached rows: the reviewed pack contract, the operation, and the allowed fields. Renewing the grant cutoff, replacing a CA bundle, moving an endpoint, or changing acquisition limits keeps the stored epoch. A changed contract, operation, allowed field list, or effective cache lifetime starts a fresh epoch at the next start. A withdrawn slot whose binding is still configured also starts a fresh epoch. Rows under every older epoch are left for purge, and a withdrawn or replaced epoch never becomes readable again.
 
-Each projection's scope covers its own declaration and its external record type. Editing a view, an access profile, or another projection keeps its cache. Changing the projection's own declaration resets its scope during package activation and requires fresh acquisition. Removing the final indexed projection removes its rebuildable store during package activation.
+Each projection's scope covers its own declaration and its external record type. Editing a view, an access profile, or another projection keeps its cache. Changing the projection's own declaration resets its scope during package activation and requires fresh acquisition.
+
+If you already run an indexed projection, activate a successor package with the release that adds managed refresh before starting that release against the database. The migration installs the queue and the compiler-owned lookup indexes. Activation refuses removal of the final indexed projection once the queue schema has been installed, so it cannot erase pending work or replay state. To stop acquisition, keep that declaration and remove its source binding and refresh plans from every BReg instance. Removing the remaining schema requires a separate reviewed retirement migration.
 
 A projection that cannot bind leaves only its own views unavailable. Its binding may fail its own checks, its source grant may have expired, or the database may refuse its scope. Those views answer `503` with the `source.unavailable` Problem, whose `fieldPath` is `/externalProjections/{id}`. Other views keep serving. Startup logs each unavailable projection with the reason, and `bregctl doctor` reports each one as an `external-projection.unavailable` warning. A doctor check binds and rolls back, so it never moves a serving scope to a new epoch.
 
@@ -57,9 +59,56 @@ Each signal names the projection and a fixed reason category. None carries a sou
 
 ## Schedule refresh and inspect coverage
 
-Run the named view’s `POST /v1/external-views/{view}/{link}/refresh` with the approved machine profile. Continue with the returned `nextCursor` until the sweep ends. For independent related labels, run `POST /v1/external-views/{view}/{link}/refresh-labels` after the related collection refresh. That machine profile needs explicit refresh grants on both projections under the same purpose. The label sweep selects keys only from authorised roots with fresh complete collections. Before each source call it confirms that the collections which supplied that page are still current and unexpired. A refresh of other collections leaves the sweep running; a refresh of one of its own collections stops acquisition for that page, and the next sweep picks up the new members. A rotated, withdrawn or reset collection projection ends the sweep, so start a fresh one.
+Add an optional top-level `externalRefresh` block in your BReg runtime file, alongside `externalSources`. A plan targets one indexed view link. Reuse a worker binding when two plans use the same machine identity and row scope.
 
-The refresh report counts processed roots or related rows, published values, reused keys and unavailable results. A root without a link key counts only as processed. A root with an invalid link key counts as unavailable, although a read of it answers as having no outside value. A related row with an invalid label key also counts as unavailable. `bregctl external-projection inspect` reports receipt counts by outcome and fresh, expired and invalidated snapshot counts. Use an authorised indexed query to test readiness for its local root scope.
+The following example uses the service profile and a 300-second source lifetime from the [external views example](examples/external-views/README.md). The service access token must have the named principal, requester client, required scope and purpose, and the expected claim for each root List boundary. The reviewed project gives that profile List permission and `refreshExternalProjections`. BReg uses the separate credentials under `externalSources` to contact the authority.
+
+```yaml
+externalRefresh:
+  workers:
+    licensing-zone-a:
+      accessProfile: projection-refresh
+      requesterClient: licensing-refresh
+      principal: synthetic-licensing-refresh
+      rowClaims: {jurisdiction: zone-a}
+  plans:
+    licensing-holders:
+      worker: licensing-zone-a
+      target: {view: licence-holder-indexed, link: holder}
+      intervalSeconds: 120
+    licensing-holdings:
+      worker: licensing-zone-a
+      target: {view: business-holdings-indexed, link: holdings}
+      intervalSeconds: 120
+      refreshLabels: true
+      sourceChanges:
+        holdings-indexed:
+          requesterClient: business-change-notifier
+          requiredScope: registry:licensing:holdings-change-hint
+```
+
+Check the complete file with `bregctl check PROJECT --runtime-config FILE`. `intervalSeconds` is measured from the start of one completed sweep to the start of the next. A sweep that runs past its interval is immediately due again. A failed traversal, expired target, exhausted retry, or reconciliation obligation discovered after the sweep started waits at least 60 seconds before the follow-up, so a persistent failure cannot create a tight loop. Keep the interval, the time to finish a sweep, and a margin for retries and timer delay inside the effective source lifetime. Measure them with your number of distinct subjects and the source's request budget. `pageSize` defaults to 50 and accepts 1 to 100. Collections use a smaller root page and every call observes the bound Adapter operation's own limits. `refreshLabels` defaults to false. Enable it only when the worker has the separate label projection grant and its source binding is available. A plan with an unavailable binding does not prevent unrelated views and plans from serving.
+
+Run the following from your existing scheduler using the worker's current BReg access token. A newly registered or restored plan is immediately due. The command stops when ready work runs out, another worker holds the lease, or its run budget ends. Use `--start-sweep` for an immediate reconciliation request, which coalesces with one that is already due or in progress.
+
+```bash
+bregctl external-projection refresh \
+  --breg-url https://licences.example.org \
+  --plan licensing-holders \
+  --access-token-file /run/secrets/licensing-refresh.jwt
+```
+
+Each `POST /v1/external-refresh-plans/{plan}/step` accepts `{}` or `{"startSweep":true}` and advances one bounded sweep page or ready target batch. PostgreSQL holds the lease and the sealed continuation, so another invocation can resume after interruption. Steps alternate between ready targets and a due sweep. An ordinary Record write queues a local root when it changes a link or a field used by the worker's row boundary. The worker rechecks the current root and may reuse a fresh snapshot. A source hint instead asks for a new observation. A transient failure retries the affected key while the previous value keeps its original expiry.
+
+Removing a plan, changing its activation, authority or projection epoch, or disabling its indexed projection fences the previous generation immediately. Its pending selectors remain sensitive managed database state until their original expiry, but no worker can claim or publish them. The purge removes them after that bound; re-enabling a plan starts a current-generation reconciliation instead of reviving the retained work.
+
+For source notifications, configure `sourceChanges` for a primary or enabled label projection. The notifier uses its own verified BReg service client. It posts `hintId`, `projection`, `selectorScheme` and `selector` to `POST /v1/external-refresh-plans/{plan}/hints`. A `202` acknowledges a committed queue entry, including replay of the same hint. It does not report whether an eligible local root exists. Reuse the same hint ID on delivery retry. See the [signed webhook bridge example](examples/webhook-receiver/README.md) for admission, retry, and holdings moves. A holdings notice fetches the complete current collection for the named parent. To pick up a move immediately, notify for both parents. A scheduled sweep reconciles missed notifications.
+
+Use `bregctl doctor` to see the plan's due and lease state, last attempt and completed sweep, and queue age. The step report counts processed items, published and reused keys, failures and retries. A completed sweep can have acquisition failures. An authorised indexed query checks current coverage for the scope that query serves. The operator's grant horizon and queue status cannot establish coverage on their own.
+
+Manual refresh remains available at `POST /v1/external-views/{view}/{link}/refresh`. Continue with `nextCursor` until it ends. For related labels, run `POST /v1/external-views/{view}/{link}/refresh-labels` after the collection refresh. Both modes check the same machine grants, row policy, scope and publication rules. Label acquisition uses only current eligible roots and fresh complete parent snapshots.
+
+In a manual sweep, a root without a link key counts only as processed. An invalid key counts as unavailable. `bregctl external-projection inspect` reports projection receipt counts by outcome and fresh, expired and invalidated snapshot counts.
 
 ## Stop acquisition, withdraw, and renew
 
@@ -77,7 +126,7 @@ These operations do not change the governed schema or package digest. They mutat
 
 ## Logical backups
 
-Exclude data from all four projection tables. Keep their schema and functions so a restore retains the package-installed allowlist but starts with no source values, old bindings, or refresh receipts. For example, with PostgreSQL service profiles supplying your connections and credentials:
+Exclude data from all seven projection and managed-refresh tables. Keep their schema and functions so a restore retains the package-installed allowlist but starts with no source values, old bindings, refresh work, selectors, or receipts. For example, with PostgreSQL service profiles supplying your connections and credentials:
 
 ```bash
 pg_dump --dbname='service=breg-backup' --format=custom \
@@ -85,10 +134,13 @@ pg_dump --dbname='service=breg-backup' --format=custom \
   --exclude-table-data=registry_internal.registry_external_projection_refreshes \
   --exclude-table-data=registry_internal.registry_external_projection_snapshots \
   --exclude-table-data=registry_internal.registry_external_projection_values \
+  --exclude-table-data=registry_internal.registry_external_refresh_plans \
+  --exclude-table-data=registry_internal.registry_external_refresh_work \
+  --exclude-table-data=registry_internal.registry_external_refresh_receipts \
   --file=registry.backup
 ```
 
-The four exclusions do not remove the local identifiers that your own Records hold. Those identifiers remain part of the registry backup according to its ordinary policy. Do not use `--exclude-table`: the projection table definitions, privileges, and functions belong to the governed database schema.
+The seven exclusions do not remove the local identifiers that your own Records hold. Those identifiers remain part of the registry backup according to its ordinary policy. Do not use `--exclude-table`: the projection and refresh table definitions, privileges, and functions belong to the governed database schema. After restore, register the current plans and start their reconciliation sweeps under current source authority.
 
 Use a PostgreSQL dump client compatible with the server version. Protect the backup according to the sensitivity of the registry's own records. Physical backups and storage snapshots do not provide these table-data exclusions, so they need a separately approved erasure and restore procedure before they can be used for an indexed grant.
 
@@ -103,6 +155,8 @@ Startup binds each configured projection using the current reviewed deployment c
 ## Implementation references
 
 - [Guarded projection storage and binding](../../crates/registry-breg/src/postgres/external_projection.rs)
+- [Managed PostgreSQL refresh queue](../../crates/registry-breg/src/postgres/external_refresh_queue.rs)
+- [Scheduled and targeted refresh steps](../../crates/registry-breg/src/postgres/external_runtime/managed.rs)
 - [Indexed coverage and query kernel](../../crates/registry-breg/src/postgres/external_view_query.rs)
 - [Managed schema installation](../../crates/registry-breg/src/postgres/schema.rs)
 - [Exact catalog and runtime privilege checks](../../crates/registry-breg/src/postgres/catalog.rs)

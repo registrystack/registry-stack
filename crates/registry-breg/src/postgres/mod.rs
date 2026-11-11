@@ -9,6 +9,7 @@ mod config;
 mod context;
 pub(crate) mod external_label_acquisition;
 pub(crate) mod external_projection;
+pub(crate) mod external_refresh_queue;
 pub(crate) mod external_runtime;
 pub(crate) mod external_view_query;
 mod failure;
