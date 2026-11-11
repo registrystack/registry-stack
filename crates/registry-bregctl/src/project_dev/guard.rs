@@ -555,11 +555,10 @@ mod tests {
         command
             .args([
                 "-c",
-                &format!(
-                    "sh -c 'trap \"\" TERM; exec sleep 60' & printf '%s' \"$!\" > '{}' ; wait",
-                    nested_file.display()
-                ),
+                r#"sh -c 'trap "" TERM; printf "%s" "$$" > "$1.tmp" && mv "$1.tmp" "$1" && exec sleep 60' sh "$1" & wait"#,
+                "guard-fixture",
             ])
+            .arg(&nested_file)
             .process_group(0)
             .stdin(Stdio::null());
         let guard_lock = lock.clone();
@@ -596,10 +595,35 @@ mod tests {
             rustix::process::getpgid(Some(leader)).unwrap_err(),
             rustix::io::Errno::SRCH
         );
-        assert_eq!(
-            rustix::process::getpgid(Some(nested)).unwrap_err(),
-            rustix::io::Errno::SRCH
-        );
+        // The guard owns the leader. The OS adopts the nested child when
+        // the leader exits, and may keep it visible as a zombie after SIGKILL.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid = nested.as_raw_pid().to_string();
+        loop {
+            let output = process::Command::new("ps")
+                .args(["-p", &pid, "-o", "stat="])
+                .output()
+                .unwrap();
+            if output.status.code() == Some(1)
+                && output.stdout.is_empty()
+                && output.stderr.is_empty()
+            {
+                break;
+            }
+            assert!(
+                output.status.success(),
+                "ps could not read the nested process"
+            );
+            let state = String::from_utf8(output.stdout).unwrap();
+            if state.trim_start().starts_with('Z') {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the nested process is still live: {state}"
+            );
+            thread::sleep(POLL);
+        }
     }
 
     #[test]
