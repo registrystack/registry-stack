@@ -861,6 +861,131 @@ seed:
 }
 
 #[test]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker"]
+fn installed_dev_rehearses_subject_bound_rows_with_two_local_clients() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::Builder::new()
+        .prefix("breg-native-subject-test-")
+        .tempdir_in(binary.parent().unwrap())
+        .unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let parent = fs::canonicalize(temporary.keep()).unwrap();
+    let session = Session {
+        project: parent.join("registry"),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
+    };
+    fs::create_dir_all(session.project.join("tests")).unwrap();
+    write(
+        &session.project.join("registry.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: subject-bound-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://subject-bound.example.test}
+package: {sourceRevision: synthetic-1}
+datasets: [{id: test-dataset}]
+recordTypes:
+  - id: record
+    primaryDataset: test-dataset
+    route: records
+    mutationMode: mutable
+    fields:
+      - {id: owner-subject, type: string, maximumLength: 64, required: true, classification: internal}
+accessProfiles:
+  - id: self-service
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [owner, other]
+    requiredScopes: [registry:records:write]
+    permissions:
+      records:
+        - recordType: record
+          operations: [create, list]
+          readableFields: [owner-subject]
+          writableFields: [owner-subject]
+          rowBoundaries:
+            - {field: owner-subject, claim: sub, operator: equals}
+"#,
+    );
+    write(
+        &session.project.join("dev-clients.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: owner
+    accessProfiles: [self-service]
+    allowHumanFixture: true
+    scopes: [registry:records:write]
+    claims: {registry_actor_kind: human}
+  - id: other
+    accessProfiles: [self-service]
+    allowHumanFixture: true
+    scopes: [registry:records:write]
+    claims: {registry_actor_kind: human}
+    testBindings: [{journeyId: ownership, stepId: list-as-other}]
+seed: []
+"#,
+    );
+    let owner_subject =
+        registry_thunderid_tooling::local::agent_id("subject-bound-registry", "owner");
+    let journeys = r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: ownership
+    steps:
+      - id: create-as-owner
+        recordType: record
+        accessProfile: self-service
+        claims:
+          principal: "$localClientSubject"
+          scopes: [registry:records:write]
+          actorKind: human
+          requesterClient: owner
+          directClaims: {sub: "$localClientSubject"}
+        request: {type: create, data: {owner-subject: "synthetic-owner-subject"}}
+        expect: {outcome: success, status: 201}
+        capture: owned-record
+      - id: list-as-owner
+        recordType: record
+        accessProfile: self-service
+        claims:
+          principal: "$localClientSubject"
+          scopes: [registry:records:write]
+          actorKind: human
+          requesterClient: owner
+          directClaims: {sub: "$localClientSubject"}
+        request: {type: list}
+        expect:
+          outcome: success
+          status: 200
+          count: 1
+          members:
+            owned-record:
+              fields: {owner-subject: "synthetic-owner-subject"}
+      - id: list-as-other
+        recordType: record
+        accessProfile: self-service
+        claims:
+          principal: "$localClientSubject"
+          scopes: [registry:records:write]
+          actorKind: human
+          requesterClient: other
+          directClaims: {sub: "$localClientSubject"}
+        request: {type: list}
+        expect: {outcome: success, status: 200, count: 0}
+"#
+    .replace("synthetic-owner-subject", &owner_subject);
+    let journeys_path = session.project.join("tests/journeys.yaml");
+    write(&journeys_path, journeys.as_bytes());
+
+    let report = session.start();
+    assert_eq!(report["outcome"], "ready");
+    assert_eq!(fs::read(journeys_path).unwrap(), journeys.as_bytes());
+    session.remove();
+    drop(session);
+    fs::remove_dir_all(parent).unwrap();
+}
+
+#[test]
 #[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
 fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));

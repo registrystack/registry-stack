@@ -943,7 +943,7 @@ fn has_local_subject_marker(value: &Value) -> bool {
     }
 }
 
-/// Resolve an explicit local fixture identity, never an arbitrary expectation.
+/// Resolve explicit fixture assertions about the selected local client's subject.
 /// The caller writes only its private captured project, not authored inputs.
 fn resolve_local_subject_markers(
     journeys: &mut Value,
@@ -963,7 +963,9 @@ fn resolve_local_subject_markers(
             .as_array_mut()
             .context("journey steps must be an array")?
         {
-            if step["claims"]["principal"] != LOCAL_SUBJECT_MARKER {
+            let principal_marker = step["claims"]["principal"] == LOCAL_SUBJECT_MARKER;
+            let row_claim_marker = step["claims"]["directClaims"]["sub"] == LOCAL_SUBJECT_MARKER;
+            if !principal_marker && !row_claim_marker {
                 continue;
             }
             let profile = step["accessProfile"]
@@ -981,18 +983,23 @@ fn resolve_local_subject_markers(
                     .any(|profile| profile.principal_claim != "sub")
             {
                 bail!(
-                    "$localClientSubject is supported only as claims.principal for an authenticated sub access profile"
+                    "$localClientSubject requires an authenticated access profile with principalClaim: sub"
                 );
             }
             let client = journey_client(clients, &journey_id, step_id, profile)?;
-            step["claims"]["principal"] = json!(registry_thunderid_tooling::local::agent_id(
-                issuer_instance,
-                &client.id
-            ));
+            let subject = registry_thunderid_tooling::local::agent_id(issuer_instance, &client.id);
+            if principal_marker {
+                step["claims"]["principal"] = json!(subject);
+            }
+            if row_claim_marker {
+                step["claims"]["directClaims"]["sub"] = json!(subject);
+            }
         }
     }
     if has_local_subject_marker(journeys) {
-        bail!("$localClientSubject must appear only as a sub profile's journey claims.principal");
+        bail!(
+            "$localClientSubject must appear only as journey claims.principal or claims.directClaims.sub"
+        );
     }
     Ok(())
 }

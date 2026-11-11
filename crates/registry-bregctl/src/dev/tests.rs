@@ -629,8 +629,9 @@ fn local_subject_marker_uses_actual_issuer_owner_and_exact_client_binding() {
     let compiled = local_principal_compiled(&local_principal_source("sub"));
     let mut journeys = json!({"journeys":[{"id":"read","steps":[
         {"id":"ordinary","accessProfile":"operator","claims":{"principal":LOCAL_SUBJECT_MARKER}},
-        {"id":"variant","accessProfile":"operator","claims":{"principal":LOCAL_SUBJECT_MARKER}},
-        {"id":"literal","accessProfile":"operator","claims":{"principal":"authored-expectation"}}
+        {"id":"variant","accessProfile":"operator","claims":{"principal":LOCAL_SUBJECT_MARKER,"directClaims":{"sub":LOCAL_SUBJECT_MARKER}}},
+        {"id":"literal","accessProfile":"operator","claims":{"principal":"authored-expectation","directClaims":{"sub":LOCAL_SUBJECT_MARKER}}},
+        {"id":"literal-row-claim","accessProfile":"operator","claims":{"principal":LOCAL_SUBJECT_MARKER,"directClaims":{"sub":"different-subject"}}}
     ]}]});
     resolve_local_subject_markers(&mut journeys, &clients, &compiled, "actual-issuer-owner")
         .unwrap();
@@ -648,17 +649,52 @@ fn local_subject_marker_uses_actual_issuer_owner_and_exact_client_binding() {
         journeys["journeys"][0]["steps"][2]["claims"]["principal"],
         "authored-expectation"
     );
+    assert_eq!(
+        journeys["journeys"][0]["steps"][1]["claims"]["directClaims"]["sub"],
+        journeys["journeys"][0]["steps"][1]["claims"]["principal"]
+    );
+    assert_eq!(
+        journeys["journeys"][0]["steps"][2]["claims"]["directClaims"]["sub"],
+        journeys["journeys"][0]["steps"][0]["claims"]["principal"]
+    );
+    assert_eq!(
+        journeys["journeys"][0]["steps"][3]["claims"]["directClaims"]["sub"],
+        "different-subject"
+    );
     assert!(!has_local_subject_marker(&journeys));
-    for claim in ["registry_principal", "sub"] {
-        let mut misplaced = json!({"journeys":[{"id":"read","steps":[{"id":"ordinary","accessProfile":"operator","claims":{"principal":LOCAL_SUBJECT_MARKER},"other":LOCAL_SUBJECT_MARKER}]}]});
-        assert!(resolve_local_subject_markers(
-            &mut misplaced,
-            &clients,
-            &local_principal_compiled(&local_principal_source(claim)),
-            "owner"
-        )
-        .is_err());
+}
+
+#[test]
+fn local_subject_marker_refuses_other_locations_profiles_and_missing_clients() {
+    let (_temporary, _, mut clients, _) = fixture();
+    let compiled = local_principal_compiled(&local_principal_source("sub"));
+    let journeys = |step| json!({"journeys":[{"id":"read","steps":[step]}]});
+    for step in [
+        json!({"id":"ordinary","accessProfile":"operator","claims":{"principal":LOCAL_SUBJECT_MARKER},"request":{"data":{"owner-subject":LOCAL_SUBJECT_MARKER}}}),
+        json!({"id":"ordinary","accessProfile":"operator","claims":{"directClaims":{"other":LOCAL_SUBJECT_MARKER}}}),
+        json!({"id":"ordinary","accessProfile":"operator","claims":{"directClaims":{"sub":[LOCAL_SUBJECT_MARKER]}}}),
+    ] {
+        let error =
+            resolve_local_subject_markers(&mut journeys(step), &clients, &compiled, "owner")
+                .unwrap_err();
+        assert!(error.to_string().contains("must appear only"));
     }
+
+    let mut marked = journeys(
+        json!({"id":"ordinary","accessProfile":"operator","claims":{"directClaims":{"sub":LOCAL_SUBJECT_MARKER}}}),
+    );
+    let other_profile = local_principal_compiled(&local_principal_source("registry_principal"));
+    let error =
+        resolve_local_subject_markers(&mut marked.clone(), &clients, &other_profile, "owner")
+            .unwrap_err();
+    assert!(error.to_string().contains("principalClaim: sub"));
+
+    clients.clients.clear();
+    let error =
+        resolve_local_subject_markers(&mut marked, &clients, &compiled, "owner").unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("needs one unambiguous local client"));
 }
 
 #[test]
