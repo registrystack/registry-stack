@@ -161,6 +161,37 @@
             ],
             "allowCount": true,
             "recordType": "service-site"
+          },
+          {
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "create",
+              "get",
+              "list",
+              "patch"
+            ],
+            "readableFields": [
+              "native-id",
+              "area-code",
+              "label",
+              "boundary"
+            ],
+            "writableFields": [
+              "native-id",
+              "area-code",
+              "label",
+              "boundary"
+            ],
+            "filterableFields": [
+              "native-id",
+              "area-code"
+            ],
+            "sortableFields": [
+              "area-code",
+              "label"
+            ],
+            "allowCount": true,
+            "recordType": "service-area"
           }
         ]
       }
@@ -207,6 +238,48 @@
               }
             },
             "recordType": "service-site"
+          }
+        ]
+      }
+    },
+    {
+      "id": "area-map-reader",
+      "principalClaim": "registry_principal",
+      "requiredScopes": [
+        "service-areas:public:read"
+      ],
+      "requiredPurposes": [
+        "service-area-public-map"
+      ],
+      "permissions": {
+        "records": [
+          {
+            "rowBoundaries": "unrestricted",
+            "operations": [
+              "get",
+              "list"
+            ],
+            "readableFields": [
+              "native-id",
+              "area-code",
+              "label",
+              "boundary"
+            ],
+            "filterableFields": [
+              "area-code"
+            ],
+            "sortableFields": [
+              "area-code",
+              "label"
+            ],
+            "allowCount": true,
+            "spatialQueries": {
+              "bbox": {
+                "maximumLongitudeSpanDegrees": 0.25,
+                "maximumLatitudeSpanDegrees": 0.2
+              }
+            },
+            "recordType": "service-area"
           }
         ]
       }
@@ -394,6 +467,74 @@
     }
   ],
   "recordTypes": [
+    {
+      "id": "service-area",
+      "primaryDataset": "spatial-service-sites",
+      "route": "service-areas",
+      "mutationMode": "mutable",
+      "classification": "public",
+      "fields": [
+        {
+          "id": "native-id",
+          "type": "uuid",
+          "required": true,
+          "classification": "public"
+        },
+        {
+          "id": "area-code",
+          "type": "string",
+          "required": true,
+          "maximumLength": 64,
+          "classification": "public"
+        },
+        {
+          "id": "label",
+          "type": "string",
+          "required": true,
+          "maximumLength": 160,
+          "classification": "public"
+        },
+        {
+          "id": "boundary",
+          "type": "crs84-polygon",
+          "precision": 9,
+          "maximumPositions": 100,
+          "bbox": {
+            "west": "100.450000000",
+            "south": "13.600000000",
+            "east": "100.700000000",
+            "north": "13.900000000"
+          },
+          "required": true,
+          "classification": "public"
+        }
+      ],
+      "geojson": {
+        "geometryField": "boundary"
+      },
+      "constraints": [
+        {
+          "type": "unique",
+          "fields": [
+            "native-id"
+          ]
+        },
+        {
+          "type": "unique",
+          "fields": [
+            "area-code"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "id": "by-area-label",
+          "fields": [
+            "label"
+          ]
+        }
+      ]
+    },
     {
       "id": "service-site",
       "primaryDataset": "spatial-service-sites",

@@ -635,7 +635,9 @@ fn canonical_boundary_value(
         | FieldTypeSource::Uuid
         | FieldTypeSource::Reference { .. }
         | FieldTypeSource::VocabularyCode { .. } => Value::String(value.to_owned()),
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => {
             return Err(ReadServiceError::Unavailable);
         }
     };

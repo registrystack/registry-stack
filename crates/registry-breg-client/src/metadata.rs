@@ -1820,6 +1820,19 @@ fn action_field_type(value: Value) -> Result<(), BRegMetadataError> {
                 validate_action_bbox(bbox, precision)?;
             }
         }
+        "crs84-polygon" => {
+            let precision = required(&mut field_type, "precision")?
+                .as_u64()
+                .filter(|precision| *precision <= 9)
+                .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+            required(&mut field_type, "maximumPositions")?
+                .as_u64()
+                .filter(|maximum| (4..=10_000).contains(maximum))
+                .ok_or_else(|| metadata_error(BRegMetadataErrorKind::Shape))?;
+            if let Some(bbox) = field_type.remove("bbox") {
+                validate_action_bbox(bbox, precision)?;
+            }
+        }
         "structured" => {
             let max_bytes = positive_integer(required(&mut field_type, "maximumBytes")?)?;
             if max_bytes > 1_048_576

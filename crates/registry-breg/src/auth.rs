@@ -708,6 +708,7 @@ fn validate_claim_mapping(
                     FieldTypeSource::Boolean
                         | FieldTypeSource::Int64
                         | FieldTypeSource::Crs84Point { .. }
+                        | FieldTypeSource::Crs84Polygon { .. }
                         | FieldTypeSource::Structured { .. }
                 )
             {
@@ -906,7 +907,9 @@ fn mapped_scalar_claim(
             .as_str()
             .map(str::to_owned)
             .ok_or(AuthenticationError::InvalidClaims)?,
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => {
             return Err(AuthenticationError::InvalidClaims);
         }
     };

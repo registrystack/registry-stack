@@ -51,7 +51,7 @@ use super::{
         is_spatial_candidate_view_sql, map_pattern_database_error, pattern_field_for_constraint,
         reconcile_compiled_runtime_acl, retire_spatial_bbox_role, transfer_spatial_candidate_views,
     },
-    verify_btree_gist, verify_migration_role, verify_postgis, ConnectionConfig,
+    verify_btree_gist, verify_migration_role, verify_postgis_prerequisites, ConnectionConfig,
     ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
 };
 
@@ -3442,9 +3442,12 @@ fn is_deferred_not_null(statement: &PackageDdlStatement<'_>) -> bool {
 fn is_spatial_projection_addition(statement: &PackageDdlStatement<'_>) -> bool {
     (statement.kind == DdlStatementKind::Column
         && statement.sql.contains(" ADD COLUMN ")
-        && statement
+        && (statement
             .sql
-            .contains("registry_spatial_ext.geometry(Point,4326)"))
+            .contains("registry_spatial_ext.geometry(Point,4326)")
+            || statement
+                .sql
+                .contains("registry_spatial_ext.geometry(MultiPolygon,4326)")))
         || (statement.kind == DdlStatementKind::Index
             && statement.sql.contains(" USING gist ")
             && statement.sql.contains("\"breg_spgeom_"))
@@ -3469,7 +3472,13 @@ async fn verify_compiled_prerequisites_for_client(
         verify_btree_gist(client).await?;
     }
     if registry.ddl().requires_postgis {
-        verify_postgis(client, migration_role, runtime_role).await?;
+        verify_postgis_prerequisites(
+            client,
+            migration_role,
+            runtime_role,
+            registry.ddl().requires_spatial_bbox(),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -3982,6 +3991,7 @@ pub(crate) fn field_plaintext_string(
             .ok_or(PostgresKernelError::RegistryUnavailable)?
             .to_string(),
         crate::contract::FieldTypeSource::Crs84Point { .. }
+        | crate::contract::FieldTypeSource::Crs84Polygon { .. }
         | crate::contract::FieldTypeSource::Structured { .. } => String::from_utf8(
             registry_platform_canonical_json::canonicalize_json(value)
                 .map_err(|_| PostgresKernelError::RegistryUnavailable)?,

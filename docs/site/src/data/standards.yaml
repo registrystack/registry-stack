@@ -132,17 +132,21 @@
   standards_body: Internet Engineering Task Force
   official_url: https://www.rfc-editor.org/rfc/rfc7946
   version_or_profile: RFC 7946
-  status: referenced
-  claim_level: compares_against
-  adoption_mode: not adopted
-  used_by: []
+  status: used
+  claim_level: emits
+  adoption_mode: profiled
+  used_by:
+    - registry-breg
   surfaces:
+    - Base Registry Engine Record and GIS GeoJSON representations
     - retired Relay wire format
   evidence_docs:
+    - label: Base Registry Engine API reference
+      url: /reference/breg-api/
     - label: Registry Relay v0.38.0 product record
       url: https://github.com/registrystack/registry-stack/blob/v0.38.0/products/relay-v2/README.md
-  last_checked: 2026-10-03
-  notes: The maintained Registry Stack has no GeoJSON service surface. Registry Relay emitted a bounded GeoJSON Point profile through v0.38.0.
+  last_checked: 2026-11-11
+  notes: Base Registry Engine emits a bounded CRS84 GeoJSON Point, Polygon, and MultiPolygon profile under configured Record and GIS routes. It does not claim full RFC 7946 conformance. Registry Relay emitted its separate bounded Point profile through v0.38.0.
 - id: json-fg
   name: OGC Features and Geometries JSON
   standards_body: Open Geospatial Consortium

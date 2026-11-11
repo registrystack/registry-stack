@@ -81,8 +81,13 @@ Registry Render.
 Base Registry Engine serves one governed registry from a PostgreSQL database it owns, under a
 package an operator activates deliberately. Its current limits are:
 
-- PostgreSQL only: the store requires `btree_gist`, plus PostGIS where the registry declares
-  spatial fields. There is no SQLite, other SQL engine, file, or HTTP source adapter.
+- PostgreSQL only: the store requires `btree_gist`. Polygon and MultiPolygon fields always require
+  PostGIS. Point fields require it only when a profile grants bbox queries. There is no SQLite,
+  other SQL engine, file, or HTTP source adapter.
+- Spatial fields are two-dimensional CRS84 only. A Record type can store multiple geometry fields.
+  The `geojson.geometryField` member binds at most one as its primary GeoJSON geometry. A Polygon cannot
+  cross the antimeridian in one ring. Split it into MultiPolygon parts. BReg computes no area or
+  collection extent.
 - Audit is outside PostgreSQL: each process writes its own file or `stdout` stream. A crash after a
   mutation commits can leave a request entry without its response. Revision history still records
   the change; external append-only storage supplies audit tamper evidence and completeness.

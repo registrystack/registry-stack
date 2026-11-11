@@ -3416,10 +3416,9 @@ fn first_page_spatial_query(
     if geojson.geometry_field != capability.geometry_field {
         return Err(ReadQueryError::Invalid);
     }
-    if !matches!(
-        data_field_type(surface.response_entity, &capability.geometry_field),
-        Some(FieldTypeSource::Crs84Point { .. })
-    ) {
+    if !data_field_type(surface.response_entity, &capability.geometry_field)
+        .is_some_and(FieldTypeSource::is_crs84_geometry)
+    {
         return Err(ReadQueryError::Invalid);
     }
     let maximum_longitude_span =
@@ -3751,10 +3750,8 @@ fn validate_spatial_shape(
     if spatial.bbox.geometry_field != capability.geometry_field
         || spatial.bbox.maximum_longitude_span_degrees != maximum_longitude_span
         || spatial.bbox.maximum_latitude_span_degrees != maximum_latitude_span
-        || !matches!(
-            data_field_type(entity, &spatial.bbox.geometry_field),
-            Some(FieldTypeSource::Crs84Point { .. })
-        )
+        || !data_field_type(entity, &spatial.bbox.geometry_field)
+            .is_some_and(FieldTypeSource::is_crs84_geometry)
     {
         return Err(ReadQueryError::Invalid);
     }
@@ -4399,7 +4396,9 @@ fn lookup_json_scalar(
             .as_str()
             .map(str::to_owned)
             .ok_or(LookupResolutionError::InvalidRequest)?,
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => {
             return Err(LookupResolutionError::InvalidRequest);
         }
     };
@@ -4967,10 +4966,8 @@ fn geojson_available(surface: &AuthorizedSurface<'_>) -> bool {
         return false;
     };
     surface.readable_fields.contains(&geojson.geometry_field)
-        && matches!(
-            data_field_type(surface.response_entity, &geojson.geometry_field),
-            Some(FieldTypeSource::Crs84Point { .. })
-        )
+        && data_field_type(surface.response_entity, &geojson.geometry_field)
+            .is_some_and(FieldTypeSource::is_crs84_geometry)
 }
 
 fn exact_mutation(

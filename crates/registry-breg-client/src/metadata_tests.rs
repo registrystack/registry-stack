@@ -1455,6 +1455,47 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
         .select_action("register-company", "company-writer")
         .expect("a bounded closed Draft 2020-12 structured schema promotes");
 
+    let mut polygon = value.clone();
+    polygon["actions"][0]["inputs"][0]["fieldType"] = json!({
+        "type": "crs84-polygon", "precision": 9, "maximumPositions": 10_000,
+        "bbox": {"west":"-180","south":"-90","east":"180","north":"90"}
+    });
+    let action = parse(&polygon)
+        .select_action("register-company", "company-writer")
+        .expect("bounded polygon type promotes");
+    assert_eq!(
+        action.inputs()[0].field_type(),
+        &polygon["actions"][0]["inputs"][0]["fieldType"]
+    );
+    for invalid_maximum in [json!(3), json!(10_001), json!(4.0), json!("4")] {
+        let mut malformed = polygon.clone();
+        malformed["actions"][0]["inputs"][0]["fieldType"]["maximumPositions"] = invalid_maximum;
+        assert_eq!(
+            parse(&malformed)
+                .select_action("register-company", "company-writer")
+                .unwrap_err()
+                .kind(),
+            BRegMetadataSelectionErrorKind::ContractMismatch
+        );
+    }
+    for malformed_field_type in [
+        json!({"type":"crs84-polygon", "precision":10, "maximumPositions":4}),
+        json!({
+            "type":"crs84-polygon", "precision":6, "maximumPositions":4,
+            "bbox":{"west":"100","south":"13","east":"99","north":"14"}
+        }),
+    ] {
+        let mut malformed = polygon.clone();
+        malformed["actions"][0]["inputs"][0]["fieldType"] = malformed_field_type;
+        assert_eq!(
+            parse(&malformed)
+                .select_action("register-company", "company-writer")
+                .unwrap_err()
+                .kind(),
+            BRegMetadataSelectionErrorKind::ContractMismatch
+        );
+    }
+
     let oversized_properties = (0..3_000)
         .map(|index| (format!("field{index}"), json!({"type": "string"})))
         .collect::<serde_json::Map<_, _>>();

@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use registry_breg::contract::{Crs84BboxSource, EventTrigger, FieldTypeSource};
+use registry_breg::contract::{
+    valid_crs84_polygon, Crs84BboxSource, EventTrigger, FieldTypeSource,
+};
 use registry_breg::hooks::{
     HookDeliveryStatus, HookDeliveryStatusKind, HookDrainReport, HookOperatorError,
     HookOperatorService, MAX_HOOK_STATUS_RESULTS,
@@ -509,8 +511,65 @@ fn synthetic_field_value(field_type: &FieldTypeSource) -> Result<Value, HookLife
             let (longitude, latitude) = point_in_bbox(bbox.as_ref())?;
             Ok(json!({"type": "Point", "coordinates": [longitude, latitude]}))
         }
+        FieldTypeSource::Crs84Polygon {
+            precision,
+            bbox,
+            max_positions,
+        } => polygon_in_bbox(*precision, bbox.as_ref(), *max_positions),
         FieldTypeSource::Structured { schema, .. } => synthesize_schema(schema, schema, 0),
     }
+}
+
+fn polygon_in_bbox(
+    precision: u8,
+    bbox: Option<&Crs84BboxSource>,
+    max_positions: u32,
+) -> Result<Value, HookLifecycleError> {
+    if precision > 9 || max_positions < 4 {
+        return Err(HookLifecycleError::Sample);
+    }
+    let coordinates = if let Some(bbox) = bbox {
+        let scale = 10_i64.pow(u32::from(precision));
+        // All CRS84 coordinates scaled to nine decimal places fit exactly
+        // within the integer precision of f64.
+        let scaled = |bound: &str| {
+            bound
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.abs() <= 180.0)
+                .map(|value| (value * scale as f64).round() as i64)
+                .ok_or(HookLifecycleError::Sample)
+        };
+        let (west, south, east, north) = (
+            scaled(&bbox.west)?,
+            scaled(&bbox.south)?,
+            scaled(&bbox.east)?,
+            scaled(&bbox.north)?,
+        );
+        if west >= east || south >= north {
+            return Err(HookLifecycleError::Sample);
+        }
+        let coordinate = |units: i64| {
+            if units % scale == 0 {
+                json!(units / scale)
+            } else {
+                json!(units as f64 / scale as f64)
+            }
+        };
+        let start = json!([coordinate(west), coordinate(south)]);
+        vec![
+            start.clone(),
+            json!([coordinate(west + 1), coordinate(south)]),
+            json!([coordinate(west), coordinate(south + 1)]),
+            start,
+        ]
+    } else {
+        vec![json!([0, 0]), json!([1, 0]), json!([0, 1]), json!([0, 0])]
+    };
+    let value = json!({"type": "Polygon", "coordinates": [coordinates]});
+    valid_crs84_polygon(&value, precision, bbox, max_positions)
+        .then_some(value)
+        .ok_or(HookLifecycleError::Sample)
 }
 
 fn point_in_bbox(bbox: Option<&Crs84BboxSource>) -> Result<(Number, Number), HookLifecycleError> {
@@ -662,6 +721,110 @@ mod tests {
 
     use super::*;
     use registry_breg::hooks::HookDeliveryFailureReason;
+
+    #[test]
+    fn polygon_sample_is_closed_bounded_and_counted() {
+        let field_type = FieldTypeSource::Crs84Polygon {
+            precision: 6,
+            bbox: Some(Crs84BboxSource {
+                west: "100.000000".to_owned(),
+                south: "10.000000".to_owned(),
+                east: "101.000000".to_owned(),
+                north: "11.000000".to_owned(),
+            }),
+            max_positions: 4,
+        };
+        let value = synthetic_field_value(&field_type).expect("polygon sample synthesizes");
+        assert!(registry_breg::contract::valid_crs84_polygon(
+            &value,
+            6,
+            match &field_type {
+                FieldTypeSource::Crs84Polygon { bbox, .. } => bbox.as_ref(),
+                _ => unreachable!(),
+            },
+            4,
+        ));
+        assert_eq!(value["type"], "Polygon");
+        assert_eq!(value["coordinates"][0].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn polygon_sample_refuses_bounds_without_one_precision_step() {
+        for bbox in [
+            Crs84BboxSource {
+                west: "100.000000".to_owned(),
+                south: "10.000000".to_owned(),
+                east: "100.000000".to_owned(),
+                north: "11.000000".to_owned(),
+            },
+            Crs84BboxSource {
+                west: "100.000000".to_owned(),
+                south: "10.000000".to_owned(),
+                east: "101.000000".to_owned(),
+                north: "10.000000".to_owned(),
+            },
+        ] {
+            let field_type = FieldTypeSource::Crs84Polygon {
+                precision: 6,
+                bbox: Some(bbox),
+                max_positions: 4,
+            };
+            assert_eq!(
+                synthetic_field_value(&field_type),
+                Err(HookLifecycleError::Sample)
+            );
+        }
+    }
+
+    #[test]
+    fn polygon_sample_emits_plain_numbers_at_precision_zero() {
+        let field_type = FieldTypeSource::Crs84Polygon {
+            precision: 0,
+            bbox: Some(Crs84BboxSource {
+                west: "100".to_owned(),
+                south: "10".to_owned(),
+                east: "101".to_owned(),
+                north: "11".to_owned(),
+            }),
+            max_positions: 4,
+        };
+        let value = synthetic_field_value(&field_type).expect("integer polygon synthesizes");
+        let rendered = serde_json::to_string(&value).expect("polygon serializes");
+        assert!(!rendered.contains("100.0"), "{rendered}");
+        assert!(registry_breg::contract::valid_crs84_polygon(
+            &value,
+            0,
+            match &field_type {
+                FieldTypeSource::Crs84Polygon { bbox, .. } => bbox.as_ref(),
+                _ => unreachable!(),
+            },
+            4,
+        ));
+    }
+
+    #[test]
+    fn polygon_sample_supports_fine_scale_precision_nine_coordinates() {
+        let field_type = FieldTypeSource::Crs84Polygon {
+            precision: 9,
+            bbox: Some(Crs84BboxSource {
+                west: "0.000000001".to_owned(),
+                south: "0.000000001".to_owned(),
+                east: "0.000000002".to_owned(),
+                north: "0.000000002".to_owned(),
+            }),
+            max_positions: 4,
+        };
+        let value = synthetic_field_value(&field_type).expect("fine-scale polygon synthesizes");
+        assert!(registry_breg::contract::valid_crs84_polygon(
+            &value,
+            9,
+            match &field_type {
+                FieldTypeSource::Crs84Polygon { bbox, .. } => bbox.as_ref(),
+                _ => unreachable!(),
+            },
+            4,
+        ));
+    }
 
     #[test]
     fn structured_sample_synthesis_is_deterministic_and_uses_required_typed_properties() {

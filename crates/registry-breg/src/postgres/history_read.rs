@@ -1362,9 +1362,9 @@ fn field_typed_sql(field: &HistorySqlField) -> Result<String, ReadServiceError> 
             "({alias} #>> '{{}}')::{}",
             postgres_cast(&field.field_type)
         )),
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
-            Err(ReadServiceError::Unavailable)
-        }
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => Err(ReadServiceError::Unavailable),
     }
 }
 
@@ -1978,7 +1978,9 @@ fn postgres_cast(field_type: &FieldTypeSource) -> &'static str {
         FieldTypeSource::Date => "date",
         FieldTypeSource::Timestamp => "timestamptz",
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => "uuid",
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => "jsonb",
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => "jsonb",
     }
 }
 

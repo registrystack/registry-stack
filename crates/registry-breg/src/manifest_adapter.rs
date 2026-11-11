@@ -522,6 +522,7 @@ fn project_field(
         ),
         FieldTypeSource::Reference { .. }
         | FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
         | FieldTypeSource::Structured { .. } => return None,
     };
     Some(FieldManifest {

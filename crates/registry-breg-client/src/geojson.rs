@@ -15,6 +15,7 @@ use crate::{
 };
 
 pub(crate) const GEOJSON_MEDIA_TYPE: &str = "application/geo+json";
+const MAXIMUM_GEOMETRY_POSITIONS: usize = 10_000;
 
 /// Projection and authorization options for one native GeoJSON record read.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -126,6 +127,41 @@ pub enum BRegGeoJsonPointType {
     Point,
 }
 
+/// One strict CRS84 GeoJSON Polygon. Ring order and winding are preserved.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BRegGeoJsonPolygon {
+    #[serde(rename = "type")]
+    pub polygon_type: BRegGeoJsonPolygonType,
+    pub coordinates: Vec<Vec<[Number; 2]>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum BRegGeoJsonPolygonType {
+    Polygon,
+}
+
+/// One strict CRS84 GeoJSON MultiPolygon. Part, ring, and winding order are preserved.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BRegGeoJsonMultiPolygon {
+    #[serde(rename = "type")]
+    pub multi_polygon_type: BRegGeoJsonMultiPolygonType,
+    pub coordinates: Vec<Vec<Vec<[Number; 2]>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum BRegGeoJsonMultiPolygonType {
+    MultiPolygon,
+}
+
+/// A strict native CRS84 GeoJSON geometry served by BReg.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum BRegGeoJsonGeometry {
+    Point(BRegGeoJsonPoint),
+    Polygon(BRegGeoJsonPolygon),
+    MultiPolygon(BRegGeoJsonMultiPolygon),
+}
+
 /// BReg foreign members attached to one GeoJSON Feature.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BRegGeoJsonFeatureRegistry {
@@ -138,7 +174,7 @@ pub struct BRegGeoJsonFeature {
     #[serde(rename = "type")]
     pub feature_type: BRegGeoJsonFeatureType,
     pub id: String,
-    pub geometry: Option<BRegGeoJsonPoint>,
+    pub geometry: Option<BRegGeoJsonGeometry>,
     pub properties: BTreeMap<String, Value>,
     pub registry: BRegGeoJsonFeatureRegistry,
 }
@@ -296,7 +332,7 @@ pub(crate) fn decode_feature(value: Value) -> Result<BRegGeoJsonFeature, ()> {
     }
     let geometry = match take(&mut document, "geometry")? {
         Value::Null => None,
-        value => Some(decode_point(value)?),
+        value => Some(decode_geometry(value)?),
     };
     let properties = object(take(&mut document, "properties")?)?
         .into_iter()
@@ -359,6 +395,15 @@ pub(crate) fn decode_collection(value: Value) -> Result<BRegGeoJsonFeatureCollec
     })
 }
 
+fn decode_geometry(value: Value) -> Result<BRegGeoJsonGeometry, ()> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("Point") => decode_point(value).map(BRegGeoJsonGeometry::Point),
+        Some("Polygon") => decode_polygon(value).map(BRegGeoJsonGeometry::Polygon),
+        Some("MultiPolygon") => decode_multi_polygon(value).map(BRegGeoJsonGeometry::MultiPolygon),
+        _ => Err(()),
+    }
+}
+
 fn decode_point(value: Value) -> Result<BRegGeoJsonPoint, ()> {
     let mut document = object(value)?;
     exact_string(take(&mut document, "type")?, "Point")?;
@@ -376,6 +421,97 @@ fn decode_point(value: Value) -> Result<BRegGeoJsonPoint, ()> {
         point_type: BRegGeoJsonPointType::Point,
         coordinates,
     })
+}
+
+fn decode_polygon(value: Value) -> Result<BRegGeoJsonPolygon, ()> {
+    let mut document = object(value)?;
+    exact_string(take(&mut document, "type")?, "Polygon")?;
+    let mut positions = 0;
+    let coordinates =
+        decode_polygon_coordinates(take(&mut document, "coordinates")?, &mut positions)?;
+    empty(document)?;
+    Ok(BRegGeoJsonPolygon {
+        polygon_type: BRegGeoJsonPolygonType::Polygon,
+        coordinates,
+    })
+}
+
+fn decode_multi_polygon(value: Value) -> Result<BRegGeoJsonMultiPolygon, ()> {
+    let mut document = object(value)?;
+    exact_string(take(&mut document, "type")?, "MultiPolygon")?;
+    let polygons = match take(&mut document, "coordinates")? {
+        Value::Array(polygons) if !polygons.is_empty() => polygons,
+        _ => return Err(()),
+    };
+    let mut positions = 0;
+    let coordinates = polygons
+        .into_iter()
+        .map(|polygon| decode_polygon_coordinates(polygon, &mut positions))
+        .collect::<Result<Vec<_>, _>>()?;
+    empty(document)?;
+    Ok(BRegGeoJsonMultiPolygon {
+        multi_polygon_type: BRegGeoJsonMultiPolygonType::MultiPolygon,
+        coordinates,
+    })
+}
+
+fn decode_polygon_coordinates(
+    value: Value,
+    positions: &mut usize,
+) -> Result<Vec<Vec<[Number; 2]>>, ()> {
+    let rings = match value {
+        Value::Array(rings) if !rings.is_empty() => rings,
+        _ => return Err(()),
+    };
+    rings
+        .into_iter()
+        .map(|ring| decode_ring(ring, positions))
+        .collect()
+}
+
+fn decode_ring(value: Value, positions: &mut usize) -> Result<Vec<[Number; 2]>, ()> {
+    let values = match value {
+        Value::Array(values) if values.len() >= 4 => values,
+        _ => return Err(()),
+    };
+    *positions = positions.checked_add(values.len()).ok_or(())?;
+    if *positions > MAXIMUM_GEOMETRY_POSITIONS {
+        return Err(());
+    }
+    let ring = values
+        .into_iter()
+        .map(decode_position)
+        .collect::<Result<Vec<_>, _>>()?;
+    if !same_position(&ring[0], ring.last().ok_or(())?)
+        || ring
+            .windows(2)
+            .any(|edge| longitude_delta(&edge[0], &edge[1]) > 180.0)
+    {
+        return Err(());
+    }
+    Ok(ring)
+}
+
+fn decode_position(value: Value) -> Result<[Number; 2], ()> {
+    match value {
+        Value::Array(mut values) if values.len() == 2 => {
+            let latitude = number(values.pop().ok_or(())?, -90.0, 90.0)?;
+            let longitude = number(values.pop().ok_or(())?, -180.0, 180.0)?;
+            Ok([longitude, latitude])
+        }
+        _ => Err(()),
+    }
+}
+
+fn same_position(left: &[Number; 2], right: &[Number; 2]) -> bool {
+    left.iter()
+        .zip(right)
+        .all(|(left, right)| left.as_f64() == right.as_f64())
+}
+
+fn longitude_delta(left: &[Number; 2], right: &[Number; 2]) -> f64 {
+    (left[0].as_f64().unwrap_or(f64::INFINITY) - right[0].as_f64().unwrap_or(f64::NEG_INFINITY))
+        .abs()
 }
 
 fn object(value: Value) -> Result<Map<String, Value>, ()> {
@@ -532,5 +668,64 @@ mod tests {
         assert!(decode_feature(feature(json!(0), json!(91), json!(1))).is_err());
         assert!(decode_feature(feature(json!(0), json!(0), json!(0))).is_err());
         assert!(decode_feature(feature(json!(0), json!(0), json!(u64::MAX))).is_err());
+    }
+
+    #[test]
+    fn polygon_and_multipolygon_preserve_tagged_shapes_and_winding() {
+        let polygon = json!({
+            "type": "Feature",
+            "id": "00000000-0000-4000-8000-000000000001",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                    [100.125, 13.25], [101, 13.25], [101, 14], [100.125, 13.25]
+                ]]
+            },
+            "properties": {},
+            "registry": {"revision": 1}
+        });
+        let decoded = decode_feature(polygon.clone()).expect("valid polygon");
+        assert_eq!(serde_json::to_value(decoded).unwrap(), polygon);
+
+        let multipolygon = json!({
+            "type": "Feature",
+            "id": "00000000-0000-4000-8000-000000000001",
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                    [[[100, 13], [100, 14], [101, 14], [100, 13]]],
+                    [[[102, 15], [103, 15], [103, 16], [102, 15]]]
+                ]
+            },
+            "properties": {},
+            "registry": {"revision": 1}
+        });
+        let decoded = decode_feature(multipolygon.clone()).expect("valid multipolygon");
+        assert_eq!(serde_json::to_value(decoded).unwrap(), multipolygon);
+    }
+
+    #[test]
+    fn polygon_geometry_rejects_invalid_rings_parts_and_edges() {
+        let feature = |geometry: Value| {
+            json!({
+                "type": "Feature",
+                "id": "00000000-0000-4000-8000-000000000001",
+                "geometry": geometry,
+                "properties": {},
+                "registry": {"revision": 1}
+            })
+        };
+        for invalid in [
+            json!({"type":"Polygon","coordinates":[]}),
+            json!({"type":"Polygon","coordinates":[[]]}),
+            json!({"type":"Polygon","coordinates":[[[0,0],[1,0],[0,0]]]}),
+            json!({"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1]]]}),
+            json!({"type":"Polygon","coordinates":[[[-170,0],[170,0],[170,1],[-170,0]]]}),
+            json!({"type":"MultiPolygon","coordinates":[]}),
+            json!({"type":"MultiPolygon","coordinates":[[]]}),
+            json!({"type":"MultiPolygon","coordinates":[[[[0,0,1],[1,0],[1,1],[0,0]]]]}),
+        ] {
+            assert!(decode_feature(feature(invalid)).is_err());
+        }
     }
 }

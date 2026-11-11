@@ -4477,15 +4477,15 @@ fn validate_geojson(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         errors.push(Diagnostic::error(
             "breg.geojson.geometry-field-unknown",
             "recordTypes[].geojson.geometryField",
-            "a GeoJSON geometry field must name one stored CRS84 point field",
+            "a GeoJSON geometry field must name one stored CRS84 geometry field",
         ));
         return;
     };
-    if !matches!(field.field_type, FieldTypeSource::Crs84Point { .. }) {
+    if !field.field_type.is_crs84_geometry() {
         errors.push(Diagnostic::error(
             "breg.geojson.geometry-field-type-unsupported",
             "recordTypes[].geojson.geometryField",
-            "a GeoJSON geometry field must name one stored CRS84 point field",
+            "a GeoJSON geometry field must name one stored CRS84 geometry field",
         ));
     }
 }
@@ -4690,6 +4690,24 @@ fn validate_entity_fields(
                     "breg.field.crs84-point-bounds-invalid",
                     "recordTypes[].fields[]",
                     "CRS84 point precision or CRS84 bounding box is invalid",
+                ));
+            }
+            FieldTypeSource::Crs84Polygon {
+                precision,
+                bbox,
+                max_positions,
+            } if *precision > 9
+                || !(crate::contract::MIN_CRS84_POLYGON_POSITIONS
+                    ..=crate::contract::MAX_CRS84_POLYGON_POSITIONS)
+                    .contains(max_positions)
+                || bbox
+                    .as_ref()
+                    .is_some_and(|bbox| parsed_bbox(bbox, *precision).is_none()) =>
+            {
+                errors.push(Diagnostic::error(
+                    "breg.field.crs84-polygon-bounds-invalid",
+                    "recordTypes[].fields[]",
+                    "CRS84 polygon precision, CRS84 bounding box, or maximumPositions is invalid",
                 ));
             }
             FieldTypeSource::Structured { max_bytes, schema }
@@ -4932,7 +4950,9 @@ fn generated_identifier_scope_max_bytes(field_type: &FieldTypeSource) -> Option<
         FieldTypeSource::Decimal { .. } | FieldTypeSource::Timestamp => Some(64),
         FieldTypeSource::Date => Some(10),
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => Some(36),
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => None,
     }
 }
 
@@ -5116,6 +5136,24 @@ fn validate_field_type_bounds(
                 "breg.field.crs84-point-bounds-invalid",
                 path,
                 "CRS84 point precision or CRS84 bounding box is invalid",
+            ));
+        }
+        FieldTypeSource::Crs84Polygon {
+            precision,
+            bbox,
+            max_positions,
+        } if *precision > 9
+            || !(crate::contract::MIN_CRS84_POLYGON_POSITIONS
+                ..=crate::contract::MAX_CRS84_POLYGON_POSITIONS)
+                .contains(max_positions)
+            || bbox
+                .as_ref()
+                .is_some_and(|bbox| parsed_bbox(bbox, *precision).is_none()) =>
+        {
+            errors.push(Diagnostic::error(
+                "breg.field.crs84-polygon-bounds-invalid",
+                path,
+                "CRS84 polygon precision, CRS84 bounding box, or maximumPositions is invalid",
             ));
         }
         FieldTypeSource::Structured { max_bytes, schema }
@@ -5403,7 +5441,9 @@ enum FieldStorageKind {
 fn selector_field_supported(field_type: &FieldTypeSource) -> bool {
     !matches!(
         field_type,
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
+        FieldTypeSource::Crs84Point { .. }
+            | FieldTypeSource::Crs84Polygon { .. }
+            | FieldTypeSource::Structured { .. }
     )
 }
 
@@ -5574,9 +5614,9 @@ fn validate_selector_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic
             .iter()
             .map(String::as_str)
             .filter(|field| {
-                fields.get(field).is_some_and(|field| {
-                    matches!(field.field_type, FieldTypeSource::Crs84Point { .. })
-                })
+                fields
+                    .get(field)
+                    .is_some_and(|field| field.field_type.is_crs84_geometry())
             })
             .collect();
         let unsupported: Vec<&str> = selector
@@ -5594,7 +5634,7 @@ fn validate_selector_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic
                 "breg.selector-profile.field-type-unsupported",
                 "recordTypes[].selectorProfiles[].fields",
                 &format!(
-                    "CRS84 point fields cannot be selector fields; {} must leave selector profile `{}`, use spatialQueries.bbox for bounded spatial search",
+                    "CRS84 geometry fields cannot be selector fields; {} must leave selector profile `{}`, use spatialQueries.bbox for bounded spatial search",
                     quoted_list(&spatial),
                     selector.id
                 ),
@@ -5979,14 +6019,14 @@ fn validate_profiles(
         let mut boundaries = BTreeSet::new();
         for boundary in &access.row_boundaries {
             if boundary.field != "id"
-                && fields.get(boundary.field.as_str()).is_some_and(|field| {
-                    matches!(field.field_type, FieldTypeSource::Crs84Point { .. })
-                })
+                && fields
+                    .get(boundary.field.as_str())
+                    .is_some_and(|field| field.field_type.is_crs84_geometry())
             {
                 errors.push(Diagnostic::error(
                     "breg.access-profile.row-boundary-type-unsupported",
                     "recordTypes[].accessProfiles[].rowBoundaries",
-                    "CRS84 point fields cannot be row-boundary fields; use spatialQueries.bbox for bounded spatial search",
+                    "CRS84 geometry fields cannot be row-boundary fields; use spatialQueries.bbox for bounded spatial search",
                 ));
             } else if boundary.field != "id"
                 && fields.get(boundary.field.as_str()).is_some_and(|field| {
@@ -7193,6 +7233,9 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
         // The closed Point shape and precision grammar fit well below this
         // conservative bound.
         FieldTypeSource::Crs84Point { .. } => 128,
+        FieldTypeSource::Crs84Polygon { max_positions, .. } => {
+            crate::contract::maximum_polygon_json_bytes(*max_positions)
+        }
         FieldTypeSource::Structured { max_bytes, .. } => u64::from(*max_bytes),
     };
     Some(bytes)
@@ -8747,11 +8790,11 @@ fn query_filter_field(
         | FieldTypeSource::Timestamp => {
             operators.push(CompiledQueryFilterOperator::Range);
         }
-        FieldTypeSource::Crs84Point { .. } => {
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Crs84Polygon { .. } => {
             errors.push(Diagnostic::error(
                 "breg.query.filter-field-type-unsupported",
                 "recordTypes[].accessProfiles[].filterableFields",
-                "CRS84 point fields cannot be filterableFields; use spatialQueries.bbox for bounded spatial search",
+                "CRS84 geometry fields cannot be filterableFields; use spatialQueries.bbox for bounded spatial search",
             ));
             return None;
         }
@@ -8818,11 +8861,11 @@ fn query_sort_field(
     field: &str,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledQuerySortField> {
-    if matches!(field_type, FieldTypeSource::Crs84Point { .. }) {
+    if field_type.is_crs84_geometry() {
         errors.push(Diagnostic::error(
             "breg.query.sort-field-type-unsupported",
             "recordTypes[].accessProfiles[].sortableFields",
-            "CRS84 point fields cannot be sortableFields; use spatialQueries.bbox for bounded spatial search",
+            "CRS84 geometry fields cannot be sortableFields; use spatialQueries.bbox for bounded spatial search",
         ));
         return None;
     }
@@ -9135,12 +9178,14 @@ fn validate_unique_when_field<'a>(
     };
     if matches!(
         source.field_type,
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
+        FieldTypeSource::Crs84Point { .. }
+            | FieldTypeSource::Crs84Polygon { .. }
+            | FieldTypeSource::Structured { .. }
     ) {
         errors.push(Diagnostic::error(
             "breg.constraint.unique-when-field-unsupported",
             "recordTypes[].constraints[].when[].field",
-            "CRS84 point and structured fields cannot be partial unique predicates",
+            "CRS84 geometry and structured fields cannot be partial unique predicates",
         ));
         return None;
     }
@@ -9193,7 +9238,9 @@ fn canonical_field_literal(value: &Value, field_type: &FieldTypeSource) -> Optio
             .as_str()
             .filter(|value| values.iter().any(|allowed| allowed == *value))
             .map(str::to_owned),
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => None,
     }
 }
 
@@ -9232,6 +9279,68 @@ fn canonical_timestamp(value: &str) -> bool {
         return false;
     };
     formatted == value
+}
+
+#[cfg(test)]
+mod polygon_compiler_tests {
+    use super::*;
+    use crate::contract::parse_project_json;
+
+    fn project(field: &str) -> RegistryProject {
+        parse_project_json(
+            format!(
+                r#"{{
+                    "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+                    "kind":"BRegProject",
+                    "project":{{"id":"polygon-compiler","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://polygon.example.test"}},
+                    "datasets":[{{"id":"test-dataset"}}],
+                    "recordTypes":[{{
+                        "id":"area","primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable",
+                        "geojson":{{"geometryField":"geometry"}},
+                        "fields":[{field}]
+                    }}]
+                }}"#
+            )
+            .as_bytes(),
+        )
+        .expect("polygon compiler fixture parses")
+    }
+
+    #[test]
+    fn compiler_accepts_polygon_as_geojson_geometry() {
+        let project = project(
+            r#"{"id":"geometry","type":"crs84-polygon","precision":6,"maximumPositions":128,"classification":"internal"}"#,
+        );
+        let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("bounded polygon geometry compiles");
+        let field = &compiled.entities()["area"].fields["geometry"].field_type;
+        assert!(matches!(
+            field,
+            FieldTypeSource::Crs84Polygon {
+                precision: 6,
+                max_positions: 128,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn compiler_refuses_polygon_bounds_outside_the_contract() {
+        let mut project = project(
+            r#"{"id":"geometry","type":"crs84-polygon","precision":6,"maximumPositions":128,"classification":"internal"}"#,
+        );
+        project.entities[0].fields[0].field_type = FieldTypeSource::Crs84Polygon {
+            precision: 6,
+            bbox: None,
+            max_positions: 3,
+        };
+        let errors = compile_project(&project, &[], CompileProfile::Authoring)
+            .expect_err("too-small maximumPositions is refused");
+        assert!(errors
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.field.crs84-polygon-bounds-invalid"));
+    }
 }
 
 fn valid_uuid(value: &str) -> bool {
@@ -9335,6 +9444,7 @@ fn manifest_projects_field(field: &CompiledField) -> bool {
             &field.field_type,
             FieldTypeSource::Reference { .. }
                 | FieldTypeSource::Crs84Point { .. }
+                | FieldTypeSource::Crs84Polygon { .. }
                 | FieldTypeSource::Structured { .. }
         )
 }
@@ -9654,6 +9764,7 @@ fn validate_local_value_types(
             FieldTypeSource::Reference { .. }
                 | FieldTypeSource::Structured { .. }
                 | FieldTypeSource::Crs84Point { .. }
+                | FieldTypeSource::Crs84Polygon { .. }
         ) {
             errors.push(Diagnostic::error(
                 "breg.value-type.scalar-required",

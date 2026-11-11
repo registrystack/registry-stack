@@ -399,7 +399,7 @@ impl ExpectedManagedCatalog {
             Some("EXECUTE"),
             None,
         );
-        if registry.ddl().requires_postgis {
+        if registry.ddl().requires_spatial_bbox() {
             catalog.grant_schema_spatial_bbox("registry_data");
             catalog.grant_schema_spatial_bbox("registry_context");
         }
@@ -1484,6 +1484,14 @@ async fn verify_closed_ambient_catalog(
                            (n.nspname = 'registry_context'
                            AND ((p.proname IN ('evaluation_date', 'spatial_bbox_geometry')
                                  AND pg_catalog.pg_get_function_identity_arguments(p.oid) = '')
+                                OR (p.proname = 'valid_crs84_polygon'
+                                    AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'jsonb, integer, numeric, numeric, numeric, numeric, integer'
+                                    AND p.prorettype = 'boolean'::regtype
+                                    AND NOT p.proretset
+                                    AND NOT p.prosecdef
+                                    AND p.proisstrict
+                                    AND p.provolatile = 'i'
+                                    AND p.proconfig = ARRAY['search_path=pg_catalog'])
                                 OR (p.proname ~ '^membership_[0-9a-f]{24}$'
                                     AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'uuid'
                                     AND p.prorettype = 'boolean'::regtype

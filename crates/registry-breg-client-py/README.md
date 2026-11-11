@@ -22,7 +22,8 @@ These descriptions support interface choices; select a binding before execution.
 `list_records` accepts an optional exact decimal `bbox=(west, south, east,
 north)`. GeoJSON has separate `get_geojson_record`, `list_geojson_records`, and
 `continue_geojson_list` methods so its response contract cannot be confused
-with a Registry Record.
+with a Registry Record. Their typed feature geometry is `Point`, `Polygon`,
+`MultiPolygon`, or `None`. Polygon ring order and winding are preserved.
 
 Temporal and relationship collections also use operation-specific methods and
 continuations:

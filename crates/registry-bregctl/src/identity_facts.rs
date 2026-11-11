@@ -421,6 +421,7 @@ fn refuse_unissuable_claim(
         FieldTypeSource::Boolean => "boolean",
         FieldTypeSource::Int64 => "int64",
         FieldTypeSource::Crs84Point { .. } => "crs84-point",
+        FieldTypeSource::Crs84Polygon { .. } => "crs84-polygon",
         FieldTypeSource::Structured { .. } => "structured",
         _ => return Ok(()),
     };

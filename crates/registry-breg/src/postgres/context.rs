@@ -1626,6 +1626,7 @@ fn canonical_snapshot_field_value(
             .map(|value| value.to_string())
             .ok_or_else(invalid_context),
         crate::contract::FieldTypeSource::Crs84Point { .. }
+        | crate::contract::FieldTypeSource::Crs84Polygon { .. }
         | crate::contract::FieldTypeSource::Structured { .. } => {
             let bytes = canonicalize_json(value).map_err(|_| invalid_context())?;
             String::from_utf8(bytes).map_err(|_| invalid_context())

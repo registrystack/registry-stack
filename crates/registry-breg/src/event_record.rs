@@ -59,6 +59,7 @@ fn value_type(field: &FieldSource) -> Option<EventRecordValueType> {
         | FieldTypeSource::Int64
         | FieldTypeSource::Decimal { .. }
         | FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
         | FieldTypeSource::Structured { .. } => None,
     }
 }
@@ -77,6 +78,7 @@ fn field_type_name(field_type: &FieldTypeSource) -> &'static str {
         FieldTypeSource::VocabularyCode { .. } => "vocabulary-code",
         FieldTypeSource::Reference { .. } => "reference",
         FieldTypeSource::Crs84Point { .. } => "crs84-point",
+        FieldTypeSource::Crs84Polygon { .. } => "crs84-polygon",
         FieldTypeSource::Structured { .. } => "structured",
     }
 }

@@ -144,7 +144,9 @@ key.
 Ordinary list calls accept `bbox: [west, south, east, north]` as four exact
 decimal strings when the served query contract supports it. GeoJSON has a
 separate `getGeoJsonRecord` and `listGeoJsonRecords` surface, with typed
-features, GeoJSON media checks, and its own continuation type.
+features whose geometry is `Point | Polygon | MultiPolygon | null`, GeoJSON
+media checks, and its own continuation type. Polygon ring order and winding are
+preserved.
 
 `listCurrentRecords`, `listRecordsAsOf`, and `listSnapshotRecords` keep their
 temporal parameters and continuations distinct. Snapshot continuations bind

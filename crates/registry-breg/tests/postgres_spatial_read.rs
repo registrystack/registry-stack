@@ -28,10 +28,11 @@ use registry_breg::compiler::{
 use registry_breg::contract::{parse_module_json, parse_project_json, ModuleAssetSource};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
+    begin_record_transaction, initialize_compiled_registry_state_for_test,
+    initialize_registry_state_for_catalog_test, install_compiled_schema,
     provision_postgis_prerequisites, spatial_bbox_role, ClaimContext, ExpectedManagedCatalog,
-    PostgresRecordReadService, ReadFaultPoint, RegistryLockKey, RegistryStateTestIdentity,
-    RowBoundaryContext, RuntimePool,
+    PostgresRecordMutationService, PostgresRecordReadService, ReadFaultPoint, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::PublicOrigin;
 use registry_platform_audit::AuditProfile;
@@ -255,6 +256,244 @@ const SERVICE_REGION_A: &str = "00000000-0000-4000-8000-000000000033";
 const SERVICE_REGION_B: &str = "00000000-0000-4000-8000-000000000034";
 const PLAIN_POINT: &str = "10000000-0000-4000-8000-000000000001";
 const LARGE_NOTE_BYTES: usize = 1_080_000;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn polygon_records_validate_write_and_intersect_bbox_through_native_and_gis_routes() {
+    let harness = SpatialHarness::create(compiled_polygon_registry()).await;
+    let app = harness.router(None, cursor_codec());
+    let polygon = json!({"type":"Polygon","coordinates":[
+        [[100,13],[101,13],[101,14],[100,14],[100,13]],
+        [[100.4,13.4],[100.4,13.6],[100.6,13.6],[100.6,13.4],[100.4,13.4]]
+    ]});
+    let multipolygon = json!({"type":"MultiPolygon","coordinates":[
+        [[[102,13],[103,13],[103,14],[102,13]]],
+        [[[104,13],[105,13],[105,14],[104,13]]]
+    ]});
+    let mut patch_target = None;
+    for (jurisdiction, key, geometry) in [
+        ("zone-a", "visible-polygon", polygon.clone()),
+        ("zone-a", "visible-multipolygon", multipolygon.clone()),
+        ("zone-b", "hidden-polygon", polygon.clone()),
+    ] {
+        let response = create_plot(&app, jurisdiction, key, geometry.clone()).await;
+        let status = response.status();
+        let etag = response.headers().get(header::ETAG).cloned();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::CREATED, "{key}: {body}");
+        assert_eq!(body["data"]["domainData"]["boundary"], geometry);
+        if key == "visible-polygon" {
+            let id = body["data"]["recordIdentifier"].as_str().unwrap();
+            patch_target = Some((id.to_owned(), etag.unwrap()));
+        }
+    }
+    for (key, coordinates) in [
+        (
+            "bow-tie",
+            json!([[[100, 13], [101, 14], [100, 14], [101, 13], [100, 13]]]),
+        ),
+        (
+            "open",
+            json!([[[100, 13], [101, 13], [101, 14], [100, 14]]]),
+        ),
+        ("few", json!([[[100, 13], [101, 13], [100, 13]]])),
+        (
+            "range",
+            json!([[[181, 13], [101, 13], [101, 14], [181, 13]]]),
+        ),
+        (
+            "precision",
+            json!([[[100.0000001, 13], [101, 13], [101, 14], [100.0000001, 13]]]),
+        ),
+        (
+            "bounds",
+            json!([[[99, 13], [101, 13], [101, 14], [99, 13]]]),
+        ),
+        (
+            "size",
+            json!([[
+                [100, 13],
+                [101, 13],
+                [102, 13],
+                [103, 13],
+                [104, 13],
+                [104, 14],
+                [103, 14],
+                [102, 14],
+                [101, 14],
+                [100, 14],
+                [100, 13]
+            ]]),
+        ),
+    ] {
+        let response = create_plot(
+            &app,
+            "zone-a",
+            key,
+            json!({"type":"Polygon","coordinates":coordinates}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{key}");
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "request.invalid", "{key}");
+        assert_eq!(problem["fieldPath"], "/data/boundary", "{key}");
+    }
+    let (id, etag) = patch_target.unwrap();
+    let mut patch = Request::patch(format!("/v1/records/plots/{id}"))
+        .header(header::CONTENT_TYPE, "application/json-patch+json")
+        .header(header::IF_MATCH, etag)
+        .header("idempotency-key", "patch-bow-tie")
+        .body(Body::from(json!([{
+            "op":"replace","path":"/data/boundary",
+            "value":{"type":"Polygon","coordinates":[[[100,13],[101,14],[100,14],[101,13],[100,13]]]}
+        }]).to_string()))
+        .unwrap();
+    patch.extensions_mut().insert(claims(["zone-a"]));
+    let response = app.clone().call(patch).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(response).await["fieldPath"], "/0/value");
+
+    for (bbox, expected) in [
+        ("100.2,13.2,100.3,13.3", Some(&polygon)),
+        ("100.45,13.45,100.55,13.55", None),
+        ("100,13.5,100,13.5", Some(&polygon)),
+        ("104.8,13.2,104.9,13.3", Some(&multipolygon)),
+    ] {
+        for route in [
+            "/v1/records/plots",
+            "/v1/gis/collections/plot.plot-reader/items",
+        ] {
+            let response = send(
+                &app,
+                &format!("{route}?bbox={bbox}"),
+                Some(claims(["zone-a"])),
+                Some("application/geo+json"),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{route} {bbox}");
+            let body = body_json(response).await;
+            let features = body["features"].as_array().unwrap();
+            assert_eq!(
+                features.len(),
+                usize::from(expected.is_some()),
+                "{route} {bbox}"
+            );
+            if let Some(expected) = expected {
+                assert_eq!(&features[0]["geometry"], expected, "{route} {bbox}");
+            }
+        }
+    }
+    let denied = send(
+        &app,
+        "/v1/records/plots?accessProfile=no-bbox&bbox=100,13,101,14",
+        Some(claims(["zone-a"])),
+        None,
+    )
+    .await;
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+
+    let landing = send(&app, "/v1/gis", Some(claims(["zone-a"])), None).await;
+    assert_eq!(
+        body_json(landing).await["registry"]["profile"],
+        "breg-gis-bounded-crs84-geometry-bbox-v1"
+    );
+    let entity = &harness.compiled.entities()["plot"];
+    let table = quote_identifier(&entity.physical_table);
+    let index: String = harness.database.admin
+        .query_one(
+            "SELECT indexdef FROM pg_indexes WHERE schemaname = 'registry_data' AND tablename = $1 AND indexdef LIKE '% USING gist %'",
+            &[&entity.physical_table],
+        ).await.unwrap().get(0);
+    assert!(index.contains("breg_spgeom_"));
+    let geometry_column: String = harness.database.admin
+        .query_one(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'registry_data' AND table_name = $1 AND is_generated = 'ALWAYS'",
+            &[&entity.physical_table],
+        ).await.unwrap().get(0);
+    let geometry_column = quote_identifier(&geometry_column);
+    let projected: i64 = harness
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FROM registry_data.{table}
+              WHERE registry_spatial_ext.ST_SRID({geometry_column}) = 4326
+                AND registry_spatial_ext.ST_GeometryType({geometry_column}) = 'ST_MultiPolygon'"
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(projected, 3);
+
+    use registry_breg_client::{BRegBoundingBox, BRegGeoJsonGeometry, BRegGeoJsonListRequest};
+    let http = client_http::ClientHttp::start(app, claims(["zone-a"])).await;
+    let request = BRegGeoJsonListRequest::default()
+        .bbox(BRegBoundingBox::new("104.8", "13.2", "104.9", "13.3").unwrap());
+    let page = http
+        .client
+        .list_geojson_records("plots", &request)
+        .await
+        .unwrap();
+    let features = &page.value.value.features;
+    assert_eq!(features.len(), 1);
+    assert!(matches!(
+        features[0].geometry,
+        Some(BRegGeoJsonGeometry::MultiPolygon(_))
+    ));
+    drop(http);
+    harness.cleanup().await;
+}
+
+async fn create_plot(
+    app: &axum::Router,
+    jurisdiction: &str,
+    key: &str,
+    boundary: Value,
+) -> Response<Body> {
+    let mut request = Request::post("/v1/records/plots")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("idempotency-key", key)
+        .body(Body::from(
+            json!({"data":{"jurisdiction":jurisdiction,"boundary":boundary}}).to_string(),
+        ))
+        .unwrap();
+    request.extensions_mut().insert(claims([jurisdiction]));
+    app.clone().call(request).await.unwrap()
+}
+
+fn compiled_polygon_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(br#"{
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+      "project":{"id":"spatial-read-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+      "datasets":[{"id":"test-dataset"}],
+      "recordTypes":[{
+        "id":"plot","primaryDataset":"test-dataset","route":"plots","mutationMode":"mutable","classification":"internal",
+        "fields":[
+          {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+          {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":10,
+           "bbox":{"west":"100","south":"13","east":"105","north":"14"},"classification":"internal"}
+        ],
+        "geojson":{"geometryField":"boundary"}
+      }],
+      "accessProfiles":[{
+          "id":"plot-reader","default":true,"principalClaim":"registry_principal","requiredScopes":["registry.read"],
+          "requiredPurposes":["case-management"],"permissions":{"records":[{
+          "recordType":"plot","operations":["create","get","list","patch"],
+          "readableFields":["jurisdiction","boundary"],"writableFields":["jurisdiction","boundary"],
+          "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}],
+          "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1.25,"maximumLatitudeSpanDegrees":1.25}}
+          }]}
+        },{
+          "id":"no-bbox","principalClaim":"registry_principal","requiredScopes":["registry.read"],
+          "requiredPurposes":["case-management"],"permissions":{"records":[{
+          "recordType":"plot","operations":["list"],"readableFields":["boundary"],
+          "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
+          }]}
+      }]
+    }"#).expect("polygon project parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("polygon project compiles")
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit() {
@@ -1135,11 +1374,10 @@ impl SpatialHarness {
         install_compiled_schema(&migration, &compiled, &database.runtime_role)
             .await
             .expect("migration installs the complete compiled spatial schema");
-        let catalog = ExpectedManagedCatalog::compiled(&compiled);
-        let identity = initialize_registry_state_for_catalog_test(
+        let identity = initialize_compiled_registry_state_for_test(
             &migration,
             &database.runtime_role,
-            &catalog,
+            &compiled,
             RegistryStateTestIdentity {
                 package_id: PACKAGE_ID,
                 database_id: DATABASE_ID,
@@ -1242,6 +1480,15 @@ fn read_router(
         package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
     });
+    let mutations = PostgresRecordMutationService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        "spatial-read-test",
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+    );
     let mut records = PostgresRecordReadService::new(
         pool,
         registry.clone(),
@@ -1264,7 +1511,8 @@ fn read_router(
         Arc::new(AlwaysReady),
         cursors,
     )
-    .with_public_origin(PublicOrigin::parse("http://127.0.0.1:18080").expect("public origin"));
+    .with_public_origin(PublicOrigin::parse("http://127.0.0.1:18080").expect("public origin"))
+    .with_postgres_mutations(Arc::new(mutations));
     router(Arc::new(service))
 }
 

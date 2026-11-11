@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Read a configured Point collection with a bbox and explicit pagination.
+//! Read a configured spatial collection with a bbox and explicit pagination.
 //! See the crate README for the required environment variables.
 
 use std::sync::Arc;

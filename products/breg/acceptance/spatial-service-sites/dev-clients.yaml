@@ -21,6 +21,10 @@ clients:
     accessProfiles: [map-reader]
     scopes: [service-sites:public:read]
     claims: {registry_principal: synthetic-public-map, registry_purpose: service-site-public-map}
+  - id: public-area-map-reader
+    accessProfiles: [area-map-reader]
+    scopes: [service-areas:public:read]
+    claims: {registry_principal: synthetic-public-area-map, registry_purpose: service-area-public-map}
   - id: public-directory-reader
     accessProfiles: [directory-reader]
     scopes: [service-sites:public:read]

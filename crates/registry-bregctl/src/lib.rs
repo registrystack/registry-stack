@@ -11205,7 +11205,9 @@ fn filter_literal(field_type: &FieldTypeSource) -> Option<String> {
         FieldTypeSource::VocabularyCode { values, .. } => {
             values.first().map(|value| quote_filter_string(value))
         }
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => None,
     }
 }
 
@@ -11232,7 +11234,9 @@ fn alternate_filter_literal(field_type: &FieldTypeSource) -> Option<String> {
         FieldTypeSource::VocabularyCode { values, .. } => {
             values.get(1).map(|value| quote_filter_string(value))
         }
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => None,
     }
 }
 

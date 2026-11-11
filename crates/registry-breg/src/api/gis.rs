@@ -2,7 +2,7 @@
 
 //! Bounded QGIS-facing OAPIF-shaped adapter.
 //!
-//! This module is only a transport adapter over compiled direct list operations.
+//! This module is only a transport adapter over compiled direct spatial list operations.
 //! It does not declare OGC API Features conformance, compute extents, add a
 //! query engine, or reinterpret Registry access profiles.
 
@@ -67,9 +67,16 @@ async fn landing(
         return unavailable();
     };
     let collections = visible_gis_collections(&service, &claims);
+    let polygon_visible = collections
+        .iter()
+        .any(|collection| collection.geometry_kind == GisGeometryKind::Polygon);
     let body = json!({
         "title": service.registry.registry_id(),
-        "description": "Bounded Registry GIS adapter for authorized CRS84 Point bbox reads.",
+        "description": if polygon_visible {
+            "Bounded Registry GIS adapter for authorized CRS84 geometry bbox reads."
+        } else {
+            "Bounded Registry GIS adapter for authorized CRS84 Point bbox reads."
+        },
         "links": [
             link(origin, "self", "application/json", GIS_ROOT),
             link(origin, "data", "application/json", &format!("{GIS_ROOT}/collections")),
@@ -77,7 +84,11 @@ async fn landing(
             link(origin, "service-desc", SERVICE_DESC_MEDIA_TYPE, &format!("{GIS_ROOT}/api")),
         ],
         "registry": {
-            "profile": "breg-gis-bounded-crs84-point-bbox-v1",
+            "profile": if polygon_visible {
+                "breg-gis-bounded-crs84-geometry-bbox-v1"
+            } else {
+                "breg-gis-bounded-crs84-point-bbox-v1"
+            },
             "collections": collections.len(),
         },
     });
@@ -168,6 +179,7 @@ async fn api(
             }),
         );
     }
+    let geometry_schema = gis_geometry_schema(&collections);
     let body = json!({
         "openapi": "3.0.0",
         "info": {
@@ -196,20 +208,7 @@ async fn api(
                     "properties": {
                         "type": {"type": "string", "enum": ["Feature"]},
                         "id": {"type": "string"},
-                        "geometry": {
-                            "type": "object",
-                            "nullable": true,
-                            "required": ["type", "coordinates"],
-                            "properties": {
-                                "type": {"type": "string", "enum": ["Point"]},
-                                "coordinates": {
-                                    "type": "array",
-                                    "items": {"type": "number"},
-                                    "minItems": 2,
-                                    "maxItems": 2,
-                                },
-                            },
-                        },
+                        "geometry": geometry_schema,
                         "properties": {"type": "object"},
                         "registry": {"type": "object"},
                     },
@@ -441,8 +440,16 @@ struct GisCollection {
     entity_id: String,
     profile_id: String,
     geometry_field: String,
+    geometry_kind: GisGeometryKind,
+    geometry_maximum_positions: Option<u32>,
     max_page_size: u16,
     fields: Vec<GisField>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GisGeometryKind {
+    Point,
+    Polygon,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -466,7 +473,10 @@ impl GisCollection {
                 "accessProfile": self.profile_id,
                 "geometryField": self.geometry_field,
                 "pageLimitMaximum": self.max_page_size,
-                "profile": "bounded-crs84-point-bbox",
+                "profile": match self.geometry_kind {
+                    GisGeometryKind::Point => "bounded-crs84-point-bbox",
+                    GisGeometryKind::Polygon => "bounded-crs84-polygon-bbox",
+                },
                 "fields": self.fields.iter().map(|field| {
                     json!({
                         "name": field.name,
@@ -557,6 +567,14 @@ fn gis_collection_value(
 ) -> Option<GisCollection> {
     let collection_id = operation.gis_collection_id()?;
     let bbox = operation.spatial.as_ref()?.bbox.as_ref()?;
+    let (geometry_kind, geometry_maximum_positions) =
+        match data_field_type(entity, &bbox.geometry_field)? {
+            FieldTypeSource::Crs84Point { .. } => (GisGeometryKind::Point, None),
+            FieldTypeSource::Crs84Polygon { max_positions, .. } => {
+                (GisGeometryKind::Polygon, Some(*max_positions))
+            }
+            _ => return None,
+        };
     let mut fields = Vec::new();
     for field_id in &operation.projection_fields {
         if field_id == &bbox.geometry_field || !surface.readable_fields.contains(field_id) {
@@ -574,6 +592,8 @@ fn gis_collection_value(
         entity_id: operation.entity_id.clone(),
         profile_id: operation.profile_id.clone(),
         geometry_field: bbox.geometry_field.clone(),
+        geometry_kind,
+        geometry_maximum_positions,
         max_page_size: operation.max_page_size,
         fields,
     })
@@ -584,13 +604,93 @@ fn geojson_geometry_available(entity: &CompiledEntity, readable_fields: &BTreeSe
         return false;
     };
     readable_fields.contains(&geojson.geometry_field)
-        && matches!(
-            entity
-                .fields
-                .get(&geojson.geometry_field)
-                .map(|field| &field.field_type),
-            Some(FieldTypeSource::Crs84Point { .. })
-        )
+        && entity
+            .fields
+            .get(&geojson.geometry_field)
+            .map(|field| &field.field_type)
+            .is_some_and(FieldTypeSource::is_crs84_geometry)
+}
+
+fn gis_geometry_schema(collections: &[GisCollection]) -> Value {
+    let point_visible = collections
+        .iter()
+        .any(|collection| collection.geometry_kind == GisGeometryKind::Point);
+    let polygon_visible = collections
+        .iter()
+        .any(|collection| collection.geometry_kind == GisGeometryKind::Polygon);
+    if !polygon_visible {
+        return point_geometry_schema();
+    }
+    let minimum_ring_positions = crate::contract::MIN_CRS84_POLYGON_POSITIONS;
+    let maximum_positions = collections
+        .iter()
+        .filter_map(|collection| collection.geometry_maximum_positions)
+        .max()
+        .unwrap_or(crate::contract::MAX_CRS84_POLYGON_POSITIONS);
+    let maximum_rings = maximum_positions / minimum_ring_positions;
+    let position = json!({
+        "type": "array",
+        "items": {"type": "number"},
+        "minItems": 2,
+        "maxItems": 2,
+    });
+    let ring = json!({
+        "type": "array",
+        "items": position,
+        "minItems": minimum_ring_positions,
+        "maxItems": maximum_positions,
+    });
+    let polygon_coordinates = json!({
+        "type": "array",
+        "items": ring,
+        "minItems": 1,
+        "maxItems": maximum_rings,
+    });
+    let polygon = tagged_geometry_schema("Polygon", polygon_coordinates.clone());
+    let multi_polygon = tagged_geometry_schema(
+        "MultiPolygon",
+        json!({
+            "type": "array",
+            "items": polygon_coordinates,
+            "minItems": 1,
+            "maxItems": maximum_rings,
+        }),
+    );
+    let mut variants = Vec::with_capacity(if point_visible { 3 } else { 2 });
+    if point_visible {
+        variants.push(point_geometry_schema_without_null());
+    }
+    variants.extend([polygon, multi_polygon]);
+    json!({"type": "object", "nullable": true, "oneOf": variants})
+}
+
+fn point_geometry_schema() -> Value {
+    let mut schema = point_geometry_schema_without_null();
+    schema["nullable"] = Value::Bool(true);
+    schema
+}
+
+fn point_geometry_schema_without_null() -> Value {
+    tagged_geometry_schema(
+        "Point",
+        json!({
+            "type": "array",
+            "items": {"type": "number"},
+            "minItems": 2,
+            "maxItems": 2,
+        }),
+    )
+}
+
+fn tagged_geometry_schema(kind: &str, coordinates: Value) -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "coordinates"],
+        "properties": {
+            "type": {"type": "string", "enum": [kind]},
+            "coordinates": coordinates,
+        },
+    })
 }
 
 fn api_name_for_field<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
@@ -784,6 +884,7 @@ fn field_type_name(field_type: &FieldTypeSource) -> &'static str {
         FieldTypeSource::VocabularyCode { .. } => "string",
         FieldTypeSource::Reference { .. } => "string",
         FieldTypeSource::Crs84Point { .. } => "geometry",
+        FieldTypeSource::Crs84Polygon { .. } => "geometry",
         FieldTypeSource::Structured { schema, .. } => {
             if schema.get("type").and_then(Value::as_str) == Some("array") {
                 "array"
@@ -880,6 +981,8 @@ mod tests {
             entity_id: "service-site".to_owned(),
             profile_id: "map-reader".to_owned(),
             geometry_field: "location".to_owned(),
+            geometry_kind: GisGeometryKind::Point,
+            geometry_maximum_positions: None,
             max_page_size: 100,
             fields: vec![],
         };
@@ -896,6 +999,7 @@ mod tests {
         assert!(links.iter().all(|link| link["href"].as_str().is_some_and(
             |href| href.starts_with("https://registry.example.test/registry-a/v1/gis")
         )));
+        assert_eq!(value["registry"]["profile"], "bounded-crs84-point-bbox");
     }
 
     #[tokio::test]
@@ -919,6 +1023,18 @@ mod tests {
 
     #[tokio::test]
     async fn gis_service_description_uses_openapi_3_nullable_point_schema() {
+        let landing = request_with_malicious_origin_headers(
+            test_app(Some("https://registry.example.test")),
+            "/v1/gis",
+            Some(map_reader_claims()),
+        )
+        .await;
+        let landing: Value =
+            serde_json::from_str(&response_body_string(landing).await).expect("landing JSON");
+        assert_eq!(
+            landing["registry"]["profile"],
+            "breg-gis-bounded-crs84-point-bbox-v1"
+        );
         let response = request_with_malicious_origin_headers(
             test_app(Some("https://registry.example.test")),
             "/v1/gis/api",
@@ -943,8 +1059,97 @@ mod tests {
         let geometry = &body["components"]["schemas"]["Feature"]["properties"]["geometry"];
         assert_eq!(geometry["type"], "object");
         assert_eq!(geometry["nullable"], true);
+        assert_eq!(geometry["properties"]["type"]["enum"], json!(["Point"]));
         assert!(geometry.get("oneOf").is_none());
+        assert!(!body.to_string().contains("Polygon"));
         assert!(!body.to_string().contains("\"type\":\"null\""));
+    }
+
+    #[tokio::test]
+    async fn polygon_visibility_changes_landing_collection_and_schema_profiles() {
+        let app = test_app(Some("https://registry.example.test"));
+        let landing = request_with_malicious_origin_headers(
+            app.clone(),
+            "/v1/gis",
+            Some(area_reader_claims()),
+        )
+        .await;
+        assert_eq!(landing.status(), StatusCode::OK);
+        let landing: Value =
+            serde_json::from_str(&response_body_string(landing).await).expect("landing JSON");
+        assert_eq!(
+            landing["registry"]["profile"],
+            "breg-gis-bounded-crs84-geometry-bbox-v1"
+        );
+        assert_eq!(landing["registry"]["collections"], 1);
+
+        let collection = request_with_malicious_origin_headers(
+            app.clone(),
+            "/v1/gis/collections/service-area.area-map-reader",
+            Some(area_reader_claims()),
+        )
+        .await;
+        assert_eq!(collection.status(), StatusCode::OK);
+        let collection: Value =
+            serde_json::from_str(&response_body_string(collection).await).expect("collection JSON");
+        assert_eq!(
+            collection["registry"]["profile"],
+            "bounded-crs84-polygon-bbox"
+        );
+
+        let api =
+            request_with_malicious_origin_headers(app, "/v1/gis/api", Some(area_reader_claims()))
+                .await;
+        assert_eq!(api.status(), StatusCode::OK);
+        let api: Value = serde_json::from_str(&response_body_string(api).await).expect("API JSON");
+        assert!(api["paths"]
+            .get("/v1/gis/collections/service-area.area-map-reader/items")
+            .is_some());
+        assert!(api["paths"]
+            .get("/v1/gis/collections/service-site.map-reader/items")
+            .is_none());
+        let geometry = &api["components"]["schemas"]["Feature"]["properties"]["geometry"];
+        assert_eq!(geometry["type"], "object");
+        assert_eq!(geometry["nullable"], true);
+        let variants = geometry["oneOf"].as_array().expect("polygon variants");
+        assert_eq!(
+            geometry_kinds(variants),
+            BTreeSet::from(["MultiPolygon", "Polygon"])
+        );
+        let polygon = variants
+            .iter()
+            .find(|variant| variant["properties"]["type"]["enum"][0] == "Polygon")
+            .expect("Polygon schema");
+        assert_eq!(
+            polygon["properties"]["coordinates"]["items"]["items"]["minItems"],
+            2
+        );
+        assert_eq!(polygon["properties"]["coordinates"]["items"]["minItems"], 4);
+        assert_eq!(
+            polygon["properties"]["coordinates"]["items"]["maxItems"],
+            1000
+        );
+        assert_eq!(polygon["properties"]["coordinates"]["maxItems"], 250);
+    }
+
+    #[tokio::test]
+    async fn mixed_visible_collections_describe_all_served_geometry_tags() {
+        let response = request_with_malicious_origin_headers(
+            test_app(Some("https://registry.example.test")),
+            "/v1/gis/api",
+            Some(all_map_reader_claims()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_str(&response_body_string(response).await).expect("API JSON");
+        let variants = body["components"]["schemas"]["Feature"]["properties"]["geometry"]["oneOf"]
+            .as_array()
+            .expect("mixed geometry variants");
+        assert_eq!(
+            geometry_kinds(variants),
+            BTreeSet::from(["MultiPolygon", "Point", "Polygon"])
+        );
     }
 
     #[tokio::test]
@@ -1016,6 +1221,38 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn polygon_gis_items_reach_the_bounded_spatial_read_plan() {
+        let records = Arc::new(RecordingReadService::default());
+        let app = test_app_with_records(
+            Some("https://registry.example.test"),
+            Arc::clone(&records) as Arc<dyn RecordReadService>,
+        );
+        let response = request_with_malicious_origin_headers(
+            app,
+            "/v1/gis/collections/service-area.area-map-reader/items?bbox=100,13,101,14&limit=50",
+            Some(area_reader_claims()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let requests = records.list_requests.lock().expect("recorded requests");
+        assert_eq!(requests.len(), 1);
+        let read = match &requests[0].kind {
+            RecordReadKind::List { plan } => plan,
+            _ => panic!("GIS items must remain a list read"),
+        };
+        assert_eq!(
+            read.spatial
+                .as_ref()
+                .map(|spatial| spatial.bbox.geometry_field.as_str()),
+            Some("boundary")
+        );
+        assert_eq!(
+            read.cursor_binding.representation,
+            CursorRepresentation::GeoJson
+        );
+    }
+
     #[test]
     fn compiled_gis_collection_id_omits_get_only_and_no_bbox_profiles() {
         let registry = compile_fixture();
@@ -1048,6 +1285,8 @@ mod tests {
                 entity_id: "service-site".to_owned(),
                 profile_id: "map-reader".to_owned(),
                 geometry_field: "location".to_owned(),
+                geometry_kind: GisGeometryKind::Point,
+                geometry_maximum_positions: None,
                 max_page_size: operation.max_page_size,
                 fields: vec![],
             },
@@ -1155,6 +1394,32 @@ mod tests {
         .expect("claims")
     }
 
+    fn area_reader_claims() -> VerifiedRequestClaims {
+        map_claims(["registry:areas:read"])
+    }
+
+    fn all_map_reader_claims() -> VerifiedRequestClaims {
+        map_claims(["registry:areas:read", "registry:sites:read"])
+    }
+
+    fn map_claims(scopes: impl IntoIterator<Item = &'static str>) -> VerifiedRequestClaims {
+        VerifiedRequestClaims::authenticated(
+            "principal",
+            "qgis-client",
+            scopes.into_iter().map(str::to_owned).collect(),
+            None,
+            BTreeMap::new(),
+        )
+        .expect("claims")
+    }
+
+    fn geometry_kinds(variants: &[Value]) -> BTreeSet<&str> {
+        variants
+            .iter()
+            .filter_map(|variant| variant["properties"]["type"]["enum"][0].as_str())
+            .collect()
+    }
+
     async fn request_with_malicious_origin_headers(
         app: Router,
         uri: &str,
@@ -1233,6 +1498,14 @@ recordTypes:
       - {id: code, type: string, maximumLength: 32, classification: public, required: true}
       - {id: label, type: string, maximumLength: 80, classification: public}
       - {id: location, type: crs84-point, precision: 6, classification: public}
+  - id: service-area
+    primaryDataset: test-dataset
+    route: service-areas
+    mutationMode: create-only
+    geojson: {geometryField: boundary}
+    fields:
+      - {id: code, type: string, maximumLength: 32, classification: public, required: true}
+      - {id: boundary, type: crs84-polygon, precision: 6, maximumPositions: 1000, classification: public}
 accessProfiles:
   - id: map-reader
     default: true
@@ -1266,6 +1539,19 @@ accessProfiles:
           rowBoundaries: unrestricted
           operations: [get, list]
           readableFields: [code, label, location]
+  - id: area-map-reader
+    principalClaim: principal
+    requiredScopes: [registry:areas:read]
+    permissions:
+      records:
+        - recordType: service-area
+          rowBoundaries: unrestricted
+          operations: [get, list]
+          readableFields: [code, boundary]
+          spatialQueries:
+            bbox:
+              maximumLongitudeSpanDegrees: 2
+              maximumLatitudeSpanDegrees: 2
 "#;
         let project = parse_project_yaml(source.as_bytes()).expect("fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)

@@ -131,12 +131,12 @@ pub use rehearsal::{
 pub use revision_read::PostgresRevisionReadService;
 #[cfg(feature = "postgres-test")]
 pub use revision_read::RevisionReadFaultPoint;
-pub(crate) use roles::find_runtime_write_authority;
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use roles::find_runtime_write_authority as find_runtime_write_authority_for_test;
 #[doc(hidden)]
 pub use roles::RuntimeRevoke;
+pub(crate) use roles::{find_runtime_write_authority, verify_postgis_prerequisites};
 pub(crate) use timer_activation_preview::read_timer_activation_previews;
 
 #[cfg(feature = "postgres-test")]

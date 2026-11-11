@@ -4861,6 +4861,7 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
             FieldTypeSource::VocabularyCode { .. } => "vocabulary-code",
             FieldTypeSource::Reference { .. } => "reference",
             FieldTypeSource::Crs84Point { .. } => "crs84-point",
+            FieldTypeSource::Crs84Polygon { .. } => "crs84-polygon",
             FieldTypeSource::Structured { .. } => "structured",
         })
         .collect();

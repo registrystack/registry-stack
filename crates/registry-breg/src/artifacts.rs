@@ -1993,6 +1993,72 @@ pub(crate) fn field_schema(field_type: &FieldTypeSource) -> Value {
             }
             schema
         }
+        FieldTypeSource::Crs84Polygon {
+            precision,
+            bbox,
+            max_positions,
+        } => {
+            let position = json!({
+                "type": "array",
+                "prefixItems": [
+                    {"type": "number", "minimum": -180, "maximum": 180},
+                    {"type": "number", "minimum": -90, "maximum": 90}
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+            });
+            let ring = json!({
+                "type": "array",
+                "items": position,
+                "minItems": 4,
+                "maxItems": max_positions
+            });
+            let polygon_coordinates = json!({
+                "type": "array",
+                "items": ring,
+                "minItems": 1,
+                "maxItems": max_positions / 4
+            });
+            let mut schema = json!({
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "type": {"const": "Polygon"},
+                            "coordinates": polygon_coordinates.clone()
+                        },
+                        "required": ["type", "coordinates"]
+                    },
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "type": {"const": "MultiPolygon"},
+                            "coordinates": {
+                                "type": "array",
+                                "items": polygon_coordinates,
+                                "minItems": 1,
+                                "maxItems": max_positions / 4
+                            }
+                        },
+                        "required": ["type", "coordinates"]
+                    }
+                ],
+                "description": "CRS84 GeoJSON Polygon or MultiPolygon with positions in [longitude, latitude] order. Rings are closed and contain at least four positions.",
+                "x-registry-coordinateReferenceSystem": "CRS84",
+                "x-registry-coordinatePrecision": precision,
+                "x-registry-maximumPositions": max_positions
+            });
+            if let Some(bbox) = bbox {
+                schema
+                    .as_object_mut()
+                    .expect("polygon schema is an object")
+                    .insert("x-registry-bbox".to_owned(), json!(bbox));
+            }
+            schema
+        }
         FieldTypeSource::Structured { max_bytes, schema } => {
             let mut schema = schema.clone();
             schema
@@ -4922,6 +4988,34 @@ mod spatial_tests {
             .unwrap()
             .iter()
             .any(|p| p["name"] == "bbox"));
+    }
+
+    #[test]
+    fn polygon_field_schema_describes_polygon_and_multipolygon_nesting() {
+        let schema = field_schema(&FieldTypeSource::Crs84Polygon {
+            precision: 6,
+            bbox: None,
+            max_positions: 16,
+        });
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .expect("polygon schema compiles");
+        let polygon = json!({
+            "type": "Polygon",
+            "coordinates": [[[100.0, 10.0], [101.0, 10.0], [101.0, 11.0], [100.0, 10.0]]]
+        });
+        let multi = json!({
+            "type": "MultiPolygon",
+            "coordinates": [[[[100.0, 10.0], [101.0, 10.0], [101.0, 11.0], [100.0, 10.0]]]]
+        });
+        assert!(validator.is_valid(&polygon));
+        assert!(validator.is_valid(&multi));
+        assert!(!validator.is_valid(&json!({
+            "type": "Polygon",
+            "coordinates": [[100.0, 10.0]]
+        })));
+        assert_eq!(schema["x-registry-maximumPositions"], 16);
     }
 }
 

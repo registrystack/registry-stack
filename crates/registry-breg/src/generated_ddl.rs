@@ -10,8 +10,9 @@ use sha2::{Digest, Sha256};
 mod proposal;
 
 use crate::contract::{
-    BoundaryOperator, ComparisonOperator, ConstraintSource, FieldTypeSource, Operation,
-    UniqueWhenPredicate, ValidTimeRole,
+    maximum_polygon_json_bytes, BoundaryOperator, ComparisonOperator, ConstraintSource,
+    FieldTypeSource, Operation, UniqueWhenPredicate, ValidTimeRole, MAX_CRS84_POLYGON_POSITIONS,
+    MAX_CRS84_PRECISION, MIN_CRS84_POLYGON_POSITIONS,
 };
 use crate::model::{
     CompiledAction, CompiledActionInventory, CompiledActionTargetUse,
@@ -28,6 +29,9 @@ const GENERATED_TEXT_COLLATION: &str = "pg_catalog.pg_c_utf8";
 pub(crate) const REFERENCE_LIFECYCLE_COLUMN: &str = "record_reference_lifecycle";
 pub(crate) const POSTGIS_EXTENSION_SCHEMA: &str = "registry_spatial_ext";
 pub(crate) const SPATIAL_BBOX_FUNCTION_NAME: &str = "spatial_bbox_geometry";
+pub(crate) const SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME: &str = "valid_crs84_polygon";
+const SPATIAL_POLYGON_CONTRACT_ARGUMENTS: &str =
+    "jsonb, integer, numeric, numeric, numeric, numeric, integer";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -189,6 +193,20 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl DdlInventory {
+    #[cfg(feature = "runtime")]
+    pub(crate) fn requires_spatial_bbox(&self) -> bool {
+        self.views
+            .iter()
+            .any(|view| view.owner == DdlObjectOwner::SpatialBbox)
+    }
+
+    #[cfg(any(test, feature = "runtime"))]
+    pub(crate) fn requires_spatial_polygon_contract(&self) -> bool {
+        self.functions
+            .iter()
+            .any(|function| function.name == SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME)
+    }
+
     pub fn script(&self) -> String {
         let mut output = String::new();
         for statement in &self.statements {
@@ -229,9 +247,33 @@ pub(crate) fn generate_ddl_with_actions(
               $breg_function$"
             .to_owned(),
     });
-    let requires_postgis = requires_postgis(entities);
-    if requires_postgis {
+    let requires_spatial_bbox = entities
+        .values()
+        .any(|entity| spatial_bbox_geometry_field(entity).is_some());
+    let requires_spatial_polygon_contract = entities.values().any(|entity| {
+        entity
+            .fields
+            .values()
+            .any(|field| matches!(field.field_type, FieldTypeSource::Crs84Polygon { .. }))
+    });
+    let requires_postgis = requires_spatial_bbox
+        || entities.values().any(|entity| {
+            entity
+                .fields
+                .values()
+                .any(|field| matches!(field.field_type, FieldTypeSource::Crs84Polygon { .. }))
+        })
+        || actions.actions.iter().any(|action| {
+            action
+                .inputs
+                .iter()
+                .any(|input| matches!(input.field_type, FieldTypeSource::Crs84Polygon { .. }))
+        });
+    if requires_spatial_bbox {
         statements.push(spatial_bbox_function_statement());
+    }
+    if requires_spatial_polygon_contract {
+        statements.push(spatial_polygon_contract_statement());
     }
 
     for entity in entities.values() {
@@ -464,7 +506,7 @@ pub(crate) fn generate_ddl_with_actions(
         runtime_execute: true,
         spatial_bbox_execute: false,
     }];
-    if requires_postgis {
+    if requires_spatial_bbox {
         functions.push(DdlFunction {
             id: format!("registry_context.{SPATIAL_BBOX_FUNCTION_NAME}"),
             schema: "registry_context".to_owned(),
@@ -472,6 +514,16 @@ pub(crate) fn generate_ddl_with_actions(
             arguments: String::new(),
             runtime_execute: true,
             spatial_bbox_execute: true,
+        });
+    }
+    if requires_spatial_polygon_contract {
+        functions.push(DdlFunction {
+            id: format!("registry_context.{SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME}"),
+            schema: "registry_context".to_owned(),
+            name: SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME.to_owned(),
+            arguments: SPATIAL_POLYGON_CONTRACT_ARGUMENTS.to_owned(),
+            runtime_execute: true,
+            spatial_bbox_execute: false,
         });
     }
     // Invoker helpers give membership facts a processing-only RLS context.
@@ -829,33 +881,34 @@ pub(crate) fn generated_identifier_seed_statement(
     }
 }
 
-fn requires_postgis(entities: &BTreeMap<String, CompiledEntity>) -> bool {
-    entities
-        .values()
-        .any(|entity| !spatial_projection_fields(entity).is_empty())
-}
-
 pub(crate) fn spatial_projection_fields(entity: &CompiledEntity) -> BTreeSet<String> {
-    let Some(geojson) = entity.geojson.as_ref() else {
-        return BTreeSet::new();
-    };
     entity
-        .access_profiles
+        .fields
         .values()
-        .filter(|profile| profile.operations.contains(&Operation::List))
-        .filter(|profile| {
-            profile
-                .spatial_queries
-                .as_ref()
-                .and_then(|spatial| spatial.bbox.as_ref())
-                .is_some()
-        })
-        .map(|_| geojson.geometry_field.clone())
+        .filter(|field| matches!(field.field_type, FieldTypeSource::Crs84Polygon { .. }))
+        .map(|field| field.id.clone())
+        .chain(spatial_bbox_geometry_field(entity).map(str::to_owned))
         .collect()
 }
 
+fn spatial_bbox_geometry_field(entity: &CompiledEntity) -> Option<&str> {
+    let geojson = entity.geojson.as_ref()?;
+    entity
+        .access_profiles
+        .values()
+        .any(|profile| {
+            profile.operations.contains(&Operation::List)
+                && profile
+                    .spatial_queries
+                    .as_ref()
+                    .and_then(|spatial| spatial.bbox.as_ref())
+                    .is_some()
+        })
+        .then_some(geojson.geometry_field.as_str())
+}
+
 fn ordinary_policy_role(entity: &CompiledEntity) -> DdlPolicyRole {
-    if spatial_projection_fields(entity).is_empty() {
+    if spatial_bbox_geometry_field(entity).is_none() {
         DdlPolicyRole::Public
     } else {
         DdlPolicyRole::Runtime
@@ -916,6 +969,151 @@ pub(crate) fn spatial_bbox_function_statement() -> DdlStatement {
     }
 }
 
+#[cfg_attr(
+    not(feature = "runtime"),
+    allow(dead_code, reason = "runtime package planning consumes this helper")
+)]
+pub(crate) fn drop_spatial_polygon_contract_statement() -> DdlStatement {
+    DdlStatement {
+        id: format!(
+            "function.registry_context.{SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME}.drop"
+        ),
+        kind: DdlStatementKind::Function,
+        sql: format!(
+            "DROP FUNCTION IF EXISTS registry_context.{SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME}({SPATIAL_POLYGON_CONTRACT_ARGUMENTS})"
+        ),
+    }
+}
+
+pub(crate) fn spatial_polygon_contract_statement() -> DdlStatement {
+    DdlStatement {
+        id: format!("function.registry_context.{SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME}"),
+        kind: DdlStatementKind::Function,
+        sql: format!(
+            "CREATE OR REPLACE FUNCTION registry_context.{SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME}(
+                 {SPATIAL_POLYGON_CONTRACT_ARGUMENTS}
+             ) RETURNS boolean
+             LANGUAGE plpgsql IMMUTABLE STRICT
+             SECURITY INVOKER
+             SET search_path = pg_catalog
+             AS $breg_polygon_contract$
+             DECLARE
+                 geometry_value ALIAS FOR $1;
+                 coordinate_precision ALIAS FOR $2;
+                 west_bound ALIAS FOR $3;
+                 south_bound ALIAS FOR $4;
+                 east_bound ALIAS FOR $5;
+                 north_bound ALIAS FOR $6;
+                 maximum_positions ALIAS FOR $7;
+                 polygons jsonb;
+                 polygon_value jsonb;
+                 ring_value jsonb;
+                 position_value jsonb;
+                 polygon_count integer;
+                 ring_count integer;
+                 ring_length integer;
+                 position_count integer := 0;
+                 polygon_index integer;
+                 ring_index integer;
+                 position_index integer;
+                 longitude numeric;
+                 latitude numeric;
+                 first_longitude numeric;
+                 first_latitude numeric;
+                 previous_longitude numeric;
+             BEGIN
+                 IF coordinate_precision NOT BETWEEN 0 AND {MAX_CRS84_PRECISION}
+                    OR maximum_positions NOT BETWEEN {MIN_CRS84_POLYGON_POSITIONS} AND {MAX_CRS84_POLYGON_POSITIONS}
+                    OR west_bound < -180 OR east_bound > 180 OR west_bound > east_bound
+                    OR south_bound < -90 OR north_bound > 90 OR south_bound > north_bound
+                 THEN
+                     RETURN false;
+                 END IF;
+                 IF pg_catalog.jsonb_typeof(geometry_value) <> 'object'
+                    OR NOT geometry_value ? 'type'
+                    OR NOT geometry_value ? 'coordinates'
+                    OR geometry_value - 'type' - 'coordinates' <> '{{}}'::jsonb
+                 THEN
+                     RETURN false;
+                 END IF;
+
+                 IF geometry_value ->> 'type' = 'Polygon' THEN
+                     polygons := pg_catalog.jsonb_build_array(geometry_value -> 'coordinates');
+                 ELSIF geometry_value ->> 'type' = 'MultiPolygon' THEN
+                     polygons := geometry_value -> 'coordinates';
+                 ELSE
+                     RETURN false;
+                 END IF;
+                 IF pg_catalog.jsonb_typeof(polygons) <> 'array' THEN
+                     RETURN false;
+                 END IF;
+                 IF pg_catalog.jsonb_array_length(polygons) = 0 THEN
+                     RETURN false;
+                 END IF;
+
+                 polygon_count := pg_catalog.jsonb_array_length(polygons);
+                 FOR polygon_index IN 0..(polygon_count - 1) LOOP
+                     polygon_value := polygons -> polygon_index;
+                     IF pg_catalog.jsonb_typeof(polygon_value) <> 'array' THEN
+                         RETURN false;
+                     END IF;
+                     IF pg_catalog.jsonb_array_length(polygon_value) = 0 THEN
+                         RETURN false;
+                     END IF;
+                     ring_count := pg_catalog.jsonb_array_length(polygon_value);
+                     FOR ring_index IN 0..(ring_count - 1) LOOP
+                         ring_value := polygon_value -> ring_index;
+                         IF pg_catalog.jsonb_typeof(ring_value) <> 'array' THEN
+                             RETURN false;
+                         END IF;
+                         ring_length := pg_catalog.jsonb_array_length(ring_value);
+                         position_count := position_count + ring_length;
+                         IF ring_length < {MIN_CRS84_POLYGON_POSITIONS} OR position_count > maximum_positions THEN
+                             RETURN false;
+                         END IF;
+                         previous_longitude := NULL;
+                         FOR position_index IN 0..(ring_length - 1) LOOP
+                             position_value := ring_value -> position_index;
+                             IF pg_catalog.jsonb_typeof(position_value) <> 'array' THEN
+                                 RETURN false;
+                             END IF;
+                             IF pg_catalog.jsonb_array_length(position_value) <> 2 THEN
+                                 RETURN false;
+                             END IF;
+                             IF pg_catalog.jsonb_typeof(position_value -> 0) <> 'number'
+                                OR pg_catalog.jsonb_typeof(position_value -> 1) <> 'number'
+                             THEN
+                                 RETURN false;
+                             END IF;
+                             longitude := (position_value ->> 0)::numeric;
+                             latitude := (position_value ->> 1)::numeric;
+                             IF longitude <> pg_catalog.trunc(longitude, coordinate_precision)
+                                OR latitude <> pg_catalog.trunc(latitude, coordinate_precision)
+                                OR longitude NOT BETWEEN west_bound AND east_bound
+                                OR latitude NOT BETWEEN south_bound AND north_bound
+                                OR (previous_longitude IS NOT NULL
+                                    AND pg_catalog.abs(longitude - previous_longitude) > 180)
+                             THEN
+                                 RETURN false;
+                             END IF;
+                             IF position_index = 0 THEN
+                                 first_longitude := longitude;
+                                 first_latitude := latitude;
+                             END IF;
+                             previous_longitude := longitude;
+                         END LOOP;
+                         IF longitude <> first_longitude OR latitude <> first_latitude THEN
+                             RETURN false;
+                         END IF;
+                     END LOOP;
+                 END LOOP;
+                 RETURN true;
+             END;
+             $breg_polygon_contract$"
+        ),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpatialProjectionStatements {
     pub add_column: DdlStatement,
@@ -928,13 +1126,7 @@ pub(crate) fn spatial_projection_statements(
     entity: &CompiledEntity,
     field_id: &str,
 ) -> SpatialProjectionStatements {
-    assert!(
-        matches!(
-            entity.fields[field_id].field_type,
-            FieldTypeSource::Crs84Point { .. }
-        ),
-        "spatial projections are generated only for CRS84 point fields"
-    );
+    assert!(entity.fields[field_id].field_type.is_crs84_geometry());
     let column_name = spatial_geometry_column_name(&entity.id, field_id);
     let index_name = spatial_geometry_index_name(&entity.id, field_id);
     let table = quote_identifier(&entity.physical_table);
@@ -970,6 +1162,33 @@ pub(crate) fn spatial_projection_statements(
 fn spatial_projection_column_definition(entity: &CompiledEntity, field_id: &str) -> String {
     let source = quote_identifier(&entity.fields[field_id].physical_name);
     let column = quote_identifier(&spatial_geometry_column_name(&entity.id, field_id));
+    if let FieldTypeSource::Crs84Polygon {
+        precision,
+        bbox,
+        max_positions,
+    } = &entity.fields[field_id].field_type
+    {
+        let contract =
+            spatial_polygon_contract_expression(&source, *precision, bbox.as_ref(), *max_positions);
+        let maximum_bytes = maximum_polygon_json_bytes(*max_positions);
+        // Keep the authored geometry type and winding in JSONB. Use a single
+        // typmod for the derived representation of either polygon type.
+        return format!(
+            "{column} {POSTGIS_EXTENSION_SCHEMA}.geometry(MultiPolygon,4326)
+             GENERATED ALWAYS AS (
+                 {POSTGIS_EXTENSION_SCHEMA}.ST_Multi(
+                     {POSTGIS_EXTENSION_SCHEMA}.ST_SetSRID(
+                         {POSTGIS_EXTENSION_SCHEMA}.ST_GeomFromGeoJSON({source}),
+                         4326
+                     )
+                 )::{POSTGIS_EXTENSION_SCHEMA}.geometry(MultiPolygon,4326)
+             ) STORED CHECK (
+                 pg_catalog.octet_length({source}::text) <= {maximum_bytes}
+                 AND {contract}
+                 AND {POSTGIS_EXTENSION_SCHEMA}.ST_IsValid({column}, 0)
+             )"
+        );
+    }
     format!(
         "{column} {POSTGIS_EXTENSION_SCHEMA}.geometry(Point,4326)
          GENERATED ALWAYS AS (
@@ -984,6 +1203,31 @@ fn spatial_projection_column_definition(entity: &CompiledEntity, field_id: &str)
                  )::{POSTGIS_EXTENSION_SCHEMA}.geometry(Point,4326)
              END
          ) STORED"
+    )
+}
+
+fn spatial_polygon_contract_expression(
+    value: &str,
+    precision: u8,
+    bbox: Option<&crate::contract::Crs84BboxSource>,
+    max_positions: u32,
+) -> String {
+    let (west, south, east, north) = bbox.map_or(("-180", "-90", "180", "90"), |bbox| {
+        (
+            bbox.west.as_str(),
+            bbox.south.as_str(),
+            bbox.east.as_str(),
+            bbox.north.as_str(),
+        )
+    });
+    format!(
+        "registry_context.{SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME}(
+             {value}, {precision}, {}::numeric, {}::numeric, {}::numeric, {}::numeric, {max_positions}
+         )",
+        quote_literal(west),
+        quote_literal(south),
+        quote_literal(east),
+        quote_literal(north),
     )
 }
 
@@ -1238,7 +1482,7 @@ fn column_definition(field: &crate::model::CompiledField, inline_requiredness: b
 }
 
 fn spatial_bbox_table_privileges(entity: &CompiledEntity) -> BTreeSet<TablePrivilege> {
-    if spatial_projection_fields(entity).is_empty() {
+    if spatial_bbox_geometry_field(entity).is_none() {
         BTreeSet::new()
     } else {
         BTreeSet::from([TablePrivilege::Select])
@@ -1555,21 +1799,33 @@ fn spatial_bbox_predicate(
     bbox: &crate::contract::SpatialBboxPermissionSource,
 ) -> String {
     let geometry = quote_identifier(&spatial_geometry_column_name(&entity.id, geometry_field));
-    let source = quote_identifier(&entity.fields[geometry_field].physical_name);
     let west = "NULLIF(current_setting('registry.bbox_west', true), '')::numeric";
     let south = "NULLIF(current_setting('registry.bbox_south', true), '')::numeric";
     let east = "NULLIF(current_setting('registry.bbox_east', true), '')::numeric";
     let north = "NULLIF(current_setting('registry.bbox_north', true), '')::numeric";
+    // Points already promise exact numeric bbox edge checks. The PostGIS
+    // predicate uses doubles, so retain that residual on Point fields.
+    let point_residual = if matches!(
+        entity.fields[geometry_field].field_type,
+        FieldTypeSource::Crs84Point { .. }
+    ) {
+        let source = quote_identifier(&entity.fields[geometry_field].physical_name);
+        format!(
+            "
+         AND ({source} -> 'coordinates' ->> 0)::numeric >= {west}
+         AND ({source} -> 'coordinates' ->> 0)::numeric <= {east}
+         AND ({source} -> 'coordinates' ->> 1)::numeric >= {south}
+         AND ({source} -> 'coordinates' ->> 1)::numeric <= {north}"
+        )
+    } else {
+        String::new()
+    };
     format!(
         "{geometry} IS NOT NULL
          AND ({east} - {west}) BETWEEN 0 AND {}
          AND ({north} - {south}) BETWEEN 0 AND {}
          AND {geometry} OPERATOR({POSTGIS_EXTENSION_SCHEMA}.&&) registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()
-         AND {POSTGIS_EXTENSION_SCHEMA}.ST_Intersects({geometry}, registry_context.{SPATIAL_BBOX_FUNCTION_NAME}())
-         AND ({source} -> 'coordinates' ->> 0)::numeric >= {west}
-         AND ({source} -> 'coordinates' ->> 0)::numeric <= {east}
-         AND ({source} -> 'coordinates' ->> 1)::numeric >= {south}
-         AND ({source} -> 'coordinates' ->> 1)::numeric <= {north}",
+         AND {POSTGIS_EXTENSION_SCHEMA}.ST_Intersects({geometry}, registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()){point_residual}",
         bbox.maximum_longitude_span_degrees,
         bbox.maximum_latitude_span_degrees,
     )
@@ -2497,7 +2753,9 @@ fn policy_value_type(field_type: &FieldTypeSource) -> &'static str {
         FieldTypeSource::Date => "date",
         FieldTypeSource::Timestamp => "timestamptz",
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => "uuid",
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => "jsonb",
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => "jsonb",
     }
 }
 
@@ -2835,7 +3093,9 @@ fn typed_literal_sql(value: &Value, field_type: &FieldTypeSource) -> String {
             "{}::uuid",
             quote_literal(value.as_str().expect("validated UUID literal"))
         ),
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => {
             unreachable!("validated partial unique predicates reject JSON field types")
         }
     }
@@ -2866,9 +3126,9 @@ fn sql_type(field_type: &FieldTypeSource) -> String {
         FieldTypeSource::Date => "date".to_owned(),
         FieldTypeSource::Timestamp => "timestamptz".to_owned(),
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => "uuid".to_owned(),
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
-            "jsonb".to_owned()
-        }
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => "jsonb".to_owned(),
     }
 }
 
@@ -3103,9 +3363,10 @@ mod tests {
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
     use crate::generated_ddl::{
-        drop_spatial_bbox_function_statement, spatial_bbox_function_statement,
+        drop_spatial_bbox_function_statement, drop_spatial_polygon_contract_statement,
+        quote_identifier, spatial_bbox_function_statement, spatial_polygon_contract_statement,
         spatial_projection_fields, spatial_projection_statements, DdlStatementKind,
-        SPATIAL_BBOX_FUNCTION_NAME,
+        SPATIAL_BBOX_FUNCTION_NAME, SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME,
     };
 
     #[cfg(feature = "runtime")]
@@ -3270,6 +3531,75 @@ mod tests {
             .contains(&format!(
                 "DROP FUNCTION IF EXISTS registry_context.{SPATIAL_BBOX_FUNCTION_NAME}()"
             )));
+    }
+
+    #[test]
+    fn polygon_projection_uses_the_compiler_owned_structural_contract() {
+        let registry = compile_polygon_registry();
+        assert!(registry.ddl().requires_spatial_polygon_contract());
+        assert!(registry
+            .ddl()
+            .functions
+            .iter()
+            .any(|function| function.name == SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME));
+        let entity = &registry.entities()["area"];
+        let add = spatial_projection_statements(entity, "boundary").add_column;
+        assert!(add.sql.contains("registry_context.valid_crs84_polygon("));
+        let source_argument = format!(
+            "{}, 6",
+            quote_identifier(&entity.fields["boundary"].physical_name)
+        );
+        for argument in [
+            &source_argument,
+            "'100.000000'::numeric",
+            "'10.000000'::numeric",
+            "'110.000000'::numeric",
+            "'20.000000'::numeric",
+            ", 32",
+        ] {
+            assert!(
+                add.sql.contains(argument),
+                "missing {argument}: {}",
+                add.sql
+            );
+        }
+        assert!(add.sql.contains("pg_catalog.octet_length"));
+        assert!(add.sql.contains("pg_catalog.octet_length"));
+        assert!(add.sql.contains("registry_spatial_ext.ST_IsValid"));
+
+        let helper = spatial_polygon_contract_statement();
+        assert!(helper.sql.contains("LANGUAGE plpgsql IMMUTABLE STRICT"));
+        assert!(helper.sql.contains("SECURITY INVOKER"));
+        assert!(helper.sql.contains("SET search_path = pg_catalog"));
+        assert!(helper.sql.contains("pg_catalog.trunc"));
+        assert!(helper.sql.contains("> 180"));
+        assert!(drop_spatial_polygon_contract_statement()
+            .sql
+            .contains("DROP FUNCTION IF EXISTS registry_context.valid_crs84_polygon(jsonb, integer, numeric, numeric, numeric, numeric, integer)"));
+
+        assert!(!compile_spatial_registry()
+            .ddl()
+            .requires_spatial_polygon_contract());
+    }
+
+    fn compile_polygon_registry() -> crate::CompiledRegistry {
+        let project = parse_project_json(
+            br#"{
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"polygon-ddl","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://polygon-ddl.example.test"},
+              "datasets":[{"id":"test-dataset"}], "recordTypes":[{
+                "id":"area","primaryDataset":"test-dataset","route":"areas","mutationMode":"mutable","classification":"internal",
+                "fields":[
+                  {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":32,"bbox":{"west":"100.000000","south":"10.000000","east":"110.000000","north":"20.000000"},"required":true,"classification":"internal"}
+                ],
+                "geojson":{"geometryField":"boundary"}
+              }]
+            }"#,
+        )
+        .expect("polygon DDL project parses");
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("polygon DDL project compiles")
     }
 
     fn compile_spatial_registry() -> crate::CompiledRegistry {

@@ -149,8 +149,9 @@ let page = client.list_records("establishments", &request).await?;
 for it.
 
 Use the GeoJSON methods when you need a Feature or FeatureCollection. Leaving the geometry field out
-of `select` yields null geometry. The `/v1/gis` adapter routes serve QGIS directly and have no client
-methods.
+of `select` yields null geometry. A configured geometry can be a CRS84 Point, Polygon, or
+MultiPolygon. The clients preserve the geometry returned by the server. The `/v1/gis` adapter
+routes serve QGIS directly and have no client methods.
 
 {/* Evidence: crates/registry-breg-client/src/query.rs, BRegBoundingBox, MAX_BBOX_PARAMETER_BYTES,
     crates/registry-breg-client/src/geojson.rs,

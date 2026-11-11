@@ -195,6 +195,7 @@ fn add_value_type_diagnostics(
             field_type,
             FieldTypeSource::Reference { .. }
                 | FieldTypeSource::Crs84Point { .. }
+                | FieldTypeSource::Crs84Polygon { .. }
                 | FieldTypeSource::Structured { .. }
         ) {
             continue;
@@ -208,7 +209,7 @@ fn add_value_type_diagnostics(
             "breg.value-type.scalar-required",
             &pointer,
             "reusable value types must declare scalar constraints",
-            "Declare the reference, crs84-point, or structured type directly on each record field or Action input.",
+            "Declare the reference, CRS84 geometry, or structured type directly on each record field or Action input.",
         ));
     }
 }
