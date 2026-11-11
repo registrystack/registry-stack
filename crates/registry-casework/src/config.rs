@@ -1423,6 +1423,23 @@ impl RuntimeConfig {
         }
     }
 
+    /// Refuses a context-provider binding that provider construction would
+    /// refuse, at the member that breaks the rule, without resolving a secret.
+    fn check_context_providers(&self, findings: &mut Vec<RuntimeConfigError>) {
+        for (deployment, binding) in &self.context_providers {
+            let Err(refusal) = binding.check_offline() else {
+                continue;
+            };
+            let mut segments = vec!["contextProviders", deployment.as_str()];
+            segments.extend(refusal.member.split('/').skip(1));
+            findings.push(RuntimeConfigError::InvalidContextProvider {
+                path: segments.join("."),
+                pointer: pointer_to(&segments),
+                reason: refusal.reason,
+            });
+        }
+    }
+
     fn check_principal_claims(
         &self,
         project: &CaseworkProject,
@@ -1803,6 +1820,7 @@ const FILE_RULES: &[FileRule] = &[
     RuntimeConfig::check_oidc,
     RuntimeConfig::check_database,
     RuntimeConfig::check_review_completion_destinations,
+    RuntimeConfig::check_context_providers,
 ];
 
 /// The rules a runtime file satisfies against the project it binds.
@@ -2699,6 +2717,78 @@ mod tests {
     }
 
     #[test]
+    fn context_provider_bindings_are_refused_at_the_member_and_rule_provider_construction_refuses()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let binding = json!({
+            "baseUrl": "https://registry.example.test",
+            "statusProfile": "review-status",
+            "tokenEndpoint": "https://identity.example.test/token",
+            "clientIdRef": "secret:file/client-id",
+            "clientAssertionKeyRef": "secret:file/client-key",
+            "resource": "urn:example:registry",
+            "scopes": ["registry:proposal:review-status"]
+        });
+        let mut value = operator_value(directory.path(), directory.path());
+        value["contextProviders"] = json!({ "registry-main": binding.clone() });
+        let path = write_operator(&value, directory.path());
+        assert!(check_runtime(&path, None, false)
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "casework.runtime.invalid-context-provider"));
+
+        for (member, refused, pointer, rule) in [
+            (
+                "resource",
+                json!("registry"),
+                "/contextProviders/registry-main/resource",
+                "absolute URI",
+            ),
+            (
+                "baseUrl",
+                json!("http://registry.example.test"),
+                "/contextProviders/registry-main/baseUrl",
+                "HTTPS",
+            ),
+            (
+                "delegatedDisplayExchange",
+                json!({
+                    "tokenEndpoint": "https://identity.example.test/token",
+                    "clientIdRef": "secret:file/source-id",
+                    "clientAssertionKeyRef": "secret:file/source-key",
+                    "resource": "urn:example:registry",
+                    "scopes": ["registry:proposal:review"],
+                    "generation": ""
+                }),
+                "/contextProviders/registry-main/delegatedDisplayExchange/generation",
+                "generation",
+            ),
+        ] {
+            let mut binding = binding.clone();
+            binding[member] = refused;
+            value["contextProviders"] = json!({ "registry-main": binding });
+            let config = read_operator(&value, directory.path());
+            let error = first(config.findings(None)).expect_err("the binding is refused");
+            assert_eq!(error.code(), "casework.runtime.invalid-context-provider");
+            assert_eq!(error.pointer(), pointer);
+            assert!(error.in_file(), "{error}");
+            let message = error.to_string();
+            assert!(message.contains(rule), "{message}");
+            assert!(!message.contains("response"), "{message}");
+            let path = write_operator(&value, directory.path());
+            let check = check_runtime(&path, None, false);
+            let diagnostic = check
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "casework.runtime.invalid-context-provider")
+                .expect("the offline check reports the refusal");
+            assert_eq!(diagnostic.path, pointer);
+            assert!(diagnostic.message.contains(rule), "{diagnostic:?}");
+            assert!(diagnostic.source.is_some(), "{diagnostic:?}");
+        }
+    }
+
+    #[test]
     fn environment_expressions_substitute_values_but_never_secret_references() {
         let temp =
             tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
@@ -2938,6 +3028,12 @@ pub enum RuntimeConfigError {
     InvalidAuditDestination(#[source] AuditDestinationError),
     #[error("contextProviders contains a deploymentRef casework.yaml does not declare")]
     InvalidContextProviders,
+    #[error("{path}: {reason}")]
+    InvalidContextProvider {
+        path: String,
+        pointer: String,
+        reason: String,
+    },
     #[error(
         "{path} must name exactly one completion secret, in a header the runtime does not reserve"
     )]
@@ -2997,6 +3093,7 @@ impl RuntimeConfigError {
             | Self::BindingSecret { .. }
             | Self::InvalidReviewCompletionAuth { .. }
             | Self::InvalidReviewCompletionDestination { .. }
+            | Self::InvalidContextProvider { .. }
             | Self::InvalidTaskAuthority { .. }
             | Self::InvalidDelegatedStaffReader { .. }
             | Self::MissingIdentity
@@ -3020,6 +3117,7 @@ impl RuntimeConfigError {
             Self::BindingSecret { pointer, .. }
             | Self::InvalidReviewCompletionAuth { pointer, .. }
             | Self::InvalidReviewCompletionDestination { pointer, .. }
+            | Self::InvalidContextProvider { pointer, .. }
             | Self::InvalidTaskAuthority { pointer, .. }
             | Self::InvalidDelegatedStaffReader { pointer, .. } => pointer.clone(),
             Self::MissingIdentity => "/identity".to_owned(),
@@ -3066,6 +3164,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference => "casework.runtime.invalid-database-reference",
             Self::InvalidAuditDestination(_) => "casework.runtime.invalid-audit",
             Self::InvalidContextProviders => "casework.runtime.context-providers-mismatch",
+            Self::InvalidContextProvider { .. } => "casework.runtime.invalid-context-provider",
             Self::InvalidReviewCompletionAuth { .. } => {
                 "casework.runtime.invalid-review-completion-auth"
             }
@@ -3140,6 +3239,9 @@ impl RuntimeConfigError {
             Self::InvalidAuditDestination(error) => audit_action(error),
             Self::InvalidContextProviders => {
                 "Remove the unrecognized contextProviders key, or declare its deploymentRef in casework.yaml. Omitted providers remain unavailable to their current-source reviews."
+            }
+            Self::InvalidContextProvider { .. } => {
+                "Correct the context provider member so it meets the rule the message names."
             }
             Self::InvalidReviewCompletionAuth { .. } => {
                 "Configure exactly one of bearerTokenRef and auth.secretRef, and name in auth.header only a header the runtime does not reserve."

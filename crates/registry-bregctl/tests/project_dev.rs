@@ -337,7 +337,8 @@ fn fake_casework_tool(root: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// A `caseworkctl` whose `proposal-context` provider names `status_profile`
-/// for the `service-status` capability.
+/// for the `service-status` capability. Its `check` refuses a runtime file
+/// whose context provider resource is `registry`, as Casework does.
 fn fake_casework_tool_with_status_profile(
     root: &std::path::Path,
     status_profile: &str,
@@ -348,9 +349,26 @@ fn fake_casework_tool_with_status_profile(
         concat!(
             "#!/usr/bin/env bash\n",
             "set -euo pipefail\n",
-            "[[ $# -eq 4 ]]\n",
-            "[[ $1 == --format && $2 == json && $3 == explain ]]\n",
-            "[[ -f $4/casework.yaml ]]\n",
+            "[[ $1 == --format && $2 == json && -f $4/casework.yaml ]]\n",
+            "if [[ $3 == check ]]; then\n",
+            "  [[ $# -eq 6 && $5 == --runtime-config && -f $6 ]]\n",
+            "  if grep -q '\"resource\":\"registry\"' \"$6\"; then\n",
+            "    printf '%s\\n' '",
+            "{\"apiVersion\":\"id.registrystack.org/formats/casework/report/v1alpha2\",",
+            "\"kind\":\"CaseworkReport\",\"command\":\"check\",\"status\":\"domain-refusal\",\"ok\":false,",
+            "\"diagnostics\":[{\"severity\":\"error\",\"code\":\"casework.runtime.invalid-context-provider\",",
+            "\"artifact\":\"CaseworkRuntimeConfig\",\"path\":\"/contextProviders/proposal-context/resource\",",
+            "\"message\":\"contextProviders.proposal-context.resource: the resource must be one absolute URI without a fragment or userinfo\",",
+            "\"suggestedAction\":\"Correct the context provider member so it meets the rule the message names.\"}]}'\n",
+            "    exit 1\n",
+            "  fi\n",
+            "  printf '%s\\n' '",
+            "{\"apiVersion\":\"id.registrystack.org/formats/casework/report/v1alpha2\",",
+            "\"kind\":\"CaseworkReport\",\"command\":\"check\",\"status\":\"complete\",\"ok\":true,",
+            "\"diagnostics\":[]}'\n",
+            "  exit 0\n",
+            "fi\n",
+            "[[ $# -eq 4 && $3 == explain ]]\n",
             "printf '%s\\n' '",
             "{\"apiVersion\":\"id.registrystack.org/formats/casework/report/v1alpha2\",",
             "\"kind\":\"CaseworkReport\",\"command\":\"explain\",\"status\":\"complete\",\"ok\":true,",
@@ -1126,6 +1144,76 @@ fn check_refuses_binding_configuration_the_products_would_refuse_at_the_plan_fie
         );
         assert!(!state.exists(), "{plan_edit}");
     }
+}
+
+#[test]
+fn check_refuses_a_context_provider_binding_with_the_rule_caseworkctl_check_names() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let tool = casework_reference_project(
+        scratch.path(),
+        "reviewer",
+        "bindings:\n  caseworkContextProvider: {id: proposal-context, identity: operator, action: review-action}\n",
+    );
+    let dev = scratch.path().join("dev.yaml");
+    let text = fs::read_to_string(&dev).unwrap();
+    fs::write(
+        &dev,
+        text.replace("audience: \"urn:example:registry\"", "audience: registry"),
+    )
+    .unwrap();
+
+    let checked = check_with_casework_tool(scratch.path(), &state, &tool);
+
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/products/0/audience");
+    assert_eq!(
+        diagnostic["message"],
+        "Casework refuses the binding configuration the run writes from this value: \
+contextProviders.proposal-context.resource: the resource must be one absolute URI without a \
+fragment or userinfo."
+    );
+    assert!(!state.exists());
+
+    // A helper that cannot check the configuration is unavailable, not a
+    // refusal of the plan.
+    fs::rename(&tool, scratch.path().join("caseworkctl-reference")).unwrap();
+    fs::write(
+        &tool,
+        concat!(
+            "#!/usr/bin/env bash\n",
+            "set -euo pipefail\n",
+            "if [[ $3 == check ]]; then\n",
+            "  printf '%s\\n' '",
+            "{\"apiVersion\":\"id.registrystack.org/formats/casework/report/v1alpha2\",",
+            "\"kind\":\"CaseworkReport\",\"command\":\"check\",\"status\":\"domain-refusal\",\"ok\":false,",
+            "\"diagnostics\":[{\"severity\":\"error\",\"code\":\"config.unknown-key\",",
+            "\"artifact\":\"CaseworkRuntimeConfig\",\"path\":\"/listener\",",
+            "\"message\":\"The key is not part of this format.\",",
+            "\"suggestedAction\":\"Remove the key.\"}]}'\n",
+            "  exit 1\n",
+            "fi\n",
+            "exec \"${0%/*}/caseworkctl-reference\" \"$@\"\n",
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let unavailable = check_with_casework_tool(scratch.path(), &state, &tool);
+
+    assert_eq!(unavailable.status.code(), Some(3), "{unavailable:?}");
+    let report: serde_json::Value = serde_json::from_slice(&unavailable.stdout).unwrap();
+    assert_eq!(report["status"], "operational-failure");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/products/1/project");
+    assert_eq!(
+        diagnostic["message"],
+        "The selected `caseworkctl` helper could not check the Casework configuration the run writes."
+    );
+    assert!(!state.exists());
 }
 
 #[test]

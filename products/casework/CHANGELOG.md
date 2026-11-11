@@ -11,6 +11,12 @@
   with each access profile's `id` and `principalClaim`, so a caller no longer
   reads them from a review policy's `dependencies`. The member is additive.
 
+- `caseworkctl check --runtime-config` refuses a `contextProviders` binding
+  that startup would refuse, such as a `resource` that is not an absolute URI
+  or a `baseUrl` that is not HTTPS, without resolving a secret. The diagnostic
+  `casework.runtime.invalid-context-provider` sits at the member and names the
+  rule it breaks.
+
 ## 0.46.0 - 2026-11-08
 
 - Each access profile may carry an optional `label` and `description`. Neither is matched against a caller, a profile that writes neither reads as before, and rewording them leaves a policy's behavioral binding unchanged. Casework keeps both in the review policy description, which any caller who may read that description, requesters included, can see.

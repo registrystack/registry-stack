@@ -65,7 +65,6 @@ registry-cli-api.workspace = true
 registry-cli-reference.workspace = true
 registry-breg = { workspace = true, features = ["runtime", "tooling"] }
 registry-breg-client.workspace = true
-registry-casework-breg.workspace = true
 registry-evidence-verifier.workspace = true
 registry-linkml.workspace = true
 registry-manifest-core.workspace = true

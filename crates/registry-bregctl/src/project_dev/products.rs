@@ -367,45 +367,22 @@ impl<'a> ProductRunner<'a> {
         package: &Path,
         urls: DatabaseUrls,
     ) -> Result<PathBuf> {
-        let mut clients: BTreeSet<_> = self
-            .input
-            .plan
-            .people
-            .values()
-            .filter(|person| person.grants.contains_key(&product))
-            .map(|person| person.client.as_str())
-            .collect();
-        if product == Product::Breg {
-            let authority = self.input.breg_authority.as_ref().expect("BReg authority");
-            clients.extend(authority.named_clients.iter().map(String::as_str));
-        }
-        let mut oidc = json!({
-            "issuer": self.input.plan.issuer,
-            "audience": self.input.plan.product(product).audience,
-            "allowedClients": clients,
-            "scopeClaim": "scope",
-            "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}
-        });
-        let mut database = json!({
-            "runtimeUrlRef": self.secret(&format!("{name}-runtime-url"), urls.runtime.as_bytes())?,
-            "migrationUrlRef": self.secret(&format!("{name}-migration-url"), urls.migration.as_bytes())?
-        });
-        if self.root.join("postgres-ca").is_file() {
-            database["trustedRootCertificateRef"] = json!("secret:file/postgres-ca");
-        }
-        let audit = json!({
-            "hashKeyRef": self.secret(&format!("{name}-audit-key"), random_secret()?.as_bytes())?,
-            "path": self.root.join(format!("{name}-audit")).join("audit.jsonl"),
-        });
+        let plan = &self.input.plan;
+        self.secret(&format!("{name}-runtime-url"), urls.runtime.as_bytes())?;
+        self.secret(&format!("{name}-migration-url"), urls.migration.as_bytes())?;
+        self.secret(&format!("{name}-audit-key"), random_secret()?.as_bytes())?;
         let identity = format!("dev-{}-{name}", self.input.run_id);
-        let mut config = json!({
-            "package": {"root": package},
-            "secretProviders": {"file": {"root": self.root}},
-            "database": database,
-            "audit": audit,
-        });
-        match product {
+        let mut config = match product {
             Product::Breg => {
+                let authority = self.input.breg_authority.as_ref().expect("BReg authority");
+                let (mut config, mut oidc) = shared_config(
+                    plan,
+                    product,
+                    name,
+                    self.root,
+                    package,
+                    &authority.named_clients,
+                );
                 oidc["allowedAlgorithm"] = json!("ES256");
                 oidc["accessTokenType"] = json!("at+jwt");
                 oidc["scopeSeparator"] = json!(" ");
@@ -425,7 +402,6 @@ impl<'a> ProductRunner<'a> {
                 });
                 config["audit"]["destination"] = json!("file");
                 config["listener"] = json!({"bind": bind});
-                let authority = self.input.breg_authority.as_ref().expect("BReg authority");
                 if name == "breg" && authority.requires_postgis {
                     config["listener"]["publicOrigin"] = json!(format!("http://{bind}"));
                 }
@@ -458,17 +434,10 @@ impl<'a> ProductRunner<'a> {
                     "recordLockMilliseconds": 5000, "migrationLockMilliseconds": 30000,
                     "migrationStatementMilliseconds": 60000
                 });
+                config
             }
-            Product::Casework => {
-                config["apiVersion"] =
-                    json!("id.registrystack.org/formats/casework/runtime/v1alpha1");
-                config["kind"] = json!("CaseworkRuntimeConfig");
-                config["listener"] =
-                    json!({"bind": bind, "tlsTermination": "development-loopback"});
-                config["identity"] = json!({"databaseId": identity});
-                config["authentication"] = json!({"oidc": oidc});
-            }
-        }
+            Product::Casework => casework_config(plan, name, self.root, package, &identity, bind),
+        };
         if let Some(bindings) = &self.bindings {
             bindings.configure(product, &mut config);
         }
@@ -479,7 +448,7 @@ impl<'a> ProductRunner<'a> {
 
     fn secret(&self, name: &str, bytes: &[u8]) -> Result<String> {
         write_private(&self.root.join(name), bytes)?;
-        Ok(format!("secret:file/{name}"))
+        Ok(secret_ref(name))
     }
 
     fn tool(&self, product: Product, stage: &str, args: &[&std::ffi::OsStr]) -> Result<()> {
@@ -705,6 +674,83 @@ fn write_processes(root: &Path, children: &[(Product, u32)]) -> Result<()> {
     write_private(&root.join("processes.json"), &serde_json::to_vec(&entries)?)
 }
 
+/// The reference to the secret the run writes as `name` in its directory.
+fn secret_ref(name: &str) -> String {
+    format!("secret:file/{name}")
+}
+
+/// The members both products' runtime configurations share, and the OIDC
+/// settings each completes. They name the run's secrets by reference only:
+/// `config` writes the secrets beside them.
+fn shared_config(
+    plan: &Plan,
+    product: Product,
+    name: &str,
+    root: &Path,
+    package: &Path,
+    extra_clients: &BTreeSet<String>,
+) -> (Value, Value) {
+    let clients: BTreeSet<_> = plan
+        .people
+        .values()
+        .filter(|person| person.grants.contains_key(&product))
+        .map(|person| person.client.as_str())
+        .chain(extra_clients.iter().map(String::as_str))
+        .collect();
+    let oidc = json!({
+        "issuer": plan.issuer,
+        "audience": plan.product(product).audience,
+        "allowedClients": clients,
+        "scopeClaim": "scope",
+        "jwksSource": {"type": "static", "documentRef": secret_ref("jwks")}
+    });
+    let mut database = json!({
+        "runtimeUrlRef": secret_ref(&format!("{name}-runtime-url")),
+        "migrationUrlRef": secret_ref(&format!("{name}-migration-url"))
+    });
+    if root.join("postgres-ca").is_file() {
+        database["trustedRootCertificateRef"] = json!(secret_ref("postgres-ca"));
+    }
+    let audit = json!({
+        "hashKeyRef": secret_ref(&format!("{name}-audit-key")),
+        "path": root.join(format!("{name}-audit")).join("audit.jsonl"),
+    });
+    let config = json!({
+        "package": {"root": package},
+        "secretProviders": {"file": {"root": root}},
+        "database": database,
+        "audit": audit,
+    });
+    (config, oidc)
+}
+
+/// The Casework runtime configuration the run writes, before its bindings.
+/// `check` renders it with stand-in paths, so the configuration Casework
+/// checks is the one `start` writes.
+fn casework_config(
+    plan: &Plan,
+    name: &str,
+    root: &Path,
+    package: &Path,
+    identity: &str,
+    bind: &str,
+) -> Value {
+    let (mut config, oidc) = shared_config(
+        plan,
+        Product::Casework,
+        name,
+        root,
+        package,
+        &BTreeSet::new(),
+    );
+    config["apiVersion"] = json!("id.registrystack.org/formats/casework/runtime/v1alpha1");
+    config["kind"] = json!("CaseworkRuntimeConfig");
+    config["listener"] = json!({"bind": bind, "tlsTermination": "development-loopback"});
+    config["identity"] = json!({"databaseId": identity});
+    config["authentication"] = json!({"oidc": oidc});
+    config
+}
+
 fn random_secret() -> Result<zeroize::Zeroizing<String>> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
@@ -804,7 +850,7 @@ pub(super) fn inspect(
     plan: &Plan,
     terminate: &AtomicBool,
 ) -> Result<ProductInspection> {
-    super::bindings::check_with_product_readers(plan)?;
+    super::bindings::check_with_breg_reader(plan)?;
     let breg_authority = breg_authority(root, plan)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
     Ok(ProductInspection {
@@ -1041,6 +1087,9 @@ fn casework_principals(
         .and_then(|person| person.grants.get(&Product::Breg))
         .map(|grant| grant.profile.as_str());
     validate_casework_binding_ids(&plan.bindings, &facts, status_profile)?;
+    if let Some(binding) = &plan.bindings.casework_context_provider {
+        check_casework_binding(&tool, &project, plan, binding, terminate)?;
+    }
     Ok(casework_principals_from_facts(plan, breg, &facts)?)
 }
 
@@ -1094,15 +1143,33 @@ fn explain_casework_facts(
     project: &Path,
     terminate: &AtomicBool,
 ) -> Result<CaseworkFacts> {
+    let (status, report) = casework_report(tool, "explain", &[project.as_os_str()], terminate)?;
+    if status.success() {
+        return casework_report_facts(&report);
+    }
+    if status.code() == Some(1) && casework_domain_refusal(&report, "explain") {
+        return Err(InvalidCaseworkProject.into());
+    }
+    anyhow::bail!("caseworkctl explain did not complete successfully")
+}
+
+/// Runs `caseworkctl --format json <command> <arguments>` and returns its
+/// exit status with the JSON report it printed.
+fn casework_report(
+    tool: &Path,
+    command: &str,
+    arguments: &[&std::ffi::OsStr],
+    terminate: &AtomicBool,
+) -> Result<(ExitStatus, Value)> {
     const MAX_REPORT: u64 = 4 * 1024 * 1024;
 
     let mut child = child_command(tool)
-        .args(["--format", "json", "explain"])
-        .arg(project)
+        .args(["--format", "json", command])
+        .args(arguments)
         .stdout(Stdio::piped())
         .spawn()
-        .context("cannot start caseworkctl explain")?;
-    let stdout = child.stdout.take().expect("the explain output was piped");
+        .with_context(|| format!("cannot start caseworkctl {command}"))?;
+    let stdout = child.stdout.take().expect("the report output was piped");
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         stdout.take(MAX_REPORT + 1).read_to_end(&mut bytes)?;
@@ -1114,31 +1181,25 @@ fn explain_casework_facts(
             !terminate.load(Ordering::Relaxed),
             "development product inspection was interrupted"
         );
-        ensure!(Instant::now() < deadline, "caseworkctl explain timed out");
+        ensure!(Instant::now() < deadline, "caseworkctl {command} timed out");
         Ok(())
     })?;
     let bytes = reader
         .join()
-        .map_err(|_| anyhow::anyhow!("cannot collect the Casework authoring report"))??;
+        .map_err(|_| anyhow::anyhow!("cannot collect the caseworkctl {command} report"))??;
     ensure!(
         bytes.len() as u64 <= MAX_REPORT,
-        "the Casework authoring report exceeds the size limit"
+        "the caseworkctl {command} report exceeds the size limit"
     );
-    let report: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("caseworkctl explain did not emit a JSON report"))?;
-    if status.success() {
-        return casework_report_facts(&report);
-    }
-    if status.code() == Some(1) && casework_domain_refusal(&report) {
-        return Err(InvalidCaseworkProject.into());
-    }
-    anyhow::bail!("caseworkctl explain did not complete successfully")
+    let report = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("caseworkctl {command} did not emit a JSON report"))?;
+    Ok((status, report))
 }
 
-fn casework_domain_refusal(report: &Value) -> bool {
+fn casework_domain_refusal(report: &Value, command: &str) -> bool {
     report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
         && report["kind"] == "CaseworkReport"
-        && report["command"] == "explain"
+        && report["command"] == command
         && report["status"] == "domain-refusal"
         && report["ok"] == false
         && report["diagnostics"].as_array().is_some_and(|diagnostics| {
@@ -1156,6 +1217,137 @@ fn casework_domain_refusal(report: &Value) -> bool {
                         .is_some_and(|value| !value.is_empty())
             })
         })
+}
+
+/// The listener `check` renders the Casework configuration with. Nothing
+/// binds it.
+const CHECK_BIND: &str = "127.0.0.1:1";
+
+/// Renders the Casework runtime configuration the run writes and lets the
+/// selected `caseworkctl check` decide whether Casework would accept the
+/// context provider binding in it. A refusal lands on the plan field that
+/// produced the member Casework names.
+fn check_casework_binding(
+    tool: &Path,
+    project: &SelectedProduct,
+    plan: &Plan,
+    binding: &super::bindings::CaseworkContextProvider,
+    terminate: &AtomicBool,
+) -> Result<()> {
+    let unavailable = || {
+        InspectionUnavailable::new(
+            &project.field,
+            "The selected `caseworkctl` helper could not check the Casework configuration the run writes.",
+            "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
+        )
+    };
+    let checked = (|| {
+        let directory = tempfile::tempdir()?;
+        // The runtime loader refuses a file reached through a symbolic link,
+        // as the default temporary directory is on some systems.
+        let root = directory.path().canonicalize()?;
+        let mut config = casework_config(
+            plan,
+            "casework",
+            &root,
+            &root.join("casework-package"),
+            "dev-check-casework",
+            CHECK_BIND,
+        );
+        super::bindings::render_for_check(plan, Product::Casework, &mut config);
+        let path = root.join("casework-runtime.yaml");
+        write_private(&path, &serde_json::to_vec(&config)?)?;
+        casework_report(
+            tool,
+            "check",
+            &[
+                project.root.as_os_str(),
+                "--runtime-config".as_ref(),
+                path.as_os_str(),
+            ],
+            terminate,
+        )
+    })();
+    let Ok((status, report)) = checked else {
+        return Err(unavailable().into());
+    };
+    match casework_binding_check(status.code(), &report, &binding.id) {
+        BindingCheck::Accepted => Ok(()),
+        BindingCheck::Refused { member, message } => Err(plan::SemanticRefusal::new(
+            super::bindings::casework_binding_field(plan, binding, &member),
+            format!(
+                "Casework refuses the binding configuration the run writes from this value: {}.",
+                message.trim_end_matches('.')
+            ),
+            "Correct the value so the product accepts the configuration the run writes for this binding.",
+        )
+        .into()),
+        BindingCheck::Unchecked => Err(unavailable().into()),
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum BindingCheck {
+    Accepted,
+    /// Casework refused `member`, a JSON pointer relative to the binding.
+    Refused {
+        member: String,
+        message: String,
+    },
+    /// Casework did not read the binding.
+    Unchecked,
+}
+
+/// What a `caseworkctl check` that exited with `code` and printed `report`
+/// decided about the context provider binding `id` in the configuration the
+/// run writes. Only refusals at the binding count: the rest of the file names
+/// stand-in paths and the project is not yet paired, and `start` checks both
+/// as they are. A refusal by the shared loader elsewhere in the file means
+/// Casework never read the binding.
+fn casework_binding_check(code: Option<i32>, report: &Value, id: &str) -> BindingCheck {
+    if code == Some(0)
+        && report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2"
+        && report["kind"] == "CaseworkReport"
+        && report["command"] == "check"
+        && report["status"] == "complete"
+        && report["ok"] == true
+    {
+        return BindingCheck::Accepted;
+    }
+    if code != Some(1) || !casework_domain_refusal(report, "check") {
+        return BindingCheck::Unchecked;
+    }
+    let binding = format!(
+        "/contextProviders/{}",
+        registry_platform_yaml::escape_pointer_segment(id)
+    );
+    let mut unread = false;
+    for diagnostic in report["diagnostics"].as_array().into_iter().flatten() {
+        if diagnostic["severity"] != "error" || diagnostic["artifact"] != "CaseworkRuntimeConfig" {
+            continue;
+        }
+        let (Some(path), Some(code), Some(message)) = (
+            diagnostic["path"].as_str(),
+            diagnostic["code"].as_str(),
+            diagnostic["message"].as_str(),
+        ) else {
+            return BindingCheck::Unchecked;
+        };
+        if let Some(member) = path.strip_prefix(&binding) {
+            if member.is_empty() || member.starts_with('/') {
+                return BindingCheck::Refused {
+                    member: member.to_owned(),
+                    message: message.to_owned(),
+                };
+            }
+        }
+        unread |= !code.starts_with("casework.runtime.");
+    }
+    if unread {
+        BindingCheck::Unchecked
+    } else {
+        BindingCheck::Accepted
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1874,6 +2066,169 @@ mod tests {
             assert!(error.contains("service-status profile"), "{error}");
             assert!(!error.contains("other-profile"), "{error}");
         }
+    }
+
+    #[test]
+    fn only_a_casework_refusal_at_the_binding_refuses_the_binding() {
+        let report = |status: &str, diagnostics: Value| {
+            json!({
+                "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
+                "kind": "CaseworkReport", "command": "check", "status": status,
+                "ok": status == "complete", "diagnostics": diagnostics
+            })
+        };
+        let diagnostic = |artifact: &str, code: &str, path: &str| {
+            json!({
+                "severity": "error", "code": code, "artifact": artifact, "path": path,
+                "message": "the rule", "suggestedAction": "Correct it."
+            })
+        };
+        let runtime = "CaseworkRuntimeConfig";
+        let refused = |member: &str| BindingCheck::Refused {
+            member: member.to_owned(),
+            message: "the rule".to_owned(),
+        };
+        for (code, diagnostics, expected) in [
+            (Some(0), json!([]), BindingCheck::Accepted),
+            (
+                Some(1),
+                json!([diagnostic(
+                    runtime,
+                    "casework.runtime.invalid-context-provider",
+                    "/contextProviders/registry/resource"
+                )]),
+                refused("/resource"),
+            ),
+            (
+                Some(1),
+                json!([diagnostic(
+                    runtime,
+                    "config.invalid-value",
+                    "/contextProviders/registry/baseUrl"
+                )]),
+                refused("/baseUrl"),
+            ),
+            (
+                Some(1),
+                json!([diagnostic(
+                    runtime,
+                    "casework.runtime.unknown",
+                    "/contextProviders/registry"
+                )]),
+                refused(""),
+            ),
+            // Another provider, Casework rules about the stand-in files or
+            // the unpaired project, and project diagnostics are not this
+            // binding's.
+            (
+                Some(1),
+                json!([
+                    diagnostic(
+                        runtime,
+                        "casework.runtime.invalid-context-provider",
+                        "/contextProviders/registry-other/resource"
+                    ),
+                    diagnostic(
+                        runtime,
+                        "casework.runtime.context-providers-mismatch",
+                        "/contextProviders"
+                    ),
+                    diagnostic(
+                        "CaseworkProject",
+                        "casework.project.invalid",
+                        "/reviewPolicies"
+                    ),
+                ]),
+                BindingCheck::Accepted,
+            ),
+            // The loader refused the file elsewhere, so Casework never read
+            // the binding.
+            (
+                Some(1),
+                json!([diagnostic(runtime, "config.unknown-key", "/listener/port")]),
+                BindingCheck::Unchecked,
+            ),
+            (
+                Some(3),
+                json!([diagnostic(
+                    runtime,
+                    "casework.runtime.unknown",
+                    "/contextProviders/registry"
+                )]),
+                BindingCheck::Unchecked,
+            ),
+            (None, json!([]), BindingCheck::Unchecked),
+        ] {
+            let status = if code == Some(0) {
+                "complete"
+            } else {
+                "domain-refusal"
+            };
+            assert_eq!(
+                casework_binding_check(code, &report(status, diagnostics.clone()), "registry"),
+                expected,
+                "{code:?} {diagnostics}"
+            );
+        }
+        let explain = json!({
+            "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
+            "kind": "CaseworkReport", "command": "explain", "status": "complete", "ok": true
+        });
+        assert_eq!(
+            casework_binding_check(Some(0), &explain, "registry"),
+            BindingCheck::Unchecked
+        );
+    }
+
+    #[test]
+    fn check_renders_the_casework_configuration_start_writes() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let terminate = AtomicBool::new(false);
+        let mut input = breg_input(false);
+        input.plan = serde_json::from_value(json!({
+            "issuer": "https://issuer.example.invalid",
+            "products": [
+                {"product": "breg", "project": ".", "audience": "urn:example:registry"},
+                {"product": "casework", "project": "casework", "audience": "urn:example:review"}
+            ],
+            "people": {"reviewer": {
+                "subject": "reviewer", "client": "reviewer-client",
+                "grants": {"casework": {"profile": "reviewer", "scopes": ["casework:review"]}}
+            }},
+            "journey": {"id": "read", "steps": [{
+                "id": "read", "product": "casework", "as": "reviewer", "method": "GET",
+                "path": "/v1/review-tasks", "expect": {"status": 200}
+            }]}
+        }))
+        .unwrap();
+        let identity = format!("dev-{}-casework", input.run_id);
+        let runner = ProductRunner::new(Arc::new(input), &root, &terminate).unwrap();
+        let urls = DatabaseUrls {
+            runtime: "postgresql://runtime:password@127.0.0.1:5432/run".to_owned(),
+            migration: "postgresql://migration:password@127.0.0.1:5432/run".to_owned(),
+        };
+        let package = root.join("casework-package");
+        let path = runner
+            .config(Product::Casework, "casework", "127.0.0.1:0", &package, urls)
+            .unwrap();
+        let written: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+
+        let rendered = casework_config(
+            &runner.input.plan,
+            "casework",
+            &root,
+            &package,
+            &identity,
+            "127.0.0.1:0",
+        );
+        assert_eq!(written, rendered);
+        assert_eq!(
+            written["authentication"]["oidc"]["allowedClients"],
+            json!(["reviewer-client"])
+        );
+        assert!(!written.to_string().contains("password"), "{written}");
     }
 
     #[test]

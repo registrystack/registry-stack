@@ -41,26 +41,8 @@ impl DelegatedDisplayExchange {
         scopes: Vec<String>,
         generation: String,
     ) -> Result<Self, ReviewContextError> {
-        let valid_token = |value: &str, maximum| {
-            !value.is_empty()
-                && value.len() <= maximum
-                && !value
-                    .bytes()
-                    .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-        };
-        if !valid_token(&resource, 2048)
-            || scopes.is_empty()
-            || scopes.len() > 128
-            || scopes.iter().any(|scope| !valid_token(scope, 512))
-            || scopes
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != scopes.len()
-            || !valid_token(&generation, 512)
-        {
-            return Err(ReviewContextError::Invalid);
-        }
+        config::check_exchange_values(&resource, &scopes, &generation)
+            .map_err(|_| ReviewContextError::Invalid)?;
         let actor = Arc::new(
             PrivateKeyJwt::new(Self::client_config(
                 &token_endpoint,
