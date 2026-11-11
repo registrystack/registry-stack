@@ -1324,6 +1324,21 @@ fn spatial_credential_bindings(
             ),
             SchemaTestCredentialBinding::bearer(
                 "service-site-source-profile-smoke",
+                "create-intersecting-service-area",
+                Zeroizing::new(spatial_admin_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "create-envelope-only-service-area",
+                Zeroizing::new(spatial_admin_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
+                "area-map-reader-bbox-uses-geometry-intersection",
+                Zeroizing::new(spatial_public_area_map_token(idp)),
+            ),
+            SchemaTestCredentialBinding::bearer(
+                "service-site-source-profile-smoke",
                 "public-map-reader-lists-public-point-fields",
                 Zeroizing::new(spatial_public_map_token(idp)),
             ),
@@ -1495,6 +1510,16 @@ fn spatial_public_map_token(idp: &MockIdp) -> String {
         "registry_principal": "synthetic-public-map",
         "registry_purpose": "service-site-public-map",
         "scope": "service-sites:public:read",
+    }))
+}
+
+fn spatial_public_area_map_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_actor_kind": "service",
+        "registry_principal": "synthetic-public-area-map",
+        "registry_purpose": "service-area-public-map",
+        "scope": "service-areas:public:read",
     }))
 }
 
