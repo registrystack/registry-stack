@@ -262,12 +262,11 @@ impl<'a> ProductRunner<'a> {
         }
         crate::field_encryption::keygen(&self.root.join(FIELD_KEY))
             .map(drop)
-            .map_err(|_| {
-                Operational(
+            .map_err(|error| {
+                Operational(format!(
                     "cannot write the development run's field-encryption key into its run \
-                     directory"
-                        .to_owned(),
-                )
+                     directory: {error}"
+                ))
                 .into()
             })
     }
@@ -2492,6 +2491,14 @@ mod tests {
         runner.write_field_key().unwrap();
         let key = root.join(FIELD_KEY);
         assert_eq!(field_key_file(&root), Some(key.clone()));
+        let refused = runner.write_field_key().unwrap_err();
+        assert!(refused.is::<Operational>(), "{refused:#}");
+        assert!(
+            refused
+                .to_string()
+                .ends_with("run directory: a key file already exists at that path"),
+            "{refused:#}"
+        );
         assert_eq!(
             fs::metadata(&key).unwrap().permissions().mode() & 0o777,
             0o600

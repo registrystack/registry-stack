@@ -29,15 +29,19 @@ pub(crate) struct KeygenOutcome {
 }
 
 /// Value-free generation refusals.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum KeygenError {
     /// A relative path cannot name a deliberate deployment secret location.
+    #[error("the key path is not absolute")]
     RelativeOutput,
     /// The output already exists; key material is never regenerated over it.
+    #[error("a key file already exists at that path")]
     OutputExists,
     /// The platform random source refused.
+    #[error("the platform random source refused")]
     RandomSource,
     /// The filesystem refused a parent directory or the key file itself.
+    #[error("the filesystem refused a parent directory or the key file")]
     Write,
 }
 

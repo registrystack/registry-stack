@@ -1369,9 +1369,17 @@ fn removing_dir(root: &Path) -> Result<PathBuf> {
 }
 
 /// Renames the run directory away before deleting it, so `status` sees either
-/// the whole run or no run, never a run whose report is already deleted.
+/// the whole run or no run, never a run whose report is already deleted. The
+/// run's field-encryption key goes first, so an interrupted deletion never
+/// leaves key material behind.
 fn remove_run_dir(root: &Path) -> Result<()> {
     let doomed = removing_dir(root)?;
+    match fs::remove_file(root.join(products::FIELD_KEY)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(error).context("cannot remove the run's field-encryption key");
+        }
+        _ => {}
+    }
     fs::rename(root, &doomed).context("cannot remove run scratch files")?;
     fs::remove_dir_all(&doomed)
         .with_context(|| format!("cannot remove run scratch files at {}", doomed.display()))
@@ -1724,6 +1732,25 @@ mod tests {
         remove_run_dir(&root).unwrap();
         assert!(!root.exists());
         assert_eq!(fs::read_dir(&base).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_run_directory_loses_its_field_key_before_it_is_renamed() {
+        let scratch = tempfile::tempdir().unwrap();
+        let base = scratch.path().canonicalize().unwrap();
+        let root = base.join(RUN_ID);
+        private_directory(&root).unwrap();
+        fs::write(root.join(products::FIELD_KEY), "key").unwrap();
+        fs::write(root.join(REPORT), "{}").unwrap();
+        // A non-empty directory at the removal name makes the rename fail, as
+        // an interrupted deletion would leave the run behind.
+        let doomed = removing_dir(&root).unwrap();
+        private_directory(&doomed).unwrap();
+        fs::write(doomed.join("blocker"), "").unwrap();
+
+        assert!(remove_run_dir(&root).is_err());
+        assert!(!root.join(products::FIELD_KEY).exists());
+        assert!(root.join(REPORT).exists());
     }
 
     #[test]
