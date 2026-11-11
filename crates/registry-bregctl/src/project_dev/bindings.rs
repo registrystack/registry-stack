@@ -992,6 +992,7 @@ mod tests {
             error.contains("/people/producer/grants/casework/scopes"),
             "{error}"
         );
+        assert!(error.contains("4096"), "{error}");
 
         // A person no binding names keeps the plan's own scope rule.
         let mut value = plan();
@@ -1014,6 +1015,7 @@ mod tests {
         value.issuer = "not a uri".to_owned();
         let error = check_with_breg_reader(&value).unwrap_err().to_string();
         assert!(error.contains("/issuer"), "{error}");
+        assert!(error.contains("assertion audience"), "{error}");
 
         // The profile grammar is a rule only the product readers state: the
         // runner restates nothing about it, so BReg's reader catches it and
@@ -1032,6 +1034,7 @@ mod tests {
             error.contains("/people/producer/grants/casework/profile"),
             "{error}"
         );
+        assert!(error.contains("the profile must be"), "{error}");
     }
 
     #[test]
