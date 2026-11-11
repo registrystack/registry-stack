@@ -233,6 +233,19 @@ fn require_machine_person<'a>(
             product.name()
         ),
     )?;
+    // The calling product requests these scopes through the shared OAuth
+    // client, which refuses the list at startup unless it passes this check.
+    if let Err(error) = registry_platform_httputil::validate_requested_scopes(&grant.scopes) {
+        let reason = match error {
+            registry_platform_httputil::TokenError::Configuration { reason } => reason.to_owned(),
+            other => other.to_string(),
+        };
+        return plan::refuse(
+            &format!("/people/{alias}/grants/{}/scopes", product.name()),
+            &format!("A binding requests this grant's scopes over OAuth, and {reason}."),
+            "Use only OAuth scope characters (no spaces, quotes, or backslashes), and keep the scopes, joined by spaces, within 4096 bytes.",
+        );
+    }
     Ok(person)
 }
 
@@ -861,6 +874,59 @@ mod tests {
         let mut value = plan();
         value.bindings.casework_context_provider = None;
         value.products[0].audience = "registry".to_owned();
+        value.bindings.validate(&value).unwrap();
+    }
+
+    #[test]
+    fn validation_refuses_bound_scopes_the_products_would_not_request() {
+        // Both products request a binding's scopes through the shared OAuth
+        // client, which refuses this list before the run could start them.
+        let too_long = (0..17)
+            .map(|index| format!("{index:02}{}", "s".repeat(254)))
+            .collect::<Vec<_>>();
+        let mut value = plan();
+        value
+            .people
+            .get_mut("producer")
+            .unwrap()
+            .grants
+            .get_mut(&Product::Casework)
+            .unwrap()
+            .scopes
+            .clone_from(&too_long);
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(
+            error.contains("/people/producer/grants/casework/scopes"),
+            "{error}"
+        );
+        assert!(error.contains("4096"), "{error}");
+
+        let mut value = plan();
+        value
+            .people
+            .get_mut("context-reader")
+            .unwrap()
+            .grants
+            .get_mut(&Product::Breg)
+            .unwrap()
+            .scopes = vec!["registry:\"quoted\"".to_owned()];
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(
+            error.contains("/people/context-reader/grants/breg/scopes"),
+            "{error}"
+        );
+
+        // A person no binding names keeps the plan's own scope rule.
+        let mut value = plan();
+        value.bindings.casework_context_provider = None;
+        value
+            .people
+            .get_mut("context-reader")
+            .unwrap()
+            .grants
+            .get_mut(&Product::Breg)
+            .unwrap()
+            .scopes = too_long;
         value.bindings.validate(&value).unwrap();
     }
 
