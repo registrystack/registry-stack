@@ -1601,6 +1601,11 @@ fn assert_worker_hit_resource_wall(reply: &Reply) {
             || (reply.status == 500 && body.contains("render-panicked")),
         "expected the timeout or memory wall to stop the worker: {body}"
     );
+    let problem: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+    assert_eq!(
+        problem["detail"],
+        "The request was refused; use the problem code and the operator diagnostics to correct it."
+    );
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
