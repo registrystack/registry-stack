@@ -3659,8 +3659,10 @@ pub(crate) fn envelope_member_from_projection(value: Value) -> Result<Value, Mut
         return Ok(Value::Null);
     }
     let encoded = value.as_str().ok_or(MutationError::Unavailable)?;
+    // PostgreSQL's base64 encoding breaks its output every 76 characters;
+    // those line breaks carry no data.
     let envelope = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
+        .decode(encoded.replace('\n', ""))
         .map_err(|_| MutationError::Unavailable)?;
     Ok(envelope_member_json(&envelope))
 }
@@ -4836,5 +4838,29 @@ mod tests {
             },
         )
         .is_ok());
+    }
+
+    /// PostgreSQL's `encode(..., 'base64')` breaks its output every 76
+    /// characters, so a projected envelope longer than 57 bytes reaches row
+    /// decode on several lines.
+    #[test]
+    fn a_projected_envelope_decodes_across_postgresql_line_breaks() {
+        use base64::Engine as _;
+        let envelope = (0..=200).collect::<Vec<u8>>();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&envelope);
+        let wrapped = encoded
+            .as_bytes()
+            .chunks(76)
+            .map(|line| std::str::from_utf8(line).expect("base64 is ASCII"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            envelope_member_from_projection(Value::String(wrapped)),
+            Ok(envelope_member_json(&envelope))
+        );
+        assert_eq!(
+            envelope_member_from_projection(Value::String(format!(" {encoded}"))),
+            Err(MutationError::Unavailable)
+        );
     }
 }
