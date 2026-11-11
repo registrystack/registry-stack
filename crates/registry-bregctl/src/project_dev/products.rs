@@ -627,12 +627,21 @@ fn run_logged_tool(
     );
 }
 
-/// Record each child's process group. Children start as group leaders, so the
-/// group ID is the PID.
+/// Record each child's process group and the start time of its leader.
+/// Children start as group leaders, so the group ID is the PID. Recovery after
+/// a lost supervisor signals a group only while its leader still has this
+/// start time, because process IDs are reused.
 fn write_processes(root: &Path, children: &[(Product, u32)]) -> Result<()> {
+    let table = super::recovery::process_table()?;
     let entries: Vec<_> = children
         .iter()
-        .map(|(product, pid)| json!({"product": product.name(), "pid": pid, "pgid": pid}))
+        .map(|(product, pid)| {
+            let started = table
+                .iter()
+                .find(|row| row.pid == *pid)
+                .map(|row| &row.started);
+            json!({"product": product.name(), "pid": pid, "pgid": pid, "started": started})
+        })
         .collect();
     write_private(&root.join("processes.json"), &serde_json::to_vec(&entries)?)
 }
@@ -1828,14 +1837,35 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
             json!([
-                {"product": "breg", "pid": 4242, "pgid": 4242},
-                {"product": "casework", "pid": 4343, "pgid": 4343}
+                {"product": "breg", "pid": 4242, "pgid": 4242, "started": null},
+                {"product": "casework", "pid": 4343, "pgid": 4343, "started": null}
             ])
         );
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn a_live_process_is_recorded_with_its_start_time() {
+        let scratch = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        write_processes(scratch.path(), &[(Product::Breg, child.id())]).unwrap();
+        let recorded: Value =
+            serde_json::from_slice(&fs::read(scratch.path().join("processes.json")).unwrap())
+                .unwrap();
+        let started = recorded[0]["started"].as_str().map(str::to_owned);
+        assert!(started.is_some(), "{recorded}");
+        assert_eq!(
+            started,
+            crate::project_dev::recovery::started_at(child.id())
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     fn minimal_registry(edit: impl FnOnce(&str) -> String) -> registry_breg::CompiledRegistry {

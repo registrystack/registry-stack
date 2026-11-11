@@ -228,7 +228,29 @@ directory, and `status` reports `cleanup-pending` with the remaining databases,
 roles and processes. If the supervisor is lost, `stop` and `status` report the
 run directory, the process groups, and the exact database and role names.
 
-Release the listed resources by hand, in this order:
+Release a run whose supervisor is gone with:
+
+```sh
+rstack dev stop RUN_ID --recover [--database-url URL]
+```
+
+`--database-url` defaults to `RSTACK_DEV_DATABASE_URL`, as for `start`, and
+the URL needs the same administrator rights. `--recover` first checks
+everything it needs, then acts: it refuses a run whose supervisor is still
+running (use plain `stop`), stops each recorded process group, drops the
+databases and roles, and removes the run directory. It signals a process group
+only while the group leader's start time equals the one recorded when the run
+started. If the recorded ID now belongs to another process, `--recover` leaves
+that process running and lists the group under `skipped_process_groups` in the
+report. If a start time was not recorded and the leader is still alive,
+`--recover` refuses and signals nothing. When it cannot finish, the error
+names the reason and lists the run directory, process groups, databases and
+roles to release by hand. Running it again after a partial failure is safe.
+
+A successful recovery reports `status` `stopped` and a `recovered` object with
+`stopped_process_groups`, `skipped_process_groups` and `databases_and_roles`.
+
+To release the resources by hand instead, in this order:
 
 1. Stop each listed process group, for example `kill -TERM -PGID`.
 2. As the administrator, run `DROP DATABASE IF EXISTS "NAME" WITH (FORCE)` for
@@ -239,13 +261,27 @@ Release the listed resources by hand, in this order:
 
 ### Errors and limitations
 
-With `--json`, a failed `rstack dev` command prints one JSON error object with
-`schema_version` (`registry.rstack.dev.v1`), `status` set to `error`, and
-`error`. It adds `run_id` when the run needs cleanup and `recovery` with the
-resources listed above. Failures that occur before the helper starts, such as a
-missing component, print a `registry.rstack.error.v1` object with `status` set
-to `refused` and an `error` object holding `class` and `message`. The reports of
-`rstack dev check` use `BRegCtlReport` instead.
+With `--json`, every refusal or failure of `rstack dev` start, status, token
+and stop prints one JSON object on standard output, validated by
+`schemas/rstack-dev-error.v1.schema.json`. The launcher prints the same object
+for failures before the helper starts, such as a missing component.
+
+- `schema_version` is `registry.rstack.error.v1` and `status` is `refused`.
+- `error.class` is `domain` (exit 1: the request or the run's state was
+  refused), `usage` (exit 2: the command line is wrong) or `operational`
+  (exit 3: the environment failed, a cleanup stalled, or a run needs its
+  resources released). `error.message` is the human-readable reason.
+- `run_id` is present when the failure concerns a run that still has
+  resources to release. Use it with `stop --recover`.
+- `recovery` accompanies `run_id` when the resources are known. It has `kind`
+  (`lost-supervisor` or `cleanup-pending`), `run_directory`, `processes`,
+  `objects` or `databases_and_roles`, and `reason` when `--recover` could not
+  finish.
+
+Without `--json`, the message goes to standard error as `rstack dev: MESSAGE`
+with the same exit code. The reports of `rstack dev check` use `BRegCtlReport`
+instead. A helper started without the launcher's request prints a plain
+message and exits 2.
 
 `rstack dev` does not configure field encryption yet. `rstack dev check` and
 `start` refuse a BReg project with encrypted fields at the product's

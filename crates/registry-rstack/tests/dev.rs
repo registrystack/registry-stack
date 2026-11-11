@@ -427,6 +427,10 @@ fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
             vec!["dev", "stop", "run-4", "--json"],
             serde_json::json!({"action":"stop","run_id":"run-4","json":true}),
         ),
+        (
+            vec!["dev", "stop", "run-5", "--recover", "--json"],
+            serde_json::json!({"action":"stop","run_id":"run-5","recover":true,"json":true}),
+        ),
     ] {
         let output = tools
             .empty_command()
@@ -437,6 +441,52 @@ fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
         assert!(output.status.success(), "{output:?}");
         assert_eq!(request(&output), expected);
     }
+}
+
+#[test]
+fn recover_passes_the_administrator_url_through_the_environment_only() {
+    let tools = SourceTools::new();
+    let database_url = "postgresql://example.invalid/dev-secret";
+    let output = tools
+        .empty_command()
+        .args([
+            "dev",
+            "stop",
+            "run-6",
+            "--recover",
+            "--database-url",
+            database_url,
+        ])
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .env("EXPECTED_DATABASE_URL", database_url)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(stdout.contains("database:matched\n"), "{stdout}");
+    assert!(!stdout.contains(database_url));
+    assert!(!request(&output).to_string().contains(database_url));
+}
+
+#[test]
+fn database_url_is_refused_for_stop_without_recover() {
+    let tools = SourceTools::new();
+    let output = tools
+        .empty_command()
+        .args([
+            "dev",
+            "stop",
+            "run-7",
+            "--database-url",
+            "postgresql://example.invalid/x",
+            "--json",
+        ])
+        .env("RSTACK_BREGCTL_BIN", &tools.bregctl)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
 }
 
 #[test]
@@ -474,6 +524,10 @@ fn root_and_dev_help_need_no_installation_or_binary_overrides() {
             &["dev", "start", "--help"][..],
             &["--database-url", "--ttl", "--json"][..],
         ),
+        (
+            &["dev", "stop", "--help"][..],
+            &["--recover", "--database-url", "--json"][..],
+        ),
     ] {
         let output = tools.empty_command().args(arguments).output().unwrap();
         assert!(output.status.success(), "{arguments:?}: {output:?}");
@@ -502,6 +556,22 @@ fn write_plan(project: &Path, products: &[&str]) {
     .unwrap();
 }
 
+/// Validates a launcher failure against the documented error schema.
+fn assert_matches_error_schema(report: &Value) {
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../../products/platform/schemas/rstack-dev-error.v1.schema.json"
+    ))
+    .unwrap();
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    if let Err(errors) = schema.validate(report) {
+        let errors: Vec<_> = errors.map(|error| error.to_string()).collect();
+        panic!("{report} violates the error schema: {errors:?}");
+    };
+}
+
 #[test]
 fn dev_subcommand_json_makes_launcher_failures_json() {
     let tools = SourceTools::new();
@@ -517,6 +587,7 @@ fn dev_subcommand_json_makes_launcher_failures_json() {
     assert_eq!(report["schema_version"], "registry.rstack.error.v1");
     assert_eq!(report["status"], "refused");
     assert_eq!(report["error"]["class"], "domain");
+    assert_matches_error_schema(&report);
 
     let usage = tools
         .empty_command()
@@ -527,6 +598,7 @@ fn dev_subcommand_json_makes_launcher_failures_json() {
     let report: Value = serde_json::from_slice(&usage.stdout).unwrap();
     assert_eq!(report["schema_version"], "registry.rstack.error.v1");
     assert_eq!(report["error"]["class"], "usage");
+    assert_matches_error_schema(&report);
 
     let human = tools
         .empty_command()

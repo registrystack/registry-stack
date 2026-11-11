@@ -206,6 +206,10 @@ def dev(bin_dir, env, cwd, *args, expected=0):
         raise RuntimeError(f"rstack dev {args[0]} exited {result.returncode}: {report}")
     if args[0] == "check":
         assert report["kind"] == "BRegCtlReport" and report["command"] == "dev-check"
+    elif report["schema_version"] == "registry.rstack.error.v1":
+        assert report["status"] == "refused", report
+        assert report["error"]["class"] in ("domain", "usage", "operational"), report
+        assert report["error"]["message"], report
     else:
         assert report["schema_version"] == "registry.rstack.dev.v1"
     return report
@@ -510,9 +514,9 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     failing.chmod(0o700)
     failure_env = {**env, "RSTACK_CASEWORK_BIN": str(failing)}
     report = dev(bin_dir, failure_env, checkout, "start", ".", expected=1)
-    assert "casework exited before readiness" in report["error"], report
-    assert "boom" in report["error"], report
-    logs = kept_logs(state, report["error"])
+    assert "casework exited before readiness" in report["error"]["message"], report
+    assert "boom" in report["error"]["message"], report
+    logs = kept_logs(state, report["error"]["message"])
     assert any("boom" in log.read_text() for log in logs.glob("casework-*.log")), report
     assert inventory(pg, pg_env) == baseline, report
     assert live_runs(state) == [], report
@@ -562,7 +566,7 @@ def verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env):
             time.sleep(0.1)
 
         report = dev(bin_dir, env, checkout, "start", ".", expected=1)
-        error = report["error"]
+        error = report["error"]["message"]
         assert "cannot create an isolated PostgreSQL database" in error, report
         assert "statement deadline" in error, report
         assert psql(pg, pg_env, lock_query).strip() == "t"
@@ -631,9 +635,10 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
     )
     [supervisor] = worker.stdout.split()
     os.kill(int(supervisor), signal.SIGKILL)
-    status = dev(bin_dir, env, checkout, "status", run, expected=1)
-    stopped = dev(bin_dir, env, checkout, "stop", run, expected=1)
+    status = dev(bin_dir, env, checkout, "status", run, expected=3)
+    stopped = dev(bin_dir, env, checkout, "stop", run, expected=3)
     for lost in (status, stopped):
+        assert lost["error"]["class"] == "operational", lost
         assert lost["recovery"]["kind"] == "lost-supervisor", lost
         assert lost["run_id"] == run, lost
     recovery = stopped["recovery"]
@@ -664,6 +669,77 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
     assert live_runs(state) == []
     assert dev(bin_dir, env, checkout, "status", run)["status"] == "stopped"
     print("A lost supervisor was recovered by hand from the facts stop reported")
+    verify_recover(bin_dir, pg, checkout, state, env, pg_env)
+
+
+def lose_supervisor(bin_dir, checkout, state, env):
+    report = dev(bin_dir, env, checkout, "start", ".")
+    run = report["run_id"]
+    worker = command(
+        "pgrep", "-f", f"project-dev --worker {re.escape(str(state / run))}"
+    )
+    [supervisor] = worker.stdout.split()
+    os.kill(int(supervisor), signal.SIGKILL)
+    return report, run
+
+
+def verify_recover(bin_dir, pg, checkout, state, env, pg_env):
+    baseline = inventory(pg, pg_env)
+    baseline_locks = administrator_locks(pg, pg_env)
+
+    report, run = lose_supervisor(bin_dir, checkout, state, env)
+    recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
+    assert recovered["status"] == "stopped", recovered
+    assert len(recovered["recovered"]["stopped_process_groups"]) == 2, recovered
+    assert recovered["recovered"]["skipped_process_groups"] == [], recovered
+    assert_nothing_listening(bin_dir, report["products"].values())
+    assert inventory(pg, pg_env) == baseline
+    eventually(
+        lambda: administrator_locks(pg, pg_env) == baseline_locks,
+        "the recovery's administrator lock was not released",
+    )
+    assert live_runs(state) == []
+    assert dev(bin_dir, env, checkout, "status", run)["status"] == "stopped"
+    assert dev(bin_dir, env, checkout, "stop", run, "--recover")["status"] == "stopped"
+    print("stop --recover released a lost supervisor's processes, databases and roles")
+
+    # A recorded group whose leader started at another time is not the run's:
+    # recovery leaves it running and still releases the rest.
+    report, run = lose_supervisor(bin_dir, checkout, state, env)
+    processes_file = state / run / "processes.json"
+    processes = json.loads(processes_file.read_text())
+    [casework] = [p for p in processes if p["product"] == "casework"]
+    casework["started"] = "Mon Jan  1 00:00:00 2001"
+    processes_file.write_text(json.dumps(processes))
+    try:
+        recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
+        assert recovered["recovered"]["skipped_process_groups"] == [
+            casework["pgid"]
+        ], recovered
+        os.killpg(casework["pgid"], 0)
+        assert inventory(pg, pg_env) == baseline
+        assert live_runs(state) == []
+    finally:
+        try:
+            os.killpg(casework["pgid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    assert_nothing_listening(bin_dir, report["products"].values())
+
+    # Without an administrator URL nothing is signalled or dropped, and the
+    # error carries the facts for a hand release.
+    report, run = lose_supervisor(bin_dir, checkout, state, env)
+    no_url = {k: v for k, v in env.items() if k != "RSTACK_DEV_DATABASE_URL"}
+    refused = dev(bin_dir, no_url, checkout, "stop", run, "--recover", expected=3)
+    assert "no PostgreSQL administrator URL" in refused["error"]["message"], refused
+    assert refused["run_id"] == run, refused
+    assert len(refused["recovery"]["processes"]) == 2, refused
+    assert len(product_pids(bin_dir)) == 2, refused
+    dev(bin_dir, env, checkout, "stop", run, "--recover")
+    assert_nothing_listening(bin_dir, report["products"].values())
+    assert inventory(pg, pg_env) == baseline
+    assert live_runs(state) == []
+    print("stop --recover skips a reused process ID and fails with facts when it cannot proceed")
 
 
 def verify_native_handoff(root, bin_dir, env):
@@ -767,9 +843,9 @@ def verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env):
     supported = bool(offered) and tuple(map(int, offered.split(".")[:2])) >= (3, 5)
     report = dev(bin_dir, env, checkout, "start", ".", expected=1)
     if supported:
-        assert "must be allowed to CREATE EXTENSION postgis" in report["error"], report
+        assert "must be allowed to CREATE EXTENSION postgis" in report["error"]["message"], report
     else:
-        assert "PostGIS 3.5 or later installed" in report["error"], report
+        assert "PostGIS 3.5 or later installed" in report["error"]["message"], report
     assert inventory(pg, pg_env) == baseline, report
     assert live_runs(state) == [], report
     print("A spatial start without PostGIS rights was refused and left nothing behind")
