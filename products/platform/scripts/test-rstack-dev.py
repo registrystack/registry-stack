@@ -1200,6 +1200,24 @@ def verify_offline_plan(root, bin_dir, project):
     assert diagnostic["suggestedAction"]
     assert unknown not in diagnostic["message"] + diagnostic["suggestedAction"]
     assert not state.exists()
+
+    # Casework's own check refuses the context provider binding the run would
+    # write, and the refusal lands on the plan field that produced it.
+    binding = root / "offline-context-binding"
+    binding.mkdir()
+    for product in ("registry", "casework"):
+        shutil.copytree(NATIVE_REVIEW / product, binding / product)
+    authored = (NATIVE_REVIEW / "dev.yaml").read_text()
+    audience = 'audience: "urn:journey:breg"'
+    assert authored.count(audience) == 1
+    (binding / "dev.yaml").write_text(authored.replace(audience, "audience: registry"))
+    refused = dev(bin_dir, check_env, binding, "check", ".", expected=1)
+    [diagnostic] = refused["diagnostics"]
+    assert refused["status"] == "domain-refusal"
+    assert diagnostic["path"] == "/products/0/audience"
+    assert diagnostic["message"].startswith("Casework refuses"), diagnostic
+    assert "contextProviders.registry.resource: " in diagnostic["message"], diagnostic
+    assert not state.exists()
     print("Offline checks resolve product profiles with only the authoring tools")
 
 

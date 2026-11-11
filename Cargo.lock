@@ -6331,7 +6331,6 @@ dependencies = [
  "rcgen",
  "registry-breg",
  "registry-breg-client",
- "registry-casework-breg",
  "registry-cli-api",
  "registry-cli-reference",
  "registry-cli-report",

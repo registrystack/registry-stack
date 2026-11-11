@@ -136,9 +136,10 @@ context provider and action. `rstack dev check` refuses a binding that names a
 review authority or action the BReg project does not declare, or a producer or
 context provider the Casework project does not declare; `start` refuses it
 before it provisions anything. `check` also writes each binding's product
-configuration exactly as `start` does and lets BReg's review-authority reader
-and Casework's context-binding reader refuse what they would refuse at startup,
-reporting the refusal at the plan field that produced the value. It refuses a
+configuration exactly as `start` does. BReg's review-authority reader and
+`caseworkctl check --runtime-config` on the Casework configuration refuse what
+each product would refuse at startup, and `check` reports the refusal, with the
+rule it broke, at the plan field that produced the value. It refuses a
 BReg grant profile that is not the `service-status` profile the Casework context
 provider's policy names. A binding requests tokens for the other
 product's audience as an OAuth resource, so that audience must be an absolute

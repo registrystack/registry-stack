@@ -99,50 +99,150 @@ pub struct BregBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_display_exchange: Option<DelegatedDisplayExchangeBinding>,
 }
+/// The member of a context-provider binding that provider construction would
+/// refuse, and the rule it breaks. The reason names the rule and never the
+/// configured value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BindingRefusal {
+    /// JSON pointer to the refused member, relative to the binding.
+    pub member: String,
+    pub reason: String,
+}
+
+impl BindingRefusal {
+    fn new(member: &str, reason: impl Into<String>) -> Self {
+        Self {
+            member: member.to_owned(),
+            reason: reason.into(),
+        }
+    }
+
+    fn within(mut self, parent: &str) -> Self {
+        self.member.insert_str(0, parent);
+        self
+    }
+}
+
+const PROFILE_IDENTIFIER_RULE: &str =
+    "the profile identifier must be 1..=128 bytes of ASCII letters, digits, `-`, `_`, `.`, or `:`";
+const RESOURCE_URI_RULE: &str =
+    "the resource must be one absolute URI without a fragment or userinfo";
+
 impl BregBinding {
     /// Checks the binding as provider construction reads it, without
     /// resolving a secret or reading a context export. The client identifier
     /// is a secret, so the identity check runs with a stand-in; the key and
     /// the identifier themselves are checked when the provider is built.
-    pub fn check_offline(&self) -> Result<(), ReviewContextError> {
-        use registry_platform_httputil::{
-            valid_resource_uri, validate_requested_scopes, PrivateKeyJwtConfig,
-        };
-        self.check_profiles()?;
-        url::Url::parse(&self.base_url).map_err(|_| ReviewContextError::Invalid)?;
-        let token_endpoint =
-            url::Url::parse(&self.token_endpoint).map_err(|_| ReviewContextError::Invalid)?;
-        let invalid = |_| ReviewContextError::Invalid;
-        PrivateKeyJwtConfig::check_identity(
-            &token_endpoint,
-            "offline-check",
+    pub fn check_offline(&self) -> Result<(), BindingRefusal> {
+        use registry_platform_httputil::{valid_resource_uri, validate_requested_scopes};
+        if !registry_casework_core::valid_profile_identifier(&self.status_profile) {
+            return Err(BindingRefusal::new(
+                "/statusProfile",
+                PROFILE_IDENTIFIER_RULE,
+            ));
+        }
+        if let Some(profile) = &self.task_grant_profile {
+            if !registry_casework_core::valid_profile_identifier(profile) {
+                return Err(BindingRefusal::new(
+                    "/taskGrantProfile",
+                    PROFILE_IDENTIFIER_RULE,
+                ));
+            }
+            if profile == &self.status_profile {
+                return Err(BindingRefusal::new(
+                    "/taskGrantProfile",
+                    "the task grant profile must differ from the status profile",
+                ));
+            }
+        }
+        check_client(
+            &self.token_endpoint,
             self.client_assertion_audience.as_deref(),
-        )
-        .map_err(invalid)?;
+        )?;
         if self
             .resource
             .as_deref()
             .is_some_and(|resource| !valid_resource_uri(resource))
         {
-            return Err(ReviewContextError::Invalid);
+            return Err(BindingRefusal::new("/resource", RESOURCE_URI_RULE));
         }
         if let Some(scopes) = &self.scopes {
-            validate_requested_scopes(scopes).map_err(invalid)?;
+            validate_requested_scopes(scopes)
+                .map_err(|error| BindingRefusal::new("/scopes", token_rule(error)))?;
+        }
+        let base_url = url::Url::parse(&self.base_url)
+            .map_err(|_| BindingRefusal::new("/baseUrl", "the service base URL must be a URL"))?;
+        registry_platform_httputil::ServiceBaseUrl::new(base_url)
+            .map_err(|error| BindingRefusal::new("/baseUrl", error.to_string()))?;
+        if let Some(delegated) = &self.delegated_display_exchange {
+            delegated
+                .check_offline()
+                .map_err(|refusal| refusal.within("/delegatedDisplayExchange"))?;
         }
         Ok(())
     }
+}
 
-    fn check_profiles(&self) -> Result<(), ReviewContextError> {
-        if !registry_casework_core::valid_profile_identifier(&self.status_profile)
-            || self.task_grant_profile.as_ref().is_some_and(|profile| {
-                !registry_casework_core::valid_profile_identifier(profile)
-                    || profile == &self.status_profile
-            })
-        {
-            return Err(ReviewContextError::Invalid);
-        }
-        Ok(())
+/// The identity and transport checks a private-key JWT client runs before it
+/// holds a key. The client identifier is a secret, so a stand-in takes its place.
+fn check_client(token_endpoint: &str, audience: Option<&str>) -> Result<(), BindingRefusal> {
+    use registry_platform_httputil::PrivateKeyJwtConfig;
+    let token_endpoint = url::Url::parse(token_endpoint)
+        .map_err(|_| BindingRefusal::new("/tokenEndpoint", "the token endpoint must be a URL"))?;
+    PrivateKeyJwtConfig::check_identity(&token_endpoint, "offline-check", None)
+        .map_err(|error| BindingRefusal::new("/tokenEndpoint", token_rule(error)))?;
+    PrivateKeyJwtConfig::check_identity(&token_endpoint, "offline-check", audience)
+        .map_err(|error| BindingRefusal::new("/clientAssertionAudience", token_rule(error)))
+}
+
+fn token_rule(error: registry_platform_httputil::TokenError) -> String {
+    match error {
+        registry_platform_httputil::TokenError::Configuration { reason } => reason.to_owned(),
+        other => other.to_string(),
     }
+}
+
+/// The value rules a delegated display exchange enforces on its resource,
+/// scopes and generation before it builds a token client.
+pub(crate) fn check_exchange_values(
+    resource: &str,
+    scopes: &[String],
+    generation: &str,
+) -> Result<(), BindingRefusal> {
+    let valid_token = |value: &str, maximum| {
+        !value.is_empty()
+            && value.len() <= maximum
+            && !value
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    };
+    if !valid_token(resource, 2048) {
+        return Err(BindingRefusal::new(
+            "/resource",
+            "the resource must be 1..=2048 bytes without control or whitespace characters",
+        ));
+    }
+    if scopes.is_empty()
+        || scopes.len() > 128
+        || scopes.iter().any(|scope| !valid_token(scope, 512))
+        || scopes
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != scopes.len()
+    {
+        return Err(BindingRefusal::new(
+            "/scopes",
+            "the scopes must be 1..=128 distinct values of 1..=512 bytes without control or whitespace characters",
+        ));
+    }
+    if !valid_token(generation, 512) {
+        return Err(BindingRefusal::new(
+            "/generation",
+            "the generation must be 1..=512 bytes without control or whitespace characters",
+        ));
+    }
+    Ok(())
 }
 
 impl std::fmt::Debug for BregBinding {
@@ -190,6 +290,24 @@ impl std::fmt::Debug for DelegatedDisplayExchangeBinding {
     }
 }
 
+impl DelegatedDisplayExchangeBinding {
+    /// Checks the exchange as provider construction reads it, without
+    /// resolving its client identifier or key.
+    pub fn check_offline(&self) -> Result<(), BindingRefusal> {
+        use registry_platform_httputil::{valid_resource_uri, validate_requested_scopes};
+        check_exchange_values(&self.resource, &self.scopes, &self.generation)?;
+        check_client(
+            &self.token_endpoint,
+            self.client_assertion_audience.as_deref(),
+        )?;
+        if !valid_resource_uri(&self.resource) {
+            return Err(BindingRefusal::new("/resource", RESOURCE_URI_RULE));
+        }
+        validate_requested_scopes(&self.scopes)
+            .map_err(|error| BindingRefusal::new("/scopes", token_rule(error)))
+    }
+}
+
 pub fn build_provider(
     binding: &BregBinding,
     policy: &registry_casework_core::ReviewContextProviderPolicy,
@@ -204,7 +322,9 @@ pub fn build_provider(
     if description.is_empty() || description.len() > 1024 * 1024 {
         return Err(ReviewContextError::Invalid);
     }
-    binding.check_profiles()?;
+    binding
+        .check_offline()
+        .map_err(|_| ReviewContextError::Invalid)?;
     let export: BregContextExport = serde_json::from_value(
         registry_breg_client::decode_exact_json(description)
             .map_err(|_| ReviewContextError::Invalid)?,
@@ -339,41 +459,142 @@ mod tests {
         })
     }
 
-    fn offline_check(value: serde_json::Value) -> Result<(), ReviewContextError> {
+    fn offline_check(value: serde_json::Value) -> Result<(), BindingRefusal> {
         serde_json::from_value::<BregBinding>(value)
             .expect("the binding parses")
             .check_offline()
     }
 
-    #[test]
-    fn offline_check_accepts_a_binding_without_resolving_secrets() {
-        offline_check(offline_binding()).expect("the binding is acceptable");
+    fn delegated_exchange() -> serde_json::Value {
+        json!({
+            "tokenEndpoint": "http://127.0.0.1:31003/oauth2/token",
+            "clientIdRef": "secret:file/source-client-id",
+            "clientAssertionKeyRef": "secret:file/source-client-key",
+            "resource": "urn:example:registry",
+            "scopes": ["registry:proposal:review"],
+            "generation": "casework-source-v1"
+        })
     }
 
     #[test]
-    fn offline_check_refuses_what_provider_construction_refuses_before_secrets() {
-        for (member, value) in [
-            ("statusProfile", json!("not a profile")),
-            ("taskGrantProfile", json!("casework-review-status")),
-            ("taskGrantProfile", json!("not a profile")),
-            ("resource", json!("registry")),
-            ("resource", json!("urn:example:registry#fragment")),
-            ("scopes", json!([])),
-            ("scopes", json!(["registry:read", "registry:read"])),
-            ("scopes", json!(["has space"])),
-            ("clientAssertionAudience", json!(" ")),
-            ("tokenEndpoint", json!("http://idp.example.test/token")),
-            ("baseUrl", json!("not a url")),
+    fn offline_check_accepts_a_binding_without_resolving_secrets() {
+        offline_check(offline_binding()).expect("the binding is acceptable");
+        let mut binding = offline_binding();
+        binding["delegatedDisplayExchange"] = delegated_exchange();
+        offline_check(binding).expect("the delegated exchange is acceptable");
+    }
+
+    #[test]
+    fn offline_check_names_the_member_and_rule_provider_construction_refuses() {
+        for (member, value, rule) in [
+            (
+                "/statusProfile",
+                json!("not a profile"),
+                "profile identifier",
+            ),
+            (
+                "/taskGrantProfile",
+                json!("casework-review-status"),
+                "differ from the status profile",
+            ),
+            (
+                "/taskGrantProfile",
+                json!("not a profile"),
+                "profile identifier",
+            ),
+            ("/resource", json!("registry"), "absolute URI"),
+            (
+                "/resource",
+                json!("urn:example:registry#fragment"),
+                "absolute URI",
+            ),
+            ("/scopes", json!([]), "at least one scope"),
+            (
+                "/scopes",
+                json!(["registry:read", "registry:read"]),
+                "repeat",
+            ),
+            ("/scopes", json!(["has space"]), "scope-tokens"),
+            (
+                "/clientAssertionAudience",
+                json!(" "),
+                "audience must not be empty",
+            ),
+            (
+                "/tokenEndpoint",
+                json!("http://idp.example.test/token"),
+                "HTTPS",
+            ),
+            (
+                "/tokenEndpoint",
+                json!("https://idp.example.test/token#top"),
+                "fragment",
+            ),
+            ("/baseUrl", json!("http://breg.example.test"), "HTTPS"),
+            (
+                "/baseUrl",
+                json!("https://breg.example.test/?view=all"),
+                "query",
+            ),
+            (
+                "/baseUrl",
+                json!("https://breg.example.test/#top"),
+                "fragment",
+            ),
+            (
+                "/baseUrl",
+                json!("https://breg.example.test//api"),
+                "empty segment",
+            ),
+            (
+                "/delegatedDisplayExchange/tokenEndpoint",
+                json!("http://idp.example.test/token"),
+                "HTTPS",
+            ),
+            (
+                "/delegatedDisplayExchange/clientAssertionAudience",
+                json!(""),
+                "audience must not be empty",
+            ),
+            (
+                "/delegatedDisplayExchange/resource",
+                json!("registry"),
+                "absolute URI",
+            ),
+            (
+                "/delegatedDisplayExchange/resource",
+                json!("urn:example:registry two"),
+                "whitespace",
+            ),
+            ("/delegatedDisplayExchange/scopes", json!([]), "1..=128"),
+            (
+                "/delegatedDisplayExchange/scopes",
+                json!(["registry:\"quoted\""]),
+                "scope-tokens",
+            ),
+            (
+                "/delegatedDisplayExchange/generation",
+                json!(""),
+                "generation",
+            ),
         ] {
             let mut binding = offline_binding();
-            binding[member] = value.clone();
-            let result = serde_json::from_value::<BregBinding>(binding)
-                .map_err(|_| ReviewContextError::Invalid)
-                .and_then(|binding| binding.check_offline());
+            binding["delegatedDisplayExchange"] = delegated_exchange();
+            let mut target = &mut binding;
+            for segment in member.split('/').skip(1) {
+                target = &mut target[segment];
+            }
+            *target = value.clone();
+            let refusal =
+                offline_check(binding).expect_err(&format!("{member} {value} was accepted"));
+            assert_eq!(refusal.member, member, "{value}: {refusal:?}");
             assert!(
-                matches!(result, Err(ReviewContextError::Invalid)),
-                "{member} {value} was accepted"
+                refusal.reason.contains(rule),
+                "{member} {value}: {refusal:?}"
             );
+            if let Some(text) = value.as_str().filter(|text| text.trim().len() > 1) {
+                assert!(!refusal.reason.contains(text), "{member}: {refusal:?}");
+            }
         }
     }
 
