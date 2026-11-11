@@ -420,50 +420,41 @@ ON CONFLICT (plan_id) DO UPDATE SET
     watched_fields=EXCLUDED.watched_fields,projection_epochs=EXCLUDED.projection_epochs,
     interval_seconds=EXCLUDED.interval_seconds,page_size=EXCLUDED.page_size,
     max_pending=EXCLUDED.max_pending,active=true,
-    plan_generation=current.plan_generation + CASE WHEN
-        current.package_digest<>EXCLUDED.package_digest
-        OR current.activation_id<>EXCLUDED.activation_id
-        OR current.authority_digest<>EXCLUDED.authority_digest
-        OR current.projection_epochs<>EXCLUDED.projection_epochs
-        OR current.root_entity_id<>EXCLUDED.root_entity_id
-        OR current.watched_fields<>EXCLUDED.watched_fields THEN 1 ELSE 0 END,
-    next_due_at=CASE WHEN NOT current.active
-        OR current.package_digest<>EXCLUDED.package_digest
-        OR current.activation_id<>EXCLUDED.activation_id
-        OR current.authority_digest<>EXCLUDED.authority_digest
-        OR current.projection_epochs<>EXCLUDED.projection_epochs
-        OR current.root_entity_id<>EXCLUDED.root_entity_id
-        OR current.watched_fields<>EXCLUDED.watched_fields
-        THEN clock_timestamp() ELSE current.next_due_at END,
-    reconciliation_due=current.reconciliation_due OR NOT current.active
-        OR current.package_digest<>EXCLUDED.package_digest
-        OR current.activation_id<>EXCLUDED.activation_id
-        OR current.authority_digest<>EXCLUDED.authority_digest
-        OR current.projection_epochs<>EXCLUDED.projection_epochs
-        OR current.root_entity_id<>EXCLUDED.root_entity_id
-        OR current.watched_fields<>EXCLUDED.watched_fields,
-    reconciliation_generation=current.reconciliation_generation + CASE WHEN
-        NOT current.active
-        OR current.package_digest<>EXCLUDED.package_digest
-        OR current.activation_id<>EXCLUDED.activation_id
-        OR current.authority_digest<>EXCLUDED.authority_digest
-        OR current.projection_epochs<>EXCLUDED.projection_epochs
-        OR current.root_entity_id<>EXCLUDED.root_entity_id
-        OR current.watched_fields<>EXCLUDED.watched_fields THEN 1 ELSE 0 END,
-    lease_token=CASE WHEN current.package_digest<>EXCLUDED.package_digest
-        OR current.activation_id<>EXCLUDED.activation_id
-        OR current.authority_digest<>EXCLUDED.authority_digest
-        OR current.projection_epochs<>EXCLUDED.projection_epochs
-        OR current.root_entity_id<>EXCLUDED.root_entity_id
-        OR current.watched_fields<>EXCLUDED.watched_fields
-        THEN NULL ELSE current.lease_token END,
-    lease_expires_at=CASE WHEN current.package_digest<>EXCLUDED.package_digest
-        OR current.activation_id<>EXCLUDED.activation_id
-        OR current.authority_digest<>EXCLUDED.authority_digest
-        OR current.projection_epochs<>EXCLUDED.projection_epochs
-        OR current.root_entity_id<>EXCLUDED.root_entity_id
-        OR current.watched_fields<>EXCLUDED.watched_fields
-        THEN NULL ELSE current.lease_expires_at END,
+    (plan_generation,next_due_at,reconciliation_due,reconciliation_generation,
+     lease_token,lease_expires_at,sweep_phase,sweep_baseline,sweep_continuation,
+     sweep_started_at,sweep_reconciliation_generation,sweep_acquisition_failures,
+     next_turn,last_attempt_at,last_attempt_outcome,last_completed_at) = (
+        SELECT current.plan_generation+CASE WHEN reset THEN 1 ELSE 0 END,
+            CASE WHEN reset THEN clock_timestamp()
+                 WHEN current.sweep_phase='complete' AND NOT current.reconciliation_due
+                      AND current.interval_seconds<>EXCLUDED.interval_seconds
+                      AND current.sweep_started_at IS NOT NULL
+                 THEN greatest(
+                     current.sweep_started_at+make_interval(secs => EXCLUDED.interval_seconds::double precision),
+                     CASE WHEN current.sweep_acquisition_failures>0
+                          THEN current.last_completed_at+interval '60 seconds' END)
+                 ELSE current.next_due_at END,
+            current.reconciliation_due OR reset,
+            current.reconciliation_generation+CASE WHEN reset THEN 1 ELSE 0 END,
+            CASE WHEN reset THEN NULL ELSE current.lease_token END,
+            CASE WHEN reset THEN NULL ELSE current.lease_expires_at END,
+            CASE WHEN reset THEN 'roots' ELSE current.sweep_phase END,
+            CASE WHEN reset THEN 0 ELSE current.sweep_baseline END,
+            CASE WHEN reset THEN NULL ELSE current.sweep_continuation END,
+            CASE WHEN reset THEN NULL ELSE current.sweep_started_at END,
+            CASE WHEN reset THEN 0 ELSE current.sweep_reconciliation_generation END,
+            CASE WHEN reset THEN 0 ELSE current.sweep_acquisition_failures END,
+            CASE WHEN reset THEN 'targets' ELSE current.next_turn END,
+            CASE WHEN reset THEN NULL ELSE current.last_attempt_at END,
+            CASE WHEN reset THEN NULL ELSE current.last_attempt_outcome END,
+            CASE WHEN reset THEN NULL ELSE current.last_completed_at END
+        FROM (SELECT NOT current.active OR
+            (current.package_digest,current.activation_id,current.authority_digest,
+             current.projection_epochs,current.root_entity_id,current.watched_fields)
+            IS DISTINCT FROM
+            (EXCLUDED.package_digest,EXCLUDED.activation_id,EXCLUDED.authority_digest,
+             EXCLUDED.projection_epochs,EXCLUDED.root_entity_id,EXCLUDED.watched_fields) AS reset) AS authority
+    ),
     updated_at=clock_timestamp()
 "#;
 
@@ -796,9 +787,11 @@ pub(crate) async fn prepare_sweep(
                                      THEN $6 ELSE sweep_baseline END,
                  sweep_continuation=CASE WHEN sweep_phase='complete' THEN NULL ELSE sweep_continuation END,
                  sweep_acquisition_failures=CASE WHEN sweep_phase='complete' THEN 0 ELSE sweep_acquisition_failures END,
-                 sweep_started_at=CASE WHEN sweep_phase='complete' OR sweep_baseline=0
+                 sweep_started_at=CASE WHEN sweep_phase='complete'
+                                           OR (sweep_phase='roots' AND sweep_baseline=0)
                                        THEN clock_timestamp() ELSE sweep_started_at END,
-                 sweep_reconciliation_generation=CASE WHEN sweep_phase='complete' OR sweep_baseline=0
+                 sweep_reconciliation_generation=CASE WHEN sweep_phase='complete'
+                      OR (sweep_phase='roots' AND sweep_baseline=0)
                       THEN reconciliation_generation ELSE sweep_reconciliation_generation END,
                  updated_at=clock_timestamp()
              WHERE plan_id=$1 AND authority_digest=$2 AND plan_generation=$3
@@ -1289,16 +1282,16 @@ pub(crate) async fn finish_step(
                  sweep_acquisition_failures=$9::bigint,
                  last_completed_at=CASE WHEN $10 THEN clock_timestamp() ELSE last_completed_at END,
                  next_due_at=CASE WHEN $10 THEN
-                     CASE WHEN $9::bigint>0 OR reconciliation_generation>sweep_reconciliation_generation
+                     CASE WHEN reconciliation_generation>sweep_reconciliation_generation
                          THEN clock_timestamp()+interval '60 seconds'
                          ELSE greatest(
-                             clock_timestamp(),
+                             clock_timestamp()+CASE WHEN $9::bigint>0 THEN interval '60 seconds' ELSE interval '0 seconds' END,
                              coalesce(sweep_started_at,clock_timestamp())
                                  +make_interval(secs => interval_seconds::double precision))
                      END
                      ELSE next_due_at END,
                  reconciliation_due=CASE WHEN $10 THEN
-                     $9::bigint>0 OR reconciliation_generation>sweep_reconciliation_generation
+                     reconciliation_generation>sweep_reconciliation_generation
                      ELSE reconciliation_due END,
                  next_turn=$11,last_attempt_at=clock_timestamp(),last_attempt_outcome=$12,
                  lease_token=NULL,lease_expires_at=NULL,updated_at=clock_timestamp()
@@ -1722,8 +1715,6 @@ mod tests {
         assert!(SETTLE_TARGET_SQL.contains("work.enqueue_generation=$6"));
         assert!(SETTLE_TARGET_SQL.contains("plan_generation=$2"));
         assert!(CLAIM_TARGETS_SQL.contains("FOR UPDATE OF work SKIP LOCKED"));
-        assert!(REGISTER_PLAN_SQL.contains("authority_digest<>EXCLUDED.authority_digest"));
-        assert!(REGISTER_PLAN_SQL.contains("THEN NULL ELSE current.lease_token"));
     }
 
     #[test]
@@ -1969,6 +1960,136 @@ mod postgres_tests {
             .unwrap()
             .get(0);
         assert_eq!(retained, 0);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn schedule_edits_recalculate_due_time_and_authority_changes_restart_at_roots() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let mut plan = PlanRegistration {
+            plan_id: "plan".to_owned(),
+            package_digest: fixture.expected.package_digest.clone(),
+            activation_id: fixture.expected.activation_uuid().unwrap(),
+            authority_digest: "original-authority".to_owned(),
+            root_entity_id: "local-record".to_owned(),
+            watched_fields: BTreeSet::from(["subject-key".to_owned()]),
+            projection_epochs: vec![scope.epoch],
+            interval_seconds: 900,
+            page_size: 50,
+            max_pending: 100,
+        };
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, std::slice::from_ref(&plan))
+            .await
+            .unwrap();
+        tx.transaction()
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_plans SET
+                sweep_phase='complete',sweep_started_at=clock_timestamp()-interval '5 minutes',
+                last_completed_at=clock_timestamp()-interval '4 minutes',
+                next_due_at=clock_timestamp()+interval '10 minutes',reconciliation_due=false",
+                &[],
+            )
+            .await
+            .unwrap();
+        plan.interval_seconds = 120;
+        register_plans(&tx, std::slice::from_ref(&plan))
+            .await
+            .unwrap();
+        let state = tx.transaction().query_one(
+            "SELECT plan_generation,projection_epochs,next_due_at<=clock_timestamp(),sweep_phase
+             FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'",
+            &[],
+        ).await.unwrap();
+        assert_eq!(state.get::<_, i64>(0), 1);
+        assert_eq!(state.get::<_, Vec<Uuid>>(1), vec![scope.epoch]);
+        assert!(
+            state.get::<_, bool>(2),
+            "shorter interval takes effect immediately"
+        );
+        assert_eq!(state.get::<_, &str>(3), "complete");
+
+        let lease = claim_plan(
+            &tx,
+            "plan",
+            &plan.authority_digest,
+            Duration::from_secs(120),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tx.transaction()
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_plans SET
+                sweep_phase='labels',sweep_baseline=0,sweep_reconciliation_generation=1,
+                reconciliation_generation=2",
+                &[],
+            )
+            .await
+            .unwrap();
+        let labels = prepare_sweep(&tx, "plan", &plan.authority_digest, lease, 42)
+            .await
+            .unwrap();
+        assert_eq!(labels.phase, "labels");
+        assert_eq!(labels.baseline_sequence, 42);
+        let state = tx
+            .transaction()
+            .query_one(
+                "SELECT sweep_started_at<clock_timestamp()-interval '4 minutes',
+                    reconciliation_generation>sweep_reconciliation_generation
+             FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(
+            state.get::<_, bool>(0),
+            "labels preserve the start of the root traversal"
+        );
+        assert!(
+            state.get::<_, bool>(1),
+            "labels preserve reconciliation requested during the root traversal"
+        );
+
+        // A saved label phase must never carry across a new authority. Its
+        // root phase was run under the old policy and proves nothing now.
+        tx.transaction()
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_plans SET
+                sweep_phase='labels',sweep_baseline=42,sweep_continuation='sealed-fixture-position',
+                sweep_acquisition_failures=1",
+                &[],
+            )
+            .await
+            .unwrap();
+        plan.authority_digest = "changed-authority".to_owned();
+        register_plans(&tx, std::slice::from_ref(&plan))
+            .await
+            .unwrap();
+        let state = tx
+            .transaction()
+            .query_one(
+                "SELECT plan_generation,sweep_phase,sweep_baseline,sweep_continuation IS NULL,
+                    sweep_acquisition_failures,last_completed_at IS NULL
+             FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.get::<_, i64>(0), 2);
+        assert_eq!(state.get::<_, &str>(1), "roots");
+        assert_eq!(state.get::<_, i64>(2), 0);
+        assert!(state.get::<_, bool>(3));
+        assert_eq!(state.get::<_, i64>(4), 0);
+        assert!(state.get::<_, bool>(5));
+        tx.commit().await.unwrap();
+        drop(runtime);
         fixture.cleanup().await;
     }
 }
