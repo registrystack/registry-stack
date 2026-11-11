@@ -85,6 +85,7 @@ use crate::model::{
 use crate::outbox::{
     event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
 };
+use crate::postgres::external_refresh_queue::{capture_local_records, LocalRecordCapture};
 use crate::postgres::{
     begin_action_transaction, begin_record_transaction, begin_timer_action_transaction,
     ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, ImmediateActionLinkBinding,
@@ -2687,16 +2688,10 @@ pub(crate) struct CurrentRow {
 /// tombstones pass an empty field set, which deliberately matches every plan
 /// for the Record type. The call is skipped entirely for packages without an
 /// indexed projection, including packages created before the queue existed.
-pub(super) struct ExternalRefreshCapture {
-    entity_id: String,
-    record_id: Uuid,
-    changed_fields: BTreeSet<String>,
-}
-
 pub(super) fn external_refresh_capture(
     entity_id: &str,
     current: &CurrentRow,
-) -> ExternalRefreshCapture {
+) -> LocalRecordCapture {
     let changed_fields = match (&current.before_data, current.record_lifecycle.as_str()) {
         (Some(before), "active") => before
             .keys()
@@ -2706,7 +2701,7 @@ pub(super) fn external_refresh_capture(
             .collect::<BTreeSet<_>>(),
         _ => BTreeSet::new(),
     };
-    ExternalRefreshCapture {
+    LocalRecordCapture {
         entity_id: entity_id.to_owned(),
         record_id: current.record_uuid,
         changed_fields,
@@ -2715,22 +2710,15 @@ pub(super) fn external_refresh_capture(
 
 pub(super) async fn capture_external_refresh_rows(
     transaction: &Transaction<'_>,
-    captures: &[ExternalRefreshCapture],
+    captures: &[LocalRecordCapture],
     enabled: bool,
 ) -> Result<(), MutationError> {
     if !enabled {
         return Ok(());
     }
-    for capture in captures {
-        crate::postgres::external_refresh_queue::capture_local_record(
-            transaction,
-            &capture.entity_id,
-            capture.record_id,
-            &capture.changed_fields,
-        )
+    capture_local_records(transaction, captures)
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    }
     Ok(())
 }
 
@@ -4702,6 +4690,125 @@ impl From<HistoryCommitError> for MutationError {
 #[cfg(all(test, feature = "postgres-test"))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn external_refresh_capture_locks_plans_in_global_order() {
+        use crate::postgres::{
+            begin_registry_transaction,
+            external_projection::postgres_tests::Activated,
+            external_refresh_queue::{register_plans, PlanRegistration},
+            external_view_query::tests::registry,
+        };
+
+        let registry = registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let lock = RegistryLockKey::derive(registry.registry_id()).unwrap();
+        let timeout = Duration::from_secs(10);
+        let mut blocker = fixture.pool.get().await.unwrap();
+        let setup = begin_registry_transaction(&mut blocker, lock, timeout, &fixture.expected)
+            .await
+            .unwrap();
+        let plans = [("a-plan", "late-record"), ("z-plan", "early-record")].map(
+            |(plan_id, root_entity_id)| PlanRegistration {
+                plan_id: plan_id.to_owned(),
+                package_digest: fixture.expected.package_digest.clone(),
+                activation_id: fixture.expected.activation_uuid().unwrap(),
+                authority_digest: "authority".to_owned(),
+                root_entity_id: root_entity_id.to_owned(),
+                watched_fields: BTreeSet::from(["subject-key".to_owned()]),
+                projection_epochs: vec![scope.epoch],
+                interval_seconds: 900,
+                page_size: 50,
+                max_pending: 100,
+            },
+        );
+        register_plans(&setup, &plans).await.unwrap();
+        setup.commit().await.unwrap();
+
+        // Hold the first lock that retention takes. It must still be possible
+        // to lock the last plan while the mutation waits on the first one.
+        let blocker = begin_registry_transaction(&mut blocker, lock, timeout, &fixture.expected)
+            .await
+            .unwrap();
+        let blocker_pid: i32 = blocker
+            .transaction()
+            .query_one(
+                "SELECT pg_backend_pid() FROM registry_internal.registry_external_refresh_plans
+                 WHERE plan_id='a-plan' FOR UPDATE",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        let mut writer = fixture.pool.get().await.unwrap();
+        let writer = begin_registry_transaction(&mut writer, lock, timeout, &fixture.expected)
+            .await
+            .unwrap();
+        let writer_pid: i32 = writer
+            .transaction()
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        let captures = ["early-record", "late-record"].map(|entity_id| LocalRecordCapture {
+            entity_id: entity_id.to_owned(),
+            record_id: Uuid::new_v4(),
+            changed_fields: BTreeSet::new(),
+        });
+        let probe = async {
+            let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let row = fixture
+                        .database
+                        .admin
+                        .query_one(
+                            "SELECT $1 = ANY(pg_blocking_pids($2))",
+                            &[&blocker_pid, &writer_pid],
+                        )
+                        .await
+                        .unwrap();
+                    if row.get::<_, bool>(0) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            let last_lock = blocker
+                .transaction()
+                .query_one(
+                    "SELECT 1 FROM registry_internal.registry_external_refresh_plans
+                     WHERE plan_id='z-plan' FOR UPDATE NOWAIT",
+                    &[],
+                )
+                .await;
+            blocker.rollback().await.unwrap();
+            (waiting, last_lock)
+        };
+        let (captured, (waiting, last_lock)) = tokio::join!(
+            capture_external_refresh_rows(writer.transaction(), &captures, true),
+            probe,
+        );
+        captured.unwrap();
+        writer.commit().await.unwrap();
+        let work_count: i64 = fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_refresh_work",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        fixture.cleanup().await;
+        waiting.expect("the mutation waits for the first plan lock");
+        last_lock.expect("the mutation must not lock a later plan before the first one");
+        assert_eq!(work_count, 2);
+    }
 
     /// Every record write converts its values here. A value a caller never
     /// submitted (a proposal prepared before a view linked the field, applied

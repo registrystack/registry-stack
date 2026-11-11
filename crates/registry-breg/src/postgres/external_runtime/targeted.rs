@@ -336,18 +336,9 @@ mod tests {
 #[cfg(feature = "postgres-test")]
 mod postgres_tests {
     use super::*;
+    use crate::postgres::external_projection::postgres_tests::Activated;
     use crate::postgres::read::ReadRelations;
     use serde_json::{json, Value};
-    use tokio_postgres::NoTls;
-
-    #[allow(dead_code)]
-    mod harness {
-        use crate as registry_breg;
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/support/postgres_harness.rs"
-        ));
-    }
 
     fn registry() -> CompiledRegistry {
         let project = json!({
@@ -400,12 +391,8 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn selector_lookup_skips_a_large_excluded_prefix_and_exhausts_no_witness() {
-        let database = harness::TestDatabase::create(2).await;
-        let (migration, migration_task) = database.connect_migration().await;
         let registry = registry();
-        super::super::super::install_compiled_schema(&migration, &registry, &database.runtime_role)
-            .await
-            .unwrap();
+        let fixture = Activated::new(&registry).await;
         let entity = &registry.entities()["local-record"];
         let column = |id: &str| {
             entity
@@ -416,7 +403,7 @@ mod postgres_tests {
                 .physical_name
                 .clone()
         };
-        database.admin.batch_execute(&format!(
+        fixture.database.admin.batch_execute(&format!(
             "INSERT INTO registry_data.\"{table}\" (record_id,active_package_revision,\"{key}\",\"{tenant}\")
              SELECT ('00000000-0000-4000-8001-'||lpad(to_hex(g),12,'0'))::uuid,'fixture',
                     CASE WHEN g<=50000 THEN 'target' ELSE 'unmatched' END,'aaa'
@@ -429,13 +416,7 @@ mod postgres_tests {
             key = column("subject-key"),
             tenant = column("tenant"),
         )).await.unwrap();
-        let (runtime, connection) = database
-            .runtime_config
-            .postgres()
-            .connect(NoTls)
-            .await
-            .unwrap();
-        let runtime_task = tokio::spawn(async move { connection.await.unwrap() });
+        let runtime = fixture.pool.get().await.unwrap();
         runtime.batch_execute("SET registry.access_profile='refresh'; SET registry.principal='worker'; SET registry.purpose='consultation'; SET registry.row_boundaries='[{\"field\":\"tenant\",\"operator\":\"equals\",\"values\":[\"zzz\"]}]';").await.unwrap();
         let sql = primary_selector_sql(&keys(&registry));
         let expected = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
@@ -506,10 +487,7 @@ mod postgres_tests {
                 assert!(rows + removed <= 20.0, "{selector}: {explained}");
             }
         }
-        runtime_task.abort();
-        migration_task.abort();
         drop(runtime);
-        drop(migration);
-        database.cleanup().await;
+        fixture.cleanup().await;
     }
 }

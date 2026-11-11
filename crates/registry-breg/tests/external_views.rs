@@ -239,3 +239,42 @@ fn refresh_link_gets_a_managed_index_matching_its_row_policy() {
         "Hint accepted or already admitted, without checking local matches",
     );
 }
+
+#[test]
+fn refresh_link_row_policy_on_canonical_id_uses_the_physical_record_id() {
+    let source = format!(
+        "{PROJECT}\n{}",
+        r#"  - id: refresh
+    principalClaim: registry_principal
+    actorKind: service
+    requesterClients: [refresh-worker]
+    requiredScopes: [registry.refresh]
+    requiredPurposes: [local-consultation]
+    permissions:
+      records:
+        - recordType: local-record
+          operations: [list]
+          rowBoundaries:
+            - {field: id, claim: record_ids, operator: in}
+      refreshExternalProjections: [approved-subjects]"#
+    );
+    let registry = compile(&source).expect("a refresh policy bounded by canonical id compiles");
+    let entity = &registry.entities()["local-record"];
+    let managed = entity
+        .indexes
+        .iter()
+        .find(|(id, _)| id.starts_with("external-link:"))
+        .expect("refresh link has a compiler-owned index");
+    assert_eq!(
+        managed.1.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["subject-key"],
+        "canonical id is supplied by the physical index suffix"
+    );
+    let statement = registry
+        .ddl()
+        .statements
+        .iter()
+        .find(|statement| statement.id == format!("entity.local-record.index.{}", managed.0))
+        .expect("managed index is emitted in reviewed DDL");
+    assert_eq!(statement.sql.matches("record_id").count(), 1);
+}

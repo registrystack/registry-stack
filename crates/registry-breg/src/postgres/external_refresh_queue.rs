@@ -51,7 +51,7 @@ pub(crate) const INDEXES: &[&str] = &[
 /// Entries are (identity, result type, returns set, security definer, runtime execute).
 pub(crate) const MANAGED_FUNCTIONS: &[(&str, &str, bool, bool, bool)] = &[
     (
-        "registry_internal.capture_external_refresh_record(p_entity text, p_record uuid, p_changed text[])",
+        "registry_internal.capture_external_refresh_records(p_records jsonb)",
         "bigint",
         false,
         true,
@@ -67,7 +67,7 @@ pub(crate) const MANAGED_FUNCTIONS: &[(&str, &str, bool, bool, bool)] = &[
 ];
 
 const RUNTIME_FUNCTIONS: &[&str] = &[
-    "registry_internal.capture_external_refresh_record(text,uuid,text[])",
+    "registry_internal.capture_external_refresh_records(jsonb)",
     "registry_internal.purge_external_refresh_state(integer)",
 ];
 
@@ -348,6 +348,14 @@ pub(crate) async fn register_plans(
         return Err(QueueError::Invalid);
     }
     let client = transaction.transaction();
+    // Registration can retire and insert multiple plans. Take the table lock
+    // before touching plan rows so concurrent queue work cannot invert locks.
+    client
+        .batch_execute(
+            "LOCK TABLE registry_internal.registry_external_refresh_plans IN EXCLUSIVE MODE",
+        )
+        .await
+        .map_err(|_| QueueError::Unavailable)?;
     let active_ids = registrations
         .iter()
         .map(|plan| plan.plan_id.as_str())
@@ -458,31 +466,59 @@ ON CONFLICT (plan_id) DO UPDATE SET
     updated_at=clock_timestamp()
 "#;
 
+/// Only local identity and changed field names cross into the refresh queue.
+#[derive(serde::Serialize)]
+pub(crate) struct LocalRecordCapture {
+    pub(crate) entity_id: String,
+    pub(crate) record_id: Uuid,
+    pub(crate) changed_fields: BTreeSet<String>,
+}
+
 /// Stage local work inside the Record mutation transaction. Passing an empty
 /// field set means a create and therefore matches every active plan for the
 /// Record type. At capacity the plan is marked due instead of losing the
 /// reconciliation obligation.
+pub(crate) async fn capture_local_records(
+    client: &impl GenericClient,
+    captures: &[LocalRecordCapture],
+) -> Result<u64, QueueError> {
+    if captures.is_empty() {
+        return Ok(0);
+    }
+    if captures.iter().any(|capture| {
+        !valid_key(&capture.entity_id)
+            || capture.changed_fields.iter().any(|field| !valid_key(field))
+    }) {
+        return Err(QueueError::Invalid);
+    }
+    let records = serde_json::to_value(captures).map_err(|_| QueueError::Invalid)?;
+    let row = client
+        .query_one(
+            "SELECT registry_internal.capture_external_refresh_records($1)",
+            &[&records],
+        )
+        .await
+        .map_err(|_| QueueError::Unavailable)?;
+    let count: Option<i64> = row.get(0);
+    u64::try_from(count.ok_or(QueueError::Unavailable)?).map_err(|_| QueueError::Unavailable)
+}
+
+#[cfg(all(test, feature = "postgres-test"))]
 pub(crate) async fn capture_local_record(
     client: &impl GenericClient,
     entity_id: &str,
     record_id: Uuid,
     changed_fields: &BTreeSet<String>,
 ) -> Result<u64, QueueError> {
-    if !valid_key(entity_id) || changed_fields.iter().any(|field| !valid_key(field)) {
-        return Err(QueueError::Invalid);
-    }
-    let changed = changed_fields
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let row = client
-        .query_one(
-            "SELECT registry_internal.capture_external_refresh_record($1,$2,$3)",
-            &[&entity_id, &record_id, &changed],
-        )
-        .await
-        .map_err(|_| QueueError::Unavailable)?;
-    u64::try_from(row.get::<_, i64>(0)).map_err(|_| QueueError::Unavailable)
+    capture_local_records(
+        client,
+        &[LocalRecordCapture {
+            entity_id: entity_id.to_owned(),
+            record_id,
+            changed_fields: changed_fields.clone(),
+        }],
+    )
+    .await
 }
 
 /// Admit a source hint after HTTP authentication and source-binding checks.
@@ -519,8 +555,20 @@ pub(crate) async fn enqueue_hint(
     {
         return Err(QueueError::Invalid);
     }
-    let row = transaction
-        .transaction()
+    // Wait for the plan lock before opening the receipt query's snapshot.
+    let client = transaction.transaction();
+    let row = client
+        .query_opt(
+            "SELECT 1 FROM registry_internal.registry_external_refresh_plans
+             WHERE plan_id=$1 FOR UPDATE",
+            &[&plan_id],
+        )
+        .await
+        .map_err(|_| QueueError::Unavailable)?;
+    if row.is_none() {
+        return Err(QueueError::AuthorityChanged);
+    }
+    let row = client
         .query_one(
             ENQUEUE_HINT_SQL,
             &[
@@ -1493,48 +1541,68 @@ CREATE INDEX IF NOT EXISTS registry_external_refresh_receipts_expiry_idx
 CREATE INDEX IF NOT EXISTS registry_external_refresh_plan_capture_idx
     ON registry_internal.registry_external_refresh_plans(root_entity_id,active,plan_id);
 
-CREATE OR REPLACE FUNCTION registry_internal.capture_external_refresh_record(
-    p_entity text,p_record uuid,p_changed text[]
+CREATE OR REPLACE FUNCTION registry_internal.capture_external_refresh_records(
+    p_records jsonb
 ) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, registry_internal AS $body$
-DECLARE plan registry_internal.registry_external_refresh_plans; captured bigint := 0;
-    pending bigint; target text;
+DECLARE plan record; change record; captured bigint := 0; pending bigint; target text;
 BEGIN
-    IF p_entity IS NULL OR octet_length(p_entity) NOT BETWEEN 1 AND 1024
-        OR p_record IS NULL OR p_changed IS NULL
-        OR EXISTS (SELECT 1 FROM unnest(p_changed) field WHERE field IS NULL OR octet_length(field) NOT BETWEEN 1 AND 1024)
-        THEN RETURN NULL; END IF;
-    FOR plan IN SELECT * FROM registry_internal.registry_external_refresh_plans
-        WHERE active AND root_entity_id=p_entity
-          AND (cardinality(p_changed)=0 OR watched_fields && p_changed)
-        ORDER BY plan_id FOR UPDATE
+    IF jsonb_typeof(p_records) IS DISTINCT FROM 'array' THEN RETURN NULL; END IF;
+    IF EXISTS (
+        SELECT 1 FROM jsonb_to_recordset(p_records) AS input(entity_id text,record_id uuid,changed_fields text[])
+        WHERE input.entity_id IS NULL OR octet_length(input.entity_id) NOT BETWEEN 1 AND 1024
+            OR input.record_id IS NULL OR input.changed_fields IS NULL
+            OR EXISTS (SELECT 1 FROM unnest(input.changed_fields) field
+                       WHERE field IS NULL OR octet_length(field) NOT BETWEEN 1 AND 1024)
+    ) THEN RETURN NULL; END IF;
+
+    -- Use one ordered plan scan for the entire mutation, even when the
+    -- input spans Record types or has different watched fields per Record.
+    FOR plan IN
+        SELECT inventory.*, ttl.seconds
+        FROM registry_internal.registry_external_refresh_plans inventory
+        CROSS JOIN LATERAL (
+            SELECT min(scope.cache_ttl_seconds)::double precision AS seconds
+            FROM unnest(inventory.projection_epochs) requested(epoch)
+            JOIN registry_internal.registry_external_projection_scopes scope
+              ON scope.epoch=requested.epoch AND scope.active
+            HAVING count(DISTINCT scope.epoch)=cardinality(inventory.projection_epochs)
+        ) ttl
+        WHERE inventory.active AND EXISTS (
+            SELECT 1 FROM jsonb_to_recordset(p_records) AS input(entity_id text,changed_fields text[])
+            WHERE input.entity_id=inventory.root_entity_id
+              AND (cardinality(input.changed_fields)=0 OR inventory.watched_fields && input.changed_fields))
+        ORDER BY inventory.plan_id FOR UPDATE OF inventory
     LOOP
-        target := 'local:'||p_record::text;
-        SELECT count(*) INTO pending FROM registry_internal.registry_external_refresh_work
-            WHERE plan_id=plan.plan_id AND plan_generation=plan.plan_generation;
-        IF pending>=plan.max_pending AND NOT EXISTS (
-            SELECT 1 FROM registry_internal.registry_external_refresh_work
-            WHERE plan_id=plan.plan_id AND target_digest=target) THEN
-            UPDATE registry_internal.registry_external_refresh_plans
-                SET reconciliation_due=true,reconciliation_generation=reconciliation_generation+1,
-                    next_due_at=least(next_due_at,clock_timestamp()),updated_at=clock_timestamp()
-                WHERE plan_id=plan.plan_id;
-            CONTINUE;
-        END IF;
-        INSERT INTO registry_internal.registry_external_refresh_work
-            (plan_id,plan_generation,kind,record_id,target_digest,expires_at)
-        VALUES (plan.plan_id,plan.plan_generation,'local',p_record,target,
-                clock_timestamp()+make_interval(secs => (
-                    SELECT min(scope.cache_ttl_seconds)::double precision
-                    FROM unnest(plan.projection_epochs) AS requested(epoch)
-                    JOIN registry_internal.registry_external_projection_scopes scope
-                      ON scope.epoch=requested.epoch AND scope.active)))
-        ON CONFLICT (plan_id,target_digest) DO UPDATE SET
-            plan_generation=EXCLUDED.plan_generation,
-            enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
-            attempts=0,ready_at=clock_timestamp(),expires_at=EXCLUDED.expires_at,
-            lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL;
-        captured := captured+1;
+        FOR change IN
+            SELECT input.record_id
+            FROM jsonb_to_recordset(p_records) AS input(entity_id text,record_id uuid,changed_fields text[])
+            WHERE input.entity_id=plan.root_entity_id
+              AND (cardinality(input.changed_fields)=0 OR plan.watched_fields && input.changed_fields)
+        LOOP
+            target := 'local:'||change.record_id::text;
+            SELECT count(*) INTO pending FROM registry_internal.registry_external_refresh_work
+                WHERE plan_id=plan.plan_id AND plan_generation=plan.plan_generation;
+            IF pending>=plan.max_pending AND NOT EXISTS (
+                SELECT 1 FROM registry_internal.registry_external_refresh_work
+                WHERE plan_id=plan.plan_id AND target_digest=target) THEN
+                UPDATE registry_internal.registry_external_refresh_plans
+                    SET reconciliation_due=true,reconciliation_generation=reconciliation_generation+1,
+                        next_due_at=least(next_due_at,clock_timestamp()),updated_at=clock_timestamp()
+                    WHERE plan_id=plan.plan_id;
+                CONTINUE;
+            END IF;
+            INSERT INTO registry_internal.registry_external_refresh_work
+                (plan_id,plan_generation,kind,record_id,target_digest,expires_at)
+            VALUES (plan.plan_id,plan.plan_generation,'local',change.record_id,target,
+                    clock_timestamp()+make_interval(secs => plan.seconds))
+            ON CONFLICT (plan_id,target_digest) DO UPDATE SET
+                plan_generation=EXCLUDED.plan_generation,
+                enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
+                attempts=0,ready_at=clock_timestamp(),expires_at=EXCLUDED.expires_at,
+                lease_generation=NULL,lease_token=NULL,lease_expires_at=NULL;
+            captured := captured+1;
+        END LOOP;
     END LOOP;
     RETURN captured;
 END $body$;
@@ -1610,7 +1678,7 @@ END $body$;
 const ENQUEUE_HINT_SQL: &str = r#"
 WITH plan AS MATERIALIZED (
     SELECT * FROM registry_internal.registry_external_refresh_plans
-    WHERE plan_id=$1 FOR UPDATE
+    WHERE plan_id=$1
 ), existing AS MATERIALIZED (
     SELECT payload_digest FROM registry_internal.registry_external_refresh_receipts
     WHERE plan_id=$1 AND receipt_digest=$3||':'||$4 AND expires_at>clock_timestamp()
@@ -1645,8 +1713,7 @@ WITH plan AS MATERIALIZED (
         (plan_id,plan_generation,kind,projection_epoch,selector_scheme,selector,target_digest,expires_at)
     SELECT plan_id,plan_generation,'source',$7,$8,$9,
            $6,
-           to_timestamp($10::bigint) FROM plan
-    WHERE (SELECT value FROM status)='accepted'
+           to_timestamp($10::bigint) FROM plan CROSS JOIN receipt
     ON CONFLICT (plan_id,target_digest) DO UPDATE SET
         plan_generation=EXCLUDED.plan_generation,
         enqueue_generation=registry_external_refresh_work.enqueue_generation+1,
@@ -1662,7 +1729,9 @@ WITH plan AS MATERIALIZED (
     WHERE current.plan_id=$1 AND status.value='capacity'
     RETURNING 1
 )
-SELECT value FROM status
+SELECT CASE WHEN value='accepted' AND NOT EXISTS (SELECT 1 FROM receipt)
+            THEN 'unavailable' ELSE value END
+FROM status
 "#;
 
 #[cfg(test)]
@@ -1746,6 +1815,13 @@ mod postgres_tests {
     use super::*;
     use crate::postgres::external_projection::postgres_tests::Activated;
 
+    #[derive(Clone, Copy)]
+    struct HintInput<'a> {
+        payload_digest: &'a str,
+        target_digest: &'a str,
+        selector: &'a str,
+    }
+
     async fn transaction<'a>(
         runtime: &'a mut deadpool_postgres::Client,
         registry: &crate::model::CompiledRegistry,
@@ -1759,6 +1835,323 @@ mod postgres_tests {
         )
         .await
         .unwrap()
+    }
+
+    fn registration(
+        fixture: &Activated,
+        plan_id: &str,
+        authority_digest: &str,
+        projection_epochs: Vec<Uuid>,
+    ) -> PlanRegistration {
+        PlanRegistration {
+            plan_id: plan_id.to_owned(),
+            package_digest: fixture.expected.package_digest.clone(),
+            activation_id: fixture.expected.activation_uuid().unwrap(),
+            authority_digest: authority_digest.to_owned(),
+            root_entity_id: "local-record".to_owned(),
+            watched_fields: BTreeSet::from(["subject-key".to_owned()]),
+            projection_epochs,
+            interval_seconds: 900,
+            page_size: 50,
+            max_pending: 100,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn race_hint_after_plan_lock(
+        fixture: &Activated,
+        registry: &crate::model::CompiledRegistry,
+        projection_epoch: Uuid,
+        receipt: &str,
+        first: HintInput<'_>,
+        second: HintInput<'_>,
+        first_attempts: Option<i16>,
+    ) -> (bool, Result<HintAdmission, QueueError>) {
+        let (plan_id, authority_digest, expires_at) = ("plan", "authority", 4_102_444_800_i64);
+        let mut first_runtime = fixture.pool.get().await.unwrap();
+        let mut second_runtime = fixture.pool.get().await.unwrap();
+        let first_tx = transaction(&mut first_runtime, registry, &fixture.expected).await;
+        let second_tx = transaction(&mut second_runtime, registry, &fixture.expected).await;
+        first_tx
+            .transaction()
+            .query_one(
+                "SELECT 1 FROM registry_internal.registry_external_refresh_plans
+                 WHERE plan_id=$1 FOR UPDATE",
+                &[&plan_id],
+            )
+            .await
+            .unwrap();
+        let second_pid: i32 = second_tx
+            .transaction()
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        let first_pid: i32 = first_tx
+            .transaction()
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        let second_admission = enqueue_hint(
+            &second_tx,
+            plan_id,
+            authority_digest,
+            "notifier",
+            receipt,
+            second.payload_digest,
+            second.target_digest,
+            projection_epoch,
+            "urn:test:keys",
+            second.selector,
+            expires_at,
+        );
+        let commit_first = async {
+            let waited = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let waiting: bool = fixture
+                        .database
+                        .admin
+                        .query_one(
+                            "SELECT $2=ANY(pg_blocking_pids($1))",
+                            &[&second_pid, &first_pid],
+                        )
+                        .await
+                        .unwrap()
+                        .get(0);
+                    if waiting {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .is_ok();
+            let admitted = enqueue_hint(
+                &first_tx,
+                plan_id,
+                authority_digest,
+                "notifier",
+                receipt,
+                first.payload_digest,
+                first.target_digest,
+                projection_epoch,
+                "urn:test:keys",
+                first.selector,
+                expires_at,
+            )
+            .await;
+            if let Some(attempts) = first_attempts {
+                first_tx
+                    .transaction()
+                    .execute(
+                        "UPDATE registry_internal.registry_external_refresh_work
+                         SET attempts=$3 WHERE plan_id=$1 AND target_digest=$2",
+                        &[&plan_id, &first.target_digest, &attempts],
+                    )
+                    .await
+                    .unwrap();
+            }
+            let committed = first_tx.commit().await;
+            (waited, admitted, committed)
+        };
+        let (second_admission, (waited, first_admission, first_commit)) =
+            tokio::join!(second_admission, commit_first);
+        assert_eq!(first_admission.unwrap(), HintAdmission::Accepted);
+        first_commit.unwrap();
+        second_tx.commit().await.unwrap();
+        drop(first_runtime);
+        drop(second_runtime);
+        (waited, second_admission)
+    }
+
+    #[tokio::test]
+    async fn local_capture_skips_when_any_required_epoch_is_inactive() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let primary = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let secondary_epoch = Uuid::new_v4();
+        fixture
+            .migration
+            .execute(
+                "INSERT INTO registry_internal.registry_external_projection_scopes
+                    (projection_id,epoch,binding_digest,grant_digest,cache_ttl_seconds)
+                 VALUES ('secondary',$1,'secondary-binding','secondary-grant',60)",
+                &[&secondary_epoch],
+            )
+            .await
+            .unwrap();
+        let registration = registration(
+            &fixture,
+            "plan",
+            "authority",
+            vec![primary.epoch, secondary_epoch],
+        );
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, &[registration]).await.unwrap();
+        tx.commit().await.unwrap();
+
+        fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_projection_scopes
+                 SET active=false WHERE epoch=$1 OR epoch=$2",
+                &[&primary.epoch, &secondary_epoch],
+            )
+            .await
+            .unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        assert_eq!(
+            capture_local_record(
+                tx.transaction(),
+                "local-record",
+                Uuid::new_v4(),
+                &BTreeSet::from(["subject-key".to_owned()]),
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            tx.transaction()
+                .query_one("SELECT 1", &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            1,
+            "capture must not abort the authoritative write transaction"
+        );
+        tx.rollback().await.unwrap();
+
+        fixture
+            .migration
+            .execute(
+                "UPDATE registry_internal.registry_external_projection_scopes
+                 SET active=true WHERE epoch=$1",
+                &[&primary.epoch],
+            )
+            .await
+            .unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        assert_eq!(
+            capture_local_record(
+                tx.transaction(),
+                "local-record",
+                Uuid::new_v4(),
+                &BTreeSet::from(["subject-key".to_owned()]),
+            )
+            .await
+            .unwrap(),
+            0,
+            "an inactive required label epoch must suppress the parent capture"
+        );
+        tx.commit().await.unwrap();
+        drop(runtime);
+        let queued: i64 = fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_refresh_work",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(queued, 0);
+        fixture.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn hint_admission_refreshes_snapshot_after_waiting_for_the_plan_lock() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let registration = registration(&fixture, "plan", "authority", vec![scope.epoch]);
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, &[registration]).await.unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+
+        let duplicate = HintInput {
+            payload_digest: "duplicate-payload",
+            target_digest: "duplicate-target",
+            selector: "duplicate-selector",
+        };
+        let (waited, duplicate_result) = race_hint_after_plan_lock(
+            &fixture,
+            &registry,
+            scope.epoch,
+            "duplicate-receipt",
+            duplicate,
+            duplicate,
+            Some(3),
+        )
+        .await;
+        assert!(
+            waited,
+            "the second admission must wait on the plan row lock"
+        );
+        assert_eq!(duplicate_result.unwrap(), HintAdmission::Duplicate);
+        let attempts: i16 = fixture
+            .migration
+            .query_one(
+                "SELECT attempts FROM registry_internal.registry_external_refresh_work
+                 WHERE plan_id='plan' AND target_digest='duplicate-target'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(attempts, 3, "an exact replay must not reset retry state");
+
+        let first = HintInput {
+            payload_digest: "first-payload",
+            target_digest: "first-target",
+            selector: "first-selector",
+        };
+        let conflicting = HintInput {
+            payload_digest: "conflicting-payload",
+            target_digest: "conflicting-target",
+            selector: "conflicting-selector",
+        };
+        let (waited, conflict_result) = race_hint_after_plan_lock(
+            &fixture,
+            &registry,
+            scope.epoch,
+            "conflict-receipt",
+            first,
+            conflicting,
+            None,
+        )
+        .await;
+        assert!(
+            waited,
+            "the conflicting admission must wait on the plan row lock"
+        );
+        assert_eq!(conflict_result.unwrap_err(), QueueError::Conflict);
+        let targets: Vec<String> = fixture
+            .migration
+            .query(
+                "SELECT target_digest FROM registry_internal.registry_external_refresh_work
+                 WHERE plan_id='plan'
+                   AND target_digest IN ('first-target','conflicting-target')
+                 ORDER BY target_digest",
+                &[],
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(targets, vec!["first-target".to_owned()]);
+        fixture.cleanup().await;
     }
 
     #[tokio::test]
