@@ -1312,6 +1312,107 @@ async fn encrypted_fields_round_trip_and_store_only_envelopes() {
     server.shutdown().await;
 }
 
+/// An encrypted value long enough that its stored envelope exceeds 57 bytes,
+/// so PostgreSQL's `encode(..., 'base64')` wraps the projection at 76
+/// characters. Every read projection must still hand back the plaintext.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn long_envelopes_read_back_through_every_read_projection() {
+    let server = boot_live_server().await;
+    let long_secret = "long-secret-value-".repeat(10);
+    let (status, created, _etag) = create_holder(
+        &server,
+        "long-envelope-create",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "long-envelope",
+            "secret": long_secret,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["data"]["domainData"]["secret"], long_secret);
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("record identifier is present")
+        .to_owned();
+
+    let envelope = stored_column(
+        &server,
+        &envelope_column(server.registry(), "secret"),
+        &record_id,
+    )
+    .await;
+    assert!(
+        envelope.len() > 57,
+        "the envelope must wrap PostgreSQL's base64 output: {} bytes",
+        envelope.len()
+    );
+
+    let fetched = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let fetched = body_json(fetched).await;
+    assert_eq!(fetched["data"]["domainData"]["secret"], long_secret);
+
+    let listed = send(
+        &server,
+        Method::GET,
+        "/v1/records/holders?$select=jurisdiction,label,secret",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    let items = listed["items"].as_array().expect("list items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["domainData"]["secret"], long_secret);
+
+    let snapshot = send(
+        &server,
+        Method::GET,
+        "/v1/records/holders:snapshot?$select=jurisdiction,label,secret",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot = body_json(snapshot).await;
+    assert_eq!(snapshot["items"][0]["domainData"]["secret"], long_secret);
+
+    let revisions = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}/revisions"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(revisions.status(), StatusCode::OK);
+    let revisions = body_json(revisions).await;
+    assert_eq!(revisions["items"][0]["domainData"]["secret"], long_secret);
+
+    let detail = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}/revisions/1"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = body_json(detail).await;
+    assert_eq!(detail["data"]["domainData"]["secret"], long_secret);
+
+    server.shutdown().await;
+}
+
 /// The single stored idempotency body of one result kind, as UTF-8 text.
 async fn cached_response_body(server: &LiveServer, result_kind: &str) -> String {
     let rows = server

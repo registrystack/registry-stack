@@ -21,6 +21,12 @@
   on `geometry.type === "Point"` before reading `coordinates`. In Python the
   `.pyi` stubs describe the union, so a type checker flags code that assumes a
   Point.
+- Fix reading back an encrypted field on PostgreSQL. A registry that uses
+  field encryption failed a record, list, snapshot or revision read with
+  `503 source.unavailable` once a stored value was long enough for its
+  encrypted envelope to exceed 57 bytes, and the value could not be read
+  until this fix. Writes and shorter values were unaffected. The fault was in the read path since v0.33.0, through v0.46.0; no
+  stored data changes and nothing needs migrating.
 
 ## 0.46.0 - 2026-11-08
 
