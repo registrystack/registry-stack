@@ -560,13 +560,17 @@ fn isolate_environment(
 mod tests {
     use std::collections::BTreeSet;
     use std::ffi::OsString;
+    use std::path::Path;
+    use std::process::Stdio;
+
+    use tokio::process::Command;
 
     use super::{
         exchange_with, isolate_environment, worker_command, WorkerProblem, WorkerResponse,
         WORKER_ENVIRONMENT,
     };
 
-    fn kept_names(command: &tokio::process::Command) -> BTreeSet<String> {
+    fn kept_names(command: &Command) -> BTreeSet<String> {
         command
             .as_std()
             .get_envs()
@@ -576,7 +580,7 @@ mod tests {
     }
 
     /// Names (never values) of the variables a command's child prints.
-    async fn printed_names(command: &mut tokio::process::Command) -> BTreeSet<String> {
+    async fn printed_names(command: &mut Command) -> BTreeSet<String> {
         let output = command.output().await.expect("stand-in runs");
         assert!(output.status.success(), "stand-in exits cleanly");
         String::from_utf8_lossy(&output.stdout)
@@ -624,13 +628,13 @@ mod tests {
             .map(|(name, _)| name.to_string_lossy().into_owned())
             .filter(|name| WORKER_ENVIRONMENT.contains(&name.as_str()))
             .collect();
-        let command = worker_command(std::path::Path::new("/usr/bin/env"));
+        let command = worker_command(Path::new("/usr/bin/env"));
         assert_eq!(kept_names(&command), expected);
     }
 
     /// A stand-in worker that answers with a framed `Failed` response and
     /// then runs `after` (shell), so a test controls how it exits.
-    fn answering_stand_in(dir: &std::path::Path, after: &str) -> std::path::PathBuf {
+    fn answering_stand_in(dir: &Path, after: &str) -> Command {
         let answer = WorkerResponse::Failed {
             problem: WorkerProblem {
                 kind: "internal".to_owned(),
@@ -651,36 +655,42 @@ mod tests {
     /// open until it has the answer, so the request is read by its length
     /// prefix (little-endian `u32`), one byte per `dd` read so that nothing
     /// past the frame is consumed.
-    fn framing_stand_in(dir: &std::path::Path, body: &[u8], after: &str) -> std::path::PathBuf {
+    fn framing_stand_in(dir: &Path, body: &[u8], after: &str) -> Command {
         let mut frame = (body.len() as u32).to_le_bytes().to_vec();
         frame.extend_from_slice(body);
         stand_in_with_output(dir, &frame, after)
     }
 
-    fn stand_in_with_output(
-        dir: &std::path::Path,
-        stdout: &[u8],
-        after: &str,
-    ) -> std::path::PathBuf {
+    fn stand_in_with_output(dir: &Path, stdout: &[u8], after: &str) -> Command {
         let frame_file = dir.join("answer.frame");
         std::fs::write(&frame_file, stdout).expect("write frame");
-        let stand_in = dir.join("answering-worker");
+        let stand_in = dir.join("answering-worker.sh");
         std::fs::write(
             &stand_in,
             format!(
-                "#!/bin/sh\n\
-                 set -- $(dd bs=1 count=4 2>/dev/null | od -An -tu1)\n\
+                "set -- $(dd bs=1 count=4 2>/dev/null | od -An -tu1)\n\
                  dd bs=1 count=$(($1 + $2 * 256 + $3 * 65536 + $4 * 16777216)) \
                  of=/dev/null 2>/dev/null\n\
                  cat '{}'\n{after}\n",
                 frame_file.display()
             ),
         )
-        .expect("write stand-in");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o700))
-            .expect("make stand-in executable");
-        stand_in
+        .expect("write stand-in script");
+        stand_in_command(&stand_in)
+    }
+
+    fn stand_in_command(script: &Path) -> Command {
+        // Executing a freshly written script directly can race concurrent
+        // forks on Linux and fail with ETXTBSY. The shell reads it as data.
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        isolate_environment(&mut command, std::env::vars_os());
+        command
     }
 
     #[tokio::test]
@@ -707,15 +717,16 @@ mod tests {
                 .json()
                 .with_writer(log.reopen().expect("open worker operator log"))
                 .finish();
-            let problem = exchange_with(
-                worker_command(&stand_in),
-                request,
-                std::time::Duration::from_secs(5),
-            )
-            .with_subscriber(subscriber)
-            .await
-            .expect_err("worker sent no response");
-            assert_eq!(problem.kind, crate::problem::ProblemKind::RenderPanicked);
+            let problem = exchange_with(stand_in, request, std::time::Duration::from_secs(5))
+                .with_subscriber(subscriber)
+                .await
+                .expect_err("worker sent no response");
+            assert_eq!(
+                problem.kind,
+                crate::problem::ProblemKind::RenderPanicked,
+                "{}",
+                problem.detail
+            );
             assert!(problem.detail.contains(expected), "{}", problem.detail);
             #[cfg(target_os = "linux")]
             assert!(problem
@@ -747,13 +758,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let stand_in = stand_in_with_output(dir.path(), b"", "exec 1>&-\nexec sleep 10");
         let problem = exchange_with(
-            worker_command(&stand_in),
+            stand_in,
             super::seal_tests::receipt_request(None),
             std::time::Duration::from_secs(1),
         )
         .await
         .expect_err("worker closed its response pipe");
-        assert_eq!(problem.kind, crate::problem::ProblemKind::RenderPanicked);
+        assert_eq!(
+            problem.kind,
+            crate::problem::ProblemKind::RenderPanicked,
+            "{}",
+            problem.detail
+        );
         assert!(!problem.detail.contains("signal"), "{}", problem.detail);
     }
 
@@ -771,12 +787,8 @@ mod tests {
         ] {
             let stand_in = answering_stand_in(dir.path(), &after);
             let started = std::time::Instant::now();
-            let answer = exchange_with(
-                worker_command(&stand_in),
-                super::seal_tests::receipt_request(None),
-                deadline,
-            )
-            .await;
+            let answer =
+                exchange_with(stand_in, super::seal_tests::receipt_request(None), deadline).await;
             let elapsed = started.elapsed();
             if let Ok(pid) = std::fs::read_to_string(&pid_file) {
                 let status = std::process::Command::new("kill")
@@ -814,7 +826,7 @@ mod tests {
         let body = format!(r#"{{"rendered":{{"smuggled":{nested}}}}}"#);
         let stand_in = framing_stand_in(dir.path(), body.as_bytes(), "exit 0");
         let answer = exchange_with(
-            worker_command(&stand_in),
+            stand_in,
             super::seal_tests::receipt_request(None),
             std::time::Duration::from_secs(10),
         )
