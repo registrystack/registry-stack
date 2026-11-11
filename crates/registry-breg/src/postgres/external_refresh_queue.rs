@@ -368,7 +368,7 @@ pub(crate) async fn register_plans(
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let epochs = plan.projection_epochs.iter().copied().collect::<Vec<_>>();
+        let epochs = plan.projection_epochs.to_vec();
         client
             .execute(
                 REGISTER_PLAN_SQL,
