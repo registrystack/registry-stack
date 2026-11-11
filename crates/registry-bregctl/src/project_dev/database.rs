@@ -9,6 +9,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rustls::pki_types::{pem::PemObject as _, CertificateDer};
+use serde::{Deserialize, Serialize};
 use tokio::runtime::{Builder, Runtime};
 use tokio_postgres::{
     config::{Host, SslMode},
@@ -30,6 +31,9 @@ const STATEMENT_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const RECOVERY_IDENTITY_QUERY: &str = "SELECT system_identifier, \
+       pg_catalog.current_database()::text \
+  FROM pg_catalog.pg_control_system()";
 /// Lets a role holding CREATEROLE use the roles it creates. PostgreSQL 16 and
 /// later grant such a creator only ADMIN on them, which is not enough for
 /// `CREATE SCHEMA ... AUTHORIZATION` or `CREATE DATABASE ... OWNER`.
@@ -170,21 +174,84 @@ fn ownership_lock_statement(run_id: &str) -> Result<String> {
     Ok(format!("SELECT pg_advisory_lock({key})"))
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct RecoveryIdentity {
+    system_identifier: i64,
+    database: String,
+}
+
+fn require_recovery_identity(expected: &RecoveryIdentity, actual: &RecoveryIdentity) -> Result<()> {
+    if expected.system_identifier != actual.system_identifier {
+        bail!(
+            "this run belongs to a different PostgreSQL cluster; use the administrator URL from startup"
+        );
+    }
+    if expected.database != actual.database {
+        bail!(
+            "this run belongs to a different PostgreSQL maintenance database; use the administrator URL from startup"
+        );
+    }
+    Ok(())
+}
+
+fn read_recovery_identity(
+    runtime: &Runtime,
+    client: &Client,
+    deadline: Instant,
+) -> Result<RecoveryIdentity> {
+    let row = runtime
+        .block_on(bounded_operation(
+            "recovery identity check",
+            client.query_one(RECOVERY_IDENTITY_QUERY, &[]),
+            remaining_timeout(deadline, OPERATION_TIMEOUT)?,
+        ))
+        .map_err(anyhow::Error::new)
+        .context(
+            "cannot identify the PostgreSQL cluster; the administrator must be allowed to execute pg_catalog.pg_control_system()",
+        )?;
+    Ok(RecoveryIdentity {
+        system_identifier: row
+            .try_get(0)
+            .context("cannot read the PostgreSQL cluster identifier")?,
+        database: row
+            .try_get(1)
+            .context("cannot read the PostgreSQL administrator database name")?,
+    })
+}
+
 fn open_admin_session(
     runtime: &Runtime,
     config: &Config,
     tls: &MakeRustlsConnect,
     ownership_lock: &str,
+    expected_identity: Option<&RecoveryIdentity>,
     deadline: Instant,
 ) -> Result<(
     Client,
     tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+    RecoveryIdentity,
 )> {
     let (client, connection) = runtime.block_on(bounded_connection(
         config.connect(tls.clone()),
         remaining_timeout(deadline, CONNECTION_TIMEOUT)?,
     ))?;
     let connection_task = runtime.spawn(connection);
+    // PostgreSQL advisory locks are scoped to one cluster and database. Bind
+    // both before acquiring the lock, or the same run id at another target
+    // could appear to be exclusively owned.
+    let identity = match read_recovery_identity(runtime, &client, deadline) {
+        Ok(identity) => identity,
+        Err(error) => {
+            connection_task.abort();
+            return Err(error);
+        }
+    };
+    if let Some(expected) = expected_identity {
+        if let Err(error) = require_recovery_identity(expected, &identity) {
+            connection_task.abort();
+            return Err(error);
+        }
+    }
     let locked = runtime.block_on(bounded_operation(
         "run ownership lock acquisition",
         client.batch_execute(ownership_lock),
@@ -194,7 +261,7 @@ fn open_admin_session(
         connection_task.abort();
         return Err(error).context("cannot acquire the PostgreSQL run ownership lock");
     }
-    Ok((client, connection_task))
+    Ok((client, connection_task, identity))
 }
 
 pub(super) struct DatabaseUrls {
@@ -215,6 +282,7 @@ pub(super) struct Database {
     tls: MakeRustlsConnect,
     admin_config: Config,
     ownership_lock: String,
+    recovery_identity: RecoveryIdentity,
     endpoint: Endpoint,
     run_id: String,
     acquisitions: Vec<Acquisition>,
@@ -257,6 +325,24 @@ impl Endpoint {
 
 impl Database {
     pub(super) fn connect(admin_url: &str, ca_pem: Option<&[u8]>, run_id: &str) -> Result<Self> {
+        Self::connect_checked(admin_url, ca_pem, run_id, None)
+    }
+
+    pub(super) fn connect_for_recovery(
+        admin_url: &str,
+        ca_pem: Option<&[u8]>,
+        run_id: &str,
+        expected_identity: &RecoveryIdentity,
+    ) -> Result<Self> {
+        Self::connect_checked(admin_url, ca_pem, run_id, Some(expected_identity))
+    }
+
+    fn connect_checked(
+        admin_url: &str,
+        ca_pem: Option<&[u8]>,
+        run_id: &str,
+        expected_identity: Option<&RecoveryIdentity>,
+    ) -> Result<Self> {
         validate_run_id(run_id)?;
         let (mut admin_config, endpoint) = admin_config(admin_url)?;
         admin_config.ssl_mode(SslMode::Require);
@@ -267,12 +353,13 @@ impl Database {
             .build()
             .context("cannot initialize the PostgreSQL executor")?;
         let ownership_lock = ownership_lock_statement(run_id)?;
-        let session_deadline = Instant::now() + CONNECTION_TIMEOUT + OPERATION_TIMEOUT;
-        let (client, connection_task) = open_admin_session(
+        let session_deadline = Instant::now() + CLEANUP_ATTEMPT_TIMEOUT;
+        let (client, connection_task, recovery_identity) = open_admin_session(
             &runtime,
             &admin_config,
             &tls,
             &ownership_lock,
+            expected_identity,
             session_deadline,
         )
         .context("cannot establish the PostgreSQL administrator session over verified TLS")
@@ -286,11 +373,16 @@ impl Database {
             tls,
             admin_config,
             ownership_lock,
+            recovery_identity,
             endpoint,
             run_id: run_id.to_owned(),
             acquisitions: Vec::new(),
             runtime,
         })
+    }
+
+    pub(super) fn recovery_identity(&self) -> &RecoveryIdentity {
+        &self.recovery_identity
     }
 
     pub(super) fn provision(
@@ -379,11 +471,12 @@ impl Database {
         // session lock orders this replacement session after an unconfirmed
         // CREATE has committed or rolled back, so cleanup cannot run too early.
         self.retire_admin_session();
-        let (client, connection_task) = open_admin_session(
+        let (client, connection_task, _) = open_admin_session(
             &self.runtime,
             &self.admin_config,
             &self.tls,
             &self.ownership_lock,
+            Some(&self.recovery_identity),
             deadline,
         )
         .context("cannot reconnect to the PostgreSQL administrator database")?;
@@ -976,6 +1069,7 @@ mod tests {
             &stalled_admin_config(port),
             &untrusting_tls(),
             "SELECT 1",
+            None,
             Instant::now() + Duration::from_millis(300),
         ) else {
             panic!("a server that never answers opened a session");
@@ -1036,6 +1130,10 @@ mod tests {
             tls: untrusting_tls(),
             admin_config: stalled_admin_config(stalled_port),
             ownership_lock: "SELECT 1".to_owned(),
+            recovery_identity: RecoveryIdentity {
+                system_identifier: 23,
+                database: "postgres".to_owned(),
+            },
             endpoint: Endpoint {
                 host: UrlHost::Ipv4(std::net::Ipv4Addr::LOCALHOST),
                 port: Some(stalled_port),
@@ -1151,6 +1249,49 @@ mod tests {
             "SELECT pg_advisory_lock(-81985529216486896)"
         );
         assert!(ownership_lock_statement("short").is_err());
+    }
+
+    #[test]
+    fn recovery_refuses_a_different_postgresql_cluster() {
+        let expected = RecoveryIdentity {
+            system_identifier: 23,
+            database: "postgres".to_owned(),
+        };
+        let actual = RecoveryIdentity {
+            system_identifier: 42,
+            database: "postgres".to_owned(),
+        };
+        let error = require_recovery_identity(&expected, &actual).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "this run belongs to a different PostgreSQL cluster; use the administrator URL from startup"
+        );
+    }
+
+    #[test]
+    fn recovery_refuses_a_different_administrator_database_in_the_same_cluster() {
+        let expected = RecoveryIdentity {
+            system_identifier: 23,
+            database: "postgres".to_owned(),
+        };
+        let actual = RecoveryIdentity {
+            system_identifier: 23,
+            database: "template1".to_owned(),
+        };
+        let error = require_recovery_identity(&expected, &actual).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "this run belongs to a different PostgreSQL maintenance database; use the administrator URL from startup"
+        );
+    }
+
+    #[test]
+    fn recovery_accepts_the_original_postgresql_target() {
+        let identity = RecoveryIdentity {
+            system_identifier: 23,
+            database: "postgres".to_owned(),
+        };
+        require_recovery_identity(&identity, &identity).unwrap();
     }
 
     #[test]

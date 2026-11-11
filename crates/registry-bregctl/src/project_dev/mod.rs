@@ -4,6 +4,7 @@
 
 mod bindings;
 mod database;
+pub(crate) mod guard;
 mod issuer;
 mod journey;
 pub(crate) mod plan;
@@ -37,7 +38,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use self::{
-    database::Database,
+    database::{Database, RecoveryIdentity},
     issuer::Issuer,
     plan::{Plan, Product},
     products::{ProductRunner, SchemaPerson},
@@ -50,6 +51,7 @@ const DATABASE_URL: &str = "RSTACK_DEV_DATABASE_URL";
 const CA_FILE: &str = "RSTACK_DEV_DATABASE_CA";
 const REPORT: &str = "report.json";
 const PENDING: &str = "cleanup-pending.json";
+const POSTGRES_IDENTITY: &str = "postgres-identity.json";
 const CLEANUP_CAP: Duration = Duration::from_secs(30 * 60);
 const POLL: Duration = Duration::from_millis(100);
 // A capture can contain the 1 MiB development plan after JSON escaping,
@@ -481,16 +483,6 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
         {
             writeln!(output, "  stopped process group {group}")?;
         }
-        for group in recovered["skipped_process_groups"]
-            .as_array()
-            .into_iter()
-            .flatten()
-        {
-            writeln!(
-                output,
-                "  left process group {group} running: its ID now belongs to another process"
-            )?;
-        }
         for name in recovered["databases_and_roles"]
             .as_array()
             .into_iter()
@@ -675,6 +667,8 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     };
     let preparation = (|| {
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
+        private_directory(&root.join(guard::DIRECTORY))?;
+        write_private(&root.join(POSTGRES_IDENTITY), b"null")?;
         let supervisor_log = open_supervisor_log(&root)?;
         Command::new(env::current_exe()?)
             .arg("project-dev")
@@ -814,6 +808,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         .mode(0o600)
         .open(root.join("worker.lock"))?;
     flock(&lock, FlockOperation::LockExclusive)?;
+    ensure_private(root, false)?;
     let mut database = None;
     let mut expiry = None;
     let prepared = catch_startup(|| {
@@ -832,8 +827,15 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 .map_err(|_| anyhow::anyhow!("missing PostgreSQL administrator URL"))?,
         );
         let issuer = Arc::new(Issuer::create(root)?);
-        let database = database.insert(Database::connect(&admin, ca.as_deref(), &input.run_id)?);
-        let urls = products.start(database, issuer.clone())?;
+        let connected = Database::connect(&admin, ca.as_deref(), &input.run_id)?;
+        // The cluster identity must be recorded before anything can create a database or role.
+        write_private(
+            &root.join(POSTGRES_IDENTITY),
+            &serde_json::to_vec(connected.recovery_identity())?,
+        )
+        .context("cannot record the PostgreSQL cluster for recovery")
+        .map_err(operational)?;
+        let urls = products.start(database.insert(connected), issuer.clone())?;
         let journey = products.journey(&issuer, &urls)?;
         ensure!(
             products.services_alive()?,
@@ -1075,10 +1077,9 @@ fn stop(run_id: &str) -> Result<Value> {
     Ok(simple_report(run_id, "stopped"))
 }
 
-/// Release the resources of a run whose supervisor is gone: stop its recorded
-/// processes, drop its databases and roles, and remove its directory. Every
-/// precondition is checked before anything is signalled or dropped, and a
-/// failure reports the facts needed to finish by hand.
+/// Wait for the lost supervisor's process guards to finish, then release the
+/// databases and roles on the original PostgreSQL cluster and remove the run
+/// directory. Hold the local lock across recovery to serialize retries.
 fn recover_run(run_id: &str) -> Result<Value> {
     let root = run_dir(run_id)?;
     if !root.exists() {
@@ -1090,10 +1091,14 @@ fn recover_run(run_id: &str) -> Result<Value> {
         "run {run_id} has no supervisor lock, so it is still starting or never started; run rstack dev stop {run_id}, or delete {} if the run never started",
         root.display()
     );
-    ensure!(
-        !supervisor_running(&root)?,
-        "run {run_id} still has a running supervisor; run rstack dev stop {run_id} without --recover"
-    );
+    let lock = match try_run_lock(&root) {
+        Ok(lock) => lock,
+        Err(_) if !root.exists() => return Ok(simple_report(run_id, "stopped")),
+        Err(error) => return Err(error),
+    };
+    let _lock = lock.with_context(|| {
+        format!("run {run_id} still has a running supervisor or recovery; use plain stop for a live supervisor")
+    })?;
     let unrecovered = |reason: String| -> anyhow::Error {
         let mut facts = lost_supervisor_facts(&root, run_id);
         facts["reason"] = json!(reason);
@@ -1103,38 +1108,45 @@ fn recover_run(run_id: &str) -> Result<Value> {
         }
         .into()
     };
-    let labels = provisioned_labels(&root).map_err(|error| unrecovered(format!("{error:#}")))?;
-    let plan = recovery::process_table()
-        .and_then(|table| recovery::plan(&recorded_processes(&root), &table))
-        .map_err(|error| unrecovered(format!("{error:#}")))?;
-    let admin = Zeroizing::new(env::var(DATABASE_URL).map_err(|_| {
-        unrecovered(
-            "no PostgreSQL administrator URL; pass --database-url or set RSTACK_DEV_DATABASE_URL"
-                .to_owned(),
+    let (stopped_groups, dropped) = (|| -> Result<_> {
+        // Status can read the last report while recovery holds the worker lock.
+        write_private(
+            &root.join(REPORT),
+            &serde_json::to_vec(&simple_report(run_id, "stopping"))?,
         )
-    })?);
-    let ca = env::var_os(CA_FILE)
-        .map(|path| plan::read(Path::new(&path), 1024 * 1024))
-        .transpose()
-        .map_err(|error| unrecovered(format!("cannot read the PostgreSQL CA file: {error:#}")))?;
-    // Connecting takes the run's ownership lock, which a live supervisor holds.
-    let mut database = Database::connect(&admin, ca.as_deref(), run_id)
-        .map_err(|error| unrecovered(format!("{error:#}")))?;
-    recovery::stop_groups(&plan.ours).map_err(|error| unrecovered(format!("{error:#}")))?;
-    for (label, spatial) in &labels {
-        database
-            .adopt(label, *spatial)
-            .map_err(|error| unrecovered(format!("{error:#}")))?;
-    }
-    let dropped = database.pending_names();
-    database
-        .cleanup()
-        .map_err(|error| unrecovered(format!("{error:#}")))?;
-    remove_run_dir(&root).map_err(|error| unrecovered(format!("{error:#}")))?;
+        .context("cannot mark the run as stopping")?;
+        // A null identity means the worker never began provisioning. Missing
+        // or invalid metadata cannot prove that there is nothing to release.
+        let identity = read_json::<Option<RecoveryIdentity>>(&root.join(POSTGRES_IDENTITY), 1024)
+            .context("cannot read the recorded PostgreSQL cluster for this run")?;
+        let mut database = identity
+            .map(|expected| {
+                let admin = Zeroizing::new(env::var(DATABASE_URL).context(
+                    "no PostgreSQL administrator URL; pass --database-url or set RSTACK_DEV_DATABASE_URL",
+                )?);
+                let ca = env::var_os(CA_FILE)
+                    .map(|path| plan::read(Path::new(&path), 1024 * 1024))
+                    .transpose()
+                    .context("cannot read the PostgreSQL CA file")?;
+                Database::connect_for_recovery(&admin, ca.as_deref(), run_id, &expected)
+            })
+            .transpose()?;
+        let stopped_groups = recovery::wait_for_guards(&root)?;
+        let mut dropped = Vec::new();
+        if let Some(database) = database.as_mut() {
+            for (label, spatial) in provisioned_labels(&root)? {
+                database.adopt(label, spatial)?;
+            }
+            dropped = database.pending_names();
+            database.cleanup()?;
+        }
+        remove_run_dir(&root)?;
+        Ok((stopped_groups, dropped))
+    })()
+    .map_err(|error| unrecovered(format!("{error:#}")))?;
     let mut report = simple_report(run_id, "stopped");
     report["recovered"] = json!({
-        "stopped_process_groups": plan.ours,
-        "skipped_process_groups": plan.reused,
+        "stopped_process_groups": stopped_groups,
         "databases_and_roles": dropped,
     });
     Ok(report)
@@ -1160,12 +1172,16 @@ fn supervisor_gone(root: &Path) -> Result<bool> {
 }
 
 fn supervisor_running(root: &Path) -> Result<bool> {
+    Ok(try_run_lock(root)?.is_none())
+}
+
+fn try_run_lock(root: &Path) -> Result<Option<File>> {
     ensure_private(root, false)?;
     let lock =
         File::open(root.join("worker.lock")).context("run supervisor lock is unavailable")?;
     match flock(&lock, FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => Ok(false),
-        Err(rustix::io::Errno::WOULDBLOCK) => Ok(true),
+        Ok(()) => Ok(Some(lock)),
+        Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
         Err(error) => Err(error).context("cannot check run supervisor lock"),
     }
 }

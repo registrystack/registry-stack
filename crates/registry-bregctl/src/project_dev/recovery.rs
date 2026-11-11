@@ -1,21 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Releasing the processes of a run whose supervisor is lost.
-//!
-//! A recorded process group is signalled only while it still belongs to the
-//! run: the leader's start time must equal the one recorded when the run
-//! started. Process IDs are reused, so a recorded ID alone proves nothing.
+//! Wait for the guards that own a lost worker's child processes.
 
 use anyhow::{bail, ensure, Context, Result};
-use rustix::process::{kill_process_group, Pid, Signal};
-use serde_json::Value;
+use rustix::fs::{flock, FlockOperation};
 use std::{
+    fs::{self, File},
+    path::Path,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
-const TERM_GRACE: Duration = Duration::from_secs(5);
-const KILL_GRACE: Duration = Duration::from_secs(5);
+const GUARD_WAIT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(100);
 
 /// One row of the process table.
@@ -24,17 +20,6 @@ pub(super) struct Row {
     pub pid: u32,
     pub pgid: u32,
     pub started: String,
-}
-
-/// What a recorded process group is now.
-#[derive(Debug, Eq, PartialEq)]
-pub(super) enum Group {
-    /// No process of the group remains.
-    Gone,
-    /// The group is the run's own.
-    Ours,
-    /// The recorded ID belongs to a different process now.
-    Reused,
 }
 
 /// Every process with its group and start time. `ps` is the one portable
@@ -86,114 +71,48 @@ pub(super) fn started_at(pid: u32) -> Option<String> {
         .map(|row| row.started)
 }
 
-/// Decide whether the recorded group `pgid` is still the run's. A group ID
-/// stays reserved while any member lives, so a group whose leader has gone
-/// but whose members remain is the original group.
-pub(super) fn classify(table: &[Row], pgid: u32, recorded_start: Option<&str>) -> Result<Group> {
-    match table.iter().find(|row| row.pid == pgid) {
-        Some(leader) => {
-            let recorded = recorded_start.with_context(|| {
-                format!("process group {pgid} cannot be verified: its start time was not recorded")
-            })?;
-            Ok(if leader.started == recorded {
-                Group::Ours
-            } else {
-                Group::Reused
-            })
+/// The worker creates each lock before launching a guard. Once the worker
+/// has exited, a late guard cannot start a workload because its control pipe
+/// is closed. A guard already running a workload holds its lock through reap.
+pub(super) fn wait_for_guards(root: &Path) -> Result<Vec<u32>> {
+    wait_for_guards_until(root, Instant::now() + GUARD_WAIT)?;
+    super::guard::runtime_groups(root)
+}
+
+fn wait_for_guards_until(root: &Path, deadline: Instant) -> Result<()> {
+    let directory = root.join(super::guard::DIRECTORY);
+    let entries = fs::read_dir(directory).context("cannot read the run's process guards")?;
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("lock") {
+            continue;
         }
-        None if table.iter().any(|row| row.pgid == pgid) => Ok(Group::Ours),
-        None => Ok(Group::Gone),
-    }
-}
-
-fn signal(pgid: u32, signal: Signal) -> Result<()> {
-    let pid = i32::try_from(pgid)
-        .ok()
-        .and_then(Pid::from_raw)
-        .context("invalid process group ID")?;
-    match kill_process_group(pid, signal) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-        // Darwin reports EPERM for a group whose only members are zombies.
-        Err(rustix::io::Errno::PERM) if cfg!(target_os = "macos") => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("cannot signal process group {pgid}")),
-    }
-}
-
-fn wait_until_gone(groups: &[u32], grace: Duration) -> Result<Vec<u32>> {
-    let deadline = Instant::now() + grace;
-    loop {
-        let table = process_table()?;
-        let alive: Vec<u32> = groups
-            .iter()
-            .copied()
-            .filter(|group| table.iter().any(|row| row.pgid == *group))
-            .collect();
-        if alive.is_empty() || Instant::now() >= deadline {
-            return Ok(alive);
+        let lock = File::open(&path).context("cannot open a run process guard lock")?;
+        loop {
+            match flock(&lock, FlockOperation::NonBlockingLockExclusive) {
+                Ok(()) => break,
+                Err(rustix::io::Errno::WOULDBLOCK) if Instant::now() < deadline => {
+                    thread::sleep(POLL);
+                }
+                Err(rustix::io::Errno::WOULDBLOCK) => {
+                    bail!("a run process guard is still stopping its workload");
+                }
+                Err(error) => return Err(error).context("cannot check a run process guard lock"),
+            }
         }
-        thread::sleep(POLL);
     }
-}
-
-/// Stop each group: TERM, then KILL for any that survive the grace period.
-pub(super) fn stop_groups(groups: &[u32]) -> Result<()> {
-    if groups.is_empty() {
-        return Ok(());
-    }
-    for group in groups {
-        signal(*group, Signal::TERM)?;
-    }
-    let survivors = wait_until_gone(groups, TERM_GRACE)?;
-    for group in &survivors {
-        signal(*group, Signal::KILL)?;
-    }
-    let remaining = wait_until_gone(&survivors, KILL_GRACE)?;
-    if !remaining.is_empty() {
-        bail!(
-            "process group {} survived SIGKILL",
-            remaining
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
+    let incomplete = super::guard::incomplete_launches(root)?;
+    ensure!(
+        incomplete.is_empty(),
+        "process guards did not confirm cleanup for {}",
+        incomplete.join(", ")
+    );
     Ok(())
-}
-
-/// The recorded processes of a run, sorted into those to stop and those whose
-/// recorded ID now belongs to something else.
-pub(super) struct Plan {
-    pub ours: Vec<u32>,
-    pub reused: Vec<u32>,
-}
-
-/// Classify every recorded process group before anything is signalled, so one
-/// unverifiable entry stops the recovery with nothing touched.
-pub(super) fn plan(recorded: &Value, table: &[Row]) -> Result<Plan> {
-    let mut plan = Plan {
-        ours: Vec::new(),
-        reused: Vec::new(),
-    };
-    for entry in recorded.as_array().into_iter().flatten() {
-        let pgid = entry["pgid"]
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .context("a recorded process has no valid group ID")?;
-        match classify(table, pgid, entry["started"].as_str())? {
-            Group::Ours => plan.ours.push(pgid),
-            Group::Reused => plan.reused.push(pgid),
-            Group::Gone => {}
-        }
-    }
-    Ok(plan)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use std::os::unix::process::CommandExt;
 
     #[test]
     fn start_times_are_read_in_one_locale_and_time_zone() {
@@ -231,90 +150,42 @@ mod tests {
     }
 
     #[test]
-    fn a_group_is_ours_only_when_its_leader_started_when_recorded() {
-        let table = [row(7, 7, "Tue Nov 11 12:00:00 2026")];
-        assert_eq!(
-            classify(&table, 7, Some("Tue Nov 11 12:00:00 2026")).unwrap(),
-            Group::Ours
-        );
-        assert_eq!(
-            classify(&table, 7, Some("Mon Nov 10 08:00:00 2026")).unwrap(),
-            Group::Reused,
-            "a reused process ID has a different start time"
-        );
-        let unverified = classify(&table, 7, None).unwrap_err().to_string();
+    fn a_held_guard_lock_prevents_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let guards = root.path().join("guards");
+        std::fs::create_dir(&guards).unwrap();
+        let path = guards.join("test.lock");
+        let lock = std::fs::File::create(&path).unwrap();
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+
+        let error = wait_for_guards_until(root.path(), Instant::now()).unwrap_err();
+        assert!(error.to_string().contains("process guard"), "{error:#}");
+        drop(lock);
+        wait_for_guards_until(root.path(), Instant::now()).unwrap();
+    }
+
+    #[test]
+    fn a_released_guard_must_have_confirmed_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let guards = root.path().join("guards");
+        std::fs::create_dir(&guards).unwrap();
+        std::fs::File::create(guards.join("test.lock")).unwrap();
+        let receipt = guards.join("test.state");
+        std::fs::write(&receipt, "launching\n").unwrap();
+
+        let error = wait_for_guards_until(root.path(), Instant::now()).unwrap_err();
         assert!(
-            unverified.contains("start time was not recorded"),
-            "{unverified}"
+            error.to_string().contains("did not confirm cleanup"),
+            "{error:#}"
         );
+        std::fs::write(receipt, "complete\n").unwrap();
+        wait_for_guards_until(root.path(), Instant::now()).unwrap();
     }
 
     #[test]
-    fn a_group_without_a_leader_is_ours_while_members_remain() {
-        let members = [row(8, 7, "Tue Nov 11 12:00:00 2026")];
-        assert_eq!(classify(&members, 7, None).unwrap(), Group::Ours);
-        assert_eq!(classify(&[], 7, None).unwrap(), Group::Gone);
-    }
-
-    #[test]
-    fn nothing_is_signalled_when_one_recorded_process_cannot_be_verified() {
-        let table = [row(7, 7, "A"), row(9, 9, "B")];
-        let recorded = json!([
-            {"product": "breg", "pid": 7, "pgid": 7, "started": "A"},
-            {"product": "casework", "pid": 9, "pgid": 9, "started": null},
-        ]);
-        assert!(plan(&recorded, &table).is_err());
-        let recorded = json!([
-            {"product": "breg", "pid": 7, "pgid": 7, "started": "A"},
-            {"product": "casework", "pid": 9, "pgid": 9, "started": "other"},
-            {"product": "gone", "pid": 11, "pgid": 11, "started": "C"},
-        ]);
-        let plan = plan(&recorded, &table).unwrap();
-        assert_eq!((plan.ours, plan.reused), (vec![7], vec![9]));
-    }
-
-    fn is_alive(pgid: u32) -> bool {
-        process_table().unwrap().iter().any(|row| row.pgid == pgid)
-    }
-
-    /// A sleeping process in its own group, and a thread that reaps it once it
-    /// ends, since an unreaped child stays in the process table.
-    fn sleeper() -> (u32, thread::JoinHandle<()>) {
-        let mut child = Command::new("sleep")
-            .arg("60")
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        (
-            pid,
-            thread::spawn(move || {
-                child.wait().unwrap();
-            }),
-        )
-    }
-
-    #[test]
-    fn a_live_group_with_its_recorded_start_time_is_stopped() {
-        let (pid, reaper) = sleeper();
-        let started = started_at(pid).expect("a live process has a start time");
-        let recorded = json!([{"product": "breg", "pid": pid, "pgid": pid, "started": started}]);
-        let plan = plan(&recorded, &process_table().unwrap()).unwrap();
-        assert_eq!(plan.ours, [pid]);
-        stop_groups(&plan.ours).unwrap();
-        reaper.join().unwrap();
-        assert!(!is_alive(pid));
-    }
-
-    #[test]
-    fn a_live_group_with_another_start_time_is_left_running() {
-        let (pid, reaper) = sleeper();
-        let recorded = json!([{"product": "breg", "pid": pid, "pgid": pid, "started": "Mon Jan 1 00:00:00 2001"}]);
-        let plan = plan(&recorded, &process_table().unwrap()).unwrap();
-        assert!(plan.ours.is_empty());
-        assert_eq!(plan.reused, [pid]);
-        assert!(is_alive(pid), "the unrelated process must keep running");
-        signal(pid, Signal::KILL).unwrap();
-        reaper.join().unwrap();
+    fn a_run_without_guard_metadata_cannot_be_recovered_automatically() {
+        let root = tempfile::tempdir().unwrap();
+        let error = wait_for_guards_until(root.path(), Instant::now()).unwrap_err();
+        assert!(error.to_string().contains("process guards"), "{error:#}");
     }
 }

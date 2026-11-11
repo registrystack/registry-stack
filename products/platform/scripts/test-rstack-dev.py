@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import concurrent.futures
+import fcntl
 import hashlib
 import json
 import os
@@ -422,6 +423,7 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     try:
         exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env)
         verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
+        verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env)
         verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env)
         verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env)
         verify_field_encryption(root, bin_dir, pg, state, env, pg_env)
@@ -528,6 +530,7 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     assert inventory(pg, pg_env) == baseline, report
     assert live_runs(state) == [], report
     assert_nothing_listening(bin_dir)
+    verify_failed_journey(root, bin_dir, checkout, state, env)
     verify_native_handoff(root, bin_dir, env)
     assert inventory(pg, pg_env) == baseline
     assert administrator_locks(pg, pg_env) == baseline_locks
@@ -535,6 +538,28 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     print(
         "Stop, TTL expiry and failed startup cleaned up; authored product files stayed byte-identical"
     )
+
+
+def verify_failed_journey(root, bin_dir, checkout, state, env):
+    project = root / "failed-journey"
+    shutil.copytree(checkout, project)
+    plan = project / "dev.yaml"
+    authored = plan.read_text()
+    expectation = "      expect: {status: 201}"
+    assert expectation in authored
+    plan.write_text(authored.replace(expectation, "      expect: {status: 202}", 1))
+    report = dev(bin_dir, env, project, "start", ".", expected=1)
+    run = report["run_id"]
+    try:
+        assert report["schema_version"] == "registry.rstack.dev.v1", report
+        assert report["status"] == "ready" and report["journey"]["result"] == "failed"
+        status = dev(bin_dir, env, project, "status", run)
+        assert status["status"] == "ready" and status["journey"] == report["journey"]
+        assert all(accepts_connections(url) for url in report["products"].values())
+    finally:
+        assert dev(bin_dir, env, project, "stop", run)["status"] == "stopped"
+    assert not (state / run).exists()
+    print("A failed journey exited 1 with an inspectable run report and live products")
 
 
 def verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env):
@@ -602,28 +627,7 @@ def listener_pids(url):
 
 
 def recover_lost_supervisor(pg, owner_env, recovery):
-    """Release a lost run by hand, from the facts `stop` reports.
-
-    Order: stop each process group (TERM, then KILL), drop every database
-    (WITH (FORCE) ends leftover sessions), drop every role, then remove the
-    run directory.
-    """
-    for process in recovery["processes"]:
-        group = process["pgid"]
-        os.killpg(group, signal.SIGTERM)
-
-        def gone(group=group):
-            try:
-                os.killpg(group, 0)
-            except ProcessLookupError:
-                return True
-            return False
-
-        try:
-            eventually(gone, "a process group ignored SIGTERM", timeout=10)
-        except AssertionError:
-            os.killpg(group, signal.SIGKILL)
-            eventually(gone, "a process group survived SIGKILL", timeout=10)
+    """Release the PostgreSQL objects and directory from the recovery report."""
     objects = recovery["objects"]
     statements = [
         f'DROP DATABASE IF EXISTS "{item["database"]}" WITH (FORCE);'
@@ -638,6 +642,12 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
     baseline_locks = administrator_locks(pg, pg_env)
     report = dev(bin_dir, env, checkout, "start", ".")
     run = report["run_id"]
+    recorded = json.loads((state / run / "processes.json").read_text())
+    for process in recorded:
+        assert os.getpgid(process["pid"]) == process["pgid"], process
+        assert str(process["pid"]) in listener_pids(
+            report["products"][process["product"]]
+        )
     worker = command(
         "pgrep", "-f", f"project-dev --worker {re.escape(str(state / run))}"
     )
@@ -652,14 +662,9 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
     recovery = stopped["recovery"]
     assert recovery["run_directory"] == str(state / run), recovery
     processes = recovery["processes"]
+    assert processes == recorded
     assert sorted(p["product"] for p in processes) == ["breg", "casework"], recovery
-    for process in processes:
-        os.kill(process["pid"], 0)
-        assert os.getpgid(process["pid"]) == process["pgid"], recovery
-        listeners = listener_pids(report["products"][process["product"]])
-        assert str(process["pid"]) in listeners, recovery
-    # The pattern behind assert_nothing_listening sees the live products.
-    assert len(product_pids(bin_dir)) == 2, recovery
+    assert_nothing_listening(bin_dir, report["products"].values())
     databases, roles = inventory(pg, pg_env)
     assert {item["database"] for item in recovery["objects"]} == (
         databases - baseline[0]
@@ -699,7 +704,6 @@ def verify_recover(bin_dir, pg, checkout, state, env, pg_env):
     recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
     assert recovered["status"] == "stopped", recovered
     assert len(recovered["recovered"]["stopped_process_groups"]) == 2, recovered
-    assert recovered["recovered"]["skipped_process_groups"] == [], recovered
     assert_nothing_listening(bin_dir, report["products"].values())
     assert inventory(pg, pg_env) == baseline
     eventually(
@@ -711,28 +715,8 @@ def verify_recover(bin_dir, pg, checkout, state, env, pg_env):
     assert dev(bin_dir, env, checkout, "stop", run, "--recover")["status"] == "stopped"
     print("stop --recover released a lost supervisor's processes, databases and roles")
 
-    # A recorded group whose leader started at another time is not the run's:
-    # recovery leaves it running and still releases the rest.
-    report, run = lose_supervisor(bin_dir, checkout, state, env)
-    processes_file = state / run / "processes.json"
-    processes = json.loads(processes_file.read_text())
-    [casework] = [p for p in processes if p["product"] == "casework"]
-    casework["started"] = "Mon Jan  1 00:00:00 2001"
-    processes_file.write_text(json.dumps(processes))
-    try:
-        recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
-        assert recovered["recovered"]["skipped_process_groups"] == [
-            casework["pgid"]
-        ], recovered
-        os.killpg(casework["pgid"], 0)
-        assert inventory(pg, pg_env) == baseline
-        assert live_runs(state) == []
-    finally:
-        try:
-            os.killpg(casework["pgid"], signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    assert_nothing_listening(bin_dir, report["products"].values())
+    verify_unrelated_groups(bin_dir, checkout, state, env)
+    verify_wrong_cluster(bin_dir, pg, checkout, state, env, pg_env)
 
     # Without an administrator URL nothing is signalled or dropped, and the
     # error carries the facts for a hand release.
@@ -742,12 +726,204 @@ def verify_recover(bin_dir, pg, checkout, state, env, pg_env):
     assert "no PostgreSQL administrator URL" in refused["error"]["message"], refused
     assert refused["run_id"] == run, refused
     assert len(refused["recovery"]["processes"]) == 2, refused
-    assert len(product_pids(bin_dir)) == 2, refused
+    assert (state / run).is_dir() and inventory(pg, pg_env) != baseline
     dev(bin_dir, env, checkout, "stop", run, "--recover")
     assert_nothing_listening(bin_dir, report["products"].values())
     assert inventory(pg, pg_env) == baseline
     assert live_runs(state) == []
-    print("stop --recover skips a reused process ID and fails with facts when it cannot proceed")
+    print("stop --recover preserves the run when no administrator URL is available")
+
+
+def verify_unrelated_groups(bin_dir, checkout, state, env):
+    # Recovery must never signal based on a persisted numeric PID, even when
+    # the current process table appears to confirm it. The test owns both
+    # unrelated groups and leaves one unreaped until recovery has finished.
+    with (
+        subprocess.Popen(["/bin/sleep", "90"], start_new_session=True) as live,
+        subprocess.Popen(["/usr/bin/true"], start_new_session=True) as zombie,
+    ):
+        try:
+
+            def process_field(pid, field):
+                return (
+                    checked(
+                        "ps",
+                        "-p",
+                        str(pid),
+                        "-o",
+                        f"{field}=",
+                        env={**env, "LC_ALL": "C", "TZ": "UTC"},
+                    )
+                    .decode()
+                    .strip()
+                )
+
+            eventually(
+                lambda: process_field(zombie.pid, "stat").startswith("Z"),
+                "the unreaped child did not become a zombie",
+            )
+            report, run = lose_supervisor(bin_dir, checkout, state, env)
+            processes_file = state / run / "processes.json"
+            processes = json.loads(processes_file.read_text())
+            for child in (live, zombie):
+                processes.append(
+                    {
+                        "product": "breg",
+                        "pid": child.pid,
+                        "pgid": child.pid,
+                        "started": " ".join(process_field(child.pid, "lstart").split()),
+                    }
+                )
+            processes_file.write_text(json.dumps(processes))
+            # Hold a guard long enough to observe what status reports while
+            # recovery holds worker.lock and the old ready report is stale.
+            guard_path = state / run / "guards" / "test.lock"
+            with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                with guard_path.open("wb") as guard:
+                    fcntl.flock(guard, fcntl.LOCK_EX)
+                    recovering = pool.submit(
+                        dev, bin_dir, env, checkout, "stop", run, "--recover"
+                    )
+                    report_path = state / run / "report.json"
+                    eventually(
+                        lambda: json.loads(report_path.read_text())["status"] == "stopping",
+                        "recovery did not mark the run as stopping",
+                    )
+                    assert dev(bin_dir, env, checkout, "status", run)["status"] == "stopping"
+                recovered = recovering.result(timeout=10)
+            assert recovered["status"] == "stopped", recovered
+            assert live.poll() is None, "recovery signaled an unrelated process group"
+            assert process_field(zombie.pid, "stat").startswith("Z")
+            assert_nothing_listening(bin_dir, report["products"].values())
+        finally:
+            if live.poll() is None:
+                live.terminate()
+    print("Recovery completed with unrelated live and unreaped process groups present")
+
+
+def verify_wrong_cluster(bin_dir, pg, checkout, state, env, pg_env):
+    other = state.parent / "other-postgres"
+    other.mkdir()
+    cluster, ca, url, other_env = prepare_postgres(other, pg)
+    checked(pg / "pg_ctl", "-D", cluster, "-l", other / "postgres.log", "-w", "start")
+    try:
+        wrong_url, _ = create_owner(pg, other_env, url)
+        other_baseline = inventory(pg, other_env)
+        baseline = inventory(pg, pg_env)
+        report, run = lose_supervisor(bin_dir, checkout, state, env)
+        original_objects = inventory(pg, pg_env)
+        assert original_objects != baseline
+        try:
+            refused = dev(
+                bin_dir,
+                {
+                    **env,
+                    "RSTACK_DEV_DATABASE_URL": wrong_url,
+                    "RSTACK_DEV_DATABASE_CA": str(ca),
+                },
+                checkout,
+                "stop",
+                run,
+                "--recover",
+                expected=3,
+            )
+            assert (
+                refused["run_id"] == run and refused["error"]["class"] == "operational"
+            )
+            assert "cluster" in refused["error"]["message"], refused
+            assert (state / run).is_dir()
+            assert inventory(pg, pg_env) == original_objects
+            assert inventory(pg, other_env) == other_baseline
+
+            # PostgreSQL advisory locks are scoped to the maintenance database,
+            # so even the same cluster must use the database held by startup.
+            alternate = "devowner_alternate_admin"
+            psql(pg, pg_env, f"CREATE DATABASE {alternate};")
+            try:
+                owner_url = env["RSTACK_DEV_DATABASE_URL"]
+                wrong_database_url = f"{owner_url.rsplit('/', 1)[0]}/{alternate}"
+                refused = dev(
+                    bin_dir,
+                    {**env, "RSTACK_DEV_DATABASE_URL": wrong_database_url},
+                    checkout,
+                    "stop",
+                    run,
+                    "--recover",
+                    expected=3,
+                )
+                assert "maintenance database" in refused["error"]["message"], refused
+                assert (state / run).is_dir() and inventory(
+                    pg, pg_env
+                ) == original_objects
+            finally:
+                psql(pg, pg_env, f"DROP DATABASE {alternate};")
+        finally:
+            if (state / run).is_dir():
+                assert (
+                    dev(bin_dir, env, checkout, "stop", run, "--recover")["status"]
+                    == "stopped"
+                )
+        assert inventory(pg, pg_env) == baseline
+        assert_nothing_listening(bin_dir, report["products"].values())
+    finally:
+        checked(pg / "pg_ctl", "-D", cluster, "-m", "fast", "-w", "stop")
+    print(
+        "Recovery refused a different TLS PostgreSQL cluster and retried on the original"
+    )
+
+
+def verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env):
+    baseline = inventory(pg, pg_env)
+    shim = state.parent / "slow-bregctl"
+    ready = state.parent / "slow-bregctl-ready"
+    shim.write_text("""#!/usr/bin/env python3
+import os
+import sys
+import time
+from pathlib import Path
+
+if sys.argv[1] == "test":
+    Path(os.environ["RSTACK_TEST_MARKER"]).touch()
+    time.sleep(90)
+    raise SystemExit(1)
+os.execv(os.environ["RSTACK_TEST_BREGCTL"], sys.argv)
+""")
+    shim.chmod(0o700)
+    slow_env = {
+        **env,
+        "RSTACK_BREGCTL_BIN": str(shim),
+        "RSTACK_TEST_MARKER": str(ready),
+        "RSTACK_TEST_BREGCTL": str(bin_dir / "bregctl"),
+    }
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        starting = pool.submit(
+            dev, bin_dir, slow_env, checkout, "start", ".", expected=3
+        )
+        eventually(ready.is_file, "the provisioning tool did not start", timeout=30)
+        [run_root] = live_runs(state)
+        assert not (run_root / "processes.json").exists()
+        assert inventory(pg, pg_env) != baseline
+        worker = command(
+            "pgrep", "-f", f"project-dev --worker {re.escape(str(run_root))}"
+        )
+        [supervisor] = worker.stdout.split()
+        os.kill(int(supervisor), signal.SIGKILL)
+        assert starting.result(timeout=10)["run_id"] == run_root.name
+        assert (
+            dev(bin_dir, env, checkout, "stop", run_root.name, "--recover")["status"]
+            == "stopped"
+        )
+        eventually(
+            lambda: (
+                command("pgrep", "-f", f"{re.escape(str(shim))} test").returncode == 1
+            ),
+            "the worker left an unrecorded provisioning tool running",
+        )
+    assert live_runs(state) == []
+    assert inventory(pg, pg_env) == baseline
+    print(
+        "Recovery drained a guarded provisioning tool before any runtime PID was recorded"
+    )
 
 
 def verify_native_handoff(root, bin_dir, env):
