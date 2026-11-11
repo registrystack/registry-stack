@@ -131,12 +131,17 @@ Casework producer, and `bindings.caseworkContextProvider` identifies the BReg
 context provider and action. `rstack dev check` refuses a binding that names a
 review authority or action the BReg project does not declare, or a producer or
 context provider the Casework project does not declare; `start` refuses it
-before it provisions anything. A binding requests tokens for the other
+before it provisions anything. `check` also writes each binding's product
+configuration exactly as `start` does and lets BReg's review-authority reader
+and Casework's context-binding reader refuse what they would refuse at startup,
+reporting the refusal at the plan field that produced the value. It refuses a
+BReg grant profile that is not the `service-status` profile the Casework context
+provider's policy names. A binding requests tokens for the other
 product's audience as an OAuth resource, so that audience must be an absolute
 URI, such as `urn:example:review`. It requests the scopes of its identity's
 grant for that product, so those scopes must be OAuth scope-tokens (no quotes or
 backslashes) that fit in 4096 bytes when joined by spaces; `check` reports a
-violation at the grant's `scopes`. The run pairs the provider on a private copy
+violation at the audience or the grant's `scopes`. The run pairs the provider on a private copy
 before packaging. A reviewer whose Casework context call forwards the bearer
 to BReg declares both grants, one shared client, and `caseworkContext: true`.
 Both grants declare the same scopes and additional claims. Casework reads the

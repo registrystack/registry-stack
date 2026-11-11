@@ -333,6 +333,15 @@ fn start_with_casework_tool(
 }
 
 fn fake_casework_tool(root: &std::path::Path) -> std::path::PathBuf {
+    fake_casework_tool_with_status_profile(root, "operator")
+}
+
+/// A `caseworkctl` whose `proposal-context` provider names `status_profile`
+/// for the `service-status` capability.
+fn fake_casework_tool_with_status_profile(
+    root: &std::path::Path,
+    status_profile: &str,
+) -> std::path::PathBuf {
     let tool = root.join("caseworkctl");
     fs::write(
         &tool,
@@ -348,9 +357,12 @@ fn fake_casework_tool(root: &std::path::Path) -> std::path::PathBuf {
             "\"accessProfiles\":[{\"id\":\"reviewer\",\"principalClaim\":\"sub\"}],",
             "\"reviewPolicies\":[{\"dependencies\":{\"accessProfiles\":[{\"id\":\"reviewer\",\"principalClaim\":\"sub\"}]}}],",
             "\"trustedProducers\":[{\"id\":\"review-producer\"}],",
-            "\"contextProviders\":[{\"id\":\"proposal-context\"}]}",
-            "'\n",
-        ),
+            "\"contextProviders\":[{\"id\":\"proposal-context\",",
+            "\"serviceProfiles\":{\"service-status\":\"",
+        )
+        .to_owned()
+            + status_profile
+            + "\"}}]}'\n",
     )
     .unwrap();
     let mut permissions = fs::metadata(&tool).unwrap().permissions();
@@ -1036,6 +1048,83 @@ fn check_and_start_resolve_casework_profiles_and_bindings_with_the_owning_report
         assert!(!error.contains(supplied), "{error}");
         assert!(!state.exists());
     }
+}
+
+#[test]
+fn check_refuses_binding_configuration_the_products_would_refuse_at_the_plan_field() {
+    for (plan_edit, from, to, path, product) in [
+        (
+            "scope",
+            "casework: {profile: reviewer, scopes: [casework:review]}",
+            "casework: {profile: reviewer, scopes: ['casework:\"quoted\"']}",
+            "/people/reviewer/grants/casework/scopes",
+            "BReg refuses",
+        ),
+        (
+            "audience",
+            "audience: \"urn:example:registry\"",
+            "audience: registry",
+            "/products/0/audience",
+            "Casework refuses",
+        ),
+    ] {
+        let scratch = tempfile::tempdir().unwrap();
+        let state = scratch.path().join("state");
+        let tool = casework_reference_project(
+            scratch.path(),
+            "reviewer",
+            concat!(
+                "bindings:\n",
+                "  bregReviewAuthority: {id: local-review, producer: review-producer, identity: reviewer}\n",
+                "  caseworkContextProvider: {id: proposal-context, identity: operator, action: review-action}\n",
+            ),
+        );
+        let dev = scratch.path().join("dev.yaml");
+        let text = fs::read_to_string(&dev).unwrap();
+        assert!(text.contains(from), "{plan_edit}: {text}");
+        fs::write(&dev, text.replace(from, to)).unwrap();
+
+        let checked = check_with_casework_tool(scratch.path(), &state, &tool);
+
+        assert_eq!(checked.status.code(), Some(1), "{plan_edit}: {checked:?}");
+        let report: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+        assert_eq!(report["status"], "domain-refusal", "{plan_edit}");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["path"], path, "{plan_edit}: {diagnostic}");
+        assert!(
+            diagnostic["message"].as_str().unwrap().contains(product),
+            "{plan_edit}: {diagnostic}"
+        );
+        assert!(!state.exists(), "{plan_edit}");
+    }
+}
+
+#[test]
+fn check_refuses_a_status_profile_the_context_provider_policy_does_not_name() {
+    let bindings = "bindings:\n  caseworkContextProvider: {id: proposal-context, identity: operator, action: review-action}\n";
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let tool = casework_reference_project(scratch.path(), "reviewer", bindings);
+    fake_casework_tool_with_status_profile(scratch.path(), "another-status-profile");
+
+    let checked = check_with_casework_tool(scratch.path(), &state, &tool);
+
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["path"], "/people/operator/grants/breg/profile");
+    assert!(!diagnostic.to_string().contains("another-status-profile"));
+    assert!(!state.exists());
+
+    let started = start_with_casework_tool(scratch.path(), &state, &tool);
+    assert_eq!(started.status.code(), Some(1), "{started:?}");
+    assert!(!state.exists());
+
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let tool = casework_reference_project(scratch.path(), "reviewer", bindings);
+    let checked = check_with_casework_tool(scratch.path(), &state, &tool);
+    assert_eq!(checked.status.code(), Some(0), "{checked:?}");
 }
 
 #[test]

@@ -99,6 +99,52 @@ pub struct BregBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_display_exchange: Option<DelegatedDisplayExchangeBinding>,
 }
+impl BregBinding {
+    /// Checks the binding as provider construction reads it, without
+    /// resolving a secret or reading a context export. The client identifier
+    /// is a secret, so the identity check runs with a stand-in; the key and
+    /// the identifier themselves are checked when the provider is built.
+    pub fn check_offline(&self) -> Result<(), ReviewContextError> {
+        use registry_platform_httputil::{
+            valid_resource_uri, validate_requested_scopes, PrivateKeyJwtConfig,
+        };
+        self.check_profiles()?;
+        url::Url::parse(&self.base_url).map_err(|_| ReviewContextError::Invalid)?;
+        let token_endpoint =
+            url::Url::parse(&self.token_endpoint).map_err(|_| ReviewContextError::Invalid)?;
+        let invalid = |_| ReviewContextError::Invalid;
+        PrivateKeyJwtConfig::check_identity(
+            &token_endpoint,
+            "offline-check",
+            self.client_assertion_audience.as_deref(),
+        )
+        .map_err(invalid)?;
+        if self
+            .resource
+            .as_deref()
+            .is_some_and(|resource| !valid_resource_uri(resource))
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        if let Some(scopes) = &self.scopes {
+            validate_requested_scopes(scopes).map_err(invalid)?;
+        }
+        Ok(())
+    }
+
+    fn check_profiles(&self) -> Result<(), ReviewContextError> {
+        if !registry_casework_core::valid_profile_identifier(&self.status_profile)
+            || self.task_grant_profile.as_ref().is_some_and(|profile| {
+                !registry_casework_core::valid_profile_identifier(profile)
+                    || profile == &self.status_profile
+            })
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        Ok(())
+    }
+}
+
 impl std::fmt::Debug for BregBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("BregBinding(<operator transport and secret references>)")
@@ -155,16 +201,10 @@ pub fn build_provider(
     };
     use registry_platform_crypto::PrivateJwk;
     use std::{sync::Arc, time::Duration};
-    if description.is_empty()
-        || description.len() > 1024 * 1024
-        || !registry_casework_core::valid_profile_identifier(&binding.status_profile)
-        || binding.task_grant_profile.as_ref().is_some_and(|profile| {
-            !registry_casework_core::valid_profile_identifier(profile)
-                || profile == &binding.status_profile
-        })
-    {
+    if description.is_empty() || description.len() > 1024 * 1024 {
         return Err(ReviewContextError::Invalid);
     }
+    binding.check_profiles()?;
     let export: BregContextExport = serde_json::from_value(
         registry_breg_client::decode_exact_json(description)
             .map_err(|_| ReviewContextError::Invalid)?,
@@ -285,6 +325,57 @@ fn secret_reference<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn offline_binding() -> serde_json::Value {
+        json!({
+            "baseUrl": "http://127.0.0.1:31001",
+            "statusProfile": "casework-review-status",
+            "tokenEndpoint": "http://127.0.0.1:31003/oauth2/token",
+            "clientIdRef": "secret:file/status-client-id",
+            "clientAssertionKeyRef": "secret:file/status-client-key",
+            "clientAssertionAudience": "https://idp.example.test",
+            "resource": "urn:example:registry",
+            "scopes": ["registry:read"]
+        })
+    }
+
+    fn offline_check(value: serde_json::Value) -> Result<(), ReviewContextError> {
+        serde_json::from_value::<BregBinding>(value)
+            .expect("the binding parses")
+            .check_offline()
+    }
+
+    #[test]
+    fn offline_check_accepts_a_binding_without_resolving_secrets() {
+        offline_check(offline_binding()).expect("the binding is acceptable");
+    }
+
+    #[test]
+    fn offline_check_refuses_what_provider_construction_refuses_before_secrets() {
+        for (member, value) in [
+            ("statusProfile", json!("not a profile")),
+            ("taskGrantProfile", json!("casework-review-status")),
+            ("taskGrantProfile", json!("not a profile")),
+            ("resource", json!("registry")),
+            ("resource", json!("urn:example:registry#fragment")),
+            ("scopes", json!([])),
+            ("scopes", json!(["registry:read", "registry:read"])),
+            ("scopes", json!(["has space"])),
+            ("clientAssertionAudience", json!(" ")),
+            ("tokenEndpoint", json!("http://idp.example.test/token")),
+            ("baseUrl", json!("not a url")),
+        ] {
+            let mut binding = offline_binding();
+            binding[member] = value.clone();
+            let result = serde_json::from_value::<BregBinding>(binding)
+                .map_err(|_| ReviewContextError::Invalid)
+                .and_then(|binding| binding.check_offline());
+            assert!(
+                matches!(result, Err(ReviewContextError::Invalid)),
+                "{member} {value} was accepted"
+            );
+        }
+    }
 
     #[test]
     fn delegated_display_exchange_is_explicit_and_redacted() {
