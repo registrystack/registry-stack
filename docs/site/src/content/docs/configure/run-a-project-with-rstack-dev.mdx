@@ -1,0 +1,275 @@
+---
+title: Run a project with rstack dev
+description: Start a Base Registry Engine and Registry Casework pair from a project checkout on a local TLS PostgreSQL server, call both with development tokens, and recover a failed run.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-11"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+If you are writing a registry project and want to see Base Registry Engine (BReg) and Registry
+Casework serve it together, `rstack dev` starts both from your project directory, runs a short
+journey against them, and removes everything when you stop. It does not start PostgreSQL and does
+not use Docker: you supply a development PostgreSQL server over TLS. This page takes you from a
+checkout to a running pair, using the licensing example that ships with Registry Stack.
+
+## Before you start
+
+You need:
+
+- PostgreSQL 17 or newer command-line tools (`initdb`, `pg_ctl`, `psql`) and `openssl` on your
+  `PATH`, to run the local server below. A server you already have works too if it serves TLS and
+  has an administrator role with `LOGIN CREATEROLE CREATEDB`.
+- `curl` and `jq`.
+- A checkout of Registry Stack at the release you installed, for the example project.
+
+## Install the components
+
+Install `rstack` from one verified release, then add the two components the example uses. The
+steps are in [Decide your first Base Registry Engine registry](../../tutorials/first-breg/#install-registry-stack);
+install `casework` the same way.
+
+```sh test-skip="uses a downloaded, independently verified release installer"
+rstack install breg casework
+```
+
+Check that the commands resolve before you continue:
+
+```sh test-skip="needs the installed release"
+rstack dev --help
+```
+
+Success is the list of `check`, `start`, `status`, `token` and `stop`. If `rstack` is missing, run
+`rstack doctor`; if a component is missing, `start` names the `rstack install` command to run.
+
+## Start a local TLS PostgreSQL server
+
+`rstack dev` always verifies the server certificate and host name, so the server needs a
+certificate your machine trusts. This recipe makes a private certificate authority, starts the
+server on `127.0.0.1`, and creates a least-privilege administrator. Keep the working directory
+outside any repository. If port 5432 is taken, change `PORT`.
+
+```sh test-skip="needs a PostgreSQL installation and starts a server"
+export DEV="$HOME/rstack-dev-postgres"
+PORT=5432
+mkdir -p -m 700 "$DEV"
+umask 077
+openssl rand -hex 16 > "$DEV/postgres.pass"
+openssl rand -hex 16 > "$DEV/devadmin.pass"
+initdb -D "$DEV/data" -U postgres --auth=scram-sha-256 --pwfile="$DEV/postgres.pass" -E UTF8
+
+openssl req -new -x509 -newkey rsa:2048 -nodes -days 30 -subj /CN=rstack-dev-ca \
+  -addext basicConstraints=critical,CA:TRUE -keyout "$DEV/ca.key" -out "$DEV/ca.pem"
+openssl req -new -newkey rsa:2048 -nodes -subj /CN=localhost \
+  -keyout "$DEV/data/server.key" -out "$DEV/server.csr"
+printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' \
+  > "$DEV/server.ext"
+openssl x509 -req -in "$DEV/server.csr" -CA "$DEV/ca.pem" -CAkey "$DEV/ca.key" \
+  -CAcreateserial -days 30 -extfile "$DEV/server.ext" -out "$DEV/data/server.crt"
+
+printf "listen_addresses = '127.0.0.1'\nport = %s\nssl = on\n" "$PORT" \
+  >> "$DEV/data/postgresql.conf"
+pg_ctl -D "$DEV/data" -l "$DEV/postgres.log" -w start
+```
+
+The passwords are random and stay in owner-only files, so nothing secret reaches your shell
+history or a process list. Create the administrator with the password from its file:
+
+```sh test-skip="needs the running development server"
+CONNECTION="host=127.0.0.1 port=$PORT user=postgres dbname=postgres sslmode=verify-full sslrootcert=$DEV/ca.pem"
+PGPASSWORD="$(cat "$DEV/postgres.pass")" psql "$CONNECTION" <<'SQL'
+\set pw `cat "$DEV/devadmin.pass"`
+CREATE ROLE devadmin LOGIN CREATEROLE CREATEDB PASSWORD :'pw';
+SQL
+```
+
+Success is `CREATE ROLE`. The server must be running before you start a project. Point `rstack dev`
+at it:
+
+```sh test-skip="needs the running development server"
+export RSTACK_DEV_DATABASE_CA="$DEV/ca.pem"
+export RSTACK_DEV_DATABASE_URL="postgresql://devadmin:$(cat "$DEV/devadmin.pass")@127.0.0.1:$PORT/postgres?sslmode=verify-full"
+```
+
+Set the URL through an environment variable, not `--database-url`, because a flag is visible to
+other local users in the process list. For a spatial project, install PostGIS for this server and
+create the administrator as a superuser instead.
+
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev. */}
+
+## Adapt the development plan
+
+Copy the licensing example from your checkout, then work in the copy:
+
+```sh test-skip="needs a Registry Stack checkout"
+cp -R path/to/registry-stack/products/platform/examples/licensing ./licensing
+```
+
+The directory holds a BReg project (`registry/`), a Casework project (`casework/`) and the plan
+`dev.yaml`. Open `dev.yaml`: `rstack dev` reads only this file to decide what to start. Product
+files stay byte-for-byte unchanged, and generated settings, keys and packages live in the run's
+owner-only scratch directory.
+
+To adapt the plan to your own project, change these parts and leave the structure alone:
+
+- `issuer` names the identity issuer the local test tokens claim. Use a name that is yours.
+- `products` lists each product's project directory and token audience, in startup order.
+- `people` declares synthetic test people, each with a subject and one grant per product. A grant
+  selects an access profile of that product's project, its scopes, and extra claims. A BReg grant
+  must name a profile the BReg project declares.
+- `journey` is the sequence of requests the run makes before it reports ready. Each step names a
+  person, a product, a method, a path starting with `/v1/`, and what it expects back.
+
+The [`rstack dev` reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
+describes every key, capture type and limit.
+
+## Check, then start
+
+`check` validates the plan and resolves its fixtures, grants and references with the installed
+authoring tools. It works with the database offline.
+
+```sh test-skip="needs the installed release and a running development server"
+rstack dev check ./licensing
+```
+
+Success is `Development plan is valid` and exit status 0. Add `--deny-warnings` to refuse any
+warning, and `--json` for a machine-readable report. Fix every error before you start: the report
+names the plan field that caused it.
+
+Start the run. The time to live (TTL) begins when the run is ready and defaults to 30 minutes:
+
+```sh test-skip="needs the installed release and a running development server"
+rstack dev start ./licensing --ttl 30m
+```
+
+The command creates separate databases and logins for the run, starts both products on loopback
+ports, runs the journey, and returns while the services keep running:
+
+```text test-excerpt
+Run 2f17770cb47d4502ad0b809a529f4309 ready
+  breg http://127.0.0.1:64930
+  casework http://127.0.0.1:64931
+  Journey licensing-approval passed
+  Logs STATE_DIRECTORY/2f17770cb47d4502ad0b809a529f4309/logs
+  rstack dev token 2f17770cb47d4502ad0b809a529f4309 --as administrator
+  rstack dev token 2f17770cb47d4502ad0b809a529f4309 --as applicant
+  rstack dev token 2f17770cb47d4502ad0b809a529f4309 --as intake
+  rstack dev token 2f17770cb47d4502ad0b809a529f4309 --as reviewer
+```
+
+Your run ID and ports differ, and `STATE_DIRECTORY` stands for the state directory your run reports. Copy the run ID: every later command takes it. The
+journey has already created an application in BReg and had a reviewer approve it in Casework.
+`rstack dev status RUN_ID` repeats this report at any time.
+
+## Call the products with a token
+
+`token` writes a short-lived bearer header file for a test person and reports where it is. Tokens
+expire five minutes after issue, or with the run if that is sooner, so ask again when one lapses.
+Pass the header file to curl with `--header @FILE`:
+
+```sh test-skip="needs a running development run"
+RUN=2f17770cb47d4502ad0b809a529f4309
+HEADERS="$(rstack dev token "$RUN" --as applicant --json | jq -r '.credentials[0].header_file')"
+curl -sS --header @"$HEADERS" \
+  "http://127.0.0.1:64930/v1/records/applications?accessProfile=applicant"
+```
+
+Use the BReg URL from your own report. BReg needs the selected profile as the `accessProfile`
+query parameter, and the response lists the application the journey created:
+
+```json test-excerpt
+{"items":[{"domainData":{"profession":"Surveyor","reference":"application-001"},"recordIdentifier":"23257c7f-1acd-4fbf-8a3c-4b253238043c","revisionIdentifier":"1"}],"meta":{"datasetIdentifier":"licensing","recordTypeIdentifier":"application","registryIdentifier":"licensing"},"pageInfo":{"nextCursor":null}}
+```
+
+Casework needs no query parameter, because its header file carries the profile. This asks for the
+reviewer's open tasks; the queue is empty because the journey already decided the request:
+
+```sh test-skip="needs a running development run"
+HEADERS="$(rstack dev token "$RUN" --as reviewer --json | jq -r '.credentials[0].header_file')"
+curl -sS --header @"$HEADERS" "http://127.0.0.1:64931/v1/review-tasks?queue=applications"
+```
+
+```json test-excerpt
+{"items":[],"status":"complete"}
+```
+
+A BReg project with encrypted fields runs without extra setup: each run gets its own development
+data key, removed when the run ends, so encrypted data does not outlive its run. A step in the
+project's `tests/journeys.yaml` that touches an encrypted Record type fails the pre-activation
+test, because that test has no key. Exercise those Record types in the plan's `journey` instead.
+
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev. */}
+
+## Stop the run
+
+```sh test-skip="needs a running development run"
+rstack dev stop "$RUN"
+```
+
+Success is `Run RUN_ID stopped`. Stop, and TTL expiry, terminate both services and remove the run's
+databases, roles, keys and files. Stop the PostgreSQL server itself when you finish:
+
+```sh test-skip="needs the running development server"
+pg_ctl -D "$DEV/data" stop
+```
+
+## When a run fails
+
+Read the error first. With `--json`, a refusal prints one object on standard output and the
+process exit status tells you whose problem it is:
+
+| Exit | `error.class` | Meaning |
+| --- | --- | --- |
+| 1 | `domain` | The request, the project, the plan or the run's state was refused. Fix the plan or the command. |
+| 2 | `usage` | The command line is wrong. |
+| 3 | `operational` | The environment failed: PostgreSQL is unreachable or refuses the administrator, a product binary cannot start, no loopback port is free, or a run needs its resources released. |
+
+For example, `rstack dev start ./licensing --json` with the PostgreSQL server stopped (the operating
+system error number varies by platform):
+
+```text test-excerpt
+{"error":{"class":"operational","message":"cannot establish the PostgreSQL administrator session over verified TLS: the PostgreSQL connection handshake failed: error connecting to server: Connection refused (os error 61)"},"schema_version":"registry.rstack.error.v1","status":"refused"}
+```
+
+Start the server and run the command again. Without `--json`, the same message goes to standard
+error as `rstack dev: MESSAGE` with the same exit status.
+
+A failed journey exits 1 and leaves the run alive, so you can inspect it and then stop it. The
+report includes the run ID. When a start fails before that, the run directory is removed but its
+logs are kept at `<state>/failed/<run_id>/logs`, and the error names the path. Otherwise, a live
+run's logs are in `<run>/logs`: `supervisor.log` for the supervisor and one file per product stage,
+such as `breg-check.log` or `casework-runtime.log`. `rstack dev status RUN_ID` names the logs
+directory. Delete kept logs yourself.
+
+When a run still holds databases, roles or processes, the error carries its `run_id` and a
+`recovery` object listing them. This happens if PostgreSQL is unavailable during cleanup for
+longer than the supervisor retries (up to 30 minutes), or if the supervisor was lost. Release the
+run with:
+
+```sh test-skip="needs a run that lost its supervisor"
+rstack dev stop RUN_ID --recover
+```
+
+`--recover` checks everything it needs, then stops the recorded process groups, drops the
+databases and roles, and removes the run directory, including the run's development key file. It
+refuses a run whose supervisor is still running; use plain `stop` for that. Running it again
+after a partial failure is safe. Success is `status` `stopped` and a `recovered` object. When it
+cannot finish, the error names what to release by hand. The
+[reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
+lists the manual steps and the recovery fields.
+
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev. */}
+
+## Next
+
+- [`rstack dev` reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
+  for the full plan format, journey steps and recovery behaviour.
+- [Call an API with rstack](../api-connections/) to make short requests against the running pair.
+- [Test with journeys](../breg-journeys/) to write the BReg project's own journey tests.
+- [Encrypt a field](../breg-field-encryption/) for the key custody a deployment uses.
