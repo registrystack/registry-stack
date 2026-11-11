@@ -144,7 +144,8 @@ pub async fn provision_postgis_prerequisites(
             migration_role.quoted(),
             runtime_role.quoted(),
         ))
-        .await?;
+        .await
+        .map_err(|error| PostgresKernelError::from_statement_error(&error))?;
     let bbox_role = provision_spatial_bbox_role(admin, migration_role, runtime_role).await?;
     Ok(bbox_role)
 }
@@ -178,7 +179,8 @@ pub async fn provision_spatial_bbox_role(
             migration_role.quoted(),
             bbox_role.quoted(),
         ))
-        .await?;
+        .await
+        .map_err(|error| PostgresKernelError::from_statement_error(&error))?;
     Ok(bbox_role)
 }
 
