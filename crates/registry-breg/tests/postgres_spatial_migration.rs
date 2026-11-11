@@ -31,7 +31,7 @@ use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint,
     provision_postgis_prerequisites, verify_catalog_identity_for_catalog, verify_postgis,
     ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresFailure,
-    RegistryLockKey, SqlIdentifier,
+    PostgresKernelError, RegistryLockKey, SqlIdentifier,
 };
 use registry_breg::startup::{prepare_startup, StartupError};
 use registry_breg::CompiledRegistry;
@@ -2678,6 +2678,30 @@ async fn cleanup_bbox_role(database: &TestDatabase, bbox_role: &SqlIdentifier) {
         ))
         .await
         .expect("test cleanup removes temporary spatial bbox role");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgis_provisioning_keeps_the_sqlstate_of_a_refused_statement() {
+    let database = TestDatabase::create(1).await;
+    // The migration role may not create schemas in the database, which is
+    // what an administrator without `CREATE EXTENSION postgis` rights meets.
+    let (unprivileged, task) = database.connect_migration().await;
+    let error = provision_postgis_prerequisites(
+        &unprivileged,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect_err("a role without schema creation rights cannot provision PostGIS");
+    task.abort();
+    match &error {
+        PostgresKernelError::Statement(failure) => {
+            assert_eq!(failure.sqlstate.as_deref(), Some("42501"));
+        }
+        other => panic!("expected a statement failure, got {other:?}"),
+    }
+    assert!(error.to_string().contains("42501"), "{error}");
+    database.cleanup().await;
 }
 
 async fn cleanup_postgis_prerequisites(database: &TestDatabase, bbox_role: &SqlIdentifier) {
