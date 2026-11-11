@@ -2704,7 +2704,8 @@ jobs:
           set -euo pipefail
           # Use the Ubuntu archive if the runner's Azure mirror cannot resolve.
           if [[ -f /etc/apt/apt-mirrors.txt ]] && ! timeout 10 getent ahosts azure.archive.ubuntu.com >/dev/null; then
-            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            mirror="$(bash .github/scripts/select-ubuntu-archive.sh)"
+            printf '%s\n' "$mirror" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           fi
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends postgresql-18 postgresql-18-postgis-3
@@ -3080,7 +3081,8 @@ jobs:
           set -euo pipefail
           # Use the Ubuntu archive if the runner's Azure mirror cannot resolve.
           if [[ -f /etc/apt/apt-mirrors.txt ]] && ! timeout 10 getent ahosts azure.archive.ubuntu.com >/dev/null; then
-            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            mirror="$(bash .github/scripts/select-ubuntu-archive.sh)"
+            printf '%s\n' "$mirror" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           fi
           sudo apt-get update
           sudo apt-get install --yes zsh
