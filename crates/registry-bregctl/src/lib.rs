@@ -228,6 +228,8 @@ enum Command {
     DevSupervisor(dev::SupervisorArgs),
     #[command(name = "project-dev", hide = true)]
     ProjectDev(project_dev::Args),
+    #[command(name = "project-dev-guard", hide = true)]
+    ProjectDevGuard(project_dev::guard::Args),
     /// Explain compiled model, access, route, or event inventories.
     Explain(ExplainArgs),
     /// Compare an authoring candidate with a rederived closed package.
@@ -2908,6 +2910,7 @@ where
         Command::ProjectDev(args) => {
             return ExitCode::from(project_dev::run(args, stdout, stderr));
         }
+        Command::ProjectDevGuard(args) => return project_dev::guard::run(args),
         Command::Init(args) => match (args.from, args.template.as_deref()) {
             (None, None) => init(&args.destination),
             (None, Some(id)) => starters::run(&args.destination, id),

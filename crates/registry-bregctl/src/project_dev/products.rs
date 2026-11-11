@@ -3,7 +3,6 @@
 
 use anyhow::{bail, ensure, Context, Result};
 use registry_breg::fixtures::journey_step_profiles;
-use rustix::process::{kill_process_group, waitid, Pid, Signal, WaitId, WaitIdOptions};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -26,6 +25,7 @@ use super::{
     bindings::{Bindings, RuntimeBindings},
     clock,
     database::{Database, DatabaseUrls},
+    guard,
     issuer::Issuer,
     operational,
     plan::{self, Plan, Product},
@@ -53,7 +53,7 @@ pub(super) struct ProductRunner<'a> {
     deadline: Instant,
     runtime: tokio::runtime::Runtime,
     http: reqwest::Client,
-    children: Vec<(Product, Child)>,
+    children: Vec<(Product, guard::Child)>,
     bindings: Option<RuntimeBindings>,
 }
 
@@ -150,7 +150,12 @@ impl<'a> ProductRunner<'a> {
                 }
             };
             let binaries = &self.input.binaries[&product];
-            let mut command = child_command(&binaries.runtime);
+            let mut command = guard::Command::new(
+                self.root,
+                &format!("runtime-{}", product.name()),
+                &binaries.runtime,
+            )
+            .map_err(operational)?;
             command.arg("--runtime-config").arg(config);
             if product == Product::Casework {
                 command.arg("serve");
@@ -467,8 +472,8 @@ impl<'a> ProductRunner<'a> {
         )
     }
 
-    /// Record every live child's process group so a later `stop` can reach
-    /// processes whose supervisor died.
+    /// Record every live runtime group for status diagnostics and manual
+    /// cleanup evidence. Guards, not this record, own process lifetime.
     fn record_processes(&self) -> Result<()> {
         let entries: Vec<_> = self
             .children
@@ -506,7 +511,7 @@ impl<'a> ProductRunner<'a> {
     /// Fail while waiting on `waiting`, naming whichever child exited.
     fn ensure_alive(&self, waiting: Product) -> Result<()> {
         for (product, child) in &self.children {
-            if child_exited(child)? {
+            if child.exited()? {
                 let detail = self.runtime_log_tail(*product);
                 if *product == waiting {
                     bail!("{} exited before readiness{detail}", product.name());
@@ -527,7 +532,7 @@ impl<'a> ProductRunner<'a> {
 
     pub(super) fn services_alive(&self) -> Result<bool> {
         for (_, child) in &self.children {
-            if child_exited(child)? {
+            if child.exited()? {
                 return Ok(false);
             }
         }
@@ -550,17 +555,23 @@ impl<'a> ProductRunner<'a> {
     pub(super) fn stop(&mut self) -> Result<()> {
         let mut failures = Vec::new();
         self.children.retain_mut(|(product, child)| {
-            if stop_child(child).is_err() {
+            if child.stop().is_err() {
                 failures.push(product.name());
                 true
             } else {
                 false
             }
         });
-        // Drop reaped groups from the record so a later recovery cannot signal
-        // a reused process group ID.
+        // Drop reaped groups from the diagnostic record. Recovery waits on
+        // guard locks and lifecycle receipts rather than signaling these IDs.
         self.record_processes()?;
         ensure!(failures.is_empty(), "cannot stop {}", failures.join(", "));
+        let incomplete = guard::incomplete_launches(self.root)?;
+        ensure!(
+            incomplete.is_empty(),
+            "process guards did not confirm cleanup for {}",
+            incomplete.join(", ")
+        );
         drop(self.bindings.take());
         Ok(())
     }
@@ -641,28 +652,60 @@ fn run_logged_tool(
 ) -> Result<()> {
     let name = format!("{product}-{stage}");
     let mut output = tempfile::tempfile_in(root)?;
-    let mut child = child_command(binary)
+    let mut command = guard::Command::new(root, &format!("tool-{product}-{stage}"), binary)
+        .map_err(operational)?;
+    let mut child = command
         .args(args)
         .stdout(output.try_clone()?)
         .stderr(open_log(root, &name)?)
         .spawn()
         .with_context(|| format!("cannot start {product} {stage}"))
         .map_err(operational)?;
-    if wait_for_tool(&mut child, active)?.success() {
+    let status = wait_for_guarded_tool(&mut child, active)?;
+    logged_tool_result(status, &mut output, root, (product, stage))
+}
+
+fn logged_tool_result(
+    status: ExitStatus,
+    output: &mut fs::File,
+    root: &Path,
+    (product, stage): (&str, &str),
+) -> Result<()> {
+    if status.success() {
         return Ok(());
     }
     output.rewind()?;
     let codes = report_codes(output)?;
     bail!(
         "{product} {stage} failed{codes}{}",
-        failure_detail(&log_path(root, &name))
+        failure_detail(&log_path(root, &format!("{product}-{stage}")))
     );
 }
 
-/// Record each child's process group and the start time of its leader.
-/// Children start as group leaders, so the group ID is the PID. Recovery after
-/// a lost supervisor signals a group only while its leader still has this
-/// start time, because process IDs are reused.
+/// Exercise the log/result boundary in unit tests without routing a shell
+/// through the Rust test harness as if it were the bregctl binary. The native
+/// lifecycle test covers the real hidden guard dispatch.
+#[cfg(test)]
+fn run_logged_tool_direct(
+    binary: &Path,
+    args: &[&std::ffi::OsStr],
+    root: &Path,
+    (product, stage): (&str, &str),
+) -> Result<()> {
+    let name = format!("{product}-{stage}");
+    let mut output = tempfile::tempfile_in(root)?;
+    let mut child = child_command(binary)
+        .args(args)
+        .stdout(output.try_clone()?)
+        .stderr(open_log(root, &name)?)
+        .spawn()?;
+    let status = wait_for_tool(&mut child, || Ok(()))?;
+    logged_tool_result(status, &mut output, root, (product, stage))
+}
+
+/// Record each runtime process group and the start time of its leader for
+/// diagnostics and an operator's manual cleanup decision. Children start as
+/// group leaders, so the group ID is the PID.
 fn write_processes(root: &Path, children: &[(Product, u32)]) -> Result<()> {
     let table = super::recovery::process_table()?;
     let entries: Vec<_> = children
@@ -1502,7 +1545,7 @@ impl Drop for ProductRunner<'_> {
     fn drop(&mut self) {
         // The normal exit reports stop failures explicitly.
         for (_, child) in &mut self.children {
-            let _ = stop_child(child);
+            let _ = child.stop();
         }
     }
 }
@@ -1518,55 +1561,30 @@ pub(super) fn child_command(binary: &Path) -> Command {
     command
 }
 
-fn child_pid(child: &Child) -> Result<Pid> {
-    Pid::from_raw(i32::try_from(child.id())?).context("invalid owned process ID")
-}
-
-fn child_exited(child: &Child) -> Result<bool> {
-    let pid = child_pid(child)?;
-    // Keep the leader's PID until the group has received the final signal.
-    // Reaping the leader first would allow reuse of the group ID.
-    let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
-    loop {
-        match waitid(WaitId::Pid(pid), options) {
-            Ok(status) => return Ok(status.is_some()),
-            Err(rustix::io::Errno::INTR) => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-}
-
-fn signal_group(child: &Child, signal: Signal) -> Result<()> {
-    match kill_process_group(child_pid(child)?, signal) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-        // Darwin excludes zombies from killpg and reports EPERM when there
-        // are no signalable members. An owned, same-user group with an
-        // exited leader can already be empty of live processes.
-        Err(rustix::io::Errno::PERM) if cfg!(target_os = "macos") && child_exited(child)? => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn stop_child(child: &mut Child) -> Result<ExitStatus> {
-    if !child_exited(child)? {
-        signal_group(child, Signal::TERM)?;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline && !child_exited(child)? {
-            thread::sleep(POLL);
-        }
-    }
-    signal_group(child, Signal::KILL)?;
-    Ok(child.wait()?)
-}
-
 fn wait_for_tool(child: &mut Child, active: impl Fn() -> Result<()>) -> Result<ExitStatus> {
     loop {
         if let Err(error) = active() {
-            stop_child(child)?;
+            guard::stop_direct_child(child)?;
             return Err(error);
         }
-        if child_exited(child)? {
-            return stop_child(child);
+        if guard::direct_child_exited(child)? {
+            return guard::stop_direct_child(child);
+        }
+        thread::sleep(POLL);
+    }
+}
+
+fn wait_for_guarded_tool(
+    child: &mut guard::Child,
+    active: impl Fn() -> Result<()>,
+) -> Result<ExitStatus> {
+    loop {
+        if let Err(error) = active() {
+            child.stop()?;
+            return Err(error);
+        }
+        if child.exited()? {
+            return child.stop();
         }
         thread::sleep(POLL);
     }
@@ -2277,12 +2295,11 @@ mod tests {
     fn a_failed_tool_leaves_its_stderr_in_an_owner_only_log_and_the_error() {
         let scratch = tempfile::tempdir().unwrap();
         let root = scratch.path();
-        let error = run_logged_tool(
+        let error = run_logged_tool_direct(
             Path::new("/bin/sh"),
             &["-c".as_ref(), "echo boom >&2; exit 3".as_ref()],
             root,
             ("breg", "test"),
-            || Ok(()),
         )
         .unwrap_err()
         .to_string();
@@ -2305,12 +2322,11 @@ mod tests {
     #[test]
     fn a_successful_tool_leaves_no_failure_text() {
         let scratch = tempfile::tempdir().unwrap();
-        run_logged_tool(
+        run_logged_tool_direct(
             Path::new("/bin/sh"),
             &["-c".as_ref(), "echo fine >&2".as_ref()],
             scratch.path(),
             ("breg", "test"),
-            || Ok(()),
         )
         .unwrap();
     }
@@ -2684,12 +2700,15 @@ mod tests {
             .spawn()
             .unwrap();
         wait_for_leader(&child);
-        assert_eq!(stop_child(&mut child).unwrap().code(), Some(7));
+        assert_eq!(
+            guard::stop_direct_child(&mut child).unwrap().code(),
+            Some(7)
+        );
     }
 
     fn wait_for_leader(child: &Child) {
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !child_exited(child).unwrap() {
+        while !guard::direct_child_exited(child).unwrap() {
             assert!(Instant::now() < deadline, "the tool leader did not exit");
             thread::sleep(POLL);
         }
@@ -2705,7 +2724,7 @@ mod tests {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        let pid = child_pid(&child).unwrap();
+        let pid = guard::direct_child_pid(&child).unwrap();
         assert_eq!(rustix::process::getpgid(Some(pid)).unwrap(), pid);
         let mut pipe = BufReader::new(child.stdout.take().unwrap());
         let mut ready = String::new();
@@ -2714,7 +2733,7 @@ mod tests {
         if leader_exits {
             wait_for_leader(&child);
         }
-        stop_child(&mut child).unwrap();
+        guard::stop_direct_child(&mut child).unwrap();
 
         let (sender, receiver) = mpsc::sync_channel(1);
         let reader = thread::spawn(move || {
