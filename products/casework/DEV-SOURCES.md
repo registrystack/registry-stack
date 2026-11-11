@@ -4,7 +4,23 @@ A standalone review needs only a Casework project and its local teaching clients
 
 A current-source review adds one read-only context provider. The [canonical review example](examples/canonical-review/README.md) contains a submitted-context policy and a BReg Proposal policy. Its vendored schema and `context.contract` pin the exact native `correct-address` review-context export. The compiled policy checks the schema offline; an open review never silently adopts a later producer contract.
 
-1. Build and check the matching BReg package using the BReg runbook. Pair its native export with the authored Casework provider:
+1. Before pairing, declare access profiles with `actsAs: staff`, `actsAs: supervisor`, and `actsAs: administrator` in `casework.yaml`. Casework requires all three even when only Staff decide the review. Use a separate `actsAs: requester` profile for the trusted producer that submits the review. The canonical project's [profile definitions](examples/canonical-review/casework.yaml) give each role its own scope.
+
+   For native local development, add a client bound to the Administrator profile in `dev-clients.yaml`. `caseworkctl dev start` uses that client's authority to seed the directory on first start. Use a separate Staff client for claims and decisions, and list that client under `staff` for the review queue's directory team. These entries show the Casework scopes from the [canonical local client configuration](examples/canonical-review/dev-clients.yaml).
+
+   ```yaml
+   clients:
+     - id: administrator
+       accessProfile: administrator
+       scopes: [casework:admin]
+       claims: {registry_actor_kind: human}
+     - id: staff
+       accessProfile: staff
+       scopes: [casework:staff]
+       claims: {registry_actor_kind: human}
+   ```
+
+   Build and check the matching BReg package using the BReg runbook, then pair its native export with the authored Casework provider.
 
    ```sh
    caseworkctl provider pair products/casework/examples/canonical-review \
@@ -22,5 +38,7 @@ A current-source review adds one read-only context provider. The [canonical revi
 3. For a local session with the same issuer as BReg, add an explicit `integrations` block to Casework's `dev-clients.yaml`. Declare `integrations.resource`, `integrations.contextProviders` keyed by `deploymentRef`, and a `serviceClients` entry for the status reader. Each provider binding has the same fields as the runtime example. A generated local service client's references are `secret:file/service-CLIENT-id` and `secret:file/service-CLIENT-key`; imported owner-only files go through `integrations.secretFiles`. Start the already configured BReg dev session separately. Use `caseworkctl dev start ./casework --issuer-project ./breg-project` only when that ready BReg owner has pre-registered the Casework clients, their exact scopes, claims and resource. The Casework session retains that owner's issuer endpoint and selects free ports only for its own Casework service and database. Casework does not start BReg or modify its access profiles.
 
 The reviewer sends the current human bearer and selects an authorized BReg source profile with `Registry-Source-Profile` for open Casework work, source context, lists, decisions, and new notes. BReg must trust that issuer and audience, authorize the selected profile and subject, and grant `get-review-context` with the intended field disclosure. Casework never substitutes its service credential for a human display read. It selects the action and purpose from current caller-visible metadata, then checks the observed Proposal binding and exact context contract at visibility and decision boundaries. Context meaning, field semantics, and schema bytes stay pinned while profile and row disclosure remain current. A concealed, changed, or non-reviewable Proposal is refused or omitted from the visible task list. An inbox page that omits current-source work emits one value-free operator summary: expected concealment, source authorization filtering, or binding movement is `INFO`, while an explicit provider denial, contract mismatch, or missing source-profile selection is `WARN`. The summary carries refusal classes but no task count, profile value, subject, reference, or credential. BReg deliberately maps its 401, 403, and 404 responses to concealment, so its wrong-profile and missing-grant cases appear in the `INFO` summary and remain indistinguishable from ordinary concealment; operators diagnose those cases by checking the selected BReg profile and its `get-review-context` grant. A `WARN` summary identifies a refusal that Casework can prove is a provider or configuration fault, not merely expected filtering. Retained decided-task and settled-history reads use current Casework authority and expose no source projection. The service credential uses only its separate status and optional task-grant profiles. A task-grant read sends Casework's request and task correlation plus the frozen Proposal identity, contract, accepted policy, purpose, and exact requested fields. Those values bind the read; they do not grant authority or prove BReg verified a Casework task exists. BReg can match the request ID and exact policy against its accepted review binding; the task ID and purpose remain Casework correlation.
+
+Use the [canonical staff review example](examples/canonical-review/README.md#approve-an-exact-task-as-staff) to claim a Proposal task, decide it, and read your retained receipt.
 
 The trusted BReg producer creates or recovers the ReviewRequest and later fetches the immutable ReviewResult. An apply principal authorized by BReg independently rechecks and applies the Proposal. Casework neither synchronizes source records nor executes a source action. Use submitted context when the producer is authorized to give Casework a stable minimized snapshot and source availability or revocable disclosure is unnecessary.

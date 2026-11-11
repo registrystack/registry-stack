@@ -253,6 +253,10 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
             stage.path().join("README.md"),
             include_bytes!("../../../products/casework/examples/canonical-review/README.md"),
         )?;
+        fs::write(
+            stage.path().join("approve-task.sh"),
+            include_bytes!("../../../products/casework/examples/canonical-review/approve-task.sh"),
+        )?;
     }
     if approval_pattern {
         fs::write(

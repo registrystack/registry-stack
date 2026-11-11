@@ -1494,45 +1494,38 @@ async fn native_proposal_journey(producer_id: &'static str) {
             .unwrap(),
         "a submitted review cannot grant BReg application authority"
     );
-    let claimed = reqwest::Client::new()
-        .post(
-            casework_url
-                .join(&format!("v1/review-tasks/{id}/claim"))
-                .unwrap(),
-        )
-        .bearer_auth(&human)
-        .header("registry-casework-profile", "staff")
-        .header("registry-source-profile", "proposal-reviewer")
-        .header(
-            "if-match",
-            format!("\"{}\"", shown["revision"].as_i64().unwrap()),
-        )
-        .header("idempotency-key", "native-claim")
-        .send()
+    // Run the adopter example against the same live BReg and Casework routers.
+    use std::io::Write;
+    let mut auth_header = tempfile::NamedTempFile::new_in(scratch.path()).unwrap();
+    writeln!(
+        auth_header,
+        "Authorization: Bearer {human}\nRegistry-Casework-Profile: staff\nRegistry-Review-Profile: staff"
+    )
+    .unwrap();
+    let mut example = std::process::Command::new("bash");
+    example
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/casework/examples/canonical-review/approve-task.sh"
+        ))
+        .args([casework_url.as_str(), id])
+        .arg(auth_header.path())
+        .arg("proposal-reviewer");
+    let example = tokio::task::spawn_blocking(move || example.output())
         .await
-        .unwrap();
-    let claim_status = claimed.status();
-    let claimed: Value = claimed.json().await.unwrap();
-    assert_eq!(claim_status, StatusCode::OK, "{claimed}");
-    let decided = reqwest::Client::new()
-        .post(
-            casework_url
-                .join(&format!("v1/review-tasks/{id}/decisions"))
-                .unwrap(),
-        )
-        .bearer_auth(&human)
-        .header("registry-casework-profile", "staff")
-        .header("registry-source-profile", "proposal-reviewer")
-        .header(
-            "if-match",
-            format!("\"{}\"", claimed["revision"].as_i64().unwrap()),
-        )
-        .header("idempotency-key", "native-approve")
-        .json(&json!({"decision":{"type":"approve","outcome":"approved"}}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+        .unwrap()
+        .expect("run the canonical staff review example");
+    assert!(
+        example.status.success(),
+        "staff review example failed: {}",
+        String::from_utf8_lossy(&example.stderr)
+    );
+    let receipt: Value = serde_json::from_slice(&example.stdout).unwrap();
+    assert_eq!(receipt["decision"], "approve");
+    assert_eq!(receipt["outcome"], "approved");
+    assert_eq!(receipt["policy"], serde_json::to_value(&binding).unwrap());
+    assert!(receipt.get("reason").is_none());
+    assert!(receipt.get("result").is_none());
     let supervisor = minted(
         &idp,
         json!([CASEWORK_AUDIENCE, BREG_AUDIENCE]),

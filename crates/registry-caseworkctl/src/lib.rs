@@ -1382,6 +1382,7 @@ mod tests {
             ("casework.yaml", include_bytes!("../../../products/casework/examples/canonical-review/casework.yaml").as_slice()),
             ("schemas/correct-address.schema.json", include_bytes!("../../../products/casework/examples/canonical-review/schemas/correct-address.schema.json").as_slice()),
             ("dev-clients.yaml", include_bytes!("../../../products/casework/examples/canonical-review/dev-clients.yaml").as_slice()),
+            ("approve-task.sh", include_bytes!("../../../products/casework/examples/canonical-review/approve-task.sh").as_slice()),
         ] {
             assert_eq!(std::fs::read(project.join(name)).unwrap(), bytes, "{name}");
         }
