@@ -190,7 +190,9 @@ pub(crate) fn mark_link_fields(
                 };
                 let mut fields = vec![link.from_field.as_str().to_owned()];
                 for boundary in &profile.row_boundaries {
-                    if !fields.contains(&boundary.field) {
+                    if boundary.field.as_str() != entity.canonical_id.id.as_str()
+                        && !fields.contains(&boundary.field)
+                    {
                         fields.push(boundary.field.clone());
                     }
                 }

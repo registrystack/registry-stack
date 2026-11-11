@@ -22,7 +22,8 @@ class ReceiverError(RuntimeError):
 
 
 class WebhookAcceptance(Protocol):
-    def accept(self, headers: dict[str, str], body: bytes) -> None: ...
+    def accept(self, headers: dict[str, str], body: bytes) -> None:
+        raise NotImplementedError
 
 
 def _verify_webhook_request(

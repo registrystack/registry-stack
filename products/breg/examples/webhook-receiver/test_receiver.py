@@ -85,6 +85,15 @@ def post_event(server, headers, body):
         return response.status, response.read()
 
 
+class WebhookAcceptanceInterfaceTests(unittest.TestCase):
+    def test_incomplete_acceptance_fails_explicitly(self):
+        class IncompleteAcceptance(RECEIVER.WebhookAcceptance):
+            pass
+
+        with self.assertRaises(NotImplementedError):
+            IncompleteAcceptance().accept({}, b"")
+
+
 class WebhookAcceptanceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

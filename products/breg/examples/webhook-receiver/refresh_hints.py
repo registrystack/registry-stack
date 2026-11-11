@@ -149,17 +149,18 @@ def main() -> None:
         )
     except (OSError, ValueError):
         parser.error("check notifier origin, plan, projection, selector fields and credential files")
-    schema = (
-        f"urn:breg:event-schema:{args.registry_id}:{args.record_type}:"
-        f"{args.event_id}:sha256:{args.schema_digest}"
-    )
-    contract = {
-        "registry_id": args.registry_id, "instance_id": args.instance_id,
-        "record_type": args.record_type, "event_id": args.event_id, "trigger": args.trigger,
-        "data_schema": schema, "event_values": args.selector_field,
-    }
-    with make_server(args.port, key, contract, acceptance) as server:
-        server.serve_forever(poll_interval=0.1)
+    else:
+        schema = (
+            f"urn:breg:event-schema:{args.registry_id}:{args.record_type}:"
+            f"{args.event_id}:sha256:{args.schema_digest}"
+        )
+        contract = {
+            "registry_id": args.registry_id, "instance_id": args.instance_id,
+            "record_type": args.record_type, "event_id": args.event_id, "trigger": args.trigger,
+            "data_schema": schema, "event_values": args.selector_field,
+        }
+        with make_server(args.port, key, contract, acceptance) as server:
+            server.serve_forever(poll_interval=0.1)
 
 
 if __name__ == "__main__":
