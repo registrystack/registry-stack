@@ -910,6 +910,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'operate/advanced' },
             { label: 'Operator handoff', slug: 'operate' },
             { label: 'Call an API with rstack', slug: 'configure/api-connections' },
+            { label: 'Run a project with rstack dev', slug: 'configure/run-a-project-with-rstack-dev' },
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
             { label: 'Connect an OIDC issuer', slug: 'operate/advanced/connect-an-oidc-issuer' },
             { label: 'Generate ThunderID configuration', slug: 'operate/advanced/generate-identity-configuration' },

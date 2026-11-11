@@ -25865,7 +25865,7 @@
           "name": "dev",
           "invocation": "rstack dev",
           "about": "Run and inspect a local Registry Stack development environment",
-          "long_about": null,
+          "long_about": "Run and inspect a local Registry Stack development environment. For a walk-through from a project checkout to a running registry and review service, see `https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/`",
           "usage": "rstack dev [OPTIONS] <COMMAND>",
           "arguments": [],
           "options": [
@@ -25912,7 +25912,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -26301,6 +26301,24 @@
               ],
               "options": [
                 {
+                  "display": "--recover",
+                  "description": "Release the processes, databases and roles of a run whose supervisor was lost",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--database-url <URL>",
+                  "description": "TLS PostgreSQL administrator URL for --recover. Defaults to RSTACK_DEV_DATABASE_URL",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--json",
                   "description": "Emit the runner's JSON report",
                   "always_required": false,
@@ -26360,7 +26378,15 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--database-url <URL>",
+                  "arguments": [
+                    "--recover"
+                  ]
+                }
+              ],
               "subcommands": []
             }
           ]

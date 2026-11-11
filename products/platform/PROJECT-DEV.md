@@ -6,6 +6,10 @@ PostgreSQL server over TLS. `rstack dev` does not start PostgreSQL and does not
 use Docker: you supply the server. The products' own development modes are
 unchanged by `rstack dev`.
 
+For a walk-through from a checkout to a running pair, see
+[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
+This file is the reference.
+
 ```sh
 rstack install breg casework
 # Set RSTACK_DEV_DATABASE_URL through your shell's secret provider.

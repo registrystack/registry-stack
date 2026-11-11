@@ -155,6 +155,9 @@ enum Command {
         command: IdentityCommand,
     },
     /// Run and inspect a local Registry Stack development environment.
+    #[command(
+        long_about = "Run and inspect a local Registry Stack development environment.\n\nFor a walk-through from a project checkout to a running registry and review service, see `https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/`"
+    )]
     Dev {
         #[command(subcommand)]
         command: DevCommand,
