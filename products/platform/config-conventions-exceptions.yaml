@@ -391,7 +391,7 @@ exceptions:
   resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
 - rule: CFG-SEC-1
   format: breg/module
-  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/FieldSource/anyOf/12/properties/typeRef
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/FieldSource/anyOf/13/properties/typeRef
   class: exchange-model
   reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
   resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
@@ -439,7 +439,7 @@ exceptions:
   resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
 - rule: CFG-SEC-1
   format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/FieldSource/anyOf/12/properties/typeRef
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/FieldSource/anyOf/13/properties/typeRef
   class: exchange-model
   reason: "typeRef is the BReg v1alpha1 exchange model's reference to a local valueTypes declaration, typed LocalId. It never names a secret or invokes a secret provider; the named type supplies only the same typed constraints as an inline field/input."
   resolution: "Permanent for the BReg v1alpha1 named-value-type exchange model. native_source_conventions verifies typed declarations and refactor_contract verifies closed local resolution."
