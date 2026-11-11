@@ -1656,7 +1656,7 @@ dependencies = [
  "document-features",
  "mio",
  "parking_lot",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "signal-hook 0.3.18",
  "signal-hook-mio",
  "winapi",
@@ -4166,7 +4166,7 @@ version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57804b2c9b69967f1536a56f86297e367a33b19e98852ed624b84551cdbc0d90"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -6011,7 +6011,7 @@ dependencies = [
  "registry-platform-sqlite",
  "registry-platform-yaml",
  "rhai",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "serde_norway",
@@ -6144,7 +6144,7 @@ dependencies = [
  "registry-review-protocol",
  "reqwest 0.12.28",
  "rhai",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "rustls",
  "schemars",
  "serde",
@@ -6347,7 +6347,7 @@ dependencies = [
  "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "rustls",
  "schemars",
  "serde",
@@ -6557,7 +6557,7 @@ dependencies = [
  "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -6583,7 +6583,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-yaml",
  "reqwest 0.12.28",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -6686,7 +6686,7 @@ dependencies = [
  "registry-scheduling-core",
  "reqwest 0.12.28",
  "rhai",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "rustls",
  "schemars",
  "serde",
@@ -7035,7 +7035,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rhai",
  "rusqlite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -7320,7 +7320,7 @@ dependencies = [
  "registry-platform-yaml",
  "registry-thunderid-tooling",
  "rhai",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -7344,7 +7344,7 @@ dependencies = [
  "futures",
  "registry-evidence-authoring",
  "registry-platform-yaml",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde_json",
  "serde_norway",
  "tempfile",
@@ -7614,7 +7614,7 @@ dependencies = [
  "registry-platform-yaml",
  "registry-thunderid-tooling",
  "reqwest 0.12.28",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "serde_norway",
@@ -7649,7 +7649,7 @@ version = "0.46.1"
 dependencies = [
  "hmac 0.13.0",
  "regex",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -7710,7 +7710,7 @@ version = "0.46.1"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -7947,7 +7947,7 @@ name = "registry-platform-sqlite"
 version = "0.46.1"
 dependencies = [
  "rusqlite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "sha2 0.11.1",
  "tempfile",
@@ -8066,7 +8066,7 @@ dependencies = [
  "registry-platform-yaml",
  "registry-render-client",
  "reqwest 0.12.28",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -8177,7 +8177,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-yaml",
  "registry-thunderid-tooling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -8358,7 +8358,7 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-yaml",
  "reqwest 0.12.28",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "schemars",
  "serde",
  "serde_json",
@@ -8796,9 +8796,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
@@ -9778,7 +9778,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -11333,7 +11333,7 @@ dependencies = [
  "postcard",
  "pulley-interpreter",
  "rayon",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_derive",
  "smallvec",
@@ -11432,7 +11432,7 @@ checksum = "96dce7a8ea302c0f1eb4154eb1756525c90c595bbabbc590abad64d4c5ff8bbb"
 dependencies = [
  "cc",
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wasmtime-environ",
  "wasmtime-internal-versioned-export-macros",
  "windows-sys 0.61.2",
