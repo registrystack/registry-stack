@@ -351,14 +351,24 @@ export interface JsonOutcome<C = ListContinuation> {
   validAt?: string
 }
 
+export type GeoJsonPosition = readonly [longitude: number, latitude: number]
 export interface GeoJsonPoint {
   readonly type: 'Point'
-  readonly coordinates: readonly [number, number]
+  readonly coordinates: GeoJsonPosition
 }
+export interface GeoJsonPolygon {
+  readonly type: 'Polygon'
+  readonly coordinates: ReadonlyArray<ReadonlyArray<GeoJsonPosition>>
+}
+export interface GeoJsonMultiPolygon {
+  readonly type: 'MultiPolygon'
+  readonly coordinates: ReadonlyArray<ReadonlyArray<ReadonlyArray<GeoJsonPosition>>>
+}
+export type GeoJsonGeometry = GeoJsonPoint | GeoJsonPolygon | GeoJsonMultiPolygon
 export interface GeoJsonFeature {
   readonly type: 'Feature'
   readonly id: string
-  readonly geometry: GeoJsonPoint | null
+  readonly geometry: GeoJsonGeometry | null
   readonly properties: Readonly<Record<string, JsonValue>>
   readonly registry: { readonly revision: SafeInteger }
 }

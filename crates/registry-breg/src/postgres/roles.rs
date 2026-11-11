@@ -187,6 +187,15 @@ pub async fn verify_postgis(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
+    verify_postgis_prerequisites(client, migration_role, runtime_role, true).await
+}
+
+pub(crate) async fn verify_postgis_prerequisites(
+    client: &impl GenericClient,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+    requires_spatial_bbox: bool,
+) -> Result<()> {
     verify_postgres_version(client).await?;
     // A missing extension is the first setup action, even when its dependent
     // bbox role has not been provisioned either. Check existence before the
@@ -203,8 +212,10 @@ pub async fn verify_postgis(
             "administrator-installed PostGIS is required",
         ));
     }
-    let bbox_role = spatial_bbox_role(runtime_role);
-    verify_postgis_spatial_bbox_role(client, migration_role, runtime_role, &bbox_role).await?;
+    let bbox_role = requires_spatial_bbox.then(|| spatial_bbox_role(runtime_role));
+    if let Some(bbox_role) = &bbox_role {
+        verify_postgis_spatial_bbox_role(client, migration_role, runtime_role, bbox_role).await?;
+    }
     let installed = client
         .query_opt(
             "WITH postgis AS (
@@ -260,7 +271,7 @@ pub async fn verify_postgis(
             &[
                 &migration_role.as_str(),
                 &runtime_role.as_str(),
-                &bbox_role.as_str(),
+                &bbox_role.as_ref().map(SqlIdentifier::as_str),
             ],
         )
         .await?;
@@ -272,11 +283,11 @@ pub async fn verify_postgis(
     let version: String = row.get(0);
     if !postgis_version_supported(&version)
         || row.get::<_, String>(1) != POSTGIS_EXTENSION_SCHEMA
-        || (3..=6).any(|index| row.get::<_, bool>(index))
-        || !row.get::<_, bool>(7)
+        || (3..=6).any(|index| row.get::<_, Option<bool>>(index).unwrap_or(false))
+        || requires_spatial_bbox && !row.get::<_, bool>(7)
         || !row.get::<_, bool>(8)
         || !row.get::<_, bool>(9)
-        || (10..=18).any(|index| row.get::<_, bool>(index))
+        || (10..=18).any(|index| row.get::<_, Option<bool>>(index).unwrap_or(false))
     {
         return Err(PostgresKernelError::CatalogInvariant(
             "administrator-installed PostGIS does not match the governed prerequisite",
@@ -374,11 +385,14 @@ async fn verify_required_postgis_symbols(client: &impl GenericClient) -> Result<
                     to_regprocedure('registry_spatial_ext.st_makeline(registry_spatial_ext.geometry,registry_spatial_ext.geometry)') IS NOT NULL,
                     to_regprocedure('registry_spatial_ext.st_makeenvelope(double precision,double precision,double precision,double precision,integer)') IS NOT NULL,
                     to_regprocedure('registry_spatial_ext.st_intersects(registry_spatial_ext.geometry,registry_spatial_ext.geometry)') IS NOT NULL,
-                    to_regoperator('registry_spatial_ext.&&(registry_spatial_ext.geometry,registry_spatial_ext.geometry)') IS NOT NULL",
+                    to_regoperator('registry_spatial_ext.&&(registry_spatial_ext.geometry,registry_spatial_ext.geometry)') IS NOT NULL,
+                    to_regprocedure('registry_spatial_ext.st_geomfromgeojson(jsonb)') IS NOT NULL,
+                    to_regprocedure('registry_spatial_ext.st_multi(registry_spatial_ext.geometry)') IS NOT NULL,
+                    to_regprocedure('registry_spatial_ext.st_isvalid(registry_spatial_ext.geometry,integer)') IS NOT NULL",
             &[],
         )
         .await?;
-    if (0..=6).any(|index| !row.get::<_, bool>(index)) {
+    if (0..row.len()).any(|index| !row.get::<_, bool>(index)) {
         return Err(PostgresKernelError::CatalogInvariant(
             "administrator-installed PostGIS does not expose the required spatial symbols",
         ));

@@ -11,7 +11,9 @@ const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 const link = '<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile", </v1/schemas/company>; rel="describedby"';
 const meta = { registryIdentifier: 'registry', datasetIdentifier: 'dataset', recordTypeIdentifier: 'company' };
 const record = { recordIdentifier: id, revisionIdentifier: '1', domainData: { label: 'one' } };
-const feature = { type: 'Feature', id, geometry: null, properties: { wide: 9007199254740992 }, registry: { revision: 1 } };
+const polygon = { type: 'Polygon', coordinates: [[[100.25, 13.25], [101, 13.25], [101, 14], [100.25, 13.25]]] };
+const multiPolygon = { type: 'MultiPolygon', coordinates: [[[[100.25, 13.25], [101, 13.25], [101, 14], [100.25, 13.25]]]] };
+const feature = { type: 'Feature', id, geometry: polygon, properties: { wide: 9007199254740992 }, registry: { revision: 1 } };
 
 function respond(response, mediaType, document, includeLink = false, etag = false) {
   response.setHeader('content-type', mediaType);
@@ -29,7 +31,7 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
     const continuation = request.url.includes('$skiptoken=');
     if (request.headers.accept === 'application/geo+json') {
       if (path.endsWith(id)) return respond(response, 'application/geo+json', feature);
-      return respond(response, 'application/geo+json', `{"type":"FeatureCollection","features":[{"type":"Feature","id":"${id}","geometry":null,"properties":{"wide":9007199254740992},"registry":{"revision":1}}],"numberReturned":1,"registry":{"pageInfo":{"nextCursor":${continuation ? 'null' : '"geo-next"'}}}}`);
+      return respond(response, 'application/geo+json', `{"type":"FeatureCollection","features":[{"type":"Feature","id":"${id}","geometry":${JSON.stringify(multiPolygon)},"properties":{"wide":9007199254740992},"registry":{"revision":1}}],"numberReturned":1,"registry":{"pageInfo":{"nextCursor":${continuation ? 'null' : '"geo-next"'}}}}`);
     }
     const collection = !path.endsWith(id) && !path.includes('/revisions/');
     const responseMeta = path.includes('/incomplete-meta/')
@@ -55,9 +57,12 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
     await client.getRecordJson('companies', id, { select: ['name'] });
     assert(Buffer.isBuffer((await client.getRecordRevision('companies', id, 1)).body));
 
-    assert.equal((await client.getGeoJsonRecord('companies', id)).value.type, 'Feature');
+    const polygonFeature = (await client.getGeoJsonRecord('companies', id)).value;
+    assert.equal(polygonFeature.geometry.type, 'Polygon');
+    assert.deepEqual(polygonFeature.geometry.coordinates[0][0], [100.25, 13.25]);
     assert.match((await client.getGeoJsonRecordJson('companies', id)).valueJson, /9007199254740992/);
     const geo = await client.listGeoJsonRecords('companies', { accessProfile: 'map', bbox: ['100.1', '13.1', '100.2', '13.2'] });
+    assert.equal(geo.value.features[0].geometry.type, 'MultiPolygon');
     await client.continueGeoJsonList(geo.continuation);
     const geoJson = await client.listGeoJsonRecordsJson('companies');
     assert.match(geoJson.valueJson, /9007199254740992/);
@@ -101,6 +106,7 @@ test('specialized read methods keep routes, cursors, snapshots, exact JSON and o
 
     const requestCount = requests.length;
     await assert.rejects(client.listCurrentRecords('companies', { bbox: ['1', '2', '3', '4'] }), error => error.kind === 'invalid-request');
+    await assert.rejects(client.listGeoJsonRecords('companies', { bbox: ['100', '13', '99', '14'] }), error => error.kind === 'invalid-request');
     await assert.rejects(client.getRecordRevision('companies', id, Number.MAX_SAFE_INTEGER + 1), error => error.kind === 'invalid-request');
     assert.equal(requests.length, requestCount);
   } finally {

@@ -1115,6 +1115,7 @@ fn valid_action_input(
                 .is_some_and(|values| values.iter().any(|candidate| candidate == value))
         }),
         Some("crs84-point") => valid_point(value, contract),
+        Some("crs84-polygon") => valid_polygon(value, contract),
         Some("structured") => valid_structured(value, contract),
         _ => false,
     }
@@ -1269,6 +1270,144 @@ fn valid_point(value: &Value, contract: &Map<String, Value>) -> bool {
         return false;
     };
     west <= longitude && longitude <= east && south <= latitude && latitude <= north
+}
+
+fn valid_polygon(value: &Value, contract: &Map<String, Value>) -> bool {
+    let Some(precision) = contract
+        .get("precision")
+        .and_then(Value::as_u64)
+        .filter(|precision| *precision <= 9)
+    else {
+        return false;
+    };
+    let Some(maximum_positions) = contract
+        .get("maximumPositions")
+        .and_then(Value::as_u64)
+        .filter(|maximum| (4..=10_000).contains(maximum))
+    else {
+        return false;
+    };
+    let bounds = match contract.get("bbox") {
+        None => None,
+        Some(Value::Object(bbox)) => {
+            let [Some(west), Some(south), Some(east), Some(north)] = [
+                ("west", -180.0, 180.0),
+                ("south", -90.0, 90.0),
+                ("east", -180.0, 180.0),
+                ("north", -90.0, 90.0),
+            ]
+            .map(|(name, minimum, maximum)| {
+                bbox.get(name)
+                    .and_then(Value::as_str)
+                    .and_then(|value| coordinate_text(value, precision, minimum, maximum))
+            }) else {
+                return false;
+            };
+            Some([west, south, east, north])
+        }
+        Some(_) => return false,
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.len() != 2 {
+        return false;
+    }
+    let Some(coordinates) = object.get("coordinates") else {
+        return false;
+    };
+    let mut position_count = 0_u64;
+    match object.get("type").and_then(Value::as_str) {
+        Some("Polygon") => valid_polygon_coordinates(
+            coordinates,
+            precision,
+            bounds,
+            maximum_positions,
+            &mut position_count,
+        ),
+        Some("MultiPolygon") => coordinates.as_array().is_some_and(|polygons| {
+            !polygons.is_empty()
+                && polygons.iter().all(|polygon| {
+                    valid_polygon_coordinates(
+                        polygon,
+                        precision,
+                        bounds,
+                        maximum_positions,
+                        &mut position_count,
+                    )
+                })
+        }),
+        _ => false,
+    }
+}
+
+fn valid_polygon_coordinates(
+    value: &Value,
+    precision: u64,
+    bounds: Option<[f64; 4]>,
+    maximum_positions: u64,
+    position_count: &mut u64,
+) -> bool {
+    value.as_array().is_some_and(|rings| {
+        !rings.is_empty()
+            && rings.iter().all(|ring| {
+                valid_linear_ring(ring, precision, bounds, maximum_positions, position_count)
+            })
+    })
+}
+
+fn valid_linear_ring(
+    value: &Value,
+    precision: u64,
+    bounds: Option<[f64; 4]>,
+    maximum_positions: u64,
+    position_count: &mut u64,
+) -> bool {
+    let Some(values) = value.as_array().filter(|values| values.len() >= 4) else {
+        return false;
+    };
+    let Ok(length) = u64::try_from(values.len()) else {
+        return false;
+    };
+    let Some(total) = position_count.checked_add(length) else {
+        return false;
+    };
+    if total > maximum_positions {
+        return false;
+    }
+    *position_count = total;
+    let positions = values
+        .iter()
+        .map(|value| valid_polygon_position(value, precision, bounds))
+        .collect::<Option<Vec<_>>>();
+    let Some(positions) = positions else {
+        return false;
+    };
+    positions.first() == positions.last()
+        && positions
+            .windows(2)
+            .all(|edge| (edge[0].0 - edge[1].0).abs() <= 180.0)
+}
+
+fn valid_polygon_position(
+    value: &Value,
+    precision: u64,
+    bounds: Option<[f64; 4]>,
+) -> Option<(f64, f64)> {
+    let values = value.as_array().filter(|values| values.len() == 2)?;
+    let longitude = polygon_coordinate(&values[0], precision, -180.0, 180.0)?;
+    let latitude = polygon_coordinate(&values[1], precision, -90.0, 90.0)?;
+    if bounds.is_some_and(|[west, south, east, north]| {
+        longitude < west || longitude > east || latitude < south || latitude > north
+    }) {
+        return None;
+    }
+    Some((longitude, latitude))
+}
+
+fn polygon_coordinate(value: &Value, precision: u64, minimum: f64, maximum: f64) -> Option<f64> {
+    let value = value.as_f64()?;
+    coordinate_text(&value.to_string(), precision, minimum, maximum)
 }
 
 fn coordinate(value: &Value, precision: u64, minimum: f64, maximum: f64) -> Option<f64> {
@@ -1692,6 +1831,40 @@ mod tests {
             }),
             None,
         ));
+        let polygon_contract = json!({
+            "type":"crs84-polygon", "precision":6, "maximumPositions":8,
+            "bbox":{"west":"100.0","south":"13.0","east":"103.0","north":"16.0"}
+        });
+        assert!(valid_action_input(
+            &json!({"type":"Polygon","coordinates":[[
+                [100.0,13.0],[101.0,13.0],[101.0,14.0],[100.0,13.0]
+            ]]}),
+            &polygon_contract,
+            None,
+        ));
+        assert!(valid_action_input(
+            &json!({"type":"MultiPolygon","coordinates":[
+                [[[100.0,13.0],[101.0,13.0],[101.0,14.0],[100.0,13.0]]],
+                [[[102.0,15.0],[103.0,15.0],[103.0,16.0],[102.0,15.0]]]
+            ]}),
+            &polygon_contract,
+            None,
+        ));
+        for invalid in [
+            json!({"type":"Polygon","coordinates":[]}),
+            json!({"type":"Polygon","coordinates":[[[100.0,13.0],[101.0,13.0],[100.0,13.0]]]}),
+            json!({"type":"Polygon","coordinates":[[[100.0,13.0],[101.0,13.0],[101.0,14.0],[100.0,14.0]]]}),
+            json!({"type":"Polygon","coordinates":[[[-170.0,13.0],[170.0,13.0],[170.0,14.0],[-170.0,13.0]]]}),
+            json!({"type":"Polygon","coordinates":[[[100.0,13.0],[104.0,13.0],[104.0,14.0],[100.0,13.0]]]}),
+            json!({"type":"Polygon","coordinates":[[[100.0000001,13.0],[101.0,13.0],[101.0,14.0],[100.0000001,13.0]]]}),
+            json!({"type":"MultiPolygon","coordinates":[
+                [[[100.0,13.0],[101.0,13.0],[101.0,14.0],[100.0,13.0]]],
+                [[[102.0,15.0],[103.0,15.0],[103.0,16.0],[102.0,16.0],[102.0,15.0]]]
+            ]}),
+            json!({"type":"MultiPolygon","coordinates":[]}),
+        ] {
+            assert!(!valid_action_input(&invalid, &polygon_contract, None));
+        }
         assert!(valid_action_input(
             &json!({"flag":true}),
             &json!({
@@ -1712,6 +1885,29 @@ mod tests {
                     "required":["flag"], "properties":{"flag":{"type":"boolean"}}
                 }
             }),
+            None,
+        ));
+    }
+
+    #[test]
+    fn polygon_precision_nine_accepts_near_zero_coordinates_without_changing_point() {
+        let coordinate = json!(0.000000001);
+        assert!(coordinate.to_string().contains('e'));
+        assert!(valid_action_input(
+            &json!({"type":"Polygon","coordinates":[[
+                [0.000000001,0.000000001],
+                [0.000000002,0.000000001],
+                [0.000000002,0.000000002],
+                [0.000000001,0.000000001]
+            ]]}),
+            &json!({
+                "type":"crs84-polygon", "precision":9, "maximumPositions":4
+            }),
+            None,
+        ));
+        assert!(!valid_action_input(
+            &json!({"type":"Point","coordinates":[0.000000001,0.000000001]}),
+            &json!({"type":"crs84-point","precision":9}),
             None,
         ));
     }

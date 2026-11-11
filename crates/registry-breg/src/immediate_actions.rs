@@ -513,11 +513,13 @@ fn compile_handler(
                     ),
                 ));
             }
-            FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
+            FieldTypeSource::Crs84Point { .. }
+            | FieldTypeSource::Crs84Polygon { .. }
+            | FieldTypeSource::Structured { .. } => {
                 errors.push(Diagnostic::error(
                     "breg.action.handler-input-type-unsupported",
                     format!("{input_path}.type"),
-                    &format!("{} accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values", abi),
+                    &format!("{} accepts scalar inputs; use scalar fields or fixed effects for CRS84 geometry and structured values", abi),
                 ));
             }
             _ => {}
@@ -1203,7 +1205,9 @@ fn compile_requirements(
                 !expected.required
                     || matches!(
                         expected.field_type,
-                        FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
+                        FieldTypeSource::Structured { .. }
+                            | FieldTypeSource::Crs84Point { .. }
+                            | FieldTypeSource::Crs84Polygon { .. }
                     )
                     || !compatible_field_types(&expected.field_type, &field.field_type)
             })
@@ -1224,7 +1228,9 @@ fn compile_requirements(
             || ordered_input_invalid
             || matches!(
                 field.field_type,
-                FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
+                FieldTypeSource::Structured { .. }
+                    | FieldTypeSource::Crs84Point { .. }
+                    | FieldTypeSource::Crs84Polygon { .. }
             )
             || literal_invalid
             || input_invalid
@@ -2258,7 +2264,9 @@ fn validate_row_boundaries(
         };
         if matches!(
             field.field_type,
-            FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
+            FieldTypeSource::Crs84Point { .. }
+                | FieldTypeSource::Crs84Polygon { .. }
+                | FieldTypeSource::Structured { .. }
         ) {
             errors.push(Diagnostic::error(
                 "breg.action.permission-row-boundary-type-unsupported",
@@ -2483,6 +2491,24 @@ fn validate_field_type_bounds(
                 "CRS84 point precision or CRS84 bounding box is invalid",
             ));
         }
+        FieldTypeSource::Crs84Polygon {
+            precision,
+            bbox,
+            max_positions,
+        } if *precision > 9
+            || !(crate::contract::MIN_CRS84_POLYGON_POSITIONS
+                ..=crate::contract::MAX_CRS84_POLYGON_POSITIONS)
+                .contains(max_positions)
+            || bbox
+                .as_ref()
+                .is_some_and(|bbox| crate::contract::parsed_bbox(bbox, *precision).is_none()) =>
+        {
+            errors.push(Diagnostic::error(
+                "breg.action.input-crs84-polygon-bounds-invalid",
+                path,
+                "CRS84 polygon precision, bounding box, or maximumPositions is invalid",
+            ));
+        }
         FieldTypeSource::Structured { max_bytes, schema }
             if *max_bytes == 0
                 || *max_bytes > crate::contract::MAX_STRUCTURED_VALUE_BYTES
@@ -2522,6 +2548,9 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
             .max()
             .unwrap_or(Some(2)),
         FieldTypeSource::Crs84Point { .. } => Some(96),
+        FieldTypeSource::Crs84Polygon { max_positions, .. } => {
+            Some(crate::contract::maximum_polygon_json_bytes(*max_positions))
+        }
         FieldTypeSource::Structured { max_bytes, .. } => Some(u64::from(*max_bytes)),
     }
 }

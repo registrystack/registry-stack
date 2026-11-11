@@ -39,11 +39,17 @@ def metadata() -> dict:
     }
 
 
-def feature() -> dict:
+def feature(geometry: dict | None = None) -> dict:
     return {
         "type": "Feature",
         "id": RECORD_ID,
-        "geometry": {"type": "Point", "coordinates": [100.25, 13.25]},
+        "geometry": geometry
+        or {
+            "type": "Polygon",
+            "coordinates": [
+                [[100.25, 13.25], [101, 13.25], [101, 14], [100.25, 13.25]]
+            ],
+        },
         "properties": {"label": "one", "large": 2**63},
         "registry": {"revision": 1},
     }
@@ -76,7 +82,23 @@ class ReadParityTests(unittest.TestCase):
                         self.respond(
                             {
                                 "type": "FeatureCollection",
-                                "features": [feature()],
+                                "features": [
+                                    feature(
+                                        {
+                                            "type": "MultiPolygon",
+                                            "coordinates": [
+                                                [
+                                                    [
+                                                        [100.25, 13.25],
+                                                        [101, 13.25],
+                                                        [101, 14],
+                                                        [100.25, 13.25],
+                                                    ]
+                                                ]
+                                            ],
+                                        }
+                                    )
+                                ],
                                 "numberReturned": 1,
                                 "registry": {
                                     "pageInfo": {"nextCursor": cursor},
@@ -151,7 +173,10 @@ class ReadParityTests(unittest.TestCase):
 
     def test_geojson_bbox_and_typed_continuation(self) -> None:
         single = self.client.get_geojson_record("companies", RECORD_ID)
-        self.assertEqual(single["value"]["geometry"]["coordinates"], [100.25, 13.25])
+        self.assertEqual(single["value"]["geometry"]["type"], "Polygon")
+        self.assertEqual(
+            single["value"]["geometry"]["coordinates"][0][0], [100.25, 13.25]
+        )
         self.assertEqual(single["value"]["properties"]["large"], 2**63)
         self.assertIsNone(single["etag"])
 
@@ -163,10 +188,20 @@ class ReadParityTests(unittest.TestCase):
             bbox=("100.1", "13.1", "100.2", "13.2"),
         )
         self.assertEqual(first["value"]["numberReturned"], 1)
+        self.assertEqual(
+            first["value"]["features"][0]["geometry"]["type"], "MultiPolygon"
+        )
         self.assertEqual(first["continuation"]["skiptoken"], "geo-next")
         second = self.client.continue_geojson_list(first["continuation"])
         self.assertIsNone(second["continuation"])
         self.assertTrue(any("bbox=100.1%2C13.1%2C100.2%2C13.2" in path for path, _ in self.requests))
+        request_count = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as invalid_bbox:
+            self.client.list_geojson_records(
+                "companies", bbox=("100", "13", "99", "14")
+            )
+        self.assertEqual(invalid_bbox.exception.kind, "invalid-request")
+        self.assertEqual(len(self.requests), request_count)
 
     def test_temporal_snapshot_relationship_revision_reads(self) -> None:
         current = self.client.list_current_records("companies", top=1)

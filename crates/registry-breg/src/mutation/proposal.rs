@@ -1177,7 +1177,7 @@ impl MutationTransaction {
                     action,
                     input.input.as_ref().ok_or(MutationError::InvalidRequest)?,
                 )?;
-                crate::input_patterns::check_input_patterns(tx, action, &values).await?;
+                super::check_action_input_constraints(tx, action, &values).await?;
                 validate_input_write_authority(action, input.authority, &values, None)?;
                 let id = Uuid::new_v4();
                 proposal_store::initialize_draft(
@@ -1385,6 +1385,23 @@ impl MutationTransaction {
                             {
                                 return Err(MutationError::PreconditionFailed);
                             }
+                            for (field, value) in &target.after {
+                                if target.before.as_ref().and_then(|before| before.get(field))
+                                    != Some(value)
+                                {
+                                    let field = entity
+                                        .fields
+                                        .get(field)
+                                        .ok_or(MutationError::InvalidRequest)?;
+                                    super::validate_polygon_topology(
+                                        tx,
+                                        &field.field_type,
+                                        value,
+                                        || MutationError::InvalidRequest,
+                                    )
+                                    .await?;
+                                }
+                            }
                         }
                         let workflow = workflow
                             .submit(context, prepared.proposal)
@@ -1469,7 +1486,7 @@ impl MutationTransaction {
                                 .or(document.input.as_ref())
                                 .ok_or(MutationError::InvalidRequest)?,
                         )?;
-                        crate::input_patterns::check_input_patterns(tx, action, &values).await?;
+                        super::check_action_input_constraints(tx, action, &values).await?;
                         validate_input_write_authority(
                             action,
                             input.authority,

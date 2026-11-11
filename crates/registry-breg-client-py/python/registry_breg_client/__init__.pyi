@@ -7,6 +7,58 @@ StatisticsFormat = Literal["json", "csv"]
 StatisticsReleaseStatus = Literal["provisional", "final"]
 StatisticsReleaseSelection = Literal["any", "final"]
 StatisticsWithdrawalReason = Literal["computation-error", "source-data-error", "disclosure-risk"]
+GeoJsonPosition = list[float | int]
+
+class GeoJsonPoint(TypedDict):
+    type: Literal["Point"]
+    coordinates: GeoJsonPosition
+
+class GeoJsonPolygon(TypedDict):
+    type: Literal["Polygon"]
+    coordinates: list[list[GeoJsonPosition]]
+
+class GeoJsonMultiPolygon(TypedDict):
+    type: Literal["MultiPolygon"]
+    coordinates: list[list[list[GeoJsonPosition]]]
+
+GeoJsonGeometry = GeoJsonPoint | GeoJsonPolygon | GeoJsonMultiPolygon
+
+class GeoJsonFeatureRegistry(TypedDict):
+    revision: int
+
+class GeoJsonFeature(TypedDict):
+    type: Literal["Feature"]
+    id: str
+    geometry: GeoJsonGeometry | None
+    properties: dict[str, JsonValue]
+    registry: GeoJsonFeatureRegistry
+
+class GeoJsonPageInfo(TypedDict):
+    nextCursor: str | None
+
+class GeoJsonCollectionRegistry(TypedDict):
+    pageInfo: GeoJsonPageInfo
+    count: NotRequired[int]
+
+class GeoJsonFeatureCollection(TypedDict):
+    type: Literal["FeatureCollection"]
+    features: list[GeoJsonFeature]
+    numberReturned: int
+    registry: GeoJsonCollectionRegistry
+
+class GeoJsonCompleteOutcome(TypedDict):
+    kind: Literal["complete"]
+    value: GeoJsonFeature
+    trace_id: str
+    etag: str | None
+    location: str | None
+
+class GeoJsonPageOutcome(TypedDict):
+    kind: Literal["complete"]
+    value: GeoJsonFeatureCollection
+    continuation: dict[str, JsonValue] | None
+    trace_id: str
+    etag: str | None
 
 class BRegStatisticalDimensionDescriptor(TypedDict):
     field: str
@@ -389,7 +441,7 @@ class BaseRegistryClient:
         *,
         select: Sequence[str] | None = None,
         access_profile: str | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> GeoJsonCompleteOutcome: ...
     def list_geojson_records(
         self,
         record_route: str,
@@ -401,10 +453,10 @@ class BaseRegistryClient:
         orderby: str | None = None,
         count: bool | None = None,
         bbox: tuple[str, str, str, str] | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> GeoJsonPageOutcome: ...
     def continue_geojson_list(
         self, continuation: dict[str, JsonValue]
-    ) -> dict[str, Any]: ...
+    ) -> GeoJsonPageOutcome: ...
     def record_revisions(
         self,
         record_route: str,

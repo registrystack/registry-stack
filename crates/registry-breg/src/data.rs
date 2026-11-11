@@ -23,8 +23,8 @@ use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime}
 use uuid::Uuid;
 
 use crate::contract::{
-    valid_crs84_point, valid_decimal_value, valid_structured_value, FieldTypeSource, MutationMode,
-    Operation,
+    valid_crs84_point, valid_crs84_polygon, valid_decimal_value, valid_structured_value,
+    FieldTypeSource, MutationMode, Operation,
 };
 use crate::model::{
     CompiledEntity, CompiledQueryKind, CompiledRegistry, CompiledRoute, CompiledStoredField,
@@ -222,6 +222,11 @@ fn validate_json_field_value(value: &Value, field_type: &FieldTypeSource) -> boo
         FieldTypeSource::Crs84Point { precision, bbox } => {
             valid_crs84_point(value, *precision, bbox.as_ref())
         }
+        FieldTypeSource::Crs84Polygon {
+            precision,
+            bbox,
+            max_positions,
+        } => valid_crs84_polygon(value, *precision, bbox.as_ref(), *max_positions),
         FieldTypeSource::Structured { max_bytes, schema } => {
             valid_structured_value(value, *max_bytes, schema)
         }
@@ -265,6 +270,13 @@ fn validate_text_field_value(value: &str, field_type: &FieldTypeSource) -> bool 
         }
         FieldTypeSource::Crs84Point { precision, bbox } => parse_json_strict(value.as_bytes())
             .is_ok_and(|parsed| valid_crs84_point(&parsed, *precision, bbox.as_ref())),
+        FieldTypeSource::Crs84Polygon {
+            precision,
+            bbox,
+            max_positions,
+        } => parse_json_strict(value.as_bytes()).is_ok_and(|parsed| {
+            valid_crs84_polygon(&parsed, *precision, bbox.as_ref(), *max_positions)
+        }),
         FieldTypeSource::Structured { max_bytes, schema } => parse_json_strict(value.as_bytes())
             .is_ok_and(|parsed| valid_structured_value(&parsed, *max_bytes, schema)),
     }

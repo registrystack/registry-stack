@@ -1585,6 +1585,7 @@ async fn finish_prepared_server(
         lock_key,
         key_source: Arc::clone(&key_source),
         requires_postgis: registry.ddl().requires_postgis,
+        requires_spatial_bbox: registry.ddl().requires_spatial_bbox(),
         audit_writer: audit.writer().clone(),
     });
     if !readiness.is_ready().await {
@@ -2671,9 +2672,14 @@ async fn verify_opened_startup(
     )
     .await?;
     if package.registry().ddl().requires_postgis {
-        crate::postgres::verify_postgis(&transaction, migration_role, runtime_role)
-            .await
-            .map_err(|_| StartupError::DatabaseUnready)?;
+        crate::postgres::verify_postgis_prerequisites(
+            &transaction,
+            migration_role,
+            runtime_role,
+            package.registry().ddl().requires_spatial_bbox(),
+        )
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?;
     }
     // The physical claim is checked before the recorded identity, so a
     // restored copy is named as a copy whatever package or database id it
@@ -2770,6 +2776,7 @@ struct DynamicRuntimeReadiness {
     lock_key: RegistryLockKey,
     key_source: Arc<JwksFetcher>,
     requires_postgis: bool,
+    requires_spatial_bbox: bool,
     audit_writer: AuditWriter,
 }
 
@@ -2802,10 +2809,11 @@ impl DynamicRuntimeReadiness {
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
         if self.requires_postgis {
-            crate::postgres::verify_postgis(
+            crate::postgres::verify_postgis_prerequisites(
                 &*transaction,
                 &self.migration_role,
                 &self.runtime_role,
+                self.requires_spatial_bbox,
             )
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;

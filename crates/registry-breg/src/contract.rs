@@ -2671,6 +2671,7 @@ enum FieldSourceSchema {
     VocabularyCode(VocabularyCodeFieldSourceSchema),
     Reference(ReferenceFieldSourceSchema),
     Crs84Point(Crs84PointFieldSourceSchema),
+    Crs84Polygon(Crs84PolygonFieldSourceSchema),
     Structured(StructuredFieldSourceSchema),
 }
 
@@ -2925,6 +2926,31 @@ struct Crs84PointFieldSourceSchema {
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Crs84PolygonFieldSourceSchema {
+    #[schemars(with = "registry_platform_yaml::LocalId")]
+    id: String,
+    #[serde(default)]
+    api_name: Option<String>,
+    #[serde(rename = "type")]
+    field_type: Crs84PolygonFieldKindSchema,
+    #[serde(default)]
+    required: bool,
+    classification: Classification,
+    #[serde(default)]
+    valid_time_role: Option<ValidTimeRole>,
+    #[schemars(with = "BoundedU32<0, MAX_CRS84_PRECISION>")]
+    precision: u8,
+    #[serde(default)]
+    bbox: Option<Crs84BboxSource>,
+    #[serde(rename = "maximumPositions")]
+    #[schemars(with = "BoundedU32<MIN_CRS84_POLYGON_POSITIONS, MAX_CRS84_POLYGON_POSITIONS>")]
+    max_positions: u32,
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct StructuredFieldSourceSchema {
     #[schemars(with = "registry_platform_yaml::LocalId")]
     id: String,
@@ -3045,6 +3071,15 @@ enum ReferenceFieldKindSchema {
 enum Crs84PointFieldKindSchema {
     #[serde(rename = "crs84-point")]
     Crs84Point,
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[schemars(inline)]
+enum Crs84PolygonFieldKindSchema {
+    #[serde(rename = "crs84-polygon")]
+    Crs84Polygon,
 }
 
 #[cfg(feature = "schema")]
@@ -3269,6 +3304,33 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
                 bbox: raw.bbox.clone(),
             }
         }
+        RawFieldKind::Crs84Polygon => {
+            let precision = raw.precision.ok_or_else(|| {
+                Invalid::expected(
+                    "a crs84-polygon field with precision",
+                    "Declare precision on the crs84-polygon field.",
+                )
+                .into_error()
+            })?;
+            if u32::from(precision) > MAX_CRS84_PRECISION {
+                return Err(Invalid::expected(
+                    "a crs84-polygon field with precision from 0 to 9",
+                    "Lower precision on the crs84-polygon field to at most 9.",
+                )
+                .into_error());
+            }
+            FieldTypeSource::Crs84Polygon {
+                precision,
+                bbox: raw.bbox.clone(),
+                max_positions: raw.max_positions.ok_or_else(|| {
+                    Invalid::expected(
+                        "a crs84-polygon field with maximumPositions from 4 to 10000",
+                        "Declare maximumPositions from 4 to 10000 on the crs84-polygon field.",
+                    )
+                    .into_error()
+                })?,
+            }
+        }
         RawFieldKind::Structured => FieldTypeSource::Structured {
             max_bytes: raw.max_bytes.ok_or_else(|| {
                 Invalid::expected(
@@ -3335,6 +3397,12 @@ struct RawFieldSource {
     maximum: Option<String>,
     #[serde(default)]
     bbox: Option<Crs84BboxSource>,
+    #[serde(
+        default,
+        rename = "maximumPositions",
+        deserialize_with = "optional_bounded_u32::<_, MIN_CRS84_POLYGON_POSITIONS, MAX_CRS84_POLYGON_POSITIONS>"
+    )]
+    max_positions: Option<u32>,
     #[serde(
         default,
         rename = "maximumBytes",
@@ -3426,6 +3494,8 @@ enum RawFieldKind {
     Reference,
     #[serde(rename = "crs84-point")]
     Crs84Point,
+    #[serde(rename = "crs84-polygon")]
+    Crs84Polygon,
     Structured,
 }
 
@@ -3443,6 +3513,7 @@ impl RawFieldKind {
             "vocabulary-code" => Self::VocabularyCode,
             "reference" => Self::Reference,
             "crs84-point" => Self::Crs84Point,
+            "crs84-polygon" => Self::Crs84Polygon,
             "structured" => Self::Structured,
             _ => return None,
         })
@@ -3459,6 +3530,7 @@ impl RawFieldKind {
             Self::VocabularyCode => TypeOptionAllowances::VOCABULARY,
             Self::Reference => TypeOptionAllowances::REFERENCE,
             Self::Crs84Point => TypeOptionAllowances::CRS84_POINT,
+            Self::Crs84Polygon => TypeOptionAllowances::CRS84_POLYGON,
             Self::Structured => TypeOptionAllowances::STRUCTURED,
         }
     }
@@ -3475,6 +3547,7 @@ struct TypeOptionAllowances {
     vocabulary: bool,
     target: bool,
     bbox: bool,
+    max_positions: bool,
     delete: bool,
 }
 
@@ -3489,6 +3562,7 @@ impl TypeOptionAllowances {
         vocabulary: false,
         target: false,
         bbox: false,
+        max_positions: false,
         delete: false,
     };
     const STRING: Self = Self {
@@ -3520,6 +3594,12 @@ impl TypeOptionAllowances {
         bbox: true,
         ..Self::NONE
     };
+    const CRS84_POLYGON: Self = Self {
+        precision: true,
+        bbox: true,
+        max_positions: true,
+        ..Self::NONE
+    };
     const STRUCTURED: Self = Self {
         structured: true,
         ..Self::NONE
@@ -3536,6 +3616,7 @@ impl TypeOptionAllowances {
             "vocabulary" | "values" => self.vocabulary,
             "target" => self.target,
             "bbox" => self.bbox,
+            "maximumPositions" => self.max_positions,
             "onDelete" => self.delete,
             _ => false,
         }
@@ -3553,6 +3634,7 @@ fn reject_type_options<E: serde::de::Error>(
         || (!allowed.decimal_bounds && (raw.minimum.is_some() || raw.maximum.is_some()))
         || (!allowed.structured && (raw.max_bytes.is_some() || raw.schema.is_some()))
         || (!allowed.bbox && raw.bbox.is_some())
+        || (!allowed.max_positions && raw.max_positions.is_some())
         || (!allowed.vocabulary && (raw.vocabulary.is_some() || !raw.values.is_empty()))
         || (!allowed.target && raw.target.is_some())
         || (!allowed.delete && raw.on_delete.is_some())
@@ -3562,7 +3644,8 @@ fn reject_type_options<E: serde::de::Error>(
             "Remove the options the type does not take: string takes minimumLength and \
              maximumLength, text maximumLength, decimal precision, scale, minimum, and maximum, \
              vocabulary-code vocabulary and values, reference target and onDelete, crs84-point \
-             precision and bbox, and structured maximumBytes and schema.",
+             precision and bbox, crs84-polygon precision, bbox, and maximumPositions, and \
+             structured maximumBytes and schema.",
         )
         .into_error());
     }
@@ -3642,6 +3725,24 @@ pub enum FieldTypeSource {
         #[serde(skip_serializing_if = "Option::is_none")]
         bbox: Option<Crs84BboxSource>,
     },
+    #[serde(rename = "crs84-polygon")]
+    Crs84Polygon {
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<0, MAX_CRS84_PRECISION>")
+        )]
+        precision: u8,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bbox: Option<Crs84BboxSource>,
+        #[serde(rename = "maximumPositions")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(
+                with = "BoundedU32<MIN_CRS84_POLYGON_POSITIONS, MAX_CRS84_POLYGON_POSITIONS>"
+            )
+        )]
+        max_positions: u32,
+    },
     Structured {
         #[serde(rename = "maximumBytes")]
         #[cfg_attr(
@@ -3696,6 +3797,12 @@ struct RawValueTypeSource {
     bbox: Option<Crs84BboxSource>,
     #[serde(
         default,
+        rename = "maximumPositions",
+        deserialize_with = "optional_bounded_u32::<_, MIN_CRS84_POLYGON_POSITIONS, MAX_CRS84_POLYGON_POSITIONS>"
+    )]
+    max_positions: Option<u32>,
+    #[serde(
+        default,
         rename = "maximumBytes",
         deserialize_with = "optional_bounded_u32::<_, 1, MAX_STRUCTURED_VALUE_BYTES>"
     )]
@@ -3729,6 +3836,7 @@ impl<'de> Deserialize<'de> for FieldTypeSource {
             minimum: raw.minimum,
             maximum: raw.maximum,
             bbox: raw.bbox,
+            max_positions: raw.max_positions,
             max_bytes: raw.max_bytes,
             schema: raw.schema,
             vocabulary: raw.vocabulary,
@@ -3746,6 +3854,11 @@ impl<'de> Deserialize<'de> for FieldTypeSource {
 }
 
 impl FieldTypeSource {
+    /// Whether the value is one of the closed CRS84 GeoJSON geometry types.
+    pub fn is_crs84_geometry(&self) -> bool {
+        matches!(self, Self::Crs84Point { .. } | Self::Crs84Polygon { .. })
+    }
+
     /// Whether every value `previous` admitted is still a valid value of this
     /// type with no change to its stored column type: the vocabulary gained
     /// codes, a `text` length limit rose, or a `string` minimum length fell.
@@ -3835,6 +3948,16 @@ pub const MAX_TEXT_FIELD_LENGTH: u32 = 10_000_000;
 pub const MAX_DECIMAL_PRECISION: u32 = 38;
 /// The largest CRS84 point `precision`, in decimal places.
 pub const MAX_CRS84_PRECISION: u32 = 9;
+/// Every GeoJSON linear ring contains at least four positions, including closure.
+pub const MIN_CRS84_POLYGON_POSITIONS: u32 = 4;
+/// The largest total position count accepted by one polygon field value.
+pub const MAX_CRS84_POLYGON_POSITIONS: u32 = 10_000;
+
+/// Allow room for both coordinate tokens, separators, ring and part brackets,
+/// and PostgreSQL's JSONB whitespace at the largest supported precision.
+pub(crate) const fn maximum_polygon_json_bytes(max_positions: u32) -> u64 {
+    40 * max_positions as u64 + 64
+}
 
 pub(crate) fn decimal_scaled_value(value: &str, precision: u8, scale: u8) -> Option<i128> {
     if !(1..=38).contains(&precision) || scale > precision {
@@ -4005,6 +4128,136 @@ pub(crate) fn valid_crs84_point(
         .is_none_or(|(west, south, east, north)| {
             lon >= west && lon <= east && lat >= south && lat <= north
         })
+}
+
+/// Validate the closed CRS84 Polygon/MultiPolygon wire contract without
+/// normalizing or otherwise rewriting the supplied JSON value.
+pub fn valid_crs84_polygon(
+    value: &Value,
+    precision: u8,
+    bbox: Option<&Crs84BboxSource>,
+    max_positions: u32,
+) -> bool {
+    if precision > MAX_CRS84_PRECISION as u8
+        || !(MIN_CRS84_POLYGON_POSITIONS..=MAX_CRS84_POLYGON_POSITIONS).contains(&max_positions)
+    {
+        return false;
+    }
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.len() != 2 {
+        return false;
+    }
+    let Some(kind) = object.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(coordinates) = object.get("coordinates").and_then(Value::as_array) else {
+        return false;
+    };
+    if coordinates.is_empty() {
+        return false;
+    }
+    let mut position_count = 0_u32;
+    match kind {
+        "Polygon" => valid_crs84_polygon_coordinates(
+            coordinates,
+            precision,
+            bbox,
+            max_positions,
+            &mut position_count,
+        ),
+        "MultiPolygon" => coordinates.iter().all(|polygon| {
+            polygon.as_array().is_some_and(|rings| {
+                valid_crs84_polygon_coordinates(
+                    rings,
+                    precision,
+                    bbox,
+                    max_positions,
+                    &mut position_count,
+                )
+            })
+        }),
+        _ => false,
+    }
+}
+
+fn valid_crs84_polygon_coordinates(
+    rings: &[Value],
+    precision: u8,
+    bbox: Option<&Crs84BboxSource>,
+    max_positions: u32,
+    position_count: &mut u32,
+) -> bool {
+    if rings.is_empty() {
+        return false;
+    }
+    rings.iter().all(|ring| {
+        ring.as_array().is_some_and(|positions| {
+            valid_crs84_linear_ring(positions, precision, bbox, max_positions, position_count)
+        })
+    })
+}
+
+fn valid_crs84_linear_ring(
+    positions: &[Value],
+    precision: u8,
+    bbox: Option<&Crs84BboxSource>,
+    max_positions: u32,
+    position_count: &mut u32,
+) -> bool {
+    let Ok(ring_positions) = u32::try_from(positions.len()) else {
+        return false;
+    };
+    let Some(total_positions) = position_count.checked_add(ring_positions) else {
+        return false;
+    };
+    if ring_positions < MIN_CRS84_POLYGON_POSITIONS || total_positions > max_positions {
+        return false;
+    }
+    *position_count = total_positions;
+    let bounds = bbox.and_then(|bbox| parsed_bbox(bbox, precision));
+    let mut first = None;
+    let mut previous_longitude = None;
+    let mut last = None;
+    for position in positions {
+        let Some(position) = position.as_array() else {
+            return false;
+        };
+        if position.len() != 2 {
+            return false;
+        }
+        let Some(longitude) = polygon_coordinate_number(&position[0], precision, -180.0, 180.0)
+        else {
+            return false;
+        };
+        let Some(latitude) = polygon_coordinate_number(&position[1], precision, -90.0, 90.0) else {
+            return false;
+        };
+        if bounds.is_some_and(|(west, south, east, north)| {
+            longitude < west || longitude > east || latitude < south || latitude > north
+        }) {
+            return false;
+        }
+        if previous_longitude.is_some_and(|previous: f64| (longitude - previous).abs() > 180.0) {
+            return false;
+        }
+        let current = (longitude, latitude);
+        first.get_or_insert(current);
+        previous_longitude = Some(longitude);
+        last = Some(current);
+    }
+    first == last
+}
+
+fn polygon_coordinate_number(
+    value: &Value,
+    precision: u8,
+    minimum: f64,
+    maximum: f64,
+) -> Option<f64> {
+    let value = value.as_f64()?;
+    parse_coordinate(&value.to_string(), precision, minimum, maximum)
 }
 
 pub(crate) fn valid_structured_schema(schema: &Value) -> bool {
@@ -5898,7 +6151,7 @@ impl schemars::JsonSchema for ReusableValueTypeSchema {
                 branch
                     .pointer("/properties/type/const")
                     .and_then(Value::as_str),
-                Some("reference" | "crs84-point" | "structured")
+                Some("reference" | "crs84-point" | "crs84-polygon" | "structured")
             )
         });
         value_type
@@ -6021,5 +6274,109 @@ mod tests {
             json!(structured),
             json!({"type": "structured", "maximumBytes": 512, "schema": schema})
         );
+    }
+
+    #[test]
+    fn crs84_polygon_authoring_requires_bounded_maximum_positions() {
+        let polygon: FieldTypeSource = serde_json::from_value(json!({
+            "type": "crs84-polygon",
+            "precision": 6,
+            "maximumPositions": 32,
+            "bbox": {"west": "100.000000", "south": "10.000000", "east": "110.000000", "north": "20.000000"}
+        }))
+        .expect("bounded polygon type parses");
+        assert_eq!(
+            polygon,
+            FieldTypeSource::Crs84Polygon {
+                precision: 6,
+                bbox: Some(Crs84BboxSource {
+                    west: "100.000000".to_owned(),
+                    south: "10.000000".to_owned(),
+                    east: "110.000000".to_owned(),
+                    north: "20.000000".to_owned(),
+                }),
+                max_positions: 32,
+            }
+        );
+        for invalid in [
+            json!({"type": "crs84-polygon", "precision": 6}),
+            json!({"type": "crs84-polygon", "precision": 6, "maximumPositions": 3}),
+            json!({"type": "crs84-polygon", "precision": 6, "maximumPositions": 10001}),
+        ] {
+            assert!(
+                serde_json::from_value::<FieldTypeSource>(invalid).is_err(),
+                "an absent or out-of-range maximumPositions must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn crs84_polygon_validator_accepts_both_kinds_without_rewriting_json() {
+        let polygon = json!({
+            "type": "Polygon",
+            "coordinates": [[
+                [100.000000, 10.000000],
+                [101.000000, 10.000000],
+                [101.000000, 11.000000],
+                [100.000000, 10.000000]
+            ]]
+        });
+        let multi = json!({
+            "type": "MultiPolygon",
+            "coordinates": [
+                [[
+                    [-1.000000, 50.000000],
+                    [0.000000, 50.000000],
+                    [0.000000, 51.000000],
+                    [-1.000000, 50.000000]
+                ]],
+                [[
+                    [1.000000, 50.000000],
+                    [2.000000, 50.000000],
+                    [2.000000, 51.000000],
+                    [1.000000, 50.000000]
+                ]]
+            ]
+        });
+        let original = polygon.clone();
+        assert!(valid_crs84_polygon(&polygon, 6, None, 4));
+        assert_eq!(polygon, original, "validation preserves authored JSON");
+        assert!(valid_crs84_polygon(&multi, 6, None, 8));
+    }
+
+    #[test]
+    fn crs84_polygon_validator_accepts_nine_place_near_zero_wire_coordinates() {
+        let polygon: Value = serde_json::from_str(
+            r#"{"type":"Polygon","coordinates":[[[0.000000001,0.000000001],[0.000000002,0.000000001],[0.000000001,0.000000002],[0.000000001,0.000000001]]]}"#,
+        )
+        .expect("wire polygon parses");
+        assert!(valid_crs84_polygon(&polygon, 9, None, 4));
+    }
+
+    #[test]
+    fn crs84_polygon_validator_refuses_structural_and_coordinate_violations() {
+        let invalid = [
+            json!({"type":"Point","coordinates":[100.000000, 10.000000]}),
+            json!({"type":"Polygon","coordinates":[]}),
+            json!({"type":"Polygon","coordinates":[[]]}),
+            json!({"type":"Polygon","coordinates":[[[100.000000,10.000000],[101.000000,10.000000],[100.000000,10.000000]]]}),
+            json!({"type":"Polygon","coordinates":[[[100.000000,10.000000],[101.000000,10.000000],[101.000000,11.000000],[100.000001,10.000000]]]}),
+            json!({"type":"Polygon","coordinates":[[[100.000000,10.000000],[101.000000,10.000000],[101.000000,11.000000],[100.000000,10.000000,0]]]}),
+            json!({"type":"Polygon","coordinates":[[[100.000000,10.000000],[101.000000,10.000000],[101.000000,11.000000],[100.000000,10.000000]]],"bbox":[100,10,101,11]}),
+            json!({"type":"Polygon","coordinates":[[[179.000000,10.000000],[-179.000000,10.000000],[-179.000000,11.000000],[179.000000,10.000000]]]}),
+        ];
+        for value in invalid {
+            assert!(!valid_crs84_polygon(&value, 6, None, 10));
+        }
+        let too_many = json!({"type":"Polygon","coordinates":[[[100.000000,10.000000],[101.000000,10.000000],[101.000000,11.000000],[100.000000,10.000000]]]});
+        assert!(!valid_crs84_polygon(&too_many, 6, None, 3));
+        let out_of_bbox = json!({"type":"Polygon","coordinates":[[[100.000000,10.000000],[101.000000,10.000000],[101.000000,11.000000],[100.000000,10.000000]]]});
+        let bbox = Crs84BboxSource {
+            west: "100.000000".to_owned(),
+            south: "10.000000".to_owned(),
+            east: "100.500000".to_owned(),
+            north: "11.000000".to_owned(),
+        };
+        assert!(!valid_crs84_polygon(&out_of_bbox, 6, Some(&bbox), 10));
     }
 }

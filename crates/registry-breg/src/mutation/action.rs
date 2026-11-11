@@ -169,7 +169,7 @@ impl MutationTransaction {
         #[cfg(feature = "postgres-test")]
         authority.wait_after_preflight().await?;
         let normalized_input =
-            match validate_action_input_with_patterns(&***client, action, input).await {
+            match validate_action_input_with_constraints(&***client, action, input).await {
                 Ok(input) => input,
                 Err(MutationError::Unavailable) => return Err(MutationError::Unavailable),
                 Err(_) => {
@@ -568,7 +568,7 @@ impl MutationTransaction {
         )?;
         validate_action_claims(action, claims, Operation::Invoke)?;
         let normalized_input =
-            validate_action_input_with_patterns(&***client, action, input.input).await?;
+            validate_action_input_with_constraints(&***client, action, input.input).await?;
         validate_precondition_set(action, &input.preconditions)?;
         let _attempt = self
             .begin_action_boundary_audit(claims, input.route_id, input.correlation)
@@ -1056,7 +1056,7 @@ impl MutationTransaction {
             );
         }
         let normalized_input =
-            match validate_action_input_with_patterns(&***client, action, input_values).await {
+            match validate_action_input_with_constraints(&***client, action, input_values).await {
                 Ok(input) => input,
                 Err(MutationError::Unavailable) => return Err(UncertainApply),
                 Err(_) => {
@@ -2951,14 +2951,14 @@ impl ActionClaimExt for ActionClaimContext {
     }
 }
 
-/// The declared inputs, type-checked and then matched against any input pattern.
-async fn validate_action_input_with_patterns(
+/// Type-check the declared inputs before applying database-backed constraints.
+async fn validate_action_input_with_constraints(
     client: &(impl tokio_postgres::GenericClient + Sync),
     action: &CompiledAction,
     input: Map<String, Value>,
 ) -> Result<ActionInputs, MutationError> {
     let input = validate_action_input(action, input)?;
-    crate::input_patterns::check_input_patterns(client, action, &input).await?;
+    super::check_action_input_constraints(client, action, &input).await?;
     Ok(input)
 }
 
@@ -3826,7 +3826,7 @@ impl MutationTransaction {
         )?;
         validate_action_claims(action, claims, Operation::Invoke)?;
         let normalized =
-            validate_action_input_with_patterns(&***client, action, input.input).await?;
+            validate_action_input_with_constraints(&***client, action, input.input).await?;
         validate_precondition_set(action, &input.preconditions)?;
         *attempt = Some(
             self.begin_action_boundary_audit(claims, input.route_id, input.correlation)

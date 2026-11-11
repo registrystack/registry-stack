@@ -45,11 +45,12 @@ occupied by the link; choose another unused, non-symbolic-link name under the re
 
 - **PostgreSQL 17 or newer**, reached over TLS, with two login roles: a migration role that owns
   the schema and applies packages, and a runtime role the serving process uses. A project with a
-  `crs84-point` field also needs PostGIS 3.5 or newer. Your administrator creates the roles,
-  schemas, and extensions; the product never creates any of them. SQLite is not a target.
+  `crs84-polygon` field always needs PostGIS 3.5 or newer. A `crs84-point` field needs PostGIS only
+  when an access profile grants bbox queries. Your administrator creates the roles, schemas, and
+  extensions. The product never creates any of them. SQLite is not a target.
   Ubuntu 24.04 ships PostgreSQL 16 and Debian 12 ships PostgreSQL 15, both too old: install 17
   from the PostgreSQL project's apt repository (PGDG), or run the `postgres:17` image
-  (`postgis/postgis` at PostgreSQL 17 when the project has a `crs84-point` field).
+  (`postgis/postgis` at PostgreSQL 17 when the project requires PostGIS).
 - **A host for one process.** The runtime is a single binary that verifies one package and serves
   its REST API against one database, on the platforms in
   [platform support](../../explanation/known-limitations/#platform-support).
@@ -182,8 +183,9 @@ with `migration role has database-level administrative authority`, which is also
 role that is a superuser or has `BYPASSRLS`, `CREATEDB`, or `CREATEROLE`. If a managed PostgreSQL
 service created the database for you, check its owner and its grants first.
 
-For a spatial project, add a bounding-box role named after the runtime role with the suffix
-`__spatial_bbox`, and install PostGIS in a schema neither registry role owns:
+For a project with polygon storage or bbox queries, install PostGIS in a schema neither registry
+role owns. If the project grants bbox queries, also add a bounding-box role named after the runtime
+role with the suffix `__spatial_bbox`:
 
 ```sql
 CREATE ROLE registry_runtime__spatial_bbox NOLOGIN NOSUPERUSER NOCREATEDB
@@ -198,6 +200,10 @@ REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC;
 GRANT USAGE ON SCHEMA registry_spatial_ext
   TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
 ```
+
+A package that stores polygons and grants no bbox queries omits the bbox role, its membership, and
+its name from the final `GRANT USAGE`. Keep the PostGIS schema, extension, and grants to the
+migration and runtime roles.
 
 Size connections, timeouts, and statement statistics once the registry serves; see
 [Set a PostgreSQL baseline](../breg-monitor/#set-a-postgresql-baseline).

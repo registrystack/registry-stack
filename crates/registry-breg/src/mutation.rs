@@ -2738,6 +2738,22 @@ async fn apply_current_row(
             )
             .await?;
             authorize_record_snapshot(request, &data, record_uuid)?;
+            let profile = selected_profile(request)?;
+            for (field_id, value) in &data {
+                validate_polygon_topology(
+                    transaction,
+                    &request.plan.entity.fields[field_id].field_type,
+                    value,
+                    || {
+                        MutationError::InvalidRequestAt(data_field_location(
+                            &request.plan.entity,
+                            profile,
+                            field_id,
+                        ))
+                    },
+                )
+                .await?;
+            }
             let row =
                 apply_create_row(transaction, request, &record_id, &data, field_encryption).await?;
             Ok(row)
@@ -2761,7 +2777,7 @@ async fn apply_current_row(
                 return Err(MutationError::PreconditionFailed);
             }
             let before_data = current.data.clone();
-            let data = apply_patch_document(request, &current.data)?;
+            let data = apply_patch_document(transaction, request, &current.data).await?;
             let mut admitted_intake = current.data.clone();
             admitted_intake.extend(data.clone());
             authorize_record_snapshot(request, &admitted_intake, current.record_uuid)?;
@@ -2895,6 +2911,15 @@ pub(super) async fn write_plan_row(
                 .any(|field| entity.is_generated_identifier_immutable(field))
     {
         return Err(MutationError::InvalidRequest);
+    }
+    for (field_id, value) in &fields {
+        validate_polygon_topology(
+            transaction,
+            &entity.fields[field_id].field_type,
+            value,
+            || MutationError::InvalidRequest,
+        )
+        .await?;
     }
     let record_id = record_uuid.to_string();
     let mut current = match expected_revision {
@@ -3427,7 +3452,8 @@ fn response_data(
     Ok(response)
 }
 
-fn apply_patch_document(
+async fn apply_patch_document(
+    transaction: &Transaction<'_>,
     request: &MutationRequest<'_>,
     current: &Map<String, Value>,
 ) -> Result<Map<String, Value>, MutationError> {
@@ -3460,6 +3486,10 @@ fn apply_patch_document(
                 }
                 written_sql_value(&request.plan.entity, field, value)
                     .map_err(|_| at(PatchMember::Value))?;
+                validate_polygon_topology(transaction, &field.field_type, value, || {
+                    at(PatchMember::Value)
+                })
+                .await?;
                 materialized.insert(field_id.clone(), value.clone());
                 changed.insert(field_id, value.clone());
                 mutated = true;
@@ -4152,6 +4182,54 @@ fn written_sql_value(
     sql_value(value, &field.field_type)
 }
 
+/// Check topology only after bounding the geometry. The flags overload avoids
+/// emitting PostGIS NOTICEs containing coordinates of invalid geometries.
+async fn validate_polygon_topology(
+    client: &(impl GenericClient + Sync),
+    field_type: &FieldTypeSource,
+    value: &Value,
+    invalid: impl FnOnce() -> MutationError,
+) -> Result<(), MutationError> {
+    if !matches!(field_type, FieldTypeSource::Crs84Polygon { .. }) || value.is_null() {
+        return Ok(());
+    }
+    if !validate_field_value(FieldValue::Json(value), field_type) {
+        return Err(invalid());
+    }
+    use crate::generated_ddl::POSTGIS_EXTENSION_SCHEMA;
+    let row = client
+        .query_one(
+            &format!(
+                "SELECT {POSTGIS_EXTENSION_SCHEMA}.ST_IsValid(
+            {POSTGIS_EXTENSION_SCHEMA}.ST_GeomFromGeoJSON($1::jsonb), 0)"
+            ),
+            &[value],
+        )
+        .await
+        .map_err(map_database_error)?;
+    if !row.try_get::<_, bool>(0).map_err(map_database_error)? {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+async fn check_action_input_constraints(
+    client: &(impl GenericClient + Sync),
+    action: &CompiledAction,
+    inputs: &Map<String, Value>,
+) -> Result<(), MutationError> {
+    crate::input_patterns::check_input_patterns(client, action, inputs).await?;
+    for input in &action.inputs {
+        if let Some(value) = inputs.get(&input.id) {
+            validate_polygon_topology(client, &input.field_type, value, || {
+                MutationError::InvalidRequestAt(RequestLocation::action_input(&input.api_name))
+            })
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 /// Whether `value` written to `field_id` is a link key an external view could
 /// not send to its source. Proposal preparation and action input apply it
 /// beside the type check, so a malformed key is refused before anything is
@@ -4182,11 +4260,11 @@ pub(crate) fn sql_value(
         | FieldTypeSource::Timestamp
         | FieldTypeSource::Uuid
         | FieldTypeSource::Reference { .. } => value.as_str().map(str::to_owned),
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
-            canonicalize_json(value)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok().filter(|_| !value.is_null()))
-        }
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => canonicalize_json(value)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok().filter(|_| !value.is_null())),
     }
     .ok_or(MutationError::InvalidRequest)?;
     Ok(Some(value))
@@ -4207,7 +4285,9 @@ pub(crate) fn typed_parameter(index: usize, field_type: &FieldTypeSource) -> Str
         FieldTypeSource::Date => "date",
         FieldTypeSource::Timestamp => "timestamptz",
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => "uuid",
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => "jsonb",
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => "jsonb",
     };
     format!("${index}::text::{cast}")
 }

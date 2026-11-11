@@ -54,6 +54,7 @@ pub(crate) fn validate_access_requirements(
                                 field.field_type,
                                 FieldTypeSource::Structured { .. }
                                     | FieldTypeSource::Crs84Point { .. }
+                                    | FieldTypeSource::Crs84Polygon { .. }
                             )
                     });
                 if !valid_field

@@ -16,10 +16,11 @@ use registry_breg::migration::{
     ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
 };
 use registry_breg::migration_plan::{
-    ArtifactDigestBinding, ExternalBackupBinding, MigrationRehearsalReceipt, RehearsalFixture,
-    ReviewedChangeCover, ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor,
-    ReviewedMigrationFile, ReviewedMigrationObject, ReviewedMigrationObjectKind,
-    ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    AffectedRowBounds, ArtifactDigestBinding, ExternalBackupBinding, MigrationRehearsalReceipt,
+    RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover,
+    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
+    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
+    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, load_package, prepare_package, CompiledRegistryChangeClass,
@@ -94,7 +95,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     )
     .await
     .expect("initial non-GIS package activates");
-    seed_existing_site_and_history(&database, &base, &active).await;
+    seed_existing_site_and_history(&database, &base, &active, SeedGeometry::Point).await;
     let prior_rows = site_rows(&database, &base).await;
     let prior_history = revision_snapshots(&database).await;
     assert_eq!(prior_history.len(), 2);
@@ -194,7 +195,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     assert_ready_target(&database, &spatial_active).await;
     assert_eq!(site_rows(&database, &spatial).await, prior_rows);
     assert_eq!(revision_snapshots(&database).await, prior_history);
-    assert_spatial_projection_and_index(&database, &spatial).await;
+    assert_spatial_projection_and_index(&database, &spatial, SpatialProjection::Point).await;
     assert_spatial_candidate_view_owner(&database, &spatial, &bbox_role).await;
     assert_spatial_startup_accepts_exact_identity(&database, &spatial_package, &spatial_active)
         .await;
@@ -216,7 +217,6 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     let removed = compile_variant(Variant::WithBboxLegacyRemoved);
     let removed_fingerprint = destructive_target_fingerprint(&database, &spatial, &removed).await;
     let backup_bytes = synthetic_backup_sql(&spatial, &spatial_active, &database.runtime_role, 1);
-    let backup_digest = digest(&backup_bytes);
     let destructive_source = destructive_source_with_recovery_fault(
         &spatial_active,
         &spatial,
@@ -237,43 +237,11 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
         .expect("reviewed destructive spatial successor prepares"),
         local_context(),
     );
-    let backup_root = tempfile::Builder::new()
-        .prefix("registry-spatial-migration-backup-")
-        .tempdir_in(
-            std::env::temp_dir()
-                .canonicalize()
-                .expect("canonical temporary root"),
-        )
-        .expect("backup temporary directory creates");
-    let backup_path = backup_root.path().join("spatial-restore.backup");
-    fs::write(&backup_path, &backup_bytes).expect("backup evidence writes");
-    fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600))
-        .expect("backup evidence permissions close");
-    let now = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("current time formats");
-    let backup_binding = ExternalBackupBinding {
-        database_id: DATABASE.to_owned(),
-        prior_package_digest: spatial_active.package_digest.clone(),
-        prior_schema_fingerprint: spatial_active.schema_fingerprint.clone(),
-        backup_file: backup_path.to_str().expect("UTF-8 backup path").to_owned(),
-        sha256: backup_digest,
-        byte_length: backup_bytes.len() as u64,
-        created_at: now,
-        max_age_seconds: 3_600,
-    };
-    let binding_file = backup_root.path().join("spatial-restore-binding.json");
-    fs::write(&binding_file, canonical(&backup_binding)).expect("backup binding writes");
-    let binding_path = destructive_package
-        .verified
-        .reviewed_migration_plan()
-        .expect("destructive package carries a reviewed plan")
-        .migrations()[0]
-        .descriptor
-        .backup_binding_path
-        .as_deref()
-        .expect("destructive backup binding path exists");
-    let backup_evidence = [DestructiveBackupEvidence::new(binding_path, &binding_file)];
+    let backup = backup_fixture(&spatial_active, &backup_bytes);
+    let backup_evidence = [DestructiveBackupEvidence::new(
+        destructive_binding_path(&destructive_package),
+        &backup.binding_file,
+    )];
     let destructive_failure = apply_with_evidence(
         &database,
         &destructive_package.verified,
@@ -300,7 +268,7 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     assert_record_work_is_blocked(&database, &spatial, &spatial_active).await;
     assert_legacy_column_absent(&database, &spatial).await;
 
-    restore_synthetic_backup(&database, &backup_binding, &backup_path).await;
+    restore_synthetic_backup(&database, &backup.binding, &backup.backup_file).await;
     assert_eq!(site_rows(&database, &spatial).await, prior_rows);
     assert_eq!(revision_snapshots(&database).await, prior_history);
 
@@ -316,6 +284,341 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     assert_legacy_column_absent(&database, &spatial).await;
     assert_eq!(revision_snapshots(&database).await, prior_history);
     cleanup_bbox_role(&database, &bbox_role).await;
+    database.cleanup().await;
+}
+
+/// A nullable polygon is ordinary retained Record state, even though its
+/// generated storage needs PostGIS before any profile can query a bbox. The
+/// no-bbox successor keeps the existing table authority and creates no
+/// candidate-ID view or bbox role dependency. Enabling and removing bbox then
+/// changes only that query authority, never the retained polygon projection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn adding_nullable_polygon_retains_rows_without_bbox_authority() {
+    let database = TestDatabase::create(2).await;
+    let base = compile_variant(Variant::NoGeometry);
+    assert!(!base.ddl().requires_postgis);
+    let base_fingerprint = initial_fingerprint(&database, &base).await;
+
+    let polygon = compile_variant(Variant::PolygonNoBbox);
+    assert!(polygon.ddl().requires_postgis);
+    assert_no_compiled_spatial_candidate_view(&polygon);
+    let polygon_bbox = compile_variant(Variant::PolygonWithBbox);
+    assert!(polygon_bbox.ddl().requires_postgis);
+
+    let fingerprint_bbox_role = provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("administrator temporarily provisions PostGIS for target fingerprints");
+    let polygon_fingerprint = initial_fingerprint(&database, &polygon).await;
+    let polygon_bbox_fingerprint = initial_fingerprint(&database, &polygon_bbox).await;
+    cleanup_bbox_role(&database, &fingerprint_bbox_role).await;
+    assert!(!role_exists(&database, &fingerprint_bbox_role).await);
+
+    let initial_package = publish_and_load(
+        prepare_package(build_request(
+            Variant::NoGeometry,
+            None,
+            &base_fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ))
+        .expect("initial nonspatial package prepares"),
+        local_context(),
+    );
+    let active = apply(
+        &database,
+        &initial_package.verified,
+        ApplyPrecondition::InitialActivation,
+    )
+    .await
+    .expect("initial nonspatial package activates");
+    seed_existing_site_and_history(&database, &base, &active, SeedGeometry::None).await;
+    let prior_rows = plain_site_rows(&database, &base).await;
+    let prior_history = revision_snapshots(&database).await;
+    let prior_authority = table_authority_snapshot(&database, &base).await;
+
+    let polygon_package = reviewed_successor_package(
+        Variant::PolygonNoBbox,
+        &active,
+        &base,
+        &polygon,
+        &polygon_fingerprint,
+    );
+    let polygon_statements = &polygon_package
+        .verified
+        .manifest()
+        .migration_plan
+        .statements;
+    assert!(polygon_statements.iter().any(|statement| {
+        statement.id == "entity.site.field.boundary.column"
+            && statement.sql.contains(" ADD COLUMN ")
+    }));
+    assert!(polygon_statements.iter().any(|statement| {
+        statement.id == "entity.site.field.boundary.spatial-column.add"
+            && statement
+                .sql
+                .contains("registry_spatial_ext.geometry(MultiPolygon,4326)")
+    }));
+    assert!(polygon_statements.iter().any(|statement| {
+        statement.id == "entity.site.field.boundary.spatial-index.create"
+            && statement.sql.contains(" USING gist ")
+    }));
+    assert!(polygon_statements
+        .iter()
+        .all(|statement| !statement.id.contains("spatial-candidates-view")));
+
+    let polygon_active = apply(
+        &database,
+        &polygon_package.verified,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect("polygon storage applies without a bbox role");
+    assert_ready_target(&database, &polygon_active).await;
+    assert_eq!(plain_site_rows(&database, &polygon).await, prior_rows);
+    assert_eq!(revision_snapshots(&database).await, prior_history);
+    assert_eq!(
+        table_authority_snapshot(&database, &polygon).await,
+        prior_authority
+    );
+    assert_spatial_projection_and_index(
+        &database,
+        &polygon,
+        SpatialProjection::Polygon {
+            expected_non_null: 0,
+        },
+    )
+    .await;
+    assert_no_spatial_candidate_view(&database, &polygon).await;
+    assert!(!role_exists(&database, &fingerprint_bbox_role).await);
+    assert_spatial_startup_accepts_exact_identity(&database, &polygon_package, &polygon_active)
+        .await;
+
+    let bbox_role = provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("administrator provisions bbox authority for the bbox successor");
+    let bbox_package = reviewed_successor_package(
+        Variant::PolygonWithBbox,
+        &polygon_active,
+        &polygon,
+        &polygon_bbox,
+        &polygon_bbox_fingerprint,
+    );
+    let bbox_active = apply(
+        &database,
+        &bbox_package.verified,
+        ApplyPrecondition::Successor {
+            current: &polygon_active,
+        },
+    )
+    .await
+    .expect("polygon bbox successor applies");
+    assert_eq!(plain_site_rows(&database, &polygon_bbox).await, prior_rows);
+    assert_eq!(revision_snapshots(&database).await, prior_history);
+    assert_spatial_projection_and_index(
+        &database,
+        &polygon_bbox,
+        SpatialProjection::Polygon {
+            expected_non_null: 0,
+        },
+    )
+    .await;
+    assert_spatial_candidate_view_owner(&database, &polygon_bbox, &bbox_role).await;
+
+    let removed_bbox_package = reviewed_successor_package(
+        Variant::PolygonNoBbox,
+        &bbox_active,
+        &polygon_bbox,
+        &polygon,
+        &polygon_fingerprint,
+    );
+    let removed_bbox_active = apply(
+        &database,
+        &removed_bbox_package.verified,
+        ApplyPrecondition::Successor {
+            current: &bbox_active,
+        },
+    )
+    .await
+    .expect("bbox removal keeps polygon storage");
+    assert_ready_target(&database, &removed_bbox_active).await;
+    assert_eq!(plain_site_rows(&database, &polygon).await, prior_rows);
+    assert_eq!(revision_snapshots(&database).await, prior_history);
+    assert_eq!(
+        table_authority_snapshot(&database, &polygon).await,
+        prior_authority
+    );
+    assert_spatial_projection_and_index(
+        &database,
+        &polygon,
+        SpatialProjection::Polygon {
+            expected_non_null: 0,
+        },
+    )
+    .await;
+    assert_no_spatial_candidate_view(&database, &polygon).await;
+    assert_eq!(bbox_role_holdings(&database, &bbox_role).await, (0, 0, 0));
+
+    cleanup_bbox_role(&database, &bbox_role).await;
+    database.cleanup().await;
+}
+
+/// A reviewed polygon contract change rebuilds the generated projection around
+/// reviewed work. Valid retained values survive the rebuilt constraint. A
+/// retained value outside a successor's authored bbox fails that constraint
+/// before the successor can activate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn polygon_contract_changes_refresh_and_enforce_retained_projection() {
+    let database = TestDatabase::create(2).await;
+    let initial = compile_variant(Variant::PolygonNoBbox);
+    let limited = compile_variant(Variant::PolygonLimit6);
+    let bounded = compile_variant(Variant::PolygonBounded);
+
+    let bbox_role = provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("administrator provisions PostGIS for polygon storage");
+    let base_fingerprint = initial_fingerprint(&database, &initial).await;
+    let limited_fingerprint = initial_fingerprint(&database, &limited).await;
+    let bounded_fingerprint = initial_fingerprint(&database, &bounded).await;
+    cleanup_bbox_role(&database, &bbox_role).await;
+
+    let initial_package = publish_and_load(
+        prepare_package(build_request(
+            Variant::PolygonNoBbox,
+            None,
+            &base_fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ))
+        .expect("initial polygon package prepares"),
+        local_context(),
+    );
+    let active = apply(
+        &database,
+        &initial_package.verified,
+        ApplyPrecondition::InitialActivation,
+    )
+    .await
+    .expect("initial polygon package activates without bbox authority");
+    seed_existing_site_and_history(&database, &initial, &active, SeedGeometry::None).await;
+    let retained = json!({
+        "type": "Polygon",
+        "coordinates": [[[102.0, 15.0], [102.5, 15.0], [102.25, 15.5], [102.0, 15.0]]]
+    });
+    set_polygon_value(&database, &initial, &retained).await;
+    let prior_history = revision_snapshots(&database).await;
+
+    let limited_package = destructive_spatial_successor_package(
+        Variant::PolygonLimit6,
+        &active,
+        &initial,
+        &limited,
+        &limited_fingerprint,
+    );
+    assert_polygon_projection_refresh(
+        &limited_package,
+        &[
+            "registry_context.valid_crs84_polygon",
+            ", 6,",
+            "'-180'::numeric",
+            "'-90'::numeric",
+            "'180'::numeric",
+            "'90'::numeric, 6",
+        ],
+    );
+    let limited_backup = backup_fixture(&active, b"verified synthetic polygon backup");
+    let limited_binding = destructive_binding_path(&limited_package);
+    let limited_evidence = [DestructiveBackupEvidence::new(
+        limited_binding,
+        &limited_backup.binding_file,
+    )];
+    let limited_active = apply_with_evidence(
+        &database,
+        &limited_package.verified,
+        &active,
+        &limited_evidence,
+    )
+    .await
+    .expect("valid retained polygons satisfy the refreshed position limit");
+    assert_ready_target(&database, &limited_active).await;
+    assert_eq!(polygon_value(&database, &limited).await, retained);
+    assert_eq!(revision_snapshots(&database).await, prior_history);
+    assert_spatial_projection_and_index(
+        &database,
+        &limited,
+        SpatialProjection::Polygon {
+            expected_non_null: 1,
+        },
+    )
+    .await;
+    assert_polygon_projection_catalog(
+        &database,
+        &limited,
+        &["valid_crs84_polygon", "'-180'::numeric", "'90'::numeric, 6"],
+    )
+    .await;
+
+    let bounded_package = destructive_spatial_successor_package(
+        Variant::PolygonBounded,
+        &limited_active,
+        &limited,
+        &bounded,
+        &bounded_fingerprint,
+    );
+    assert_polygon_projection_refresh(
+        &bounded_package,
+        &[
+            "registry_context.valid_crs84_polygon",
+            ", 6,",
+            "'100.0'::numeric",
+            "'13.0'::numeric",
+            "'101.0'::numeric",
+            "'14.0'::numeric, 6",
+        ],
+    );
+    let bounded_backup = backup_fixture(
+        &limited_active,
+        b"verified synthetic bounded polygon backup",
+    );
+    let bounded_binding = destructive_binding_path(&bounded_package);
+    let bounded_evidence = [DestructiveBackupEvidence::new(
+        bounded_binding,
+        &bounded_backup.binding_file,
+    )];
+    let table = &bounded.entities()["site"].physical_table;
+    assert_value_free(
+        apply_with_evidence(
+            &database,
+            &bounded_package.verified,
+            &limited_active,
+            &bounded_evidence,
+        )
+        .await
+        .err(),
+        MigrationError::StatementFailed(PostgresFailure {
+            sqlstate: Some("23514".to_owned()),
+            table: Some(table.clone()),
+            column: None,
+            constraint: Some(format!("{table}_check")),
+        }),
+    );
+    assert_non_ready_target(
+        &database,
+        &limited_active,
+        &bounded_package.verified,
+        "failed",
+    )
+    .await;
+
     database.cleanup().await;
 }
 
@@ -465,7 +768,12 @@ async fn bbox_role_holdings(database: &TestDatabase, role: &SqlIdentifier) -> (i
 
 #[derive(Clone, Copy)]
 enum Variant {
+    NoGeometry,
     NoBbox,
+    PolygonBounded,
+    PolygonLimit6,
+    PolygonNoBbox,
+    PolygonWithBbox,
     WithBbox,
     WithBboxLegacyRemoved,
 }
@@ -474,6 +782,60 @@ struct PublishedPackage {
     _root: tempfile::TempDir,
     root: PathBuf,
     verified: VerifiedPackage,
+}
+
+struct BackupFixture {
+    _root: tempfile::TempDir,
+    backup_file: PathBuf,
+    binding: ExternalBackupBinding,
+    binding_file: PathBuf,
+}
+
+fn backup_fixture(current: &ExpectedRegistryIdentity, backup_bytes: &[u8]) -> BackupFixture {
+    let root = tempfile::Builder::new()
+        .prefix("registry-spatial-contract-backup-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("backup temporary directory creates");
+    let backup_file = root.path().join("polygon.backup");
+    fs::write(&backup_file, backup_bytes).expect("backup evidence writes");
+    fs::set_permissions(&backup_file, fs::Permissions::from_mode(0o600))
+        .expect("backup evidence permissions close");
+    let binding = ExternalBackupBinding {
+        database_id: DATABASE.to_owned(),
+        prior_package_digest: current.package_digest.clone(),
+        prior_schema_fingerprint: current.schema_fingerprint.clone(),
+        backup_file: backup_file.to_str().expect("UTF-8 backup path").to_owned(),
+        sha256: digest(backup_bytes),
+        byte_length: backup_bytes.len() as u64,
+        created_at: OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("current time formats"),
+        max_age_seconds: 3_600,
+    };
+    let binding_file = root.path().join("binding.json");
+    fs::write(&binding_file, canonical(&binding)).expect("backup binding writes");
+    BackupFixture {
+        _root: root,
+        backup_file,
+        binding,
+        binding_file,
+    }
+}
+
+fn destructive_binding_path(package: &PublishedPackage) -> &str {
+    package
+        .verified
+        .reviewed_migration_plan()
+        .expect("destructive package carries a reviewed plan")
+        .migrations()[0]
+        .descriptor
+        .backup_binding_path
+        .as_deref()
+        .expect("destructive backup binding path exists")
 }
 
 fn publish_and_load(
@@ -517,7 +879,44 @@ fn project_bytes(digest: &str) -> Vec<u8> {
 }
 
 fn module_bytes(variant: Variant) -> Vec<u8> {
-    let spatial_queries = if matches!(variant, Variant::WithBbox | Variant::WithBboxLegacyRemoved) {
+    let point = if matches!(
+        variant,
+        Variant::NoBbox | Variant::WithBbox | Variant::WithBboxLegacyRemoved
+    ) {
+        r#", {"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}"#
+    } else {
+        ""
+    };
+    let polygon = match variant {
+        Variant::PolygonNoBbox | Variant::PolygonWithBbox => {
+            r#", {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":128,"required":false,"classification":"internal"}"#
+        }
+        Variant::PolygonLimit6 => {
+            r#", {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":6,"required":false,"classification":"internal"}"#
+        }
+        Variant::PolygonBounded => {
+            r#", {"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":6,"bbox":{"west":"100.0","south":"13.0","east":"101.0","north":"14.0"},"required":false,"classification":"internal"}"#
+        }
+        _ => "",
+    };
+    let (geometry_field, geometry_access) = match variant {
+        Variant::NoGeometry => ("", ""),
+        Variant::NoBbox | Variant::WithBbox | Variant::WithBboxLegacyRemoved => (
+            r#", "geojson":{"geometryField":"location"}"#,
+            r#", "location""#,
+        ),
+        Variant::PolygonBounded
+        | Variant::PolygonLimit6
+        | Variant::PolygonNoBbox
+        | Variant::PolygonWithBbox => (
+            r#", "geojson":{"geometryField":"boundary"}"#,
+            r#", "boundary""#,
+        ),
+    };
+    let spatial_queries = if matches!(
+        variant,
+        Variant::WithBbox | Variant::WithBboxLegacyRemoved | Variant::PolygonWithBbox
+    ) {
         r#","spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}"#
     } else {
         ""
@@ -528,7 +927,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         r#",{"id":"legacy","type":"string","maximumLength":16,"classification":"internal"}"#
     };
     format!(
-        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}},{{"id":"location","type":"crs84-point","precision":6,"required":true,"classification":"internal"}}{legacy}],"geojson":{{"geometryField":"location"}},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted", "id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code","location"],"writableFields":["code","location"]{spatial_queries}}}]}}]}}"#
+        r#"{{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1","recordTypes":[{{"id":"site","primaryDataset":"spatial-migration-registry","route":"sites","mutationMode":"mutable","classification":"internal","fields":[{{"id":"code","type":"string","maximumLength":16,"required":true,"classification":"internal"}}{point}{legacy}{polygon}]{geometry_field},"accessProfiles":[{{"requiredScopes":"unrestricted","rowBoundaries":"unrestricted","id":"reader","principalClaim":"principal","operations":["get","list","create","patch"],"readableFields":["code"{geometry_access}],"writableFields":["code"{geometry_access}]{spatial_queries}}}]}}]}}"#
     )
     .into_bytes()
 }
@@ -691,6 +1090,155 @@ fn metadata_only_source_between(
     }
 }
 
+fn reviewed_successor_package(
+    variant: Variant,
+    current: &ExpectedRegistryIdentity,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    final_fingerprint: &str,
+) -> PublishedPackage {
+    let source = metadata_only_source_between(current, previous, candidate, final_fingerprint);
+    publish_and_load(
+        prepare_package(build_request(
+            variant,
+            Some(&current.package_digest),
+            final_fingerprint,
+            PackageMigrationPlanInput::ReviewedSuccessor {
+                prior_registry: Box::new(previous.clone()),
+                prior_schema_fingerprint: current.schema_fingerprint.clone(),
+                migrations: vec![source],
+            },
+        ))
+        .expect("reviewed spatial successor package prepares"),
+        local_context(),
+    )
+}
+
+fn destructive_spatial_successor_package(
+    variant: Variant,
+    current: &ExpectedRegistryIdentity,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    final_fingerprint: &str,
+) -> PublishedPackage {
+    let change_set = compiled_registry_change_set(previous, candidate, &current.package_digest);
+    let changes = change_set
+        .changes
+        .iter()
+        .filter(|change| change.class != CompiledRegistryChangeClass::CompatibleAdditive)
+        .collect::<Vec<_>>();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0].class,
+        CompiledRegistryChangeClass::DestructiveOrIrreversible
+    );
+    assert_eq!(
+        changes[0].code,
+        CompiledRegistryChangeCode::FieldTypeChanged
+    );
+    assert_eq!(changes[0].target.record_type_id.as_deref(), Some("site"));
+    assert_eq!(changes[0].target.member_id.as_deref(), Some("boundary"));
+
+    let base = "modules/core/migrations/refresh-polygon-contract";
+    let step_path = format!("{base}/steps/rewrite-boundary.sql");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let entity = &previous.entities()["site"];
+    let field = &entity.fields["boundary"];
+    let object = ReviewedMigrationObject {
+        schema: "registry_data".to_owned(),
+        table: entity.physical_table.clone(),
+        entity_id: "site".to_owned(),
+        kind: ReviewedMigrationObjectKind::Field,
+        member_id: Some("boundary".to_owned()),
+        physical_name: field.physical_name.clone(),
+    };
+    let descriptor = ReviewedMigrationDescriptor {
+        id: "refresh-polygon-contract".to_owned(),
+        change_class: CompiledRegistryChangeClass::DestructiveOrIrreversible,
+        covers: vec![ReviewedChangeCover::from(changes[0])],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
+        lock_timeout_ms: 10_000,
+        statement_timeout_ms: 60_000,
+        steps: vec![ReviewedMigrationStepDescriptor::TransactionalSql {
+            id: "rewrite-boundary".to_owned(),
+            sql_path: step_path.clone(),
+            objects: vec![object],
+            affected_rows: Some(AffectedRowBounds { min: 1, max: 1 }),
+        }],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path.clone(),
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path.clone(),
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: Some(format!("{base}/backup.json")),
+    };
+    let rewrite = format!(
+        "UPDATE registry_data.{} SET {} = {} WHERE {} IS NOT NULL",
+        entity.physical_table, field.physical_name, field.physical_name, field.physical_name
+    );
+    let assertion = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    );
+    let source = reviewed_source(ReviewedSourceRequest {
+        descriptor,
+        current,
+        final_fingerprint,
+        steps: vec![(step_path, rewrite)],
+        pre: (pre_path, assertion.clone()),
+        post: (post_path, assertion),
+        row_assertions: vec![RehearsalRowAssertion {
+            step_id: "rewrite-boundary".to_owned(),
+            affected_rows: 1,
+        }],
+    });
+    publish_and_load(
+        prepare_package(build_request(
+            variant,
+            Some(&current.package_digest),
+            final_fingerprint,
+            PackageMigrationPlanInput::ReviewedSuccessor {
+                prior_registry: Box::new(previous.clone()),
+                prior_schema_fingerprint: current.schema_fingerprint.clone(),
+                migrations: vec![source],
+            },
+        ))
+        .expect("reviewed polygon contract successor package prepares"),
+        local_context(),
+    )
+}
+
+fn assert_polygon_projection_refresh(package: &PublishedPackage, sql_fragments: &[&str]) {
+    let statements = &package.verified.manifest().migration_plan.statements;
+    let index = |id: &str| {
+        statements
+            .iter()
+            .position(|statement| statement.id == id)
+            .unwrap_or_else(|| panic!("migration statement `{id}` is present"))
+    };
+    let index_drop = index("entity.site.field.boundary.spatial-index.drop");
+    let column_drop = index("entity.site.field.boundary.spatial-column.drop");
+    let column_add = index("entity.site.field.boundary.spatial-column.add");
+    let index_add = index("entity.site.field.boundary.spatial-index.create");
+    assert!(index_drop < column_drop);
+    assert!(column_drop < column_add);
+    assert!(column_add < index_add);
+    let sql = &statements[column_add].sql;
+    let mut offset = 0;
+    for fragment in sql_fragments {
+        let relative = sql[offset..]
+            .find(fragment)
+            .unwrap_or_else(|| panic!("projection SQL omits ordered `{fragment}`: {sql}"));
+        offset += relative + fragment.len();
+    }
+}
+
 fn destructive_source_with_recovery_fault(
     current: &ExpectedRegistryIdentity,
     prior: &CompiledRegistry,
@@ -768,6 +1316,7 @@ fn destructive_source_with_recovery_fault(
         ],
         pre: (pre_path, assertion.clone()),
         post: (post_path, assertion),
+        row_assertions: Vec::new(),
     })
 }
 
@@ -778,6 +1327,7 @@ struct ReviewedSourceRequest<'a> {
     steps: Vec<(String, String)>,
     pre: (String, String),
     post: (String, String),
+    row_assertions: Vec<RehearsalRowAssertion>,
 }
 
 fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSource {
@@ -788,6 +1338,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
         steps,
         pre,
         post,
+        row_assertions,
     } = request;
     let descriptor_path = format!("modules/core/migrations/{}/descriptor.json", descriptor.id);
     let descriptor_bytes = canonical(&descriptor);
@@ -824,7 +1375,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
             row_count: 1,
         }],
         postgres_major: 17,
-        row_assertions: Vec::new(),
+        row_assertions,
         final_schema_fingerprint: final_fingerprint.to_owned(),
     };
     let mut files = steps
@@ -863,46 +1414,86 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
     }
 }
 
+enum SeedGeometry {
+    None,
+    Point,
+}
+
 async fn seed_existing_site_and_history(
     database: &TestDatabase,
     registry: &CompiledRegistry,
     active: &ExpectedRegistryIdentity,
+    geometry: SeedGeometry,
 ) {
     let entity = &registry.entities()["site"];
     let table = quote(&entity.physical_table);
     let code = quote(&entity.fields["code"].physical_name);
-    let location = quote(&entity.fields["location"].physical_name);
     let legacy = quote(&entity.fields["legacy"].physical_name);
-    let first_snapshot = canonical(&json!({
-        "code": "SITE-001",
-        "legacy": "legacy-1",
-        "location": {"type": "Point", "coordinates": [100.5, 13.75]}
-    }));
-    let second_snapshot = canonical(&json!({
-        "code": "SITE-001",
-        "legacy": "legacy-1",
-        "location": {"type": "Point", "coordinates": [100.55, 13.76]}
-    }));
-    let current_location: Value = json!({"type": "Point", "coordinates": [100.55, 13.76]});
-    database
-        .admin
-        .execute(
-            &format!(
-                "INSERT INTO registry_data.{table}
-                     (record_id, record_revision, record_lifecycle, active_package_revision,
-                      {code}, {location}, {legacy})
-                 VALUES ($1::text::uuid, 2, 'active', $2, $3, $4::jsonb, $5)"
-            ),
-            &[
-                &SITE_RECORD,
-                &active.activation_id,
-                &"SITE-001",
-                &current_location,
-                &"legacy-1",
-            ],
-        )
-        .await
-        .expect("administrator seeds the existing current Point record");
+    let base = json!({"code": "SITE-001", "legacy": "legacy-1"});
+    let (first_snapshot, second_snapshot) = match geometry {
+        SeedGeometry::None => {
+            database
+                .admin
+                .execute(
+                    &format!(
+                        "INSERT INTO registry_data.{table}
+                             (record_id, record_revision, record_lifecycle,
+                              active_package_revision, {code}, {legacy})
+                         VALUES ($1::text::uuid, 2, 'active', $2, $3, $4)"
+                    ),
+                    &[
+                        &SITE_RECORD,
+                        &active.activation_id,
+                        &"SITE-001",
+                        &"legacy-1",
+                    ],
+                )
+                .await
+                .expect("administrator seeds the existing nonspatial Record");
+            (canonical(&base), canonical(&base))
+        }
+        SeedGeometry::Point => {
+            let location = quote(&entity.fields["location"].physical_name);
+            let first = json!({
+                "code": "SITE-001", "legacy": "legacy-1",
+                "location": {"type": "Point", "coordinates": [100.5, 13.75]}
+            });
+            let second = json!({
+                "code": "SITE-001", "legacy": "legacy-1",
+                "location": {"type": "Point", "coordinates": [100.55, 13.76]}
+            });
+            let current_location = &second["location"];
+            database
+                .admin
+                .execute(
+                    &format!(
+                        "INSERT INTO registry_data.{table}
+                             (record_id, record_revision, record_lifecycle,
+                              active_package_revision, {code}, {location}, {legacy})
+                         VALUES ($1::text::uuid, 2, 'active', $2, $3, $4::jsonb, $5)"
+                    ),
+                    &[
+                        &SITE_RECORD,
+                        &active.activation_id,
+                        &"SITE-001",
+                        current_location,
+                        &"legacy-1",
+                    ],
+                )
+                .await
+                .expect("administrator seeds the existing current Point record");
+            (canonical(&first), canonical(&second))
+        }
+    };
+    seed_site_history(database, active, first_snapshot, second_snapshot).await;
+}
+
+async fn seed_site_history(
+    database: &TestDatabase,
+    active: &ExpectedRegistryIdentity,
+    first_snapshot: Vec<u8>,
+    second_snapshot: Vec<u8>,
+) {
     for (revision, predecessor, mutation, snapshot) in [
         (1_i64, None, "create", first_snapshot),
         (2_i64, Some(1_i64), "patch", second_snapshot),
@@ -931,6 +1522,71 @@ async fn seed_existing_site_and_history(
     }
 }
 
+async fn set_polygon_value(database: &TestDatabase, registry: &CompiledRegistry, value: &Value) {
+    let entity = &registry.entities()["site"];
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{} SET {} = $2::jsonb
+                  WHERE record_id = $1::text::uuid",
+                quote(&entity.physical_table),
+                quote(&entity.fields["boundary"].physical_name),
+            ),
+            &[&SITE_RECORD, value],
+        )
+        .await
+        .expect("administrator sets the retained valid polygon");
+}
+
+async fn polygon_value(database: &TestDatabase, registry: &CompiledRegistry) -> Value {
+    let entity = &registry.entities()["site"];
+    database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT {} FROM registry_data.{} WHERE record_id = $1::text::uuid",
+                quote(&entity.fields["boundary"].physical_name),
+                quote(&entity.physical_table)
+            ),
+            &[&SITE_RECORD],
+        )
+        .await
+        .expect("retained polygon reads")
+        .get(0)
+}
+
+async fn assert_polygon_projection_catalog(
+    database: &TestDatabase,
+    registry: &CompiledRegistry,
+    constraint_fragments: &[&str],
+) {
+    let entity = &registry.entities()["site"];
+    let table = &entity.physical_table;
+    let constraint: String = database
+        .admin
+        .query_one(
+            "SELECT pg_catalog.pg_get_constraintdef(c.oid)
+               FROM pg_catalog.pg_constraint AS c
+               JOIN pg_catalog.pg_class AS t ON t.oid = c.conrelid
+               JOIN pg_catalog.pg_namespace AS n ON n.oid = t.relnamespace
+              WHERE n.nspname = 'registry_data'
+                AND t.relname = $1
+                AND c.contype = 'c'
+                AND pg_catalog.pg_get_constraintdef(c.oid) LIKE '%valid_crs84_polygon%'",
+            &[table],
+        )
+        .await
+        .expect("generated polygon contract constraint reads")
+        .get(0);
+    for fragment in constraint_fragments {
+        assert!(
+            constraint.contains(fragment),
+            "projection constraint omits `{fragment}`: {constraint}"
+        );
+    }
+}
+
 async fn site_rows(
     database: &TestDatabase,
     registry: &CompiledRegistry,
@@ -955,6 +1611,63 @@ async fn site_rows(
         .collect()
 }
 
+async fn plain_site_rows(
+    database: &TestDatabase,
+    registry: &CompiledRegistry,
+) -> Vec<(String, i64, String, Option<String>)> {
+    let entity = &registry.entities()["site"];
+    let rows = database
+        .admin
+        .query(
+            &format!(
+                "SELECT record_id::text, record_revision, {}, {}
+                 FROM registry_data.{}
+                 ORDER BY record_id",
+                quote(&entity.fields["code"].physical_name),
+                quote(&entity.fields["legacy"].physical_name),
+                quote(&entity.physical_table)
+            ),
+            &[],
+        )
+        .await
+        .expect("plain site rows read");
+    rows.into_iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+        .collect()
+}
+
+async fn table_authority_snapshot(
+    database: &TestDatabase,
+    registry: &CompiledRegistry,
+) -> (String, String, bool, bool, String) {
+    let table = &registry.entities()["site"].physical_table;
+    let row = database
+        .admin
+        .query_one(
+            "SELECT owner.rolname,
+                    COALESCE(class.relacl::text, ''),
+                    class.relrowsecurity,
+                    class.relforcerowsecurity,
+                    COALESCE((
+                        SELECT string_agg(
+                            policy.polname || ':' || policy.polroles::text,
+                            ',' ORDER BY policy.polname
+                        )
+                        FROM pg_catalog.pg_policy AS policy
+                        WHERE policy.polrelid = class.oid
+                    ), '')
+               FROM pg_catalog.pg_class AS class
+               JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+               JOIN pg_catalog.pg_roles AS owner ON owner.oid = class.relowner
+              WHERE namespace.nspname = 'registry_data'
+                AND class.relname = $1",
+            &[table],
+        )
+        .await
+        .expect("table authority reads");
+    (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4))
+}
+
 async fn revision_snapshots(database: &TestDatabase) -> Vec<(i64, Option<i64>, Vec<u8>)> {
     database
         .admin
@@ -972,13 +1685,22 @@ async fn revision_snapshots(database: &TestDatabase) -> Vec<(i64, Option<i64>, V
         .collect()
 }
 
-async fn assert_spatial_projection_and_index(database: &TestDatabase, registry: &CompiledRegistry) {
+enum SpatialProjection {
+    Point,
+    Polygon { expected_non_null: i64 },
+}
+
+async fn assert_spatial_projection_and_index(
+    database: &TestDatabase,
+    registry: &CompiledRegistry,
+    expected: SpatialProjection,
+) {
     let entity = &registry.entities()["site"];
     let table = &entity.physical_table;
-    let geometry_column: String = database
+    let row = database
         .admin
         .query_one(
-            "SELECT column_name
+            "SELECT column_name, is_generated
              FROM information_schema.columns
              WHERE table_schema = 'registry_data'
                AND table_name = $1
@@ -987,33 +1709,74 @@ async fn assert_spatial_projection_and_index(database: &TestDatabase, registry: 
             &[table],
         )
         .await
-        .expect("generated geometry column is catalogued")
-        .get(0);
-    let matches_point: bool = database
-        .admin
-        .query_one(
-            &format!(
-                "SELECT registry_spatial_ext.ST_Intersects(
-                            {},
-                            registry_spatial_ext.ST_SetSRID(
-                                registry_spatial_ext.ST_MakePoint(100.55, 13.76),
-                                4326
-                            )
-                        )
-                   FROM registry_data.{}
-                  WHERE record_id = $1::text::uuid",
-                quote(&geometry_column),
-                quote(table)
-            ),
-            &[&SITE_RECORD],
-        )
-        .await
-        .expect("generated projection is readable by administrator")
-        .get(0);
-    assert!(
-        matches_point,
-        "generated geometry stores longitude as X and latitude as Y"
-    );
+        .expect("generated geometry column is catalogued");
+    let geometry_column: String = row.get(0);
+    assert_eq!(row.get::<_, String>(1), "ALWAYS");
+
+    match expected {
+        SpatialProjection::Point => {
+            let matches_point: bool = database
+                .admin
+                .query_one(
+                    &format!(
+                        "SELECT registry_spatial_ext.ST_Intersects(
+                                    {},
+                                    registry_spatial_ext.ST_SetSRID(
+                                        registry_spatial_ext.ST_MakePoint(100.55, 13.76),
+                                        4326
+                                    )
+                                )
+                           FROM registry_data.{}
+                          WHERE record_id = $1::text::uuid",
+                        quote(&geometry_column),
+                        quote(table)
+                    ),
+                    &[&SITE_RECORD],
+                )
+                .await
+                .expect("generated Point projection is readable")
+                .get(0);
+            assert!(
+                matches_point,
+                "generated geometry stores longitude as X and latitude as Y"
+            );
+        }
+        SpatialProjection::Polygon { expected_non_null } => {
+            let boundary = quote(&entity.fields["boundary"].physical_name);
+            let projected: i64 = database
+                .admin
+                .query_one(
+                    &format!(
+                        "SELECT count(*) FROM registry_data.{}
+                          WHERE {boundary} IS NOT NULL AND {} IS NOT NULL",
+                        quote(table),
+                        quote(&geometry_column),
+                    ),
+                    &[],
+                )
+                .await
+                .expect("polygon field and projection count reads")
+                .get(0);
+            assert_eq!(projected, expected_non_null);
+
+            let geometry_type: String = database
+                .admin
+                .query_one(
+                    "SELECT pg_catalog.format_type(attribute.atttypid, attribute.atttypmod)
+                       FROM pg_catalog.pg_attribute AS attribute
+                       JOIN pg_catalog.pg_class AS class ON class.oid = attribute.attrelid
+                       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+                      WHERE namespace.nspname = 'registry_data'
+                        AND class.relname = $1
+                        AND attribute.attname = $2",
+                    &[table, &geometry_column],
+                )
+                .await
+                .expect("generated polygon type reads")
+                .get(0);
+            assert!(geometry_type.ends_with("geometry(MultiPolygon,4326)"));
+        }
+    }
     let index_count: i64 = database
         .admin
         .query_one(
@@ -1029,6 +1792,46 @@ async fn assert_spatial_projection_and_index(database: &TestDatabase, registry: 
         .expect("spatial index inventory reads")
         .get(0);
     assert_eq!(index_count, 1);
+}
+
+fn assert_no_compiled_spatial_candidate_view(registry: &CompiledRegistry) {
+    assert!(registry
+        .ddl()
+        .views
+        .iter()
+        .all(|view| view.id != "entity.site.spatial-candidates"));
+    assert!(registry
+        .ddl()
+        .statements
+        .iter()
+        .all(|statement| !statement.id.contains("spatial-candidates-view")));
+}
+
+async fn assert_no_spatial_candidate_view(database: &TestDatabase, registry: &CompiledRegistry) {
+    assert_no_compiled_spatial_candidate_view(registry);
+    let count: i64 = database
+        .admin
+        .query_one(
+            r"SELECT count(*)
+             FROM pg_catalog.pg_class AS class
+             JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+             WHERE namespace.nspname = 'registry_context'
+               AND class.relname LIKE 'breg_spcand\_%' ESCAPE '\'",
+            &[],
+        )
+        .await
+        .expect("spatial candidate view absence reads")
+        .get(0);
+    assert_eq!(count, 0);
+}
+
+async fn role_exists(database: &TestDatabase, role: &SqlIdentifier) -> bool {
+    database
+        .admin
+        .query_one("SELECT to_regrole($1) IS NOT NULL", &[&role.as_str()])
+        .await
+        .expect("role existence reads")
+        .get(0)
 }
 
 async fn assert_spatial_candidate_view_owner(

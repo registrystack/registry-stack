@@ -633,6 +633,35 @@
             },
             {
               "properties": {
+                "bbox": {
+                  "$ref": "#/$defs/Crs84BboxSource"
+                },
+                "maximumPositions": {
+                  "format": "uint32",
+                  "maximum": 10000,
+                  "minimum": 4,
+                  "type": "integer"
+                },
+                "precision": {
+                  "format": "uint32",
+                  "maximum": 9,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "crs84-polygon",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "precision",
+                "maximumPositions"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "maximumBytes": {
                   "format": "uint32",
                   "maximum": 1048576,
@@ -1665,6 +1694,59 @@
       ],
       "type": "object"
     },
+    "Crs84PolygonFieldSourceSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "apiName": {
+          "type": "string"
+        },
+        "bbox": {
+          "$ref": "#/$defs/Crs84BboxSource"
+        },
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "display": {
+          "$ref": "#/$defs/DisplaySource"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "maximumPositions": {
+          "format": "uint32",
+          "maximum": 10000,
+          "minimum": 4,
+          "type": "integer"
+        },
+        "precision": {
+          "format": "uint32",
+          "maximum": 9,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "enum": [
+            "crs84-polygon"
+          ],
+          "type": "string"
+        },
+        "validTimeRole": {
+          "$ref": "#/$defs/ValidTimeRole"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "classification",
+        "precision",
+        "maximumPositions"
+      ],
+      "type": "object"
+    },
     "CurrentDatePredicateSource": {
       "enum": [
         "on-or-after",
@@ -2045,6 +2127,35 @@
           "required": [
             "type",
             "precision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bbox": {
+              "$ref": "#/$defs/Crs84BboxSource"
+            },
+            "maximumPositions": {
+              "format": "uint32",
+              "maximum": 10000,
+              "minimum": 4,
+              "type": "integer"
+            },
+            "precision": {
+              "format": "uint32",
+              "maximum": 9,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "crs84-polygon",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision",
+            "maximumPositions"
           ],
           "type": "object"
         },
@@ -3068,6 +3179,9 @@
         },
         {
           "$ref": "#/$defs/Crs84PointFieldSourceSchema"
+        },
+        {
+          "$ref": "#/$defs/Crs84PolygonFieldSourceSchema"
         },
         {
           "$ref": "#/$defs/StructuredFieldSourceSchema"

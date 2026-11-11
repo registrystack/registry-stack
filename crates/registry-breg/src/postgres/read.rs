@@ -1176,10 +1176,12 @@ fn feature_value(
                 .fields
                 .get(&geometry_field)
                 .ok_or(ReadServiceError::Unavailable)?;
-            let FieldTypeSource::Crs84Point { precision, bbox } = &field.field_type else {
-                return Err(ReadServiceError::Unavailable);
-            };
-            if !crate::contract::valid_crs84_point(&value, *precision, bbox.as_ref()) {
+            if !field.field_type.is_crs84_geometry()
+                || !crate::data::validate_field_value(
+                    crate::data::FieldValue::Json(&value),
+                    &field.field_type,
+                )
+            {
                 return Err(ReadServiceError::Unavailable);
             }
             value
@@ -1746,10 +1748,8 @@ fn validate_spatial_query(
     if spatial.bbox.geometry_field != capability.geometry_field
         || spatial.bbox.maximum_longitude_span_degrees != maximum_longitude_span
         || spatial.bbox.maximum_latitude_span_degrees != maximum_latitude_span
-        || !matches!(
-            compiled_field_type(entity, &spatial.bbox.geometry_field),
-            Some(FieldTypeSource::Crs84Point { .. })
-        )
+        || !compiled_field_type(entity, &spatial.bbox.geometry_field)
+            .is_some_and(FieldTypeSource::is_crs84_geometry)
     {
         return Err(());
     }
@@ -2923,7 +2923,9 @@ fn postgres_cast(field_type: &FieldTypeSource) -> &'static str {
         FieldTypeSource::Date => "date",
         FieldTypeSource::Timestamp => "timestamptz",
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => "uuid",
-        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => "jsonb",
+        FieldTypeSource::Crs84Point { .. }
+        | FieldTypeSource::Crs84Polygon { .. }
+        | FieldTypeSource::Structured { .. } => "jsonb",
     }
 }
 

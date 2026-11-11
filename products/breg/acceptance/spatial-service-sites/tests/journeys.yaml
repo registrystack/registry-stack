@@ -134,6 +134,248 @@
           "recordType": "service-site"
         },
         {
+          "id": "create-intersecting-service-area",
+          "accessProfile": "service-site-admin",
+          "claims": {
+            "principal": "synthetic-service-site-admin",
+            "purpose": "service-site-administration",
+            "scopes": [
+              "service-sites:seed"
+            ]
+          },
+          "request": {
+            "type": "create",
+            "data": {
+              "native-id": "55555555-5555-4555-8555-555555555555",
+              "area-code": "AREA-SYNTH-INTERSECTS-001",
+              "label": "Synthetic intersecting service area",
+              "boundary": {
+                "type": "Polygon",
+                "coordinates": [
+                  [
+                    [
+                      100.535,
+                      13.745
+                    ],
+                    [
+                      100.55,
+                      13.755
+                    ],
+                    [
+                      100.565,
+                      13.745
+                    ],
+                    [
+                      100.535,
+                      13.745
+                    ]
+                  ]
+                ]
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201,
+            "fields": {
+              "area-code": "AREA-SYNTH-INTERSECTS-001",
+              "boundary": {
+                "type": "Polygon",
+                "coordinates": [
+                  [
+                    [
+                      100.535,
+                      13.745
+                    ],
+                    [
+                      100.55,
+                      13.755
+                    ],
+                    [
+                      100.565,
+                      13.745
+                    ],
+                    [
+                      100.535,
+                      13.745
+                    ]
+                  ]
+                ]
+              }
+            }
+          },
+          "capture": "intersecting-service-area",
+          "recordType": "service-area"
+        },
+        {
+          "id": "create-envelope-only-service-area",
+          "accessProfile": "service-site-admin",
+          "claims": {
+            "principal": "synthetic-service-site-admin",
+            "purpose": "service-site-administration",
+            "scopes": [
+              "service-sites:seed"
+            ]
+          },
+          "request": {
+            "type": "create",
+            "data": {
+              "native-id": "66666666-6666-4666-8666-666666666666",
+              "area-code": "AREA-SYNTH-ENVELOPE-ONLY-001",
+              "label": "Synthetic envelope-only service area",
+              "boundary": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                  [
+                    [
+                      [
+                        100.52,
+                        13.73
+                      ],
+                      [
+                        100.53,
+                        13.73
+                      ],
+                      [
+                        100.53,
+                        13.77
+                      ],
+                      [
+                        100.52,
+                        13.77
+                      ],
+                      [
+                        100.52,
+                        13.73
+                      ]
+                    ]
+                  ],
+                  [
+                    [
+                      [
+                        100.57,
+                        13.73
+                      ],
+                      [
+                        100.58,
+                        13.73
+                      ],
+                      [
+                        100.58,
+                        13.77
+                      ],
+                      [
+                        100.57,
+                        13.77
+                      ],
+                      [
+                        100.57,
+                        13.73
+                      ]
+                    ]
+                  ]
+                ]
+              }
+            }
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 201,
+            "fields": {
+              "area-code": "AREA-SYNTH-ENVELOPE-ONLY-001",
+              "boundary": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                  [
+                    [
+                      [
+                        100.52,
+                        13.73
+                      ],
+                      [
+                        100.53,
+                        13.73
+                      ],
+                      [
+                        100.53,
+                        13.77
+                      ],
+                      [
+                        100.52,
+                        13.77
+                      ],
+                      [
+                        100.52,
+                        13.73
+                      ]
+                    ]
+                  ],
+                  [
+                    [
+                      [
+                        100.57,
+                        13.73
+                      ],
+                      [
+                        100.58,
+                        13.73
+                      ],
+                      [
+                        100.58,
+                        13.77
+                      ],
+                      [
+                        100.57,
+                        13.77
+                      ],
+                      [
+                        100.57,
+                        13.73
+                      ]
+                    ]
+                  ]
+                ]
+              }
+            }
+          },
+          "capture": "envelope-only-service-area",
+          "recordType": "service-area"
+        },
+        {
+          "id": "area-map-reader-bbox-uses-geometry-intersection",
+          "accessProfile": "area-map-reader",
+          "claims": {
+            "principal": "synthetic-public-area-map",
+            "purpose": "service-area-public-map",
+            "scopes": [
+              "service-areas:public:read"
+            ]
+          },
+          "request": {
+            "type": "query",
+            "count": true,
+            "top": 10,
+            "bbox": {
+              "west": "100.540000000",
+              "south": "13.740000000",
+              "east": "100.560000000",
+              "north": "13.760000000"
+            },
+            "select": [
+              "native-id",
+              "area-code",
+              "label",
+              "boundary"
+            ]
+          },
+          "expect": {
+            "outcome": "success",
+            "status": 200,
+            "count": 1
+          },
+          "recordType": "service-area"
+        },
+        {
           "id": "public-map-reader-lists-public-point-fields",
           "accessProfile": "map-reader",
           "claims": {

@@ -112,13 +112,28 @@ every key with its type and bounds.
 Each [Record type](../../reference/glossary/#record-type) names its route, its dataset, and its
 fields. Every field declares its type, bounds, requiredness, and classification; `typeRef` reuses
 scalar constraints from `valueTypes`, and `apiName` sets the public property name. In both projects
-and modules, declare reference, `crs84-point`, and structured types directly on each field or
-Action input instead of through `valueTypes`. `mutationPolicy` here means
+and modules, declare reference, `crs84-point`, `crs84-polygon`, and structured types directly on
+each field or Action input instead of through `valueTypes`. `mutationPolicy` here means
 a facility changes only through a [Proposal](../../reference/glossary/#proposal), even for a
 caller whose profile grants `patch`.
 
+A Record type can declare multiple stored geometry fields. Its `geojson.geometryField` binding
+selects one CRS84 Point or polygon field as the primary GeoJSON geometry. A polygon field accepts
+GeoJSON Polygon and MultiPolygon values. A polygon field requires `precision` from 0 through 9 and
+`maximumPositions` from 4 through 10,000. The position limit counts every ring and part, including
+closing positions. Set `geojson.geometryField` to that field when you want GeoJSON and GIS reads.
+The [configuration reference](../../reference/breg-configuration/) lists the optional coordinate
+bounds and the other field members.
+
+Polygon values use strict two-dimensional GeoJSON with only `type` and `coordinates`. BReg refuses
+foreign members, invalid topology, positions beyond the field's precision or optional bounds, and
+an edge whose longitude changes by more than 180 degrees. Split a shape at the antimeridian and
+send the parts as a MultiPolygon. BReg preserves ring order and winding and derives no area field.
+
 {/* Evidence: crates/registry-breg/src/authoring_integrity.rs, add_value_type_diagnostics();
-    crates/registry-breg/tests/value_type_consistency.rs. */}
+    crates/registry-breg/src/contract.rs, FieldTypeSource and valid_crs84_polygon();
+    crates/registry-breg/tests/value_type_consistency.rs;
+    products/breg/acceptance/spatial-service-sites/registry.yaml. */}
 
 ## Grant access
 

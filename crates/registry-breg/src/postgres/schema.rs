@@ -22,8 +22,8 @@ use crate::mutation::{install_mutation_schema, reconcile_action_result_target_in
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::config::ConnectionTls;
 use super::{
-    catalog::install_registry_state_schema, spatial_bbox_role, verify_btree_gist, verify_postgis,
-    PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
+    catalog::install_registry_state_schema, spatial_bbox_role, verify_btree_gist,
+    verify_postgis_prerequisites, PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier,
 };
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::{
@@ -50,7 +50,13 @@ pub async fn install_compiled_schema(
     }
     if registry.ddl().requires_postgis {
         let migration_role = current_role_identifier(migration).await?;
-        verify_postgis(migration, &migration_role, runtime_role).await?;
+        verify_postgis_prerequisites(
+            migration,
+            &migration_role,
+            runtime_role,
+            registry.ddl().requires_spatial_bbox(),
+        )
+        .await?;
     }
 
     install_registry_state_schema(migration, runtime_role).await?;
@@ -110,12 +116,12 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
 ) -> Result<()> {
     reconcile_action_result_target_index(client, !registry.actions().actions.is_empty()).await?;
     let candidate_bbox_role = spatial_bbox_role(runtime_role);
-    let bbox_role =
-        if registry.ddl().requires_postgis || role_exists(client, &candidate_bbox_role).await? {
-            Some(candidate_bbox_role)
-        } else {
-            None
-        };
+    let requires_spatial_bbox = registry.ddl().requires_spatial_bbox();
+    let bbox_role = if requires_spatial_bbox || role_exists(client, &candidate_bbox_role).await? {
+        Some(candidate_bbox_role)
+    } else {
+        None
+    };
     let bbox_revoke = bbox_role
         .as_ref()
         .map(|role| format!(", {}", role.quoted()))
@@ -130,7 +136,7 @@ pub(crate) async fn reconcile_compiled_runtime_acl(
             runtime_role.quoted(),
         ))
         .await?;
-    if let Some(role) = &bbox_role {
+    if let Some(role) = bbox_role.as_ref().filter(|_| requires_spatial_bbox) {
         client
             .batch_execute(&format!(
                 "GRANT USAGE ON SCHEMA registry_data, registry_context TO {};",

@@ -87,13 +87,15 @@ same collection identity.
 
 ## Native collection capabilities
 
-Native Point queries use `BRegBoundingBox` and `BRegListRequest::bbox` for JSON,
+Native Point and polygon queries use `BRegBoundingBox` and `BRegListRequest::bbox` for JSON,
 or the separate `get_geojson_record`, `list_geojson_records`, and
 `continue_geojson_list` methods for GeoJSON. Boxes contain exact decimal strings
-in west, south, east, north order. Edges are inclusive; zero-area boxes are valid.
+in west, south, east, north order. Edges are inclusive and zero-area boxes are valid.
 The client validates coordinate and wire bounds, and the server enforces the
-profile's geometry/query grants and span limits. GeoJSON get responses have no
-mutation ETag. The `/v1/gis` QGIS adapter routes are outside SDK scope.
+profile's geometry/query grants and span limits. Typed GeoJSON features retain
+`Point`, `Polygon`, and `MultiPolygon` coordinates, including ring order and
+winding. Read the native Record representation for a mutation ETag. QGIS
+connects directly to the `/v1/gis` adapter.
 
 The runnable `native_geojson` example prints each FeatureCollection as one JSON
 line. Run it against an existing spatial registry from the workspace root,

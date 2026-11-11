@@ -711,13 +711,25 @@ generation; discard stops future attempts and cannot undo an earlier acceptance.
 
 ## Spatial adapter
 
-A Record type with a `crs84-point` field and a `geojson.geometryField` is also served under
-`/v1/gis` for desktop GIS clients, with `bbox`, `limit` (at most 10000), and `cursor` on the item
-route. It answers GeoJSON feature collections under the same profile, grant, and row-boundary rules
-as the record routes and declares the profile `breg-gis-bounded-crs84-point-bbox-v1`. It makes no
-OGC API Features conformance claim and computes no collection extents.
+A Record type with a `crs84-point` or `crs84-polygon` field and a `geojson.geometryField` is also
+served under `/v1/gis` for desktop GIS clients, with `bbox`, `limit` (at most 10000), and `cursor`
+on the item route. The polygon field accepts GeoJSON Polygon and MultiPolygon values. The adapter
+answers GeoJSON feature collections under the same profile, grant, readable-field, and row-boundary
+rules as the record routes.
+
+The landing document declares `breg-gis-bounded-crs84-point-bbox-v1` when the caller sees only
+Point collections. It declares `breg-gis-bounded-crs84-geometry-bbox-v1` when at least one visible
+collection uses a Polygon or MultiPolygon. Point collection details keep
+`bounded-crs84-point-bbox`. Polygon collection details declare `bounded-crs84-polygon-bbox`.
+
+A bbox match is inclusive and uses actual geometry intersection. A Polygon or MultiPolygon whose
+envelope overlaps the box does not match unless its geometry does. The adapter makes no OGC API
+Features conformance claim, computes no collection extents or areas, and does not change ring order
+or winding.
 
 {/* Evidence: crates/registry-breg/src/api/gis.rs;
+    crates/registry-breg/src/generated_ddl.rs;
+    crates/registry-breg/src/postgres/read.rs;
     products/breg/acceptance/spatial-service-sites/README.md. */}
 
 ## Statistical datasets

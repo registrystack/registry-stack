@@ -34,9 +34,10 @@ use crate::contract::{
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
     add_blind_index_column_statement, add_column_statement, drop_spatial_bbox_function_statement,
-    drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
-    replace_length_check_statement, replace_vocabulary_check_statement,
-    set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
+    drop_spatial_candidate_view_statement, drop_spatial_polygon_contract_statement,
+    generate_ddl_with_actions, quote_identifier, replace_length_check_statement,
+    replace_vocabulary_check_statement, set_column_not_null_statement,
+    spatial_bbox_function_statement, spatial_polygon_contract_statement, spatial_projection_fields,
     spatial_projection_statements, DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement,
     DdlStatementKind, DdlTable,
 };
@@ -2331,11 +2332,26 @@ fn additive_migration_plan(
             });
         }
     }
-    if candidate.ddl().requires_postgis && !previous_ddl.requires_postgis {
+    if candidate.ddl().requires_spatial_bbox() && !previous_ddl.requires_spatial_bbox() {
         new_statement_ids.insert(spatial_bbox_function_statement().id);
+    }
+    if candidate.ddl().requires_spatial_polygon_contract()
+        && !previous_ddl.requires_spatial_polygon_contract()
+    {
+        new_statement_ids.insert(spatial_polygon_contract_statement().id);
     }
     for previous_table in &previous_ddl.tables {
         let previous_entity = &previous.entities[&previous_table.entity_id];
+        let previous_fields = spatial_projection_fields(previous_entity);
+        let candidate_entity = candidate.entities().get(&previous_table.entity_id);
+        let candidate_fields = candidate_entity
+            .map(spatial_projection_fields)
+            .unwrap_or_default();
+        let changed_fields = candidate_entity
+            .map(|candidate_entity| {
+                changed_spatial_projection_fields(previous_entity, candidate_entity)
+            })
+            .unwrap_or_default();
         let candidate_view_statement_id =
             format!("entity.{}.spatial-candidates-view", previous_entity.id);
         let previous_view_statement = previous_ddl
@@ -2347,8 +2363,20 @@ fn additive_migration_plan(
             .statements
             .iter()
             .find(|statement| statement.id == candidate_view_statement_id);
+        let bbox_projection_changed = changed_fields.iter().any(|field| {
+            (previous_view_statement.is_some()
+                && previous_entity
+                    .geojson
+                    .as_ref()
+                    .is_some_and(|geojson| geojson.geometry_field.as_str() == field.as_str()))
+                || (candidate_view_statement.is_some()
+                    && candidate_entity
+                        .and_then(|entity| entity.geojson.as_ref())
+                        .is_some_and(|geojson| geojson.geometry_field.as_str() == field.as_str()))
+        });
         if previous_view_statement.map(|statement| &statement.sql)
             != candidate_view_statement.map(|statement| &statement.sql)
+            || bbox_projection_changed
         {
             if previous_view_statement.is_some() {
                 // The view depends on the generated geometry and helper. Drop
@@ -2362,11 +2390,6 @@ fn additive_migration_plan(
                 new_statement_ids.insert(candidate_view_statement_id);
             }
         }
-        let previous_fields = spatial_projection_fields(previous_entity);
-        let candidate_entity = candidate.entities().get(&previous_table.entity_id);
-        let candidate_fields = candidate_entity
-            .map(spatial_projection_fields)
-            .unwrap_or_default();
         let removed_fields: Vec<_> = previous_fields.difference(&candidate_fields).collect();
         let candidate_table = candidate
             .ddl()
@@ -2376,6 +2399,7 @@ fn additive_migration_plan(
         for policy in &previous_table.policies {
             if policy.applies_to == DdlPolicyRole::SpatialBbox
                 && (!removed_fields.is_empty()
+                    || bbox_projection_changed
                     || !candidate_table.is_some_and(|table| {
                         table
                             .policies
@@ -2390,12 +2414,17 @@ fn additive_migration_plan(
                 }
             }
         }
-        for field in removed_fields {
+        for field in removed_fields.into_iter().chain(&changed_fields) {
             let projection = spatial_projection_statements(previous_entity, field);
             removed_dependency_statements.extend([projection.drop_index, projection.drop_column]);
         }
     }
-    if previous_ddl.requires_postgis && !candidate.ddl().requires_postgis {
+    if previous_ddl.requires_spatial_polygon_contract()
+        && !candidate.ddl().requires_spatial_polygon_contract()
+    {
+        removed_dependency_statements.push(drop_spatial_polygon_contract_statement());
+    }
+    if previous_ddl.requires_spatial_bbox() && !candidate.ddl().requires_spatial_bbox() {
         removed_dependency_statements.push(drop_spatial_bbox_function_statement());
     }
 
@@ -2589,7 +2618,12 @@ fn additive_migration_plan(
             new_statement_ids.insert(source_view_id);
         }
         let previous_fields = spatial_projection_fields(previous_entity);
-        for field_id in spatial_projection_fields(candidate_entity).difference(&previous_fields) {
+        let candidate_fields = spatial_projection_fields(candidate_entity);
+        let changed_fields = changed_spatial_projection_fields(previous_entity, candidate_entity);
+        for field_id in candidate_fields
+            .difference(&previous_fields)
+            .chain(&changed_fields)
+        {
             let projection = spatial_projection_statements(candidate_entity, field_id);
             added_columns
                 .entry(entity_id.clone())
@@ -2703,6 +2737,22 @@ fn additive_migration_plan(
         reviewed_descriptors: Vec::new(),
         prior_schema_fingerprint: None,
     }
+}
+
+fn changed_spatial_projection_fields(
+    previous: &CompiledEntity,
+    candidate: &CompiledEntity,
+) -> BTreeSet<String> {
+    let previous_fields = spatial_projection_fields(previous);
+    let candidate_fields = spatial_projection_fields(candidate);
+    previous_fields
+        .intersection(&candidate_fields)
+        .filter(|field| {
+            spatial_projection_statements(previous, field)
+                != spatial_projection_statements(candidate, field)
+        })
+        .cloned()
+        .collect()
 }
 
 fn statement_sql<'a>(ddl: &'a DdlInventory, id: &str) -> Option<&'a str> {
@@ -5436,4 +5486,214 @@ fn digest(bytes: &[u8]) -> String {
         write!(&mut result, "{byte:02x}").expect("writing to a String cannot fail");
     }
     result
+}
+
+#[cfg(test)]
+mod spatial_projection_migration_tests {
+    use super::*;
+    use crate::compiler::{compile_project, CompileProfile};
+    use crate::contract::parse_project_json;
+
+    const PACKAGE_DIGEST: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    #[test]
+    fn polygon_contract_changes_replace_projection_dependencies_in_order() {
+        let previous = compiled_spatial_registry(
+            r#""type":"crs84-polygon","precision":6,"maximumPositions":8"#,
+        );
+        for (contract, field_type) in [
+            (
+                "precision",
+                r#""type":"crs84-polygon","precision":7,"maximumPositions":8"#,
+            ),
+            (
+                "bbox",
+                r#""type":"crs84-polygon","precision":6,"maximumPositions":8,"bbox":{"west":"100","south":"10","east":"110","north":"20"}"#,
+            ),
+            (
+                "maximumPositions",
+                r#""type":"crs84-polygon","precision":6,"maximumPositions":12"#,
+            ),
+        ] {
+            let candidate = compiled_spatial_registry(field_type);
+            assert_ne!(
+                spatial_projection_statements(&previous.entities()["area"], "geometry").add_column,
+                spatial_projection_statements(&candidate.entities()["area"], "geometry").add_column,
+                "the generated projection must bind the authored {contract} contract"
+            );
+
+            let plan = reviewed_plan(&previous, &candidate);
+            assert_projection_replacement(&plan, &candidate);
+        }
+    }
+
+    #[test]
+    fn adding_the_first_polygon_installs_its_validator_before_the_projection() {
+        let previous = compiled_spatial_registry(r#""type":"crs84-point","precision":6"#);
+        let candidate = compiled_spatial_registry_with_fields(
+            r#"{"id":"geometry","type":"crs84-point","precision":6,"classification":"internal"},{"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":12,"classification":"internal"}"#,
+        );
+
+        let baseline = CompiledRegistryMigrationBaseline::from_compiled(PACKAGE_DIGEST, &previous);
+        let changes =
+            compiled_registry_change_set_from_baseline(&baseline, &candidate, PACKAGE_DIGEST);
+        assert!(changes.changes.iter().any(|change| {
+            change.code == CompiledRegistryChangeCode::FieldAddedOptional
+                && change.target.record_type_id.as_deref() == Some("area")
+                && change.target.member_id.as_deref() == Some("boundary")
+        }));
+        let plan = additive_migration_plan(&baseline, &candidate, PACKAGE_DIGEST, changes.changes);
+        assert!(
+            statement_index(&plan, &spatial_polygon_contract_statement().id)
+                < statement_index(&plan, "entity.area.field.boundary.spatial-column.add"),
+            "the polygon validator is installed before its generated column"
+        );
+        assert!(
+            statement(&plan, "entity.area.field.boundary.spatial-column.add")
+                .sql
+                .contains("geometry(MultiPolygon,4326)")
+        );
+        assert!(!plan.statements.iter().any(|statement| {
+            statement.id == "entity.area.field.geometry.spatial-column.drop"
+                || statement.id == "entity.area.field.geometry.spatial-column.add"
+        }));
+    }
+
+    #[test]
+    fn removing_the_last_polygon_drops_its_validator_after_the_projection() {
+        let previous = compiled_spatial_registry_with_fields(
+            r#"{"id":"geometry","type":"crs84-point","precision":6,"classification":"internal"},{"id":"boundary","type":"crs84-polygon","precision":6,"maximumPositions":12,"classification":"internal"}"#,
+        );
+        let candidate = compiled_spatial_registry(r#""type":"crs84-point","precision":6"#);
+
+        let plan = reviewed_plan_for_change(
+            &previous,
+            &candidate,
+            CompiledRegistryChangeCode::FieldRemoved,
+            "boundary",
+        );
+        let projection_drop =
+            statement_index(&plan, "entity.area.field.boundary.spatial-column.drop");
+        let validator_drop = statement_index(&plan, &drop_spatial_polygon_contract_statement().id);
+        assert!(projection_drop < validator_drop);
+        assert!(!plan.statements.iter().any(|statement| {
+            statement.id == "entity.area.field.geometry.spatial-column.drop"
+                || statement.id == "entity.area.field.geometry.spatial-column.add"
+        }));
+    }
+
+    fn compiled_spatial_registry(field_type: &str) -> CompiledRegistry {
+        compiled_spatial_registry_with_fields(&format!(
+            r#"{{"id":"geometry",{field_type},"classification":"internal"}}"#
+        ))
+    }
+
+    fn compiled_spatial_registry_with_fields(fields: &str) -> CompiledRegistry {
+        let source = format!(
+            r#"{{
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{{"id":"spatial-projection-migration","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://spatial.example.test"}},
+              "datasets":[{{"id":"registry"}}],
+              "recordTypes":[{{
+                "id":"area","primaryDataset":"registry","route":"areas","mutationMode":"mutable",
+                "fields":[{fields}],
+                "geojson":{{"geometryField":"geometry"}}
+              }}],
+              "accessProfiles":[{{
+                "id":"map-reader","principalClaim":"principal","requiredScopes":"unrestricted",
+                "permissions":{{"records":[{{
+                  "recordType":"area","operations":["get","list"],
+                  "rowBoundaries":"unrestricted","readableFields":["geometry"],
+                  "spatialQueries":{{"bbox":{{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}}}}
+                }}]}}
+              }}]
+            }}"#
+        );
+        let project = parse_project_json(source.as_bytes()).expect("spatial project parses");
+        compile_project(&project, &[], CompileProfile::Authoring).expect("spatial project compiles")
+    }
+
+    fn reviewed_plan(previous: &CompiledRegistry, candidate: &CompiledRegistry) -> MigrationPlan {
+        reviewed_plan_for_change(
+            previous,
+            candidate,
+            CompiledRegistryChangeCode::FieldTypeChanged,
+            "geometry",
+        )
+    }
+
+    fn reviewed_plan_for_change(
+        previous: &CompiledRegistry,
+        candidate: &CompiledRegistry,
+        expected_code: CompiledRegistryChangeCode,
+        expected_member: &str,
+    ) -> MigrationPlan {
+        let baseline = CompiledRegistryMigrationBaseline::from_compiled(PACKAGE_DIGEST, previous);
+        let changes =
+            compiled_registry_change_set_from_baseline(&baseline, candidate, PACKAGE_DIGEST);
+        assert!(changes.changes.iter().any(|change| {
+            change.code == expected_code
+                && change.target.record_type_id.as_deref() == Some("area")
+                && change.target.member_id.as_deref() == Some(expected_member)
+        }));
+        reviewed_successor_migration_plan(
+            &baseline,
+            candidate,
+            &changes,
+            vec!["migrations/spatial/descriptor.json".to_owned()],
+            PACKAGE_DIGEST.to_owned(),
+        )
+        .expect("reviewed successor plan builds")
+    }
+
+    fn assert_projection_replacement(plan: &MigrationPlan, candidate: &CompiledRegistry) {
+        let view_drop = statement_index(plan, "entity.area.spatial-candidates-view.drop");
+        let policy_drop = plan
+            .statements
+            .iter()
+            .position(|statement| {
+                statement.kind == DdlStatementKind::Policy
+                    && statement.id.starts_with("entity.area.policy.")
+                    && statement.id.ends_with(".drop")
+            })
+            .expect("the old bbox policy is dropped");
+        let index_drop = statement_index(plan, "entity.area.field.geometry.spatial-index.drop");
+        let column_drop = statement_index(plan, "entity.area.field.geometry.spatial-column.drop");
+        let column_add = statement_index(plan, "entity.area.field.geometry.spatial-column.add");
+        let index_add = statement_index(plan, "entity.area.field.geometry.spatial-index.create");
+        let view_add = statement_index(plan, "entity.area.spatial-candidates-view");
+
+        assert!(view_drop < policy_drop);
+        assert!(policy_drop < index_drop);
+        assert!(index_drop < column_drop);
+        assert!(column_drop < column_add);
+        assert!(column_add < index_add);
+        assert!(index_add < view_add);
+
+        let add = statement(plan, "entity.area.field.geometry.spatial-column.add");
+        assert_eq!(
+            add,
+            &spatial_projection_statements(&candidate.entities()["area"], "geometry").add_column
+        );
+        assert_eq!(
+            plan.statements
+                .iter()
+                .filter(|statement| statement.id == "entity.area.field.geometry.spatial-column.add")
+                .count(),
+            1
+        );
+    }
+
+    fn statement_index(plan: &MigrationPlan, id: &str) -> usize {
+        plan.statements
+            .iter()
+            .position(|statement| statement.id == id)
+            .unwrap_or_else(|| panic!("migration statement `{id}` is present"))
+    }
+
+    fn statement<'a>(plan: &'a MigrationPlan, id: &str) -> &'a DdlStatement {
+        &plan.statements[statement_index(plan, id)]
+    }
 }

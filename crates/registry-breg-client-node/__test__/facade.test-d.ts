@@ -20,6 +20,7 @@ import {
   AsOfListContinuation,
   CurrentListContinuation,
   GeoJsonListContinuation,
+  GeoJsonGeometry,
   RelationshipListContinuation,
   SnapshotListContinuation,
   ListContinuation,
@@ -84,6 +85,14 @@ declare const asOfContinuation: AsOfListContinuation
 declare const snapshotContinuation: SnapshotListContinuation
 declare const relationshipContinuation: RelationshipListContinuation
 declare const geoJsonContinuation: GeoJsonListContinuation
+declare const geometry: GeoJsonGeometry
+if (geometry.type === 'Polygon') {
+  geometry.coordinates[0]?.[0]?.[0].toFixed()
+} else if (geometry.type === 'MultiPolygon') {
+  geometry.coordinates[0]?.[0]?.[0]?.[1].toFixed()
+} else {
+  geometry.coordinates[0].toFixed()
+}
 
 metadata.actions[0]?.inputs[0]?.schemaJson.toUpperCase()
 metadata.actions[0]?.attachments[0]?.contentTypes[0]?.toUpperCase()

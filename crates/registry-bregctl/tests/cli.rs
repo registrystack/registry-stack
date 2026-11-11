@@ -6105,6 +6105,41 @@ accessProfiles:
 }
 
 #[test]
+fn explain_model_reports_polygon_type_and_position_bound() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: polygon-explanation, version: "1", defaultLanguage: en, canonicalBaseIri: https://polygon-explanation.example.test}
+datasets:
+  - id: test-dataset
+recordTypes:
+  - id: service-area
+    primaryDataset: test-dataset
+    route: service-areas
+    mutationMode: create-only
+    geojson: {geometryField: boundary}
+    fields:
+      - {id: boundary, type: crs84-polygon, precision: 6, maximumPositions: 128, classification: internal}
+"#,
+    );
+    let output = bregctl(&["--format", "json", "explain", "model", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    assert_eq!(
+        report["explanation"]["recordTypes"][0]["fields"][0]["fieldType"],
+        json!({
+            "type": "crs84-polygon",
+            "precision": 6,
+            "maximumPositions": 128
+        })
+    );
+    assert_eq!(
+        report["explanation"]["recordTypes"][0]["geojson"]["geometryField"],
+        "boundary"
+    );
+}
+
+#[test]
 fn check_reports_derived_sql_module_path_without_sql_values() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
