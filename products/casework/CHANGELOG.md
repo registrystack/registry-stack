@@ -11,8 +11,9 @@
   with each access profile's `id` and `principalClaim`, so a caller no longer
   reads them from a review policy's `dependencies`. The member is additive.
 
-- `caseworkctl check --runtime-config` refuses a `contextProviders` binding
-  that startup would refuse, such as a `resource` that is not an absolute URI
+- `caseworkctl check --runtime-config`, and every other command that loads the
+  runtime configuration, refuses a `contextProviders` binding that startup
+  would refuse, such as a `resource` that is not an absolute URI
   or a `baseUrl` that is not HTTPS, without resolving a secret. The diagnostic
   `casework.runtime.invalid-context-provider` sits at the member and names the
   rule it breaks.

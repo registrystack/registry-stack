@@ -830,7 +830,20 @@ impl InspectionUnavailable {
             remedy: remedy.to_owned(),
         }
     }
+}
 
+/// An inspection that could not complete, keeping the cause in the reason. The
+/// cause comes from spawning the tool, its timeout, temporary files and the
+/// report parse; none of those messages carries a configured value.
+fn inspection_failed(field: &str, action: &str, error: &anyhow::Error) -> InspectionUnavailable {
+    InspectionUnavailable::new(
+        field,
+        &format!("The selected `caseworkctl` helper could not {action}: {error:#}."),
+        "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
+    )
+}
+
+impl InspectionUnavailable {
     pub(super) fn field(&self) -> &str {
         &self.field
     }
@@ -1075,12 +1088,10 @@ fn casework_principals(
                 "Run `rstack casework check` for authored diagnostics, then correct the Casework project.",
             ).into());
         }
-        Err(_) => {
-            return Err(InspectionUnavailable::new(
-                &project.field,
-                "The selected `caseworkctl` helper could not inspect the Casework project.",
-                "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
-            ).into());
+        Err(error) => {
+            return Err(
+                inspection_failed(&project.field, "inspect the Casework project", &error).into(),
+            );
         }
     };
     let status_profile = plan
@@ -1238,13 +1249,7 @@ fn check_casework_binding(
     binding: &super::bindings::CaseworkContextProvider,
     terminate: &AtomicBool,
 ) -> Result<()> {
-    let unavailable = || {
-        InspectionUnavailable::new(
-            &project.field,
-            "The selected `caseworkctl` helper could not check the Casework configuration the run writes.",
-            "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
-        )
-    };
+    let action = "check the Casework configuration the run writes";
     let checked = (|| {
         let directory = tempfile::tempdir()?;
         // The runtime loader refuses a file reached through a symbolic link,
@@ -1272,8 +1277,9 @@ fn check_casework_binding(
             terminate,
         )
     })();
-    let Ok((status, report)) = checked else {
-        return Err(unavailable().into());
+    let (status, report) = match checked {
+        Ok(checked) => checked,
+        Err(error) => return Err(inspection_failed(&project.field, action, &error).into()),
     };
     match casework_binding_check(status.code(), &report, &binding.id) {
         BindingCheck::Accepted => Ok(()),
@@ -1286,7 +1292,12 @@ fn check_casework_binding(
             "Correct the value so the product accepts the configuration the run writes for this binding.",
         )
         .into()),
-        BindingCheck::Unchecked => Err(unavailable().into()),
+        BindingCheck::Unchecked => Err(inspection_failed(
+            &project.field,
+            action,
+            &anyhow::anyhow!("caseworkctl check did not report a result for the binding"),
+        )
+        .into()),
     }
 }
 
@@ -2530,6 +2541,30 @@ mod tests {
         let second = ProductRunner::new(Arc::new(breg_input(true)), &other, &terminate).unwrap();
         second.write_field_key().unwrap();
         assert_ne!(fs::read_to_string(other.join(FIELD_KEY)).unwrap(), encoded);
+    }
+
+    #[test]
+    fn an_unavailable_inspection_is_operational_and_names_its_cause() {
+        let class =
+            |error: &anyhow::Error| super::super::error_report(error).0["error"]["class"].clone();
+        let unavailable = anyhow::Error::new(InspectionUnavailable::new(
+            "products[0]",
+            "The Casework project cannot be inspected.",
+            "Install the tools.",
+        ));
+        assert_eq!(class(&unavailable), "operational");
+
+        let terminate = AtomicBool::new(false);
+        let missing = Path::new("/nonexistent/caseworkctl");
+        let error = explain_casework_facts(missing, Path::new("."), &terminate).unwrap_err();
+        let reason = inspection_failed("products[0]", "inspect the Casework project", &error);
+        assert!(
+            reason.reason().contains(
+                "could not inspect the Casework project: cannot start caseworkctl explain"
+            ),
+            "{}",
+            reason.reason()
+        );
     }
 
     #[test]

@@ -434,8 +434,10 @@ struct Usage(&'static str);
 /// `registry.rstack.error.v1` object, plus `run_id` and `recovery` when a run
 /// still has resources to release.
 fn error_report(error: &anyhow::Error) -> (Value, u8) {
-    let operational =
-        error.is::<Operational>() || error.is::<CleanupPending>() || error.is::<RecoveryNeeded>();
+    let operational = error.is::<Operational>()
+        || error.is::<CleanupPending>()
+        || error.is::<RecoveryNeeded>()
+        || error.is::<products::InspectionUnavailable>();
     let (class, code) = if operational {
         ("operational", crate::OPERATIONAL_FAILURE_EXIT)
     } else if error.is::<Usage>() {
