@@ -36,6 +36,9 @@ use super::{
 /// directory and removed with it.
 pub(super) const FIELD_KEY: &str = "field-key";
 
+/// How long a started product has to answer `/ready`.
+const READINESS_WAIT: Duration = Duration::from_secs(30);
+
 /// The run's field-encryption key file, when the run wrote one, so recovery
 /// can name it for removal.
 pub(super) fn field_key_file(root: &Path) -> Option<PathBuf> {
@@ -165,7 +168,7 @@ impl<'a> ProductRunner<'a> {
                 .map_err(operational)?;
             self.children.push((product, child));
             self.record_processes()?;
-            self.ready(product, url)?;
+            self.ready(product, url, READINESS_WAIT)?;
         }
         Ok(urls)
     }
@@ -476,8 +479,8 @@ impl<'a> ProductRunner<'a> {
         write_processes(self.root, &entries)
     }
 
-    fn ready(&mut self, product: Product, base: &str) -> Result<()> {
-        let end = Instant::now() + Duration::from_secs(30);
+    fn ready(&mut self, product: Product, base: &str, wait: Duration) -> Result<()> {
+        let end = Instant::now() + wait;
         let url = format!("{base}/ready");
         loop {
             self.ensure_active()?;
@@ -490,12 +493,13 @@ impl<'a> ProductRunner<'a> {
                 self.ensure_alive(product)?;
                 return Ok(());
             }
-            ensure!(
-                Instant::now() < end,
-                "{} did not become ready{}",
-                product.name(),
-                self.runtime_log_tail(product)
-            );
+            if Instant::now() >= end {
+                return Err(operational(anyhow::anyhow!(
+                    "{} did not become ready{}",
+                    product.name(),
+                    self.runtime_log_tail(product)
+                )));
+            }
             thread::sleep(POLL);
         }
     }
@@ -536,10 +540,11 @@ impl<'a> ProductRunner<'a> {
             !stopping(self.root, self.terminate),
             "development run was stopped"
         );
-        ensure!(
-            Instant::now() < self.deadline,
-            "development run did not start within five minutes"
-        );
+        if Instant::now() >= self.deadline {
+            return Err(operational(anyhow::anyhow!(
+                "development run did not start within five minutes"
+            )));
+        }
         Ok(())
     }
 
@@ -2518,6 +2523,51 @@ mod tests {
         let second = ProductRunner::new(Arc::new(breg_input(true)), &other, &terminate).unwrap();
         second.write_field_key().unwrap();
         assert_ne!(fs::read_to_string(other.join(FIELD_KEY)).unwrap(), encoded);
+    }
+
+    #[test]
+    fn missed_readiness_and_start_deadlines_are_operational() {
+        let class =
+            |error: &anyhow::Error| super::super::error_report(error).0["error"]["class"].clone();
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let terminate = AtomicBool::new(false);
+        let mut runner =
+            ProductRunner::new(Arc::new(breg_input(false)), &root, &terminate).unwrap();
+        let unused = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let not_ready = runner
+            .ready(
+                Product::Breg,
+                &format!("http://127.0.0.1:{unused}"),
+                Duration::ZERO,
+            )
+            .unwrap_err();
+        assert_eq!(class(&not_ready), "operational", "{not_ready:#}");
+        assert!(
+            not_ready
+                .to_string()
+                .starts_with("breg did not become ready"),
+            "{not_ready:#}"
+        );
+
+        runner.deadline = Instant::now();
+        let late = runner.ensure_active().unwrap_err();
+        assert_eq!(class(&late), "operational", "{late:#}");
+        assert_eq!(
+            late.to_string(),
+            "development run did not start within five minutes"
+        );
+
+        // A stop requested during startup stays a refusal.
+        terminate.store(true, Ordering::Relaxed);
+        let stopped = runner.ensure_active().unwrap_err();
+        assert_eq!(class(&stopped), "domain", "{stopped:#}");
     }
 
     #[test]
