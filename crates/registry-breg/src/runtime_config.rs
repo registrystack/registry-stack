@@ -1013,7 +1013,9 @@ impl RuntimeConfig {
             .review_authorities
             .into_iter()
             .map(|(id, authority)| {
-                ReviewAuthorityConfig::from_raw(&id, authority).map(|authority| (id, authority))
+                ReviewAuthorityConfig::from_raw(&id, authority)
+                    .map(|authority| (id, authority))
+                    .map_err(|_| RuntimeConfigError::InvalidBinding)
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
@@ -2759,13 +2761,31 @@ pub(crate) fn parse_secret_reference(
     SecretReference::parse(value).map_err(|_| error)
 }
 
+/// Why a `reviewAuthorities` entry is refused: the rule it breaks, stated
+/// without repeating a value.
+#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+#[error("{0}")]
+pub struct ReviewAuthorityRefusal(&'static str);
+
 /// Checks one `reviewAuthorities` entry with the reader the runtime uses, so
 /// a caller that renders the entry can refuse it before the runtime starts.
 /// Secret references are checked for shape only; nothing is resolved.
-pub fn check_review_authority(id: &str, authority: &serde_json::Value) -> Result<()> {
-    let raw = RawReviewAuthorityConfig::deserialize(authority)
-        .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+pub fn check_review_authority(
+    id: &str,
+    authority: &serde_json::Value,
+) -> std::result::Result<(), ReviewAuthorityRefusal> {
+    let raw = RawReviewAuthorityConfig::deserialize(authority).map_err(|_| {
+        ReviewAuthorityRefusal(
+            "the review authority must hold only its documented members, each with a value of the documented type",
+        )
+    })?;
     ReviewAuthorityConfig::from_raw(id, raw).map(|_| ())
+}
+
+/// The rule for a review authority ID and its producer ID: non-blank text of
+/// at most 128 bytes without control characters.
+fn bounded_identity_text(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
 
 #[derive(Clone)]
@@ -2780,12 +2800,17 @@ struct ReviewAuthorityConfig {
 }
 
 impl ReviewAuthorityConfig {
-    fn from_raw(id: &str, raw: RawReviewAuthorityConfig) -> Result<Self> {
-        if id.trim().is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
-            return Err(RuntimeConfigError::InvalidBinding);
+    fn from_raw(
+        id: &str,
+        raw: RawReviewAuthorityConfig,
+    ) -> std::result::Result<Self, ReviewAuthorityRefusal> {
+        if !bounded_identity_text(id) {
+            return Err(ReviewAuthorityRefusal(
+                "the review authority ID must be non-blank text of at most 128 bytes without control characters",
+            ));
         }
-        let endpoint =
-            reqwest::Url::parse(&raw.endpoint).map_err(|_| RuntimeConfigError::InvalidBinding)?;
+        let endpoint = reqwest::Url::parse(&raw.endpoint)
+            .map_err(|_| ReviewAuthorityRefusal("endpoint must be an absolute URL"))?;
         // The review client performs the complete credential-destination
         // validation during activation. Refuse URL suffixes here as well so a
         // typo never survives configuration parsing.
@@ -2794,7 +2819,9 @@ impl ReviewAuthorityConfig {
             || endpoint.query().is_some()
             || endpoint.fragment().is_some()
         {
-            return Err(RuntimeConfigError::InvalidBinding);
+            return Err(ReviewAuthorityRefusal(
+                "endpoint must not carry user information, a query or a fragment",
+            ));
         }
         let completion = match (raw.completion_token_ref, raw.completion_recipient) {
             (None, None) => None,
@@ -2803,24 +2830,36 @@ impl ReviewAuthorityConfig {
             {
                 Some((token_ref, recipient))
             }
-            _ => return Err(RuntimeConfigError::InvalidBinding),
+            _ => {
+                return Err(ReviewAuthorityRefusal(
+                    "completionTokenRef and completionRecipient must be written together, with a recipient of 1 to 256 visible ASCII characters",
+                ))
+            }
         };
         let token_ref = raw.token_ref;
         let private_key_jwt = raw
             .private_key_jwt
             .map(ReviewPrivateKeyJwtConfig::from_raw)
             .transpose()?;
-        if token_ref.is_some() == private_key_jwt.is_some()
-            || raw.profile.trim().is_empty()
+        if token_ref.is_some() == private_key_jwt.is_some() {
+            return Err(ReviewAuthorityRefusal(
+                "exactly one of tokenRef and privateKeyJwt must be written",
+            ));
+        }
+        if raw.profile.trim().is_empty()
             || raw.profile.len() > 128
             || !raw.profile.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
             })
-            || raw.producer_id.trim().is_empty()
-            || raw.producer_id.len() > 128
-            || raw.producer_id.chars().any(char::is_control)
         {
-            return Err(RuntimeConfigError::InvalidBinding);
+            return Err(ReviewAuthorityRefusal(
+                "the profile must be 1 to 128 ASCII letters, digits, `-`, `_`, `.` or `:`",
+            ));
+        }
+        if !bounded_identity_text(&raw.producer_id) {
+            return Err(ReviewAuthorityRefusal(
+                "producerId must be non-blank text of at most 128 bytes without control characters",
+            ));
         }
         Ok(Self {
             endpoint,
@@ -2883,25 +2922,28 @@ struct ReviewPrivateKeyJwtConfig {
 }
 
 impl ReviewPrivateKeyJwtConfig {
-    fn from_raw(raw: RawReviewPrivateKeyJwtConfig) -> Result<Self> {
-        let token_endpoint = raw
-            .token_endpoint
-            .parse()
-            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        if !registry_platform_httputil::valid_resource_uri(&raw.assertion_audience)
-            || !registry_platform_httputil::valid_resource_uri(&raw.resource)
-            || raw.scopes.is_empty()
-            || raw.scopes.len() > registry_platform_httputil::MAXIMUM_REQUESTED_SCOPES
-            || raw.scopes.iter().collect::<BTreeSet<_>>().len() != raw.scopes.len()
-            || raw.scopes.join(" ").len()
-                > registry_platform_httputil::MAXIMUM_SCOPE_PARAMETER_BYTES
-            || raw.scopes.iter().any(|scope| {
-                scope.len() > registry_platform_httputil::MAXIMUM_REQUESTED_SCOPE_BYTES
-                    || !registry_platform_httputil::valid_scope_token(scope)
-            })
-        {
-            return Err(RuntimeConfigError::InvalidBinding);
+    fn from_raw(
+        raw: RawReviewPrivateKeyJwtConfig,
+    ) -> std::result::Result<Self, ReviewAuthorityRefusal> {
+        let token_endpoint = raw.token_endpoint.parse().map_err(|_| {
+            ReviewAuthorityRefusal("the privateKeyJwt token endpoint must be an absolute URL")
+        })?;
+        if !registry_platform_httputil::valid_resource_uri(&raw.assertion_audience) {
+            return Err(ReviewAuthorityRefusal(
+                "the privateKeyJwt assertion audience must be one absolute URI without a fragment or userinfo",
+            ));
         }
+        if !registry_platform_httputil::valid_resource_uri(&raw.resource) {
+            return Err(ReviewAuthorityRefusal(
+                "the privateKeyJwt resource must be one absolute URI without a fragment or userinfo",
+            ));
+        }
+        registry_platform_httputil::validate_requested_scopes(&raw.scopes).map_err(|error| {
+            ReviewAuthorityRefusal(match error {
+                registry_platform_httputil::TokenError::Configuration { reason } => reason,
+                _ => "the privateKeyJwt scopes are not a scope list the token client requests",
+            })
+        })?;
         Ok(Self {
             token_endpoint,
             client_id_ref: raw.client_id_ref,
@@ -4230,26 +4272,69 @@ mod tests {
     }
 
     #[test]
-    fn check_review_authority_applies_the_runtime_reader() {
+    fn check_review_authority_applies_the_runtime_reader_and_names_the_rule() {
         super::check_review_authority("casework-a", &review_authority_fragment())
             .expect("a well-formed review authority is accepted");
 
-        let mut bad_endpoint = review_authority_fragment();
-        bad_endpoint["endpoint"] = "https://casework.example/reviews/?q=1".into();
-        let mut bad_profile = review_authority_fragment();
-        bad_profile["profile"] = "not a profile".into();
-        let mut unknown_member = review_authority_fragment();
-        unknown_member["surprise"] = true.into();
-        for fragment in [bad_endpoint, bad_profile, unknown_member] {
-            assert!(
-                matches!(
-                    super::check_review_authority("casework-a", &fragment),
-                    Err(RuntimeConfigError::InvalidBinding)
-                ),
-                "{fragment}"
-            );
+        let too_long = (0..17)
+            .map(|index| format!("{index:02}{}", "s".repeat(254)))
+            .collect::<Vec<_>>();
+        for (pointer, value, rule) in [
+            (
+                "/endpoint",
+                serde_json::json!("https://casework.example/reviews/?q=1"),
+                "query",
+            ),
+            ("/endpoint", serde_json::json!("not-a-url"), "absolute URL"),
+            ("/profile", serde_json::json!("not a profile"), "profile"),
+            ("/producerId", serde_json::json!(" "), "producerId"),
+            ("/surprise", serde_json::json!(true), "documented members"),
+            (
+                "/tokenRef",
+                serde_json::json!("secret:file/review-token"),
+                "exactly one of tokenRef and privateKeyJwt",
+            ),
+            (
+                "/completionRecipient",
+                serde_json::json!("registry"),
+                "completionTokenRef and completionRecipient",
+            ),
+            (
+                "/privateKeyJwt/resource",
+                serde_json::json!("casework"),
+                "absolute URI",
+            ),
+            (
+                "/privateKeyJwt/assertionAudience",
+                serde_json::json!("issuer"),
+                "assertion audience",
+            ),
+            (
+                "/privateKeyJwt/scopes",
+                serde_json::json!(too_long),
+                "within 4096 bytes",
+            ),
+            (
+                "/privateKeyJwt/scopes",
+                serde_json::json!(["has space"]),
+                "scope-tokens",
+            ),
+        ] {
+            let mut fragment = review_authority_fragment();
+            let (parent, member) = pointer.rsplit_once('/').unwrap();
+            fragment.pointer_mut(parent).unwrap()[member] = value.clone();
+            let refusal = super::check_review_authority("casework-a", &fragment)
+                .expect_err(pointer)
+                .to_string();
+            assert!(refusal.contains(rule), "{pointer}: {refusal}");
+            if let Some(text) = value.as_str().filter(|text| text.trim().len() > 1) {
+                assert!(!refusal.contains(text), "{pointer}: {refusal}");
+            }
         }
-        assert!(super::check_review_authority("", &review_authority_fragment()).is_err());
+        let refusal = super::check_review_authority("", &review_authority_fragment())
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("review authority ID"), "{refusal}");
     }
 
     #[test]
