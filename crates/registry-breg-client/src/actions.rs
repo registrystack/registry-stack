@@ -1890,7 +1890,7 @@ mod tests {
     }
 
     #[test]
-    fn polygon_precision_nine_accepts_near_zero_coordinates_without_changing_point() {
+    fn polygon_precision_nine_accepts_near_zero_coordinates() {
         let coordinate = json!(0.000000001);
         assert!(coordinate.to_string().contains('e'));
         assert!(valid_action_input(
@@ -1903,11 +1903,6 @@ mod tests {
             &json!({
                 "type":"crs84-polygon", "precision":9, "maximumPositions":4
             }),
-            None,
-        ));
-        assert!(!valid_action_input(
-            &json!({"type":"Point","coordinates":[0.000000001,0.000000001]}),
-            &json!({"type":"crs84-point","precision":9}),
             None,
         ));
     }

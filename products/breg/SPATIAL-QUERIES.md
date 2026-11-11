@@ -186,13 +186,24 @@ history or exports. PostGIS types, functions and operators are schema-qualified.
 
 Adding or changing the geometry binding or bbox grant requires the normal
 reviewed successor lifecycle. The compiler derives the projection/index DDL.
-an author does not write dummy SQL to enable spatial storage or bbox.
+An author does not write dummy SQL to enable spatial storage or bbox.
 Missing prerequisites refuse before maintenance begins. An apply failure
 after maintenance begins keeps records unavailable until the existing
 reviewed recovery procedure completes. Removing the last bbox grant removes
 the helper. It also removes a Point's generated projection and index when no
 other bbox grant needs them. A Polygon keeps its generated projection and index.
 Stored data, history and the administrator-owned extension and role remain.
+
+Changing a Point or Polygon field's `precision`, `bbox` or `maximumPositions`
+is a field type change, even when it only loosens the contract. It needs a
+[reviewed migration](../../docs/site/src/content/docs/operate/breg-changes.mdx#write-a-reviewed-migration-descriptor)
+with at least one SQL step, a backup binding and a rehearsal receipt. A
+tightening that a retained value violates is not caught by a pre-check: the
+apply fails on the generated check constraint, the target stays non-ready, and
+[the failed-activation recovery](../../docs/site/src/content/docs/operate/breg-changes.mdx#recover-a-failed-activation)
+applies. Issue
+[#2646](https://github.com/registrystack/registry-stack/issues/2646) proposes
+treating a loosening as a compatible change.
 
 Adding the stored projection can rewrite existing rows, and creating its index
 takes locks and additional disk space. Plan a maintenance window and a tested
