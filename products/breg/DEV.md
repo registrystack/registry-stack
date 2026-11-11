@@ -264,12 +264,26 @@ use another client for the same profile by naming that exact step with
 profile-mismatched, duplicate, or ambiguous bindings are refused before any
 service starts.
 
-For a native journey using a `sub` profile, declare
-`claims: {principal: "$localClientSubject", ...}`. This explicit fixture marker
-resolves to the selected local client's registered subject only in the private
-captured project. Exact `testBindings` select claim variants as usual. A borrowed
-issuer uses its owner's registration identity. Literal expected principals stay
-unchanged; the marker refuses under another principal claim or another field.
+For a native journey using a profile with `principalClaim: sub`, use
+`"$localClientSubject"` for the expected principal. Use the same marker in
+`directClaims.sub` when the profile applies an equality row boundary to `sub`.
+
+```yaml
+claims:
+  principal: "$localClientSubject"
+  scopes: [registry:records:read]
+  actorKind: human
+  requesterClient: local-reader
+  directClaims:
+    sub: "$localClientSubject"
+```
+
+Each marker resolves to the selected local client's registered subject in the
+private captured project. Exact `testBindings` select the client for their
+named steps. A borrowed issuer uses its owner's registration identity. Use
+literal values for other expected claims and request data. The rehearsal
+verifies the token's claims against these expectations and applies the row
+boundary to the records.
 
 Set `accessProfiles: []` for a machine client that carries only scopes or
 claims for another product, such as Casework. The empty list gives that client
