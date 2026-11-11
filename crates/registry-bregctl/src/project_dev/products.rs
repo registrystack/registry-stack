@@ -830,20 +830,7 @@ impl InspectionUnavailable {
             remedy: remedy.to_owned(),
         }
     }
-}
 
-/// An inspection that could not complete, keeping the cause in the reason. The
-/// cause comes from spawning the tool, its timeout, temporary files and the
-/// report parse; none of those messages carries a configured value.
-fn inspection_failed(field: &str, action: &str, error: &anyhow::Error) -> InspectionUnavailable {
-    InspectionUnavailable::new(
-        field,
-        &format!("The selected `caseworkctl` helper could not {action}: {error:#}."),
-        "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
-    )
-}
-
-impl InspectionUnavailable {
     pub(super) fn field(&self) -> &str {
         &self.field
     }
@@ -855,6 +842,28 @@ impl InspectionUnavailable {
     pub(super) fn remedy(&self) -> &str {
         &self.remedy
     }
+}
+
+/// The error for an inspection that could not complete. An interrupt is the
+/// operator's request and stays as it is. Any other failure is an unavailable
+/// inspection whose reason keeps the cause; the cause comes from spawning the
+/// tool, its timeout, temporary files and the report parse, and none of those
+/// messages carries a configured value.
+fn inspection_failed(
+    field: &str,
+    action: &str,
+    error: anyhow::Error,
+    terminate: &AtomicBool,
+) -> anyhow::Error {
+    if terminate.load(Ordering::Relaxed) {
+        return error;
+    }
+    InspectionUnavailable::new(
+        field,
+        &format!("The selected `caseworkctl` helper could not {action}: {error:#}."),
+        "Install the matching Casework tools or provide RSTACK_CASEWORKCTL_BIN, then run the check again.",
+    )
+    .into()
 }
 
 struct SelectedProduct {
@@ -1089,9 +1098,12 @@ fn casework_principals(
             ).into());
         }
         Err(error) => {
-            return Err(
-                inspection_failed(&project.field, "inspect the Casework project", &error).into(),
-            );
+            return Err(inspection_failed(
+                &project.field,
+                "inspect the Casework project",
+                error,
+                terminate,
+            ));
         }
     };
     let status_profile = plan
@@ -1279,7 +1291,7 @@ fn check_casework_binding(
     })();
     let (status, report) = match checked {
         Ok(checked) => checked,
-        Err(error) => return Err(inspection_failed(&project.field, action, &error).into()),
+        Err(error) => return Err(inspection_failed(&project.field, action, error, terminate)),
     };
     match casework_binding_check(status.code(), &report, &binding.id) {
         BindingCheck::Accepted => Ok(()),
@@ -1295,9 +1307,9 @@ fn check_casework_binding(
         BindingCheck::Unchecked => Err(inspection_failed(
             &project.field,
             action,
-            &anyhow::anyhow!("caseworkctl check did not report a result for the binding"),
-        )
-        .into()),
+            anyhow::anyhow!("caseworkctl check did not report a result for the binding"),
+            terminate,
+        )),
     }
 }
 
@@ -2557,13 +2569,42 @@ mod tests {
         let terminate = AtomicBool::new(false);
         let missing = Path::new("/nonexistent/caseworkctl");
         let error = explain_casework_facts(missing, Path::new("."), &terminate).unwrap_err();
-        let reason = inspection_failed("products[0]", "inspect the Casework project", &error);
+        let failed = inspection_failed(
+            "products[0]",
+            "inspect the Casework project",
+            error,
+            &terminate,
+        );
+        assert_eq!(class(&failed), "operational");
+        let reason = failed
+            .downcast_ref::<InspectionUnavailable>()
+            .expect("an unavailable inspection")
+            .reason();
         assert!(
-            reason.reason().contains(
+            reason.contains(
                 "could not inspect the Casework project: cannot start caseworkctl explain"
             ),
-            "{}",
-            reason.reason()
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_inspection_stays_the_operators_request() {
+        let class =
+            |error: &anyhow::Error| super::super::error_report(error).0["error"]["class"].clone();
+        let terminate = AtomicBool::new(true);
+        let interrupted = anyhow::anyhow!("development product inspection was interrupted");
+        let failed = inspection_failed(
+            "products[0]",
+            "inspect the Casework project",
+            interrupted,
+            &terminate,
+        );
+        assert!(!failed.is::<InspectionUnavailable>());
+        assert_eq!(class(&failed), "domain");
+        assert_eq!(
+            failed.to_string(),
+            "development product inspection was interrupted"
         );
     }
 
