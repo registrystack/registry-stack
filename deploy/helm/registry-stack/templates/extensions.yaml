@@ -1,0 +1,164 @@
+{{- with .Values.extensions }}
+{{- if ne .namespace $.Release.Namespace }}
+{{- fail "Install extensions in their bound namespace." }}
+{{- end }}
+{{- if or $.Values.breg.enabled $.Values.appKit.enabled $.Values.casework.enabled $.Values.evidence.enabled }}
+{{- fail "Install extensions in a dedicated release and namespace." }}
+{{- end }}
+{{- $paths := dict }}
+{{- range $id, $endpoint := .endpoints }}
+{{- if hasKey $paths $endpoint.path }}
+{{- fail "Each extension needs its own public route." }}
+{{- end }}
+{{- $_ := set $paths $endpoint.path true }}
+{{- $name := printf "extension-%s" $id }}
+{{- $labels := dict "app.kubernetes.io/name" $name "app.kubernetes.io/part-of" "registry-workspace-extension" "app.kubernetes.io/instance" $.Release.Name }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $labels | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.extensions.ingressNamespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $.Values.extensions.ingressPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $endpoint.port }}
+  {{- if $endpoint.egress }}
+  egress:
+    {{- range $endpoint.egress }}
+    - to:
+        - {{- toYaml .to | nindent 10 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml $labels | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "registry-stack.podSecurityContext" $ | nindent 8 }}
+      {{- include "registry-stack.imagePullSecrets" $ | nindent 6 }}
+      {{- with $endpoint.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $name }}
+          image: {{ $endpoint.image | quote }}
+          imagePullPolicy: {{ default "IfNotPresent" $endpoint.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $endpoint.port }}
+          env:
+            - name: PORT
+              value: {{ $endpoint.port | quote }}
+            - name: PUBLIC_PATH
+              value: {{ $endpoint.path | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" $ | nindent 12 }}
+          volumeMounts:
+            - name: temp
+              mountPath: /tmp
+            {{- if $endpoint.configMapName }}
+            - name: config
+              mountPath: /etc/registry-extension
+              readOnly: true
+            {{- end }}
+            {{- if $endpoint.credentialsSecretName }}
+            - name: credentials
+              mountPath: /run/registry-extension
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: temp
+          emptyDir:
+            sizeLimit: 32Mi
+        {{- if $endpoint.configMapName }}
+        - name: config
+          configMap:
+            name: {{ $endpoint.configMapName }}
+        {{- end }}
+        {{- if $endpoint.credentialsSecretName }}
+        - name: credentials
+          secret:
+            secretName: {{ $endpoint.credentialsSecretName }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- toYaml $labels | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $endpoint.port }}
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  {{- with $.Values.extensions.ingressAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ $.Values.extensions.ingressClassName }}
+  tls:
+    - hosts: [{{ $.Values.extensions.publicHost | quote }}]
+      secretName: {{ $.Values.extensions.tlsSecretName }}
+  rules:
+    - host: {{ $.Values.extensions.publicHost | quote }}
+      http:
+        paths:
+          - path: {{ $endpoint.path | quote }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- end }}
+{{- end }}

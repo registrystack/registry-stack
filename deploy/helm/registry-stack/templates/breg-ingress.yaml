@@ -1,0 +1,33 @@
+{{- if and .Values.breg.enabled .Values.breg.serve .Values.breg.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "registry-stack.bregName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: breg
+  {{- with .Values.breg.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.breg.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ .Values.breg.ingress.host | quote }}
+      secretName: {{ .Values.breg.ingress.tls.secretName }}
+  rules:
+    - host: {{ .Values.breg.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.breg.ingress.path }}
+            pathType: {{ .Values.breg.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "registry-stack.bregName" . }}
+                port:
+                  name: http
+{{- end }}

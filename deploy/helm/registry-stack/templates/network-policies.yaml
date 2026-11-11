@@ -1,0 +1,211 @@
+{{- if and .Values.breg.enabled .Values.breg.serve .Values.breg.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "registry-stack.bregName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: breg
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "breg") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if .Values.breg.networkPolicy.ingress }}
+  ingress:
+    - from:
+      {{- range .Values.breg.networkPolicy.ingress }}
+        - {{- toYaml . | nindent 10 }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if or .Values.breg.networkPolicy.dns.enabled .Values.breg.networkPolicy.dependencyEgress }}
+  egress:
+    {{- if .Values.breg.networkPolicy.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.breg.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.breg.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range .Values.breg.networkPolicy.dependencyEgress }}
+    - to:
+        - {{- toYaml .to | nindent 10 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+---
+{{- end }}
+{{- if and .Values.appKit.enabled .Values.appKit.serve .Values.appKit.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "registry-stack.appKitName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app-kit
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "app-kit") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if .Values.appKit.networkPolicy.ingress }}
+  ingress:
+    - from:
+      {{- range .Values.appKit.networkPolicy.ingress }}
+        - {{- toYaml . | nindent 10 }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.appKit.containerPort }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if or .Values.appKit.networkPolicy.dns.enabled .Values.appKit.networkPolicy.dependencyEgress }}
+  egress:
+    {{- if .Values.appKit.networkPolicy.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.appKit.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.appKit.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range .Values.appKit.networkPolicy.dependencyEgress }}
+    - to:
+        - {{- toYaml .to | nindent 10 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+---
+{{- end }}
+{{- if and .Values.casework.enabled .Values.casework.serve .Values.casework.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "registry-stack.caseworkName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: casework
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "casework") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if .Values.casework.networkPolicy.ingress }}
+  ingress:
+    - from:
+      {{- range .Values.casework.networkPolicy.ingress }}
+        - {{- toYaml . | nindent 10 }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8100
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if or .Values.casework.networkPolicy.dns.enabled .Values.casework.networkPolicy.dependencyEgress .Values.casework.networkPolicy.bregContextEgress }}
+  egress:
+    {{- if .Values.casework.networkPolicy.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.casework.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.casework.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range concat .Values.casework.networkPolicy.dependencyEgress .Values.casework.networkPolicy.bregContextEgress }}
+    - to:
+        - {{- toYaml .to | nindent 10 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+---
+{{- end }}
+{{- if and .Values.evidence.enabled .Values.evidence.serve .Values.evidence.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "registry-stack.evidenceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: evidence
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "evidence") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  {{- if .Values.evidence.networkPolicy.ingress }}
+  ingress:
+    - from:
+      {{- range .Values.evidence.networkPolicy.ingress }}
+        - {{- toYaml . | nindent 10 }}
+      {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if or .Values.evidence.networkPolicy.dns.enabled .Values.evidence.networkPolicy.dependencyEgress .Values.evidence.networkPolicy.transitEgress }}
+  egress:
+    {{- if .Values.evidence.networkPolicy.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.evidence.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.evidence.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range concat .Values.evidence.networkPolicy.dependencyEgress .Values.evidence.networkPolicy.transitEgress }}
+    - to:
+        - {{- toYaml .to | nindent 10 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- end }}

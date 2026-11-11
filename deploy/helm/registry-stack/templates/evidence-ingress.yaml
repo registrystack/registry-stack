@@ -1,0 +1,33 @@
+{{- if and .Values.evidence.enabled .Values.evidence.serve .Values.evidence.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "registry-stack.evidenceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: evidence
+  {{- with .Values.evidence.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.evidence.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ .Values.evidence.ingress.host | quote }}
+      secretName: {{ .Values.evidence.ingress.tls.secretName }}
+  rules:
+    - host: {{ .Values.evidence.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.evidence.ingress.path }}
+            pathType: {{ .Values.evidence.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "registry-stack.evidenceName" . }}
+                port:
+                  name: http
+{{- end }}

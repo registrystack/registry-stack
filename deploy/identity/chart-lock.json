@@ -1,0 +1,19 @@
+{
+  "schema": "registry.identity-chart-lock/v1",
+  "chart": {
+    "reference": "oci://ghcr.io/thunder-id/helm-charts/thunderid",
+    "version": "1.0.1",
+    "digest": "sha256:f54599dc3715fe054576c4a8351b7346f153205d17f6b553f82fab11c4536218",
+    "contentDigest": "sha256:f6fd424047932405d3d8f50d6ef69798f10626563828c1d1bed186efba99dc4d"
+  },
+  "image": {
+    "reference": "ghcr.io/thunder-id/thunderid",
+    "version": "1.0.1",
+    "digest": "sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e"
+  },
+  "source": {
+    "repository": "https://github.com/thunder-id/thunderid",
+    "tag": "v1.0.1",
+    "commit": "12f517c4384004e360e26eb7eb1ab0501b678bb2"
+  }
+}

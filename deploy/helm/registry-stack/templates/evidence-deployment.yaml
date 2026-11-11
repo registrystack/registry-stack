@@ -1,0 +1,261 @@
+{{- if and .Values.evidence.enabled .Values.evidence.serve }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "registry-stack.evidenceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: evidence
+  annotations:
+    registrystack.org/package-digest: {{ .Values.evidence.bundle.expectedDigest | quote }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "evidence") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "evidence") | nindent 8 }}
+      annotations:
+        registrystack.org/package-digest: {{ .Values.evidence.bundle.expectedDigest | quote }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "registry-stack.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: stage-evidence-inputs
+          image: {{ include "registry-stack.image" .Values.staging.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              mkdir -p /work/runtime/private /work/secrets/private
+              cp /staging/runtime/runtime.yaml /work/runtime/private/runtime.yaml
+              for source in /staging/secrets/*; do
+                [ -f "$source" ] || continue
+                target="/work/secrets/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              chmod 0700 /work/runtime/private /work/secrets/private
+              chmod 0400 /work/runtime/private/runtime.yaml
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.staging.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-source
+              mountPath: /staging/runtime
+              readOnly: true
+            - name: runtime-secret-source
+              mountPath: /staging/secrets
+              readOnly: true
+            - name: runtime-private
+              mountPath: /work/runtime
+            - name: secret-private
+              mountPath: /work/secrets
+        - name: stage-transit-proxy-inputs
+          image: {{ include "registry-stack.image" .Values.staging.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              mkdir -p /work/config/private /work/secrets/private
+              cp /staging/config/proxy.hcl /work/config/private/proxy.hcl
+              for source in /staging/secrets/*; do
+                [ -f "$source" ] || continue
+                target="/work/secrets/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              chmod 0700 /work/config/private /work/secrets/private
+              chmod 0400 /work/config/private/proxy.hcl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: {{ .Values.evidence.transitProxy.securityContext.runAsUser }}
+            runAsGroup: {{ .Values.evidence.transitProxy.securityContext.runAsGroup }}
+          resources:
+            {{- toYaml .Values.staging.resources | nindent 12 }}
+          volumeMounts:
+            - name: proxy-config-source
+              mountPath: /staging/config
+              readOnly: true
+            - name: proxy-secret-source
+              mountPath: /staging/secrets
+              readOnly: true
+            - name: proxy-config-private
+              mountPath: /work/config
+            - name: proxy-secret-private
+              mountPath: /work/secrets
+      containers:
+        - name: evidence
+          image: {{ include "registry-stack.image" .Values.evidence.image | quote }}
+          imagePullPolicy: {{ .Values.evidence.image.pullPolicy }}
+          args:
+            - serve
+            - --runtime-config
+            - /etc/registry-evidence/runtime.yaml
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.evidence.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-private
+              mountPath: /etc/registry-evidence/runtime.yaml
+              subPath: private/runtime.yaml
+              readOnly: true
+            - name: secret-private
+              mountPath: /run/secrets/registry-evidence
+              subPath: private
+              readOnly: true
+            - name: bundle
+              mountPath: {{ .Values.evidence.bundle.mountPath }}
+              readOnly: true
+            {{- with .Values.evidence.runtimeInputs.existingClaim }}
+            - name: runtime-inputs
+              mountPath: {{ $.Values.evidence.runtimeInputs.mountPath }}
+              readOnly: true
+            {{- end }}
+            - name: audit
+              mountPath: {{ .Values.evidence.audit.mountPath }}
+            - name: authority
+              mountPath: {{ .Values.evidence.authority.mountPath }}
+              readOnly: true
+            - name: transit-socket
+              mountPath: /run/registry-evidence
+              readOnly: true
+        - name: transit-proxy
+          image: {{ include "registry-stack.image" .Values.evidence.transitProxy.image | quote }}
+          imagePullPolicy: {{ .Values.evidence.transitProxy.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.evidence.transitProxy.command | nindent 12 }}
+          {{- with .Values.evidence.transitProxy.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: {{ .Values.evidence.transitProxy.securityContext.runAsUser }}
+            runAsGroup: {{ .Values.evidence.transitProxy.securityContext.runAsGroup }}
+          resources:
+            {{- toYaml .Values.evidence.transitProxy.resources | nindent 12 }}
+          volumeMounts:
+            - name: proxy-config-private
+              mountPath: /etc/registry-evidence/transit-proxy
+              subPath: private
+              readOnly: true
+            - name: proxy-secret-private
+              mountPath: /run/secrets/registry-evidence-transit-proxy
+              subPath: private
+              readOnly: true
+            - name: transit-socket
+              mountPath: /run/registry-evidence
+      volumes:
+        - name: runtime-source
+          configMap:
+            name: {{ .Values.evidence.runtimeConfig.configMapName }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.evidence.runtimeConfig.key }}
+                path: runtime.yaml
+        - name: runtime-secret-source
+          secret:
+            secretName: {{ .Values.evidence.runtimeSecrets.secretName }}
+            defaultMode: 0444
+        - name: runtime-private
+          emptyDir:
+            medium: Memory
+        - name: secret-private
+          emptyDir:
+            medium: Memory
+        - name: bundle
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.bundle.existingClaim }}
+            readOnly: true
+        {{- with .Values.evidence.runtimeInputs.existingClaim }}
+        - name: runtime-inputs
+          persistentVolumeClaim:
+            claimName: {{ . }}
+            readOnly: true
+        {{- end }}
+        - name: audit
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.audit.existingClaim }}
+        - name: authority
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.authority.existingClaim }}
+            readOnly: true
+        - name: proxy-config-source
+          configMap:
+            name: {{ .Values.evidence.transitProxy.config.configMapName }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.evidence.transitProxy.config.key }}
+                path: proxy.hcl
+        - name: proxy-secret-source
+          secret:
+            secretName: {{ .Values.evidence.transitProxy.secrets.secretName }}
+            defaultMode: 0444
+        - name: proxy-config-private
+          emptyDir:
+            medium: Memory
+        - name: proxy-secret-private
+          emptyDir:
+            medium: Memory
+        - name: transit-socket
+          emptyDir:
+            medium: Memory
+      {{- with .Values.evidence.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.evidence.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.evidence.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,89 @@
+global:
+  seaweedfs:
+    createClusterRole: false
+    automountServiceAccountToken: false
+    imagePullPolicy: IfNotPresent
+    securityConfig:
+      jwtSigning:
+        # This protects the cross-pod S3 IAM gRPC path without requiring the
+        # chart's optional cert-manager-backed internal mTLS profile.
+        filerWrite: true
+
+master:
+  enabled: true
+  replicas: 1
+  imageOverride: "chrislusf/seaweedfs@sha256:ccad23e18639c8b98cee17e7100b95830a06077b56d8e5b006d6dcf8ec5e94a0"
+  metricsPort: 9327
+  data:
+    type: "persistentVolumeClaim"
+    size: "1Gi"
+    storageClass: "local-path"
+  logs:
+    type: "emptyDir"
+
+volume:
+  enabled: true
+  replicas: 1
+  imageOverride: "chrislusf/seaweedfs@sha256:ccad23e18639c8b98cee17e7100b95830a06077b56d8e5b006d6dcf8ec5e94a0"
+  metricsPort: 9327
+  resizeHook:
+    enabled: false
+  dataDirs:
+    - name: data
+      type: "persistentVolumeClaim"
+      size: "20Gi"
+      storageClass: "local-path"
+      maxVolumes: 0
+  logs:
+    type: "emptyDir"
+
+filer:
+  enabled: true
+  replicas: 1
+  imageOverride: "chrislusf/seaweedfs@sha256:ccad23e18639c8b98cee17e7100b95830a06077b56d8e5b006d6dcf8ec5e94a0"
+  metricsPort: 9327
+  data:
+    type: "persistentVolumeClaim"
+    size: "2Gi"
+    storageClass: "local-path"
+  logs:
+    type: "emptyDir"
+
+s3:
+  enabled: true
+  replicas: 1
+  imageOverride: "chrislusf/seaweedfs@sha256:ccad23e18639c8b98cee17e7100b95830a06077b56d8e5b006d6dcf8ec5e94a0"
+  enableAuth: true
+  existingConfigSecret: registry-seaweedfs-s3-config
+  lancePort: 0
+  metricsPort: 9327
+  logs:
+    type: "emptyDir"
+  extraEnvironmentVars:
+    BREG_S3_ACCESS_KEY_ID:
+      secretKeyRef:
+        name: registry-breg-s3
+        key: access-key-id
+    BREG_S3_SECRET_ACCESS_KEY:
+      secretKeyRef:
+        name: registry-breg-s3
+        key: secret-access-key
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+
+admin:
+  enabled: false
+
+worker:
+  enabled: false
+
+cosi:
+  enabled: false
+
+allInOne:
+  enabled: false
+
+networkPolicy:
+  enabled: true

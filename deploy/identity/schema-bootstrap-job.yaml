@@ -1,0 +1,154 @@
+# Run only after the upstream setup Job succeeds and the serving Deployment has
+# been scaled to zero. Upstream 1.0.1 requires this stateful one-shot for the
+# registry-schema/ output from `rstack identity generate thunderid`. Mount the
+# generated documents beside ThunderID's shipped bootstrap bundle so this uses
+# the same supported setup path as the upstream chart.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: thunderid-registry-schema
+  namespace: registry-identity-qualification
+  annotations:
+    registry.stack/bootstrap-requires-serving-replicas: "0"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thunderid-registry-schema
+        app.kubernetes.io/part-of: registry-identity-qualification
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-postgres
+          image: ghcr.io/thunder-id/thunderid@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-ec"]
+          args:
+            - |
+              set -euo pipefail
+              for _attempt in {1..60}; do
+                if exec 3<>/dev/tcp/registry-postgres.registry-k3s-proof.svc.cluster.local/5432; then
+                  exec 3>&-
+                  exit 0
+                fi
+                sleep 1
+              done
+              printf 'PostgreSQL did not accept a connection within 60 seconds.\n' >&2
+              exit 1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+      containers:
+        - name: bootstrap
+          image: ghcr.io/thunder-id/thunderid@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+          imagePullPolicy: IfNotPresent
+          command: ["./setup.sh"]
+          env:
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: registry-identity-admin
+                  key: username
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: registry-identity-admin
+                  key: password
+            - name: DB_CONFIG_PASSWORD
+              valueFrom: &postgresPassword
+                secretKeyRef:
+                  name: registry-identity-postgres
+                  key: password
+            - name: DB_RUNTIME_TRANSIENT_PASSWORD
+              valueFrom: *postgresPassword
+            - name: DB_ENTITY_PASSWORD
+              valueFrom: *postgresPassword
+            - name: DB_RUNTIME_PERSISTENT_PASSWORD
+              valueFrom: *postgresPassword
+            - name: PGSSLROOTCERT
+              value: /opt/thunderid/config/resources/postgres-ca.pem
+            - name: APP_KIT_CLIENT_SECRET
+              valueFrom: &appKitSecret
+                secretKeyRef:
+                  name: registry-identity-fixture-credentials
+                  key: app-kit-client-secret
+            - name: QUALIFICATION_OFFICER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: registry-identity-fixture-credentials
+                  key: qualification-officer-password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: deployment
+              mountPath: /opt/thunderid/deployment.yaml
+              subPath: deployment.yaml
+              readOnly: true
+            - name: certs
+              mountPath: /opt/thunderid/config/certs
+            - name: secrets
+              mountPath: /opt/thunderid/config/secrets
+            - name: material
+              mountPath: /opt/thunderid/config/resources
+              readOnly: true
+            - name: agent-type
+              mountPath: /opt/thunderid/bootstrap/70-registry-agent-type.yaml
+              subPath: agent-type.yaml
+              readOnly: true
+            - name: agents
+              mountPath: /opt/thunderid/bootstrap/80-registry-agent.yaml
+              subPath: e5800b87-0f79-73df-88c1-1216b97768ba.yaml
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: deployment
+          configMap:
+            name: thunderid-config-map
+        - name: certs
+          persistentVolumeClaim:
+            claimName: thunderid-certs-pvc
+        - name: secrets
+          persistentVolumeClaim:
+            claimName: thunderid-secrets-pvc
+        - name: material
+          configMap:
+            name: registry-identity-material
+        - name: agent-type
+          secret:
+            secretName: registry-identity-agent-type
+        - name: agents
+          secret:
+            secretName: registry-identity-agents

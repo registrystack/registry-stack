@@ -1,0 +1,155 @@
+{{- if and .Values.breg.enabled .Values.breg.serve }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "registry-stack.bregName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: breg
+  annotations:
+    registrystack.org/package-digest: {{ .Values.breg.package.expectedDigest | quote }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "breg") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "breg") | nindent 8 }}
+      annotations:
+        registrystack.org/package-digest: {{ .Values.breg.package.expectedDigest | quote }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "registry-stack.podSecurityContext" . | nindent 8 }}
+      {{- include "registry-stack.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.breg.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: stage-runtime-inputs
+          image: {{ include "registry-stack.image" .Values.staging.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              mkdir -p /work/runtime/private /work/secrets/private
+              cp /staging/runtime/runtime.yaml /work/runtime/private/runtime.yaml
+              for source in /staging/secrets/*; do
+                [ -f "$source" ] || continue
+                target="/work/secrets/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              chmod 0700 /work/runtime/private /work/secrets/private
+              chmod 0400 /work/runtime/private/runtime.yaml
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.staging.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-source
+              mountPath: /staging/runtime
+              readOnly: true
+            - name: runtime-secret-source
+              mountPath: /staging/secrets
+              readOnly: true
+            - name: runtime-private
+              mountPath: /work/runtime
+            - name: secret-private
+              mountPath: /work/secrets
+      containers:
+        - name: breg
+          image: {{ include "registry-stack.image" .Values.breg.image | quote }}
+          imagePullPolicy: {{ .Values.breg.image.pullPolicy }}
+          args:
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          {{- with .Values.breg.caBundleKey }}
+          env:
+            - name: SSL_CERT_FILE
+              value: {{ printf "/etc/breg-secrets/%s" . | quote }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.breg.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-private
+              mountPath: /etc/breg-runtime
+              subPath: private
+              readOnly: true
+            - name: secret-private
+              mountPath: /etc/breg-secrets
+              subPath: private
+              readOnly: true
+            - name: package
+              mountPath: {{ .Values.breg.package.mountPath }}
+              readOnly: true
+            - name: audit
+              mountPath: {{ .Values.breg.audit.mountPath }}
+      volumes:
+        - name: runtime-source
+          configMap:
+            name: {{ .Values.breg.runtimeConfig.configMapName }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.breg.runtimeConfig.key }}
+                path: runtime.yaml
+        - name: runtime-secret-source
+          secret:
+            secretName: {{ .Values.breg.runtimeSecrets.secretName }}
+            defaultMode: 0444
+        - name: runtime-private
+          emptyDir:
+            medium: Memory
+        - name: secret-private
+          emptyDir:
+            medium: Memory
+        - name: package
+          persistentVolumeClaim:
+            claimName: {{ .Values.breg.package.existingClaim }}
+            readOnly: true
+        - name: audit
+          persistentVolumeClaim:
+            claimName: {{ .Values.breg.audit.existingClaim }}
+      {{- with .Values.breg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.breg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.breg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

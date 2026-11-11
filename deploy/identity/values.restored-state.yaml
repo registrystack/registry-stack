@@ -1,0 +1,6 @@
+# Retained and restored ThunderID state already contains built-in and Registry
+# Stack resources. The chart setup Job is a fresh-state operation only.
+setup:
+  enabled: false
+
+restoreExistingState: true

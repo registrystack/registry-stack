@@ -1,0 +1,9 @@
+# Create the chart-owned claims without starting ThunderID or rerunning its
+# stateful setup against restored PostgreSQL data.
+deployment:
+  replicaCount: 0
+
+setup:
+  enabled: false
+
+restoreExistingState: true

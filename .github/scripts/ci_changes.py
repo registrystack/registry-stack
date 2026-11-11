@@ -1594,6 +1594,7 @@ def classify(
 
     outputs = {
         "full_sweep": full_sweep,
+        "deployment": complete or any(path.startswith("deploy/") for path in paths),
         "rust": bool(affected),
         "rust_matrix": {"include": matrix},
         "rust_packages": sorted(affected),

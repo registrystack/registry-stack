@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Capture, archive and recover the reference PostgreSQL installation state."""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+DATABASE_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
+SNAPSHOT_ID = re.compile(r"[0-9a-f]{8,64}")
+
+
+class BundleError(Exception):
+    """A refused capture, snapshot or restore."""
+
+
+def file_hashes(root):
+    if not root.is_dir() or root.is_symlink():
+        raise BundleError("The payload must be a real directory.")
+    hashes = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise BundleError(f"The backup payload contains a symbolic link at {relative}.")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise BundleError(f"The backup payload contains a special file at {relative}.")
+        with path.open("rb") as data:
+            hashes[relative] = hashlib.file_digest(data, "sha256").hexdigest()
+    return hashes
+
+
+def verify_bundle(root):
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise BundleError("A complete backup needs a regular manifest.json.")
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except ValueError as error:
+        raise BundleError("The backup manifest is unreadable.") from error
+    if manifest.get("version") != 1 or manifest.get("files") != file_hashes(root / "payload"):
+        raise BundleError("The backup files differ from the recorded manifest.")
+    return manifest
+
+
+def checked_run(argv, label, *, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE):
+    result = subprocess.run(argv, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE, check=False)
+    if result.returncode:
+        raise BundleError(f"{label} failed with exit {result.returncode}. Inspect it in the private operator environment.")
+    return result.stdout
+
+
+def pg_command(args):
+    return [
+        args.kubectl_bin, "--context", args.kube_context, "--namespace", args.namespace,
+        "exec", "-i", args.pod, "-c", args.container, "--",
+    ]
+
+
+def valid_database(name):
+    if not DATABASE_NAME.fullmatch(name):
+        raise BundleError("Supply a lowercase PostgreSQL database name.")
+    return name
+
+
+def capture(args):
+    captured_at = datetime.now(timezone.utc).isoformat()
+    if len(set(args.database)) != len(args.database):
+        raise BundleError("Name each database once.")
+    databases = [valid_database(name) for name in args.database]
+    status = json.loads(args.status_file.read_text())
+    status = status.get("database", status)
+    digest = status.get("activePackageDigest", "")
+    if (
+        status.get("ok") is not True or status.get("command") != "status"
+        or status.get("roleMode") != "split" or status.get("maintenanceStatus") != "ready"
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+        or not status.get("databaseId") or not status.get("activationId")
+    ):
+        raise BundleError("Capture requires the current ready BReg status report.")
+    if not args.files.is_dir() or args.files.is_symlink():
+        raise BundleError("Supply the reviewed installation files in a private directory.")
+    if args.output.resolve().is_relative_to(args.files.resolve()):
+        raise BundleError("Put the new backup outside the directory being copied.")
+    args.output.mkdir(mode=0o700)
+    payload = args.output / "payload"
+    dumps = payload / "databases"
+    dumps.mkdir(parents=True, mode=0o700)
+    shutil.copytree(args.files, payload / "installation", symlinks=True)
+    file_hashes(payload / "installation")
+    for database in databases:
+        with (dumps / f"{database}.dump").open("xb") as output:
+            checked_run([
+                *pg_command(args), "pg_dump", "--format=custom", "--no-password",
+                "--username=postgres", f"--dbname={database}",
+            ], f"Dump {database}", stdout=output)
+    manifest = {
+        "version": 1, "namespace": args.namespace, "release": args.release,
+        "databaseId": status["databaseId"], "packageDigest": digest, "activationId": status["activationId"],
+        "capturedAt": captured_at, "databases": databases, "files": file_hashes(payload),
+    }
+    with (args.output / "manifest.json").open("x") as output:
+        json.dump(manifest, output, indent=2)
+        output.write("\n")
+    print(f"Captured {len(databases)} databases and the reviewed files.")
+
+
+def snapshot(args):
+    manifest = verify_bundle(args.bundle)
+    capture_timestamp(manifest)
+    manifest_hash = hashlib.sha256((args.bundle / "manifest.json").read_bytes()).hexdigest()
+    result = checked_run([
+        args.restic_bin, "backup", "--json", "--tag", "registry-stack", str(args.bundle.resolve()),
+    ], "Write the encrypted snapshot")
+    summaries = [json.loads(line) for line in result.splitlines()]
+    ids = [row.get("snapshot_id", "") for row in summaries if row.get("message_type") == "summary"]
+    if len(ids) != 1 or not SNAPSHOT_ID.fullmatch(ids[0]):
+        raise BundleError("Restic did not return one snapshot identifier.")
+    _, archived = archived_manifest(args.restic_bin, ids[0])
+    if hashlib.sha256(archived).hexdigest() != manifest_hash:
+        raise BundleError("The archived manifest digest differs from the captured bundle.")
+    receipt = {
+        key: manifest[key] for key in ("namespace", "release", "databaseId", "packageDigest", "activationId", "capturedAt")
+    }
+    receipt.update({"snapshotId": ids[0], "manifestSha256": manifest_hash})
+    with args.receipt.open("x") as output:
+        json.dump(receipt, output, indent=2)
+        output.write("\n")
+    print(f"Verified encrypted snapshot {ids[0]}.")
+
+
+def verify_snapshot_age(metadata, now, maximum_age):
+    try:
+        created = datetime.fromisoformat(metadata["time"])
+    except (KeyError, ValueError, TypeError) as error:
+        raise BundleError("Restic did not report a valid snapshot timestamp.") from error
+    if created.tzinfo is None:
+        raise BundleError("Restic did not report the snapshot time zone.")
+    if not timedelta(0) <= now - created <= maximum_age:
+        raise BundleError("The encrypted snapshot is outside the configured backup window.")
+
+
+def capture_timestamp(manifest):
+    try:
+        captured = datetime.fromisoformat(manifest["capturedAt"])
+    except (KeyError, ValueError, TypeError) as error:
+        raise BundleError("The bundle needs a recorded capture time.") from error
+    if captured.tzinfo is None:
+        raise BundleError("The bundle capture time needs a time zone.")
+    return captured
+
+
+def verify_capture_age(manifest, now, maximum_age):
+    if not timedelta(0) <= now - capture_timestamp(manifest) <= maximum_age:
+        raise BundleError("The database capture is outside the configured backup window.")
+
+
+def verify_archived_manifest(archived, receipt, now, maximum_age):
+    if hashlib.sha256(archived).hexdigest() != receipt.get("manifestSha256"):
+        raise BundleError("The archived manifest digest differs from the backup receipt.")
+    manifest = json.loads(archived)
+    fields = ("namespace", "release", "databaseId", "packageDigest", "activationId", "capturedAt")
+    if any(manifest.get(field) != receipt.get(field) for field in fields):
+        raise BundleError("The archived manifest differs from the backup receipt.")
+    verify_capture_age(manifest, now, maximum_age)
+
+
+def archived_manifest(restic, snapshot_id):
+    metadata = json.loads(checked_run([restic, "cat", "snapshot", snapshot_id], "Read the encrypted snapshot"))
+    paths = metadata.get("paths", [])
+    if len(paths) != 1 or not Path(paths[0]).is_absolute():
+        raise BundleError("The backup snapshot must identify exactly one bundle path.")
+    manifest = checked_run([restic, "dump", snapshot_id, str(Path(paths[0]) / "manifest.json")], "Read the archived manifest")
+    return metadata, manifest
+
+
+def check_snapshot(args):
+    receipt = json.loads(args.receipt.read_text())
+    snapshot_id = receipt.get("snapshotId", "")
+    if not SNAPSHOT_ID.fullmatch(snapshot_id) or args.max_age_hours < 1:
+        raise BundleError("Supply a valid snapshot receipt and a positive backup window.")
+    metadata, manifest = archived_manifest(args.restic_bin, snapshot_id)
+    now = datetime.now(timezone.utc)
+    maximum_age = timedelta(hours=args.max_age_hours)
+    verify_snapshot_age(metadata, now, maximum_age)
+    verify_archived_manifest(manifest, receipt, now, maximum_age)
+    print(f"Encrypted snapshot {snapshot_id} is within the backup window.")
+
+
+def restore_database(args):
+    manifest = verify_bundle(args.bundle)
+    source = valid_database(args.database)
+    target = valid_database(args.target)
+    if source not in manifest.get("databases", []):
+        raise BundleError("The snapshot has no dump for the requested database.")
+    user_objects = checked_run([
+        *pg_command(args), "psql", "-XAt", "--no-password", "--username=postgres", f"--dbname={target}",
+        "-v", "ON_ERROR_STOP=1", "-c",
+        "SELECT (SELECT count(*) FROM pg_namespace WHERE nspname NOT IN "
+        "('pg_catalog','pg_toast','public','information_schema') AND nspname NOT LIKE 'pg_temp_%') "
+        "+ (SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace) "
+        "+ (SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql');",
+    ], f"Check clean target {target}")
+    if user_objects.strip() != b"0":
+        raise BundleError("The restore target must be a clean database. Preserve the original for reconciliation.")
+    with (args.bundle / "payload" / "databases" / f"{source}.dump").open("rb") as dump:
+        checked_run([
+            *pg_command(args), "pg_restore", "--single-transaction", "--exit-on-error",
+            "--no-password", "--username=postgres", f"--dbname={target}",
+        ], f"Restore {target}", stdin=dump)
+    print(f"Restored {source} into clean database {target}.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="action", required=True)
+    capture_command = commands.add_parser("capture", help="Dump PostgreSQL and copy private installation files.")
+    restore_command = commands.add_parser("restore-database", help="Restore one verified dump into a clean database.")
+    for command in (capture_command, restore_command):
+        command.add_argument("--kube-context", required=True)
+        command.add_argument("--namespace", required=True)
+        command.add_argument("--pod", default="registry-postgres-0")
+        command.add_argument("--container", default="postgres")
+        command.add_argument("--kubectl-bin", default="kubectl")
+    capture_command.add_argument("--release", required=True)
+    capture_command.add_argument("--database", action="append", required=True)
+    capture_command.add_argument("--status-file", type=Path, required=True)
+    capture_command.add_argument("--files", type=Path, required=True)
+    capture_command.add_argument("--output", type=Path, required=True)
+    restore_command.add_argument("--bundle", type=Path, required=True)
+    restore_command.add_argument("--database", required=True)
+    restore_command.add_argument("--target", required=True)
+    snapshot_command = commands.add_parser("snapshot", help="Archive the bundle to the configured Restic repository.")
+    snapshot_command.add_argument("--bundle", type=Path, required=True)
+    snapshot_command.add_argument("--receipt", type=Path, required=True)
+    snapshot_command.add_argument("--restic-bin", default="restic")
+    check_command = commands.add_parser("check-snapshot", help="Check the receipt against the repository and backup window.")
+    check_command.add_argument("--receipt", type=Path, required=True)
+    check_command.add_argument("--max-age-hours", type=int, required=True)
+    check_command.add_argument("--restic-bin", default="restic")
+    verify_command = commands.add_parser("verify", help="Verify the manifest of a retrieved bundle.")
+    verify_command.add_argument("--bundle", type=Path, required=True)
+    args = parser.parse_args()
+    os.umask(0o077)
+    try:
+        if args.action == "capture":
+            capture(args)
+        elif args.action == "snapshot":
+            snapshot(args)
+        elif args.action == "check-snapshot":
+            check_snapshot(args)
+        elif args.action == "restore-database":
+            restore_database(args)
+        else:
+            manifest = verify_bundle(args.bundle)
+            print(f"Verified {len(manifest['files'])} backup files.")
+    except (BundleError, OSError, ValueError, KeyError, TypeError) as error:
+        parser.exit(1, f"state-bundle: {error}\n")
+
+
+if __name__ == "__main__":
+    main()

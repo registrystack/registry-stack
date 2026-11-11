@@ -1,0 +1,18 @@
+{
+  "schema": "registry.seaweedfs-chart-lock/v1",
+  "chart": {
+    "reference": "https://seaweedfs.github.io/seaweedfs/helm/seaweedfs",
+    "version": "4.53.0",
+    "contentDigest": "sha256:778f079cfbdf026a1a523569d385816d00df51ac049b1383db0cfaf6a094656c"
+  },
+  "image": {
+    "reference": "chrislusf/seaweedfs",
+    "version": "4.53",
+    "digest": "sha256:ccad23e18639c8b98cee17e7100b95830a06077b56d8e5b006d6dcf8ec5e94a0"
+  },
+  "source": {
+    "repository": "https://github.com/seaweedfs/seaweedfs",
+    "tag": "4.53",
+    "commit": "4ab66fb76da83700739f5839e62fcaf15fb7d02a"
+  }
+}

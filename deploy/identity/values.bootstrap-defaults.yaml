@@ -1,0 +1,31 @@
+# First-stage override for a fresh external PostgreSQL database. ThunderID's
+# built-in authentication flow must exist before Registry Stack's declarative
+# App Kit application can reference it.
+deployment:
+  replicaCount: 0
+
+configuration:
+  stores:
+    application: mutable
+    identity_provider: mutable
+    layout: mutable
+    resource: mutable
+    role: mutable
+    theme: mutable
+
+declarativeResources:
+  enabled: false
+
+setup:
+  extraVolumeMounts:
+    - name: postgres-ca
+      mountPath: /opt/thunderid/config/resources/postgres-ca.pem
+      subPath: postgres-ca.pem
+      readOnly: true
+  extraVolumes:
+    - name: postgres-ca
+      configMap:
+        name: registry-proof-postgres-ca
+        items:
+          - key: postgres-ca.pem
+            path: postgres-ca.pem

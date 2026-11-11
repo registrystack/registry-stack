@@ -1,0 +1,48 @@
+{
+  "staging": {
+    "image": {
+      "repository": "docker.io/library/busybox",
+      "digest": "sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec"
+    }
+  },
+  "breg": {
+    "enabled": true,
+    "serve": true,
+    "image": {
+      "repository": "ghcr.io/registrystack/breg",
+      "digest": "sha256:4cb370eb6c7e5c730f018b9e91dd55ad73339da7f6384f606fb963838e8b3cbc"
+    },
+    "nodeSelector": {"kubernetes.io/arch": "amd64"},
+    "runtimeConfig": {"configMapName": "directory-runtime-v1"},
+    "runtimeSecrets": {"secretName": "directory-runtime-v1"},
+    "migrationSecrets": {"secretName": "directory-migration-v1"},
+    "package": {
+      "existingClaim": "directory-package-v1",
+      "expectedDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "audit": {"existingClaim": "directory-audit"},
+    "ingress": {
+      "enabled": true,
+      "className": "traefik",
+      "host": "directory.example.org",
+      "tls": {"secretName": "directory-tls"}
+    },
+    "networkPolicy": {
+      "ingress": [
+        {
+          "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
+          "podSelector": {"matchLabels": {"app.kubernetes.io/name": "traefik"}}
+        }
+      ],
+      "dependencyEgress": [
+        {
+          "to": {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "directory"}},
+            "podSelector": {"matchLabels": {"app.kubernetes.io/name": "registry-postgres"}}
+          },
+          "ports": [{"port": 5432, "protocol": "TCP"}]
+        }
+      ]
+    }
+  }
+}

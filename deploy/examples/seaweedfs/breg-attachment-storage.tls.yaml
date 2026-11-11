@@ -1,0 +1,9 @@
+attachmentStorage:
+  type: s3
+  url: https://storage.registry.example.gov
+  bucket: registry-breg-attachments
+  region: us-east-1
+  accessKeyIdRef: secret:file/s3-access-key-id
+  secretAccessKeyRef: secret:file/s3-secret-access-key
+  caBundleRef: secret:file/s3-ca.pem
+  attemptTimeoutMilliseconds: 10000

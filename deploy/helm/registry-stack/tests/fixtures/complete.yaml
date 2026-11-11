@@ -1,0 +1,195 @@
+staging:
+  image:
+    repository: docker.io/library/busybox
+    digest: sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+
+breg:
+  enabled: true
+  serve: true
+  image:
+    repository: ghcr.io/registrystack/breg
+    digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  runtimeConfig:
+    configMapName: breg-runtime
+    key: runtime.yaml
+  runtimeSecrets:
+    secretName: breg-runtime-inputs
+  migrationSecrets:
+    secretName: breg-migration-inputs
+  hostAliases:
+    - ip: 192.0.2.11
+      hostnames: [issuer.test, source.test]
+  package:
+    existingClaim: breg-package
+    expectedDigest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  audit:
+    existingClaim: breg-audit
+  ingress:
+    enabled: true
+    className: traefik
+    host: api.registry.example
+    path: /
+    tls:
+      secretName: breg-api-tls
+  networkPolicy:
+    ingress:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-system
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: trusted-extension
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/part-of: registry-extension
+    dependencyEgress:
+      - to:
+          ipBlock:
+            cidr: 192.0.2.0/24
+        ports:
+          - protocol: TCP
+            port: 5432
+
+appKit:
+  enabled: true
+  serve: true
+  image:
+    repository: registry.example/app-kit
+    digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  config:
+    configMapName: app-kit-config
+  secrets:
+    secretName: app-kit-secrets
+  hostAliases:
+    - ip: 192.0.2.12
+      hostnames: [api.test]
+  ingress:
+    enabled: true
+    className: traefik
+    host: registry.example
+    path: /
+    tls:
+      secretName: app-kit-tls
+  networkPolicy:
+    ingress:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-system
+    dependencyEgress:
+      - to:
+          ipBlock:
+            cidr: 192.0.2.10/32
+        ports:
+          - protocol: TCP
+            port: 8080
+
+casework:
+  enabled: true
+  serve: true
+  image:
+    repository: ghcr.io/registrystack/casework
+    digest: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  runtimeConfig:
+    configMapName: casework-runtime
+    key: runtime.yaml
+  runtimeSecrets:
+    secretName: casework-runtime-inputs
+  migrationSecrets:
+    secretName: casework-migration-inputs
+  package:
+    existingClaim: casework-package
+    expectedDigest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  audit:
+    existingClaim: casework-audit
+  ingress:
+    enabled: true
+    className: traefik
+    host: casework.registry.example
+    path: /
+    tls:
+      secretName: casework-api-tls
+  networkPolicy:
+    ingress:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-system
+    dependencyEgress:
+      - to:
+          ipBlock:
+            cidr: 198.51.100.0/24
+        ports:
+          - protocol: TCP
+            port: 5432
+          - protocol: TCP
+            port: 443
+    bregContextEgress:
+      - to:
+          ipBlock:
+            cidr: 192.0.2.10/32
+        ports:
+          - protocol: TCP
+            port: 8080
+
+evidence:
+  enabled: true
+  serve: true
+  image:
+    repository: ghcr.io/registrystack/evidence
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  runtimeConfig:
+    configMapName: evidence-runtime
+    key: runtime.yaml
+  runtimeSecrets:
+    secretName: evidence-runtime-inputs
+  activationSecrets:
+    secretName: evidence-activation-inputs
+  runtimeInputs:
+    existingClaim: evidence-runtime-files
+  bundle:
+    existingClaim: evidence-bundle
+    expectedDigest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+  compiledAuthority:
+    configMapName: evidence-compiled-authority
+    key: compiled-authority.yaml
+  audit:
+    existingClaim: evidence-audit
+  authority:
+    existingClaim: evidence-authority
+  transitProxy:
+    enabled: true
+    image:
+      repository: hashicorp/vault
+      digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+    command: [vault]
+    args: [agent, -config=/etc/registry-evidence/transit-proxy/proxy.hcl]
+    config:
+      configMapName: evidence-transit-proxy
+      key: proxy.hcl
+    secrets:
+      secretName: evidence-transit-proxy-inputs
+  ingress:
+    enabled: true
+    className: traefik
+    host: evidence.registry.example
+    path: /
+    tls:
+      secretName: evidence-api-tls
+  networkPolicy:
+    ingress:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-system
+    dependencyEgress:
+      - to:
+          ipBlock:
+            cidr: 203.0.113.0/25
+        ports:
+          - protocol: TCP
+            port: 443
+    transitEgress:
+      - to:
+          ipBlock:
+            cidr: 203.0.113.200/32
+        ports:
+          - protocol: TCP
+            port: 8200

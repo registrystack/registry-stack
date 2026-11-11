@@ -1,0 +1,7 @@
+{
+  "extensions": {
+    "endpoints": {
+      "intake-status": {"path": "/extensions/intake-status"}
+    }
+  }
+}

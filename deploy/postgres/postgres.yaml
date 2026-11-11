@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-postgres
+data:
+  pg_hba.conf: |
+    local   all   postgres                  peer
+    local   all   all                       reject
+    hostssl all   postgres 0.0.0.0/0        reject
+    hostssl all   postgres ::/0             reject
+    hostssl all   all      0.0.0.0/0        scram-sha-256
+    hostssl all   all      ::/0             scram-sha-256
+    host    all   all      0.0.0.0/0        reject
+    host    all   all      ::/0             reject
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-postgres
+spec:
+  selector:
+    app.kubernetes.io/name: registry-postgres
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: registry-postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: registry-postgres
+spec:
+  serviceName: registry-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registry-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: registry-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: tls
+          image: docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+          command: [sh, -ec]
+          args:
+            - |
+              umask 077
+              mkdir -p /output/tls
+              cat /input/tls.crt > /output/tls/server.crt
+              cat /input/tls.key > /output/tls/server.key
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {memory: 32Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tls-source
+              mountPath: /input
+              readOnly: true
+            - name: tls
+              mountPath: /output
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+          args:
+            - postgres
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/run/registry-tls/server.crt
+            - -c
+            - ssl_key_file=/run/registry-tls/server.key
+            - -c
+            - hba_file=/etc/registry-postgres/pg_hba.conf
+            - -c
+            - password_encryption=scram-sha-256
+          env:
+            - {name: PGDATA, value: /data/pgdata}
+            - {name: POSTGRES_PASSWORD_FILE, value: /run/postgres-init/password}
+            - {name: POSTGRES_INITDB_ARGS, value: "--auth-local=peer --auth-host=scram-sha-256"}
+          ports:
+            - {name: postgres, containerPort: 5432}
+          startupProbe:
+            exec:
+              command: [pg_isready, -q, -h, /var/run/postgresql, -U, postgres]
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [pg_isready, -q, -h, /var/run/postgresql, -U, postgres]
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+            - {name: socket, mountPath: /var/run/postgresql}
+            - {name: tls, mountPath: /run/registry-tls, subPath: tls, readOnly: true}
+            - {name: bootstrap, mountPath: /run/postgres-init, readOnly: true}
+            - {name: config, mountPath: /etc/registry-postgres, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: registry-postgres-data
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}
+        - name: socket
+          emptyDir: {sizeLimit: 8Mi}
+        - name: tls
+          emptyDir: {medium: Memory, sizeLimit: 4Mi}
+        - name: tls-source
+          secret:
+            secretName: registry-postgres-tls
+            defaultMode: 0444
+        - name: bootstrap
+          secret:
+            secretName: registry-postgres-bootstrap
+            defaultMode: 0444
+        - name: config
+          configMap:
+            name: registry-postgres
