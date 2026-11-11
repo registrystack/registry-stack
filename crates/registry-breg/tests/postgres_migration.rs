@@ -4481,8 +4481,11 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("flip scenario initial package activates");
+    // Each value seals to an envelope longer than 57 bytes, whose base64
+    // PostgreSQL breaks across lines, so the journal capture of every sealed
+    // chunk decodes a wrapped projection.
     let secrets = (0..5)
-        .map(|index| format!("flip-secret-{index}"))
+        .map(|index| format!("flip-secret-{index}-{}", "long-envelope-".repeat(6)))
         .collect::<Vec<_>>();
     seed_flip_rows(&database, &prior, &secrets, true).await;
 
