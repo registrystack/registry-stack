@@ -3075,7 +3075,13 @@ jobs:
           cache-dependency-path: docs/site/package-lock.json
 
       - name: Install docs shell dependency
+        shell: bash
         run: |
+          set -euo pipefail
+          # Use the Ubuntu archive if the runner's Azure mirror cannot resolve.
+          if [[ -f /etc/apt/apt-mirrors.txt ]] && ! timeout 10 getent ahosts azure.archive.ubuntu.com >/dev/null; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          fi
           sudo apt-get update
           sudo apt-get install --yes zsh
 
