@@ -27,9 +27,14 @@ product authoring tools. The check works with the database offline. With
 Use `--deny-warnings` to refuse any unaccepted warning.
 
 Start reports the product URLs and the journey result.
-A failed journey exits 1 and includes the live run ID so you can inspect the
-result and stop the run. Startup failures clean up or report the run ID if
-cleanup is pending. The TTL starts at readiness and defaults to 30 minutes.
+A failed journey still produces the normal `registry.rstack.dev.v1` run report:
+the report has `status` `ready`, `journey.result` `failed`, the failed step and
+its reason, and the live run ID. `start` exits 1, but the supervisor and
+products keep running. Use `status` to repeat the report, inspect the products
+and logs, and then use `stop` to release the run. This differs from a startup
+failure, which produces a `registry.rstack.error.v1` error report and cleans up,
+or reports the run ID if cleanup is pending. The TTL starts at readiness and
+defaults to 30 minutes.
 Supply one whole-number value from `1s` to `24h` with an `s`, `m`, or `h` suffix.
 
 The [licensing example](examples/licensing/dev.yaml) creates an application in
@@ -49,6 +54,8 @@ Superuser is not needed for a non-spatial run. The runner sets
 `createrole_self_grant` on its own sessions, so you do not configure it. The
 administrator also installs `btree_gist`, which PostgreSQL treats as a trusted
 extension.
+The runner reads `pg_catalog.pg_control_system()` to identify the cluster for
+recovery. PostgreSQL allows this function by default.
 
 The administrator URL always carries a password. Set it through
 `RSTACK_DEV_DATABASE_URL`, because `--database-url` is visible to other local
@@ -257,9 +264,9 @@ and the error names that path. Delete kept logs yourself.
 
 If PostgreSQL becomes unavailable during cleanup, the supervisor retries with
 backoff for up to 30 minutes. It then writes `cleanup-pending.json` in the run
-directory, and `status` reports `cleanup-pending` with the remaining databases,
-roles and processes. If the supervisor is lost, `stop` and `status` report the
-run directory, the process groups, and the exact database and role names.
+directory. If the supervisor is lost, the run's process guards stop the product
+runtimes and any product tool that was still running. `stop` and `status` report
+the run directory, the recorded process groups, and the database and role names.
 
 Release a run whose supervisor is gone with:
 
@@ -267,38 +274,41 @@ Release a run whose supervisor is gone with:
 rstack dev stop RUN_ID --recover [--database-url URL]
 ```
 
-`--database-url` defaults to `RSTACK_DEV_DATABASE_URL`, as for `start`, and
-the URL needs the same administrator rights. `--recover` first checks
-everything it needs, then acts: it refuses a run whose supervisor is still
-running (use plain `stop`), stops each recorded process group, drops the
-databases and roles, and removes the run directory. It signals a process group
-only while the group leader's start time equals the one recorded when the run
-started. If the recorded ID now belongs to another process, `--recover` leaves
-that process running and lists the group under `skipped_process_groups` in the
-report. If a start time was not recorded and the leader is still alive,
-`--recover` refuses and signals nothing. When it cannot finish, the error
-names the reason and lists the run directory, process groups, databases and
-roles to release by hand. Running it again after a partial failure is safe.
+Use plain `stop` while the supervisor is still running. For recovery, use an
+administrator URL for the same PostgreSQL cluster and maintenance database used
+at startup, with the same administrator rights. `--database-url` defaults to
+`RSTACK_DEV_DATABASE_URL`, as for `start`. Recovery checks the recorded cluster
+identifier and maintenance database before dropping any resources. It waits for
+the process guards to finish, then drops the databases and roles and removes
+the run directory. If any step fails, the report gives the reason and the
+resources you can check before retrying.
+For runs from an older development build without recovery metadata, use the
+manual cleanup steps below.
 
 A successful recovery reports `status` `stopped` and a `recovered` object with
-`stopped_process_groups`, `skipped_process_groups` and `databases_and_roles`.
+`stopped_process_groups` and `databases_and_roles`.
 
-To release the resources by hand instead, in this order:
+If you need to finish cleanup by hand, do it in this order:
 
-1. Stop each listed process group, for example `kill -TERM -PGID`.
-2. As the administrator, run `DROP DATABASE IF EXISTS "NAME" WITH (FORCE)` for
-   each listed database.
-3. As the administrator, run `DROP ROLE IF EXISTS "NAME"` for each listed role,
-   including a `breg_bbox_*` role from a spatial run.
+1. Verify which product processes still belong to the run and stop those
+   groups. Use the run's configuration paths and process details to establish
+   ownership before signaling a group.
+2. Connect to the original PostgreSQL cluster as the administrator. Run
+   `DROP DATABASE IF EXISTS "NAME" WITH (FORCE)` for each listed database.
+3. Run `DROP ROLE IF EXISTS "NAME"` for each listed role, including a
+   `breg_bbox_*` role from a spatial run.
 4. Remove the run directory. It holds the run's development field-encryption
    key when `field_encryption_key` is listed.
 
 ### Errors and limitations
 
-With `--json`, every refusal or failure of `rstack dev` start, status, token
-and stop prints one JSON object on standard output, validated by
+With `--json`, a refusal or startup failure from `rstack dev` start, status,
+token or stop prints one JSON object on standard output, validated by
 `schemas/rstack-dev-error.v1.schema.json`. The launcher prints the same object
 for failures before the helper starts, such as a missing component.
+When a journey assertion fails, `start` exits 1 and prints the regular
+`registry.rstack.dev.v1` run report with `status` `ready` and
+`journey.result` `failed`. The run remains available for inspection.
 
 - `schema_version` is `registry.rstack.error.v1` and `status` is `refused`.
 - `error.class` is `domain` (exit 1: the request, the project, the plan or the

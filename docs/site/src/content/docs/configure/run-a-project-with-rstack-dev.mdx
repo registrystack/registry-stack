@@ -39,14 +39,17 @@ install `casework` the same way.
 rstack install breg casework
 ```
 
-Check that the commands resolve before you continue:
+Check the selected installation before you continue:
 
 ```sh test-skip="needs the installed release"
-rstack dev --help
+rstack components list
 ```
 
-Success is the list of `check`, `start`, `status`, `token` and `stop`. If `rstack` is missing, run
-`rstack doctor`; if a component is missing, `start` names the `rstack install` command to run.
+Success is a `breg` line and a `casework` line that each say `installed`. `available` means that the
+selected release provides the component but it is not installed, so run the `rstack install`
+command again. `unavailable` means that the selected release does not provide the component for
+your platform. If your shell cannot find `rstack`, or the command says `No installation selected`,
+repeat the verified `rstack` installation steps linked above.
 
 ## Start a local TLS PostgreSQL server
 
@@ -221,8 +224,15 @@ pg_ctl -D "$DEV/data" stop
 
 ## When a run fails
 
-Read the error first. With `--json`, a refusal prints one object on standard output and the
-process exit status tells you whose problem it is:
+A failed journey is different from a startup failure. `start` exits 1 but prints the normal run
+report. With `--json`, its `schema_version` is `registry.rstack.dev.v1`, its `status` is `ready`,
+and `journey.result` is `failed`; the journey includes the failed step and its reason. The services
+keep running, and `rstack dev status RUN_ID` repeats the report, so use the run ID to inspect the
+products and logs before you stop the run.
+
+Other refusals and failures produce an error report instead. With `--json`, the report is one
+object on standard output with `schema_version` `registry.rstack.error.v1` and `status` `refused`.
+Its process exit status and `error.class` identify the kind of failure:
 
 | Exit | `error.class` | Meaning |
 | --- | --- | --- |
@@ -240,12 +250,11 @@ system error number varies by platform):
 Start the server and run the command again. Without `--json`, the same message goes to standard
 error as `rstack dev: MESSAGE` with the same exit status.
 
-A failed journey exits 1 and leaves the run alive, so you can inspect it and then stop it. The
-report includes the run ID. When a start fails before that, the run directory is removed but its
-logs are kept at `<state>/failed/<run_id>/logs`, and the error names the path. Otherwise, a live
-run's logs are in `<run>/logs`: `supervisor.log` for the supervisor and one file per product stage,
-such as `breg-check.log` or `casework-runtime.log`. `rstack dev status RUN_ID` names the logs
-directory. Delete kept logs yourself.
+When a start fails before the run becomes available, the run directory is removed but its logs are
+kept at `<state>/failed/<run_id>/logs`, and the error names the path. A live run's logs are in
+`<run>/logs`: `supervisor.log` for the supervisor and one file per product stage, such as
+`breg-check.log` or `casework-runtime.log`. `rstack dev status RUN_ID` names the logs directory.
+Delete kept logs yourself.
 
 When a run still holds databases, roles or processes, the error carries its `run_id` and a
 `recovery` object listing them. This happens if PostgreSQL is unavailable during cleanup for
@@ -256,15 +265,17 @@ run with:
 rstack dev stop RUN_ID --recover
 ```
 
-`--recover` checks everything it needs, then stops the recorded process groups, drops the
-databases and roles, and removes the run directory, including the run's development key file. It
-refuses a run whose supervisor is still running; use plain `stop` for that. Running it again
-after a partial failure is safe. Success is `status` `stopped` and a `recovered` object. When it
-cannot finish, the error names what to release by hand. The
+If the supervisor is still running, use plain `stop`. For a lost supervisor, its process guards
+stop the products and any product tools still running. Use the original PostgreSQL cluster and
+maintenance database for `--recover`. Recovery waits for the guards, drops the databases and
+roles, and removes the run directory, including its development key file. If a check or cleanup
+step fails, the report explains what to inspect before retrying. The
 [reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
 lists the manual steps and the recovery fields.
 
-{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev. */}
+{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev;
+    crates/registry-bregctl/src/project_dev/mod.rs;
+    crates/registry-bregctl/src/project_dev/journey.rs. */}
 
 ## Next
 
