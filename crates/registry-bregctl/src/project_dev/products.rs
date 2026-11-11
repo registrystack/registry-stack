@@ -27,9 +27,21 @@ use super::{
     clock,
     database::{Database, DatabaseUrls},
     issuer::Issuer,
+    operational,
     plan::{self, Plan, Product},
-    private_directory, stopping, write_private, BregAuthority, RunInput, POLL,
+    private_directory, stopping, write_private, BregAuthority, Operational, RunInput, POLL,
 };
+
+/// The run's development field-encryption data key, inside the owner-only run
+/// directory and removed with it.
+pub(super) const FIELD_KEY: &str = "field-key";
+
+/// The run's field-encryption key file, when the run wrote one, so recovery
+/// can name it for removal.
+pub(super) fn field_key_file(root: &Path) -> Option<PathBuf> {
+    let path = root.join(FIELD_KEY);
+    fs::symlink_metadata(&path).is_ok().then_some(path)
+}
 
 pub(super) struct ProductRunner<'a> {
     input: Arc<RunInput>,
@@ -97,7 +109,8 @@ impl<'a> ProductRunner<'a> {
             .iter()
             .map(|_| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
             .collect::<std::io::Result<_>>()
-            .context("reserve loopback listeners")?;
+            .context("reserve loopback listeners")
+            .map_err(operational)?;
         let urls = self
             .input
             .plan
@@ -148,7 +161,8 @@ impl<'a> ProductRunner<'a> {
             drop(reservation);
             let child = command
                 .spawn()
-                .with_context(|| format!("cannot start {}", product.name()))?;
+                .with_context(|| format!("cannot start {}", product.name()))
+                .map_err(operational)?;
             self.children.push((product, child));
             self.record_processes()?;
             self.ready(product, url)?;
@@ -169,7 +183,12 @@ impl<'a> ProductRunner<'a> {
             .as_ref()
             .expect("BReg authority")
             .requires_postgis;
-        let rehearsal = database.provision("breg_test", true, requires_postgis)?;
+        self.write_field_key()?;
+        // A server that cannot provision, for example without PostGIS or the
+        // privilege to create it, is an environment failure.
+        let rehearsal = database
+            .provision("breg_test", true, requires_postgis)
+            .map_err(operational)?;
         let empty_package = self.root.join("breg-test-package");
         fs::create_dir(&empty_package)?;
         let config = self.config(
@@ -207,7 +226,9 @@ impl<'a> ProductRunner<'a> {
             ],
         )?;
         let package = build.join("package");
-        let urls = database.provision("breg", true, requires_postgis)?;
+        let urls = database
+            .provision("breg", true, requires_postgis)
+            .map_err(operational)?;
         let config = self.config(Product::Breg, "breg", bind, &package, urls)?;
         self.tool(
             Product::Breg,
@@ -226,6 +247,33 @@ impl<'a> ProductRunner<'a> {
             &["--runtime-config".as_ref(), config.as_os_str()],
         )?;
         Ok((config, package))
+    }
+
+    /// Draw the run's own data key when the project encrypts fields. BReg's
+    /// key generator creates the file owner-only from the platform random
+    /// source; the key is read only by the runtime through its `secret:file`
+    /// reference.
+    fn write_field_key(&self) -> Result<()> {
+        if !self.encrypts_fields() {
+            return Ok(());
+        }
+        crate::field_encryption::keygen(&self.root.join(FIELD_KEY))
+            .map(drop)
+            .map_err(|_| {
+                Operational(
+                    "cannot write the development run's field-encryption key into its run \
+                     directory"
+                        .to_owned(),
+                )
+                .into()
+            })
+    }
+
+    fn encrypts_fields(&self) -> bool {
+        self.input
+            .breg_authority
+            .as_ref()
+            .is_some_and(|authority| authority.encrypts_fields)
     }
 
     fn schema_credentials(&self, issuer: &Issuer) -> Result<PathBuf> {
@@ -301,7 +349,9 @@ impl<'a> ProductRunner<'a> {
                 package.as_os_str(),
             ],
         )?;
-        let urls = database.provision("casework", false, false)?;
+        let urls = database
+            .provision("casework", false, false)
+            .map_err(operational)?;
         let config = self.config(Product::Casework, "casework", bind, &package, urls)?;
         let arguments = ["--runtime-config".as_ref(), config.as_os_str()];
         self.tool(Product::Casework, "apply", &arguments)?;
@@ -379,10 +429,18 @@ impl<'a> ProductRunner<'a> {
                 if name == "breg" && authority.requires_postgis {
                     config["listener"]["publicOrigin"] = json!(format!("http://{bind}"));
                 }
+                // A development run initializes a disposable local database, as
+                // `bregctl dev` does; BReg accepts local-file key custody only
+                // for that environment.
                 config["identity"] = json!({
-                    "environment": "development", "instanceId": identity,
-                    "databaseId": identity, "databaseInitializationEnvironment": "development"
+                    "environment": "local", "instanceId": identity,
+                    "databaseId": identity, "databaseInitializationEnvironment": "local"
                 });
+                if authority.encrypts_fields {
+                    config["fieldEncryption"] = json!({"provider": {
+                        "type": "local-file", "dekRef": format!("secret:file/{FIELD_KEY}")
+                    }});
+                }
                 let mut authority_claims = json!({"principal": authority.principal});
                 if authority.purpose {
                     authority_claims["purpose"] = json!("registry_purpose");
@@ -615,7 +673,8 @@ fn run_logged_tool(
         .stdout(output.try_clone()?)
         .stderr(open_log(root, &name)?)
         .spawn()
-        .with_context(|| format!("cannot start {product} {stage}"))?;
+        .with_context(|| format!("cannot start {product} {stage}"))
+        .map_err(operational)?;
     if wait_for_tool(&mut child, active)?.success() {
         return Ok(());
     }
@@ -816,7 +875,6 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
                 "Run `rstack breg check` for authored diagnostics, then correct the BReg project.",
             )
         })?;
-    refuse_encrypted_fields(&registry, &project.field)?;
     let review_authorities = registry
         .review_authorities()
         .iter()
@@ -837,6 +895,7 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
         purpose: inventory.purpose_required,
         named_clients: crate::identity_facts::named_requester_clients(&registry),
         requires_postgis: breg_requires_postgis(&registry),
+        encrypts_fields: breg_encrypts_fields(&registry),
     }))
 }
 
@@ -896,28 +955,15 @@ fn validate_breg_binding_ids(
     Ok(())
 }
 
-/// The generated runtime configuration has no field-encryption provider, so a
-/// project with encrypted fields would only fail late and obscurely.
-fn refuse_encrypted_fields(
-    registry: &registry_breg::CompiledRegistry,
-    product_field: &str,
-) -> plan::SemanticResult<()> {
-    for entity in registry.entities().values() {
-        for field in entity.fields.values() {
-            plan::require(
-                field.encryption.is_none(),
-                product_field,
-                format!(
-                    "The BReg project encrypts {}.{}, and rstack dev does not configure field \
-                     encryption yet.",
-                    entity.id, field.id
-                ),
-                "Run this BReg project with `rstack breg` and a field-encryption provider, or \
-                 select a project without encrypted fields.",
-            )?;
-        }
-    }
-    Ok(())
+/// The runtime needs a field-encryption provider exactly when the compiled
+/// project declares an encrypted field.
+fn breg_encrypts_fields(registry: &registry_breg::CompiledRegistry) -> bool {
+    registry.entities().values().any(|entity| {
+        entity
+            .fields
+            .values()
+            .any(|field| field.encryption.is_some())
+    })
 }
 
 /// Every BReg grant must name an access profile the project declares,
@@ -1684,6 +1730,7 @@ mod tests {
             principal: "registry_principal".to_owned(),
             purpose: false,
             requires_postgis: false,
+            encrypts_fields: false,
             named_clients: BTreeSet::new(),
         };
         let error = casework_principals_from_facts(&plan, Some(&breg), &facts("custom_principal"))
@@ -2003,30 +2050,133 @@ mod tests {
         check_breg_grants(&registry, &people).unwrap();
     }
 
-    #[test]
-    fn encrypted_fields_are_refused_before_provisioning() {
-        let registry = minimal_registry(|source| {
-            let source = source.replacen(
-                "mutationMode: mutable\n    display: {label: Contact",
-                "mutationMode: mutable\n    classification: restricted\n    display: {label: Contact",
-                1,
-            );
-            source.replacen(
-                "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}\n      - {id: jurisdiction",
-                "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: restricted, encrypted: true}\n      - {id: jurisdiction",
-                1,
-            )
-        });
-        assert_eq!(
-            refuse_encrypted_fields(&registry, "/products/0/project")
-                .unwrap_err()
-                .to_string(),
-            "dev.yaml /products/0/project: The BReg project encrypts contact.email, and rstack \
-             dev does not configure field encryption yet. Next: Run this BReg project with \
-             `rstack breg` and a field-encryption provider, or select a project without \
-             encrypted fields."
+    fn encrypt_contact_email(source: &str) -> String {
+        let source = source.replacen(
+            "mutationMode: mutable\n    display: {label: Contact",
+            "mutationMode: mutable\n    classification: restricted\n    display: {label: Contact",
+            1,
         );
-        refuse_encrypted_fields(&minimal_registry(str::to_owned), "/products/0/project").unwrap();
+        source.replacen(
+            "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}\n      - {id: jurisdiction",
+            "{id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: restricted, encrypted: true}\n      - {id: jurisdiction",
+            1,
+        )
+    }
+
+    #[test]
+    fn the_compiled_project_decides_whether_a_run_encrypts_fields() {
+        assert!(breg_encrypts_fields(&minimal_registry(
+            encrypt_contact_email
+        )));
+        assert!(!breg_encrypts_fields(&minimal_registry(str::to_owned)));
+    }
+
+    fn breg_input(encrypts_fields: bool) -> RunInput {
+        RunInput {
+            run_id: "0123456789abcdef0123456789abcdef".to_owned(),
+            project: PathBuf::from("/tmp/project"),
+            plan: serde_json::from_value(json!({
+                "issuer": "https://issuer.example.invalid",
+                "products": [{"product": "breg", "project": ".", "audience": "registry"}],
+                "people": {"reader": {
+                    "subject": "reader", "client": "reader-client",
+                    "grants": {"breg": {"profile": "reader", "scopes": []}}
+                }},
+                "journey": {"id": "read", "steps": [{
+                    "id": "read", "product": "breg", "as": "reader", "method": "GET",
+                    "path": "/v1/records", "expect": {"status": 200}
+                }]}
+            }))
+            .unwrap(),
+            ttl_seconds: 300,
+            schema_people: Vec::new(),
+            breg_authority: Some(BregAuthority {
+                principal: "sub".to_owned(),
+                purpose: false,
+                requires_postgis: false,
+                encrypts_fields,
+                named_clients: BTreeSet::new(),
+            }),
+            casework_principals: BTreeMap::new(),
+            binaries: BTreeMap::new(),
+        }
+    }
+
+    fn breg_config(runner: &ProductRunner<'_>, root: &Path, name: &str) -> (Value, String) {
+        let urls = DatabaseUrls {
+            runtime: "postgresql://runtime:password@127.0.0.1:5432/run".to_owned(),
+            migration: "postgresql://migration:password@127.0.0.1:5432/run".to_owned(),
+        };
+        let path = runner
+            .config(
+                Product::Breg,
+                name,
+                "127.0.0.1:0",
+                &root.join("package"),
+                urls,
+            )
+            .unwrap();
+        let text = fs::read_to_string(path).unwrap();
+        (serde_json::from_str(&text).unwrap(), text)
+    }
+
+    #[test]
+    fn an_encrypting_run_configures_local_file_custody_with_an_owner_only_run_key() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let terminate = AtomicBool::new(false);
+        let runner = ProductRunner::new(Arc::new(breg_input(true)), &root, &terminate).unwrap();
+
+        runner.write_field_key().unwrap();
+        let key = root.join(FIELD_KEY);
+        assert_eq!(field_key_file(&root), Some(key.clone()));
+        assert_eq!(
+            fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let encoded = fs::read_to_string(&key).unwrap();
+        assert_eq!(STANDARD.decode(encoded.trim()).unwrap().len(), 32);
+
+        // The rehearsal and the served database read the same run key, by
+        // reference only; local-file custody requires local initialization.
+        for name in ["breg-test", "breg"] {
+            let (config, text) = breg_config(&runner, &root, name);
+            assert_eq!(
+                config["fieldEncryption"],
+                json!({"provider": {"type": "local-file", "dekRef": format!("secret:file/{FIELD_KEY}")}}),
+                "{name}"
+            );
+            assert_eq!(config["secretProviders"]["file"]["root"], json!(root));
+            assert_eq!(config["identity"]["environment"], "local");
+            assert_eq!(
+                config["identity"]["databaseInitializationEnvironment"],
+                "local"
+            );
+            assert!(!text.contains(encoded.trim()), "{name}");
+        }
+
+        // Each run draws its own key.
+        let other = scratch.path().join("other");
+        super::super::private_directory(&other).unwrap();
+        let second = ProductRunner::new(Arc::new(breg_input(true)), &other, &terminate).unwrap();
+        second.write_field_key().unwrap();
+        assert_ne!(fs::read_to_string(other.join(FIELD_KEY)).unwrap(), encoded);
+    }
+
+    #[test]
+    fn a_run_without_encrypted_fields_writes_no_key_and_no_provider() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let terminate = AtomicBool::new(false);
+        let runner = ProductRunner::new(Arc::new(breg_input(false)), &root, &terminate).unwrap();
+        runner.write_field_key().unwrap();
+        assert_eq!(field_key_file(&root), None);
+        let (config, _) = breg_config(&runner, &root, "breg");
+        assert!(config.get("fieldEncryption").is_none(), "{config}");
+        assert_eq!(config["identity"]["environment"], "local");
     }
 
     #[test]

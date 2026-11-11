@@ -275,7 +275,10 @@ impl Database {
             &ownership_lock,
             session_deadline,
         )
-        .context("cannot establish the PostgreSQL administrator session over verified TLS")?;
+        .context("cannot establish the PostgreSQL administrator session over verified TLS")
+        // The server is unreachable or refused the session: the environment
+        // failed, not the request.
+        .map_err(super::operational)?;
         Ok(Self {
             client,
             _connection_task: connection_task,
@@ -926,6 +929,140 @@ mod tests {
                 .unwrap(),
             7
         );
+    }
+
+    /// A loopback server that accepts one connection and never answers it, as a
+    /// PostgreSQL server does whose TLS negotiation stalls. The thread ends when
+    /// the client closes the connection.
+    fn stalled_server() -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            std::io::copy(&mut stream, &mut std::io::sink()).unwrap();
+        });
+        (port, server)
+    }
+
+    /// The administrator configuration `Database::connect` builds for `port`.
+    fn stalled_admin_config(port: u16) -> Config {
+        let (mut config, _) = admin_config(&format!(
+            "postgresql://admin:secret@127.0.0.1:{port}/postgres"
+        ))
+        .unwrap();
+        config.ssl_mode(SslMode::Require);
+        apply_session_options(&mut config);
+        config
+    }
+
+    /// A TLS connector that trusts nothing; a stalled server never reaches TLS.
+    fn untrusting_tls() -> MakeRustlsConnect {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        MakeRustlsConnect::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth(),
+        )
+    }
+
+    #[test]
+    fn a_stalled_server_cannot_hold_the_first_administrator_connection() {
+        let (port, server) = stalled_server();
+        let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+        let started = Instant::now();
+
+        let Err(error) = open_admin_session(
+            &runtime,
+            &stalled_admin_config(port),
+            &untrusting_tls(),
+            "SELECT 1",
+            Instant::now() + Duration::from_millis(300),
+        ) else {
+            panic!("a server that never answers opened a session");
+        };
+
+        assert_eq!(
+            format!("{error:#}"),
+            "the PostgreSQL connection handshake timed out"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // The abandoned attempt closed its connection.
+        server.join().unwrap();
+    }
+
+    /// A plaintext server that completes one PostgreSQL startup without
+    /// authentication, so a test can hold a real administrator `Client`.
+    fn trusting_server() -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut length = [0_u8; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut startup = vec![0_u8; u32::from_be_bytes(length) as usize - 4];
+            stream.read_exact(&mut startup).unwrap();
+            // AuthenticationOk, then ReadyForQuery while idle.
+            stream
+                .write_all(b"R\0\0\0\x08\0\0\0\0Z\0\0\0\x05I")
+                .unwrap();
+            std::io::copy(&mut stream, &mut std::io::sink()).unwrap();
+        });
+        (port, server)
+    }
+
+    #[test]
+    fn a_stalled_server_cannot_hold_the_cleanup_reconnection() {
+        let (trusting_port, trusting) = trusting_server();
+        let (stalled_port, stalled) = stalled_server();
+        let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+        let mut first = Config::new();
+        first
+            .host("127.0.0.1")
+            .port(trusting_port)
+            .user("admin")
+            .dbname("postgres")
+            .ssl_mode(SslMode::Disable);
+        let (client, connection) = runtime
+            .block_on(first.connect(tokio_postgres::NoTls))
+            .unwrap();
+        let connection_task = runtime.spawn(connection);
+        // The first session failed mid-operation, so cleanup must reconnect
+        // first, and the replacement server never answers.
+        let mut database = Database {
+            client,
+            _connection_task: connection_task,
+            admin_session_failed: true,
+            tls: untrusting_tls(),
+            admin_config: stalled_admin_config(stalled_port),
+            ownership_lock: "SELECT 1".to_owned(),
+            endpoint: Endpoint {
+                host: UrlHost::Ipv4(std::net::Ipv4Addr::LOCALHOST),
+                port: Some(stalled_port),
+            },
+            run_id: RUN_ID.to_owned(),
+            acquisitions: Vec::new(),
+            runtime,
+        };
+        let started = Instant::now();
+
+        let error = database
+            .execute_cleanup(
+                "DROP ROLE IF EXISTS rstack_stalled_role",
+                Instant::now() + Duration::from_millis(300),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            format!("{error:#}"),
+            "cannot reconnect to the PostgreSQL administrator database: \
+             the PostgreSQL connection handshake timed out"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(database.admin_session_failed);
+        stalled.join().unwrap();
+        drop(database);
+        trusting.join().unwrap();
     }
 
     #[test]
