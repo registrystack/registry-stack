@@ -5,6 +5,22 @@
 - `bregctl project-dev` runs BReg projects, including spatial projects, from a
   `breg/project-dev` v1alpha1 plan. It is an alpha format and may change.
   `rstack dev` is its entry point.
+- A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
+  WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and
+  an optional `bbox`, and the compiler validates it with PostGIS and generates
+  a stored geometry column with a GiST index. A bbox grant in an access
+  profile filters Polygon and MultiPolygon fields by bounding-box
+  intersection, as it does for a Point. The GIS profile and the spatial
+  clients carry the new geometry types.
+- BREAKING: The geometry of a GeoJSON Feature in the Rust, Node.js and Python
+  clients is a union of Point, Polygon and MultiPolygon, where it was always
+  a Point. The wire format of a Point is unchanged. In Rust, `geometry` is
+  `Option<BRegGeoJsonGeometry>` instead of `Option<BRegGeoJsonPoint>`; match
+  `BRegGeoJsonGeometry::Point(point)` before reading `coordinates`. In
+  TypeScript, `GeoJsonGeometry` replaces `GeoJsonPoint` on a feature; narrow
+  on `geometry.type === "Point"` before reading `coordinates`. In Python the
+  `.pyi` stubs describe the union, so a type checker flags code that assumes a
+  Point.
 
 ## 0.46.0 - 2026-11-08
 
