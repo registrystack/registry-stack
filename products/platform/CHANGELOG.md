@@ -14,7 +14,8 @@
   `registry.rstack.error.v1` object, published as
   `schemas/rstack-dev-error.v1.schema.json`. Its `error.class` is `domain`
   (exit 1), `usage` (exit 2) or `operational` (exit 3); a run that still holds
-  resources adds its `run_id` and a `recovery` object.
+  resources adds its `run_id`, with a `recovery` object when the resources to
+  release are known.
 - A BReg project with encrypted fields runs under `rstack dev` without extra
   setup. Each run draws its own development data key into its run directory,
   readable only by your user, and the key is removed with the run.

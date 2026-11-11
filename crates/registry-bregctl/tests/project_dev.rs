@@ -1217,7 +1217,7 @@ fragment or userinfo."
     assert_eq!(diagnostic["path"], "/products/1/project");
     assert_eq!(
         diagnostic["message"],
-        "The selected `caseworkctl` helper could not check the Casework configuration the run writes."
+        "The selected `caseworkctl` helper could not check the Casework configuration the run writes: caseworkctl check did not report a result for the binding."
     );
     assert!(!state.exists());
 }
@@ -1309,7 +1309,7 @@ fn check_distinguishes_an_unavailable_casework_helper_from_an_invalid_project() 
     assert_eq!(diagnostic["path"], "/products/1/project");
     assert_eq!(
         diagnostic["message"],
-        "The selected `caseworkctl` helper could not inspect the Casework project."
+        "The selected `caseworkctl` helper could not inspect the Casework project: caseworkctl explain did not complete successfully."
     );
     assert!(!state.exists());
 
