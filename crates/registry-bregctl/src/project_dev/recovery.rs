@@ -40,11 +40,7 @@ pub(super) enum Group {
 /// Every process with its group and start time. `ps` is the one portable
 /// source of start times on Linux and macOS.
 pub(super) fn process_table() -> Result<Vec<Row>> {
-    let output = Command::new("ps")
-        .args(["-A", "-o", "pid=,pgid=,lstart="])
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
+    let output = ps_command()
         .output()
         .context("cannot run ps to read process start times")?;
     ensure!(
@@ -52,6 +48,18 @@ pub(super) fn process_table() -> Result<Vec<Row>> {
         "ps could not list processes with their start times"
     );
     Ok(parse_table(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The `ps` call behind [`process_table`].
+fn ps_command() -> Command {
+    let mut command = Command::new("ps");
+    command
+        .args(["-A", "-o", "pid=,pgid=,lstart="])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    command
 }
 
 fn parse_table(text: &str) -> Vec<Row> {
@@ -186,6 +194,19 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::os::unix::process::CommandExt;
+
+    #[test]
+    fn start_times_are_read_in_one_locale_and_time_zone() {
+        use std::ffi::OsStr;
+        let command = ps_command();
+        let envs: Vec<_> = command.get_envs().collect();
+        for (name, value) in [("LC_ALL", "C"), ("TZ", "UTC")] {
+            assert!(
+                envs.contains(&(OsStr::new(name), Some(OsStr::new(value)))),
+                "{name}: {envs:?}"
+            );
+        }
+    }
 
     fn row(pid: u32, pgid: u32, started: &str) -> Row {
         Row {

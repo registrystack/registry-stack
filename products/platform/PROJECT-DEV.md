@@ -240,7 +240,8 @@ The state directory holds one directory per run. It defaults to
 `rstack-dev-UID` in the system temporary directory. Set `RSTACK_DEV_STATE_DIR`
 to use another location. A run directory is renamed to `.<run_id>.removing`
 before it is deleted, and `status` and `stop` ignore that name. If the deletion
-is interrupted, delete that directory yourself.
+is interrupted, delete that directory yourself; the run's field-encryption key
+is deleted before the rename, so it holds no key material.
 
 ## When a run fails
 
