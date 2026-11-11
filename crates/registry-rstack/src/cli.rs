@@ -218,6 +218,14 @@ enum DevCommand {
         /// Run ID returned by rstack dev start.
         #[arg(value_name = "RUN_ID")]
         run_id: String,
+        /// Release the processes, databases and roles of a run whose supervisor
+        /// was lost.
+        #[arg(long)]
+        recover: bool,
+        /// TLS PostgreSQL administrator URL for --recover. Defaults to
+        /// RSTACK_DEV_DATABASE_URL.
+        #[arg(long, value_name = "URL", requires = "recover")]
+        database_url: Option<String>,
         /// Emit the runner's JSON report.
         #[arg(long)]
         json: bool,
@@ -249,6 +257,8 @@ enum DevRequest<'a> {
     },
     Stop {
         run_id: &'a str,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        recover: bool,
         json: bool,
     },
 }
@@ -1463,12 +1473,18 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
             None,
             Needs::default(),
         ),
-        DevCommand::Stop { run_id, json } => (
+        DevCommand::Stop {
+            run_id,
+            recover,
+            database_url,
+            json,
+        } => (
             DevRequest::Stop {
                 run_id,
+                recover: *recover,
                 json: *json || launcher_json,
             },
-            None,
+            database_url.as_deref(),
             Needs::default(),
         ),
     };

@@ -27,6 +27,209 @@ journey:\n  id: smoke\n  steps:\n    - {{id: read, product: breg, as: operator, 
     .unwrap();
 }
 
+const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
+
+/// Validates a helper failure against the documented error schema and checks
+/// its class.
+fn assert_error_envelope(report: &serde_json::Value, class: &str) {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../products/platform/schemas/rstack-dev-error.v1.schema.json"
+    ))
+    .unwrap();
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    if let Err(errors) = schema.validate(report) {
+        let errors: Vec<_> = errors.map(|error| error.to_string()).collect();
+        panic!("{report} violates the error schema: {errors:?}");
+    }
+    assert_eq!(report["error"]["class"], class, "{report}");
+}
+
+fn helper(request: serde_json::Value, state: &std::path::Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("project-dev")
+        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
+        .env("RSTACK_DEV_STATE_DIR", state)
+        .env_remove("RSTACK_DEV_DATABASE_URL")
+        .output()
+        .unwrap()
+}
+
+/// A run directory whose supervisor is gone: its lock file exists, unlocked.
+fn lost_run(state: &std::path::Path) -> std::path::PathBuf {
+    let root = state.join(RUN_ID);
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(state, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(root.join("worker.lock"), "").unwrap();
+    root
+}
+
+#[test]
+fn every_helper_failure_prints_the_error_envelope() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    lost_run(&state);
+    let missing_project = scratch.path().join("missing");
+    let other_run = "fedcba9876543210fedcba9876543210";
+    let cases = [
+        (
+            "start of a missing project",
+            serde_json::json!({"action": "start", "project": missing_project, "json": true}),
+            "domain",
+            1,
+        ),
+        (
+            "start with a bad ttl",
+            serde_json::json!({"action": "start", "project": scratch.path(), "ttl": "9", "json": true}),
+            "domain",
+            1,
+        ),
+        (
+            "status with a malformed run ID",
+            serde_json::json!({"action": "status", "run_id": "../x", "json": true}),
+            "domain",
+            1,
+        ),
+        (
+            "token with a malformed person",
+            serde_json::json!({"action": "token", "run_id": other_run, "person": "../x", "json": true}),
+            "domain",
+            1,
+        ),
+        (
+            "token for a run that is not ready",
+            serde_json::json!({"action": "token", "run_id": other_run, "person": "operator", "json": true}),
+            "domain",
+            1,
+        ),
+        (
+            "stop with a malformed run ID",
+            serde_json::json!({"action": "stop", "run_id": "../x", "json": true}),
+            "domain",
+            1,
+        ),
+        (
+            "status of a run whose supervisor is lost",
+            serde_json::json!({"action": "status", "run_id": RUN_ID, "json": true}),
+            "operational",
+            3,
+        ),
+        (
+            "stop of a run whose supervisor is lost",
+            serde_json::json!({"action": "stop", "run_id": RUN_ID, "json": true}),
+            "operational",
+            3,
+        ),
+    ];
+    for (name, request, class, exit) in cases {
+        let output = helper(request, &state);
+        assert_eq!(output.status.code(), Some(exit), "{name}: {output:?}");
+        assert!(output.stderr.is_empty(), "{name}: {output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("{name}: {error}: {output:?}"));
+        assert_error_envelope(&report, class);
+        if class == "operational" {
+            assert_eq!(report["run_id"], RUN_ID, "{name}");
+            assert_eq!(report["recovery"]["kind"], "lost-supervisor", "{name}");
+        } else {
+            assert!(report.get("run_id").is_none(), "{name}: {report}");
+        }
+    }
+}
+
+#[test]
+fn a_helper_failure_without_json_prints_one_line_and_the_same_exit_class() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    lost_run(&state);
+    let output = helper(
+        serde_json::json!({"action": "status", "run_id": RUN_ID, "json": false}),
+        &state,
+    );
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let text = String::from_utf8(output.stderr).unwrap();
+    assert!(text.starts_with("rstack dev: run "), "{text}");
+    assert!(text.contains("lost its supervisor"), "{text}");
+}
+
+fn recover(state: &std::path::Path, run_id: &str) -> std::process::Output {
+    helper(
+        serde_json::json!({"action": "stop", "run_id": run_id, "json": true, "recover": true}),
+        state,
+    )
+}
+
+#[test]
+fn recover_of_an_absent_run_reports_it_stopped() {
+    let scratch = tempfile::tempdir().unwrap();
+    let output = recover(&scratch.path().join("state"), RUN_ID);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "stopped");
+}
+
+#[test]
+fn recover_refuses_a_run_with_a_running_supervisor() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let root = lost_run(&state);
+    let lock = fs::File::open(root.join("worker.lock")).unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+
+    let output = recover(&state, RUN_ID);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_error_envelope(&report, "domain");
+    let message = report["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("still has a running supervisor"),
+        "{message}"
+    );
+    assert!(root.exists());
+}
+
+#[test]
+fn recover_refuses_a_run_without_a_supervisor_lock() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let root = lost_run(&state);
+    fs::remove_file(root.join("worker.lock")).unwrap();
+
+    let output = recover(&state, RUN_ID);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_error_envelope(&report, "domain");
+    assert!(root.exists());
+}
+
+#[test]
+fn recover_that_cannot_proceed_reports_the_facts_and_changes_nothing() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let root = lost_run(&state);
+
+    let output = recover(&state, RUN_ID);
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_error_envelope(&report, "operational");
+    assert_eq!(report["run_id"], RUN_ID);
+    assert_eq!(report["recovery"]["kind"], "lost-supervisor");
+    assert!(report["recovery"]["run_directory"]
+        .as_str()
+        .unwrap()
+        .ends_with(RUN_ID));
+    let message = report["error"]["message"].as_str().unwrap();
+    assert!(message.contains("could not be recovered"), "{message}");
+    assert!(root.exists());
+}
+
 fn semantic_project(root: &std::path::Path, grant: &str, step_extra: &str) {
     fs::write(root.join("registry.yaml"), "fixture\n").unwrap();
     fs::write(
@@ -232,7 +435,8 @@ fn assert_dangling_schema_assignment(
 
     assert_eq!(started.status.code(), Some(1), "{started:?}");
     let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
-    let error = report["error"].as_str().unwrap();
+    assert_error_envelope(&report, "domain");
+    let error = report["error"]["message"].as_str().unwrap();
     assert!(error.contains(path), "{error}");
     assert!(error.contains(message), "{error}");
     assert!(error.contains(suggested_action), "{error}");
@@ -363,7 +567,8 @@ fn check_and_start_report_an_explicit_assignment_with_no_fixture_file() {
 
     assert_eq!(started.status.code(), Some(1), "{started:?}");
     let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
-    let error = report["error"].as_str().unwrap();
+    assert_error_envelope(&report, "domain");
+    let error = report["error"]["message"].as_str().unwrap();
     assert!(error.contains("/schemaTestPeople"), "{error}");
     assert!(
         error.contains("fixture journeys file is missing"),
@@ -416,7 +621,8 @@ fn check_and_start_refuse_a_fixture_symlink_outside_the_breg_project() {
 
     assert_eq!(started.status.code(), Some(1), "{started:?}");
     let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
-    let error = report["error"].as_str().unwrap();
+    assert_error_envelope(&report, "domain");
+    let error = report["error"]["message"].as_str().unwrap();
     assert!(error.contains("/products/0/project"), "{error}");
     assert!(error.contains("fixture journeys file must be"), "{error}");
     assert!(error.contains("without linking it outside"), "{error}");
@@ -678,7 +884,8 @@ fn start_reports_an_actionable_value_free_unstarted_grant() {
 
     assert_eq!(result.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    let error = report["error"].as_str().unwrap();
+    assert_error_envelope(&report, "domain");
+    let error = report["error"]["message"].as_str().unwrap();
     assert!(
         error.contains("/people/operator/grants/casework"),
         "{error}"
@@ -753,7 +960,8 @@ journey:\n  id: smoke\n  steps:\n    - {id: read, product: breg, as: editor, met
 
     assert_eq!(result.status.code(), Some(1), "{result:?}");
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    let error = report["error"].as_str().unwrap();
+    assert_error_envelope(&report, "domain");
+    let error = report["error"]["message"].as_str().unwrap();
     assert!(
         error.contains("/people/unused/grants/breg/profile"),
         "{error}"
@@ -820,7 +1028,8 @@ fn check_and_start_resolve_casework_profiles_and_bindings_with_the_owning_report
 
         assert_eq!(started.status.code(), Some(1), "{started:?}");
         let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
-        let error = report["error"].as_str().unwrap();
+        assert_error_envelope(&report, "domain");
+        let error = report["error"]["message"].as_str().unwrap();
         assert!(error.contains(path), "{error}");
         assert!(error.contains(message), "{error}");
         assert!(error.contains(action), "{error}");
@@ -947,10 +1156,10 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
         .unwrap();
     assert!(!result.status.success());
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(report["schema_version"], "registry.rstack.dev.v1");
+    assert_error_envelope(&report, "domain");
     assert!(report.get("diagnostics").is_none());
     assert!(
-        report["error"]
+        report["error"]["message"]
             .as_str()
             .unwrap()
             .contains("/products/0/product"),
@@ -973,7 +1182,10 @@ fn a_run_id_cannot_name_a_path() {
         .unwrap();
     assert!(!result.status.success());
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert!(report["error"].as_str().unwrap().contains("run ID"));
+    assert!(report["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("run ID"));
     assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
 }
 

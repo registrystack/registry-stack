@@ -601,6 +601,17 @@ impl Database {
         self.endpoint.product_url(database, user, password)
     }
 
+    /// Take ownership of everything `provision` can create for one label, so
+    /// that `cleanup` releases the objects of a run whose supervisor is lost.
+    pub(super) fn adopt(&mut self, label: &str, spatial: bool) -> Result<()> {
+        let mut names = run_object_names(&self.run_id, label, spatial)?;
+        let database = names.pop().context("run has no database name")?;
+        self.acquisitions
+            .extend(names.into_iter().map(Acquisition::Role));
+        self.acquisitions.push(Acquisition::Database(database));
+        Ok(())
+    }
+
     /// Names of the databases and roles this run still owns, oldest first.
     pub(super) fn pending_names(&self) -> Vec<String> {
         self.acquisitions

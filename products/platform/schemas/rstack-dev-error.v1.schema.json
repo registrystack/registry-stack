@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rstack error report",
+  "description": "The one JSON object that rstack and rstack dev print on stdout when --json is set and a command is refused or fails.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "error"],
+  "properties": {
+    "schema_version": {"const": "registry.rstack.error.v1"},
+    "status": {"const": "refused"},
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "message"],
+      "properties": {
+        "class": {
+          "description": "domain (exit 1): the request or the run's state was refused. usage (exit 2): the command line is wrong. operational (exit 3): the environment failed or resources need cleanup.",
+          "enum": ["domain", "usage", "operational"]
+        },
+        "message": {"type": "string", "minLength": 1}
+      }
+    },
+    "run_id": {
+      "description": "Present when the failure concerns a run that still has resources to release.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "recovery": {
+      "description": "Present with run_id when the resources to release are known.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "run_directory"],
+      "properties": {
+        "kind": {"enum": ["lost-supervisor", "cleanup-pending"]},
+        "run_directory": {"type": "string"},
+        "processes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "product": {"type": "string"},
+              "pid": {"type": "integer"},
+              "pgid": {"type": "integer"},
+              "started": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label", "database", "roles"],
+            "properties": {
+              "label": {"type": "string"},
+              "database": {"type": "string"},
+              "roles": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "databases_and_roles": {"type": "array", "items": {"type": "string"}},
+        "unavailable": {"type": "string"},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}
