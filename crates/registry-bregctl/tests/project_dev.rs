@@ -84,20 +84,20 @@ fn every_helper_failure_prints_the_error_envelope() {
         (
             "start with a bad ttl",
             serde_json::json!({"action": "start", "project": scratch.path(), "ttl": "9", "json": true}),
-            "domain",
-            1,
+            "usage",
+            2,
         ),
         (
             "status with a malformed run ID",
             serde_json::json!({"action": "status", "run_id": "../x", "json": true}),
-            "domain",
-            1,
+            "usage",
+            2,
         ),
         (
             "token with a malformed person",
             serde_json::json!({"action": "token", "run_id": other_run, "person": "../x", "json": true}),
-            "domain",
-            1,
+            "usage",
+            2,
         ),
         (
             "token for a run that is not ready",
@@ -108,8 +108,14 @@ fn every_helper_failure_prints_the_error_envelope() {
         (
             "stop with a malformed run ID",
             serde_json::json!({"action": "stop", "run_id": "../x", "json": true}),
-            "domain",
-            1,
+            "usage",
+            2,
+        ),
+        (
+            "recover with a malformed run ID",
+            serde_json::json!({"action": "stop", "run_id": "../x", "json": true, "recover": true}),
+            "usage",
+            2,
         ),
         (
             "status of a run whose supervisor is lost",

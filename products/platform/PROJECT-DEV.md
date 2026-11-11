@@ -301,13 +301,15 @@ for failures before the helper starts, such as a missing component.
 
 - `schema_version` is `registry.rstack.error.v1` and `status` is `refused`.
 - `error.class` is `domain` (exit 1: the request, the project, the plan or the
-  run's state was refused), `usage` (exit 2: the command line is wrong) or
-  `operational` (exit 3: the environment failed, a cleanup stalled, or a run
-  needs its resources released). Environment failures include a PostgreSQL
-  server that is unreachable, refuses the administrator session, or cannot
-  provision a run's databases and roles, a product binary that cannot be
-  started, and no free loopback port. `error.message` is the human-readable
-  reason.
+  run's state was refused), `usage` (exit 2: the command line is wrong, such
+  as a malformed run ID, `--ttl` or test person name) or `operational` (exit 3:
+  the environment failed, a cleanup stalled, or a run needs its resources
+  released). Environment failures include a PostgreSQL server that is
+  unreachable, refuses the administrator session, or cannot provision a run's
+  databases and roles, a product binary that cannot be started, no free
+  loopback port, a product or run that does not start in time, and an internal
+  failure of the run's supervisor. An interrupted `start` is `domain`.
+  `error.message` is the human-readable reason.
 - `run_id` is present when the failure concerns a run that still has
   resources to release. Use it with `stop --recover`.
 - `recovery` accompanies `run_id` when the resources are known. It has `kind`

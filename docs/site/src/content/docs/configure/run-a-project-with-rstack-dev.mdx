@@ -227,8 +227,8 @@ process exit status tells you whose problem it is:
 | Exit | `error.class` | Meaning |
 | --- | --- | --- |
 | 1 | `domain` | The request, the project, the plan or the run's state was refused. Fix the plan or the command. |
-| 2 | `usage` | The command line is wrong. |
-| 3 | `operational` | The environment failed: PostgreSQL is unreachable or refuses the administrator, a product binary cannot start, no loopback port is free, or a run needs its resources released. |
+| 2 | `usage` | The command line is wrong, such as a malformed run ID, `--ttl` or test person name. |
+| 3 | `operational` | The environment failed: PostgreSQL is unreachable or refuses the administrator, a product binary cannot start, no loopback port is free, a product or the run does not start in time, or a run needs its resources released. |
 
 For example, `rstack dev start ./licensing --json` with the PostgreSQL server stopped (the operating
 system error number varies by platform):

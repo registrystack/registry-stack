@@ -425,6 +425,11 @@ fn operational(error: anyhow::Error) -> anyhow::Error {
     Operational(format!("{error:#}")).into()
 }
 
+/// A malformed argument, refused before any project or run state is read.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct Usage(&'static str);
+
 /// The error envelope and exit code for a failed command. It is the launcher's
 /// `registry.rstack.error.v1` object, plus `run_id` and `recovery` when a run
 /// still has resources to release.
@@ -433,6 +438,8 @@ fn error_report(error: &anyhow::Error) -> (Value, u8) {
         error.is::<Operational>() || error.is::<CleanupPending>() || error.is::<RecoveryNeeded>();
     let (class, code) = if operational {
         ("operational", crate::OPERATIONAL_FAILURE_EXIT)
+    } else if error.is::<Usage>() {
+        ("usage", crate::USAGE_EXIT)
     } else {
         ("domain", crate::DOMAIN_REFUSAL_EXIT)
     };
@@ -632,6 +639,7 @@ fn write_check_report(
 }
 
 fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
+    let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
     let project = project
         .canonicalize()
         .context("cannot open the development project directory")?;
@@ -639,7 +647,6 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     let schema_people = products::schema_people(&project, &plan, true)?;
     let signals = signals()?;
     let inspection = products::inspect(&project, &plan, &signals)?;
-    let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
     ensure!(
         env::var_os(DATABASE_URL).is_some_and(|value| !value.is_empty()),
         "supply --database-url or {DATABASE_URL} for a TLS PostgreSQL development server"
@@ -746,11 +753,36 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        if signals.load(Ordering::Relaxed) || Instant::now() >= deadline {
+        if let Some(error) = start_abandoned(&signals, deadline) {
             stop(&input.run_id).map_err(|error| startup_error(&root, &input.run_id, error))?;
-            bail!("development run start was interrupted or timed out");
+            return Err(error);
         }
     }
+}
+
+/// Why `start` stops waiting for the supervisor's startup report, if it does.
+/// An interrupt is the operator's request; a missed deadline means the host or
+/// the supervisor failed.
+fn start_abandoned(signals: &AtomicBool, deadline: Instant) -> Option<anyhow::Error> {
+    if signals.load(Ordering::Relaxed) {
+        Some(anyhow::anyhow!("development run start was interrupted"))
+    } else if Instant::now() >= deadline {
+        Some(operational(anyhow::anyhow!(
+            "development run did not start within six minutes"
+        )))
+    } else {
+        None
+    }
+}
+
+/// Runs the supervisor's startup, turning a panic into an operational failure
+/// that carries no panic payload.
+fn catch_startup<T>(startup: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(startup)).unwrap_or_else(|_| {
+        Err(operational(anyhow::anyhow!(
+            "development run startup failed internally"
+        )))
+    })
 }
 
 fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
@@ -782,7 +814,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     flock(&lock, FlockOperation::LockExclusive)?;
     let mut database = None;
     let mut expiry = None;
-    let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let prepared = catch_startup(|| {
         products.check()?;
         let ca = env::var_os(CA_FILE)
             .map(|path| {
@@ -814,8 +846,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         });
         write_private(&root.join(REPORT), &capture_report(&report)?)?;
         Ok::<_, anyhow::Error>(report)
-    }))
-    .unwrap_or_else(|_| Err(anyhow::anyhow!("development run startup failed internally")));
+    });
 
     let mut failure = None;
     match prepared {
@@ -944,7 +975,7 @@ fn pending_status(root: &Path, run_id: &str, pending: Value) -> Value {
 }
 
 fn token(run_id: &str, person: &str) -> Result<Value> {
-    ensure!(plan::identifier(person), "invalid test person name");
+    ensure!(plan::identifier(person), Usage("invalid test person name"));
     let report = status(run_id)?;
     ensure!(
         report["status"] == "ready",
@@ -1187,7 +1218,11 @@ fn binaries(product: Product) -> Result<Binaries> {
 }
 
 fn parse_ttl(value: &str) -> Result<u64> {
-    let error = || anyhow::anyhow!("--ttl must be between 1s and 24h, with an s, m, or h suffix");
+    let error = || {
+        anyhow::Error::new(Usage(
+            "--ttl must be between 1s and 24h, with an s, m, or h suffix",
+        ))
+    };
     let (number, unit) = value
         .split_at_checked(value.len().saturating_sub(1))
         .ok_or_else(error)?;
@@ -1218,7 +1253,7 @@ fn run_dir(run_id: &str) -> Result<PathBuf> {
             && run_id
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        "invalid run ID; use the ID printed by rstack dev start"
+        Usage("invalid run ID; use the ID printed by rstack dev start")
     );
     Ok(state_dir().join(run_id))
 }
@@ -1523,6 +1558,15 @@ mod tests {
         assert_eq!(report["status"], "refused");
         assert!(report.get("run_id").is_none());
 
+        for malformed in [run_dir("../x").unwrap_err(), parse_ttl("9").unwrap_err()] {
+            let (report, code) = error_report(&malformed);
+            assert_eq!(
+                (report["error"]["class"].as_str(), code),
+                (Some("usage"), 2),
+                "{malformed:#}"
+            );
+        }
+
         let (report, code) = error_report(&anyhow::Error::new(Operational("stalled".into())));
         assert_eq!(
             (report["error"]["class"].as_str(), code),
@@ -1561,6 +1605,34 @@ mod tests {
         assert!(
             message.contains("could not be recovered: no URL"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_start_is_refused_and_a_late_or_panicked_start_is_operational() {
+        let class = |error: &anyhow::Error| error_report(error).0["error"]["class"].clone();
+        let later = Instant::now() + Duration::from_secs(60);
+        assert!(start_abandoned(&AtomicBool::new(false), later).is_none());
+
+        let interrupted = start_abandoned(&AtomicBool::new(true), later).unwrap();
+        assert_eq!(class(&interrupted), "domain");
+        assert_eq!(
+            interrupted.to_string(),
+            "development run start was interrupted"
+        );
+
+        let late = start_abandoned(&AtomicBool::new(false), Instant::now()).unwrap();
+        assert_eq!(class(&late), "operational");
+        assert_eq!(
+            late.to_string(),
+            "development run did not start within six minutes"
+        );
+
+        let panicked = catch_startup(|| -> Result<()> { panic!("panic payload") }).unwrap_err();
+        assert_eq!(class(&panicked), "operational");
+        assert_eq!(
+            panicked.to_string(),
+            "development run startup failed internally"
         );
     }
 
