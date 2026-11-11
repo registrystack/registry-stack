@@ -199,6 +199,10 @@ fn compound_value_types_are_refused_at_each_authored_declaration() {
             json!({"type": "crs84-point", "precision": 4}),
         ),
         (
+            "crs84-polygon",
+            json!({"type": "crs84-polygon", "precision": 6, "maximumPositions": 32}),
+        ),
+        (
             "structured",
             json!({
                 "type": "structured",
@@ -391,7 +395,7 @@ fn authoring_schemas_expose_scalar_aliases_without_hiding_direct_compound_fields
                 branch
                     .pointer("/properties/type/const")
                     .and_then(Value::as_str),
-                Some("reference" | "crs84-point" | "structured")
+                Some("reference" | "crs84-point" | "crs84-polygon" | "structured")
             )
         })
         .cloned()
@@ -419,6 +423,7 @@ fn authoring_schemas_expose_scalar_aliases_without_hiding_direct_compound_fields
         for compound_definition in [
             "ReferenceFieldSourceSchema",
             "Crs84PointFieldSourceSchema",
+            "Crs84PolygonFieldSourceSchema",
             "StructuredFieldSourceSchema",
         ] {
             assert!(
@@ -440,43 +445,45 @@ fn authoring_schemas_expose_scalar_aliases_without_hiding_direct_compound_fields
             "{schema_file} accepts scalar aliases"
         );
 
-        let mut aliased_compound = source.clone();
-        aliased_compound["valueTypes"]["shared-value"] = json!({
-            "type": "structured",
-            "maximumBytes": 256,
-            "schema": {"type": "object", "additionalProperties": false}
-        });
-        assert!(
-            !schema.is_valid(&aliased_compound),
-            "{schema_file} refuses reusable compound aliases"
-        );
-
-        for use_site in ["field", "action"] {
-            let mut direct_compound = if schema_file == REGISTRY_MODULE_SCHEMA_FILE {
-                module_source(json!({"type": "string", "maximumLength": 24}), use_site)
-            } else {
-                project_source(json!({"type": "string", "maximumLength": 24}), use_site)
-            };
-            direct_compound
-                .as_object_mut()
-                .unwrap()
-                .remove("valueTypes");
-            let declaration = json!({
-                "id": "value",
+        for compound in [
+            json!({
                 "type": "structured",
                 "maximumBytes": 256,
-                "schema": {"type": "object", "additionalProperties": false},
-                "classification": "internal"
-            });
-            if use_site == "field" {
-                direct_compound["recordTypes"][0]["fields"][0] = declaration;
-            } else {
-                direct_compound["actions"][0]["inputs"][0] = declaration;
-            }
+                "schema": {"type": "object", "additionalProperties": false}
+            }),
+            json!({"type": "crs84-polygon", "precision": 6, "maximumPositions": 32}),
+        ] {
+            let kind = compound["type"].as_str().expect("compound type name");
+            let mut aliased_compound = source.clone();
+            aliased_compound["valueTypes"]["shared-value"] = compound.clone();
             assert!(
-                schema.is_valid(&direct_compound),
-                "{schema_file} keeps direct compound {use_site} declarations"
+                !schema.is_valid(&aliased_compound),
+                "{schema_file} refuses reusable {kind} aliases"
             );
+
+            for use_site in ["field", "action"] {
+                let mut direct_compound = if schema_file == REGISTRY_MODULE_SCHEMA_FILE {
+                    module_source(json!({"type": "string", "maximumLength": 24}), use_site)
+                } else {
+                    project_source(json!({"type": "string", "maximumLength": 24}), use_site)
+                };
+                direct_compound
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("valueTypes");
+                let mut declaration = compound.clone();
+                declaration["id"] = json!("value");
+                declaration["classification"] = json!("internal");
+                if use_site == "field" {
+                    direct_compound["recordTypes"][0]["fields"][0] = declaration;
+                } else {
+                    direct_compound["actions"][0]["inputs"][0] = declaration;
+                }
+                assert!(
+                    schema.is_valid(&direct_compound),
+                    "{schema_file} keeps direct {kind} {use_site} declarations"
+                );
+            }
         }
     }
 }
