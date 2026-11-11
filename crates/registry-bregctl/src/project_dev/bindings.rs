@@ -618,7 +618,8 @@ fn start_token_server(
 ) -> Result<TokenServer> {
     ensure!(!clients.is_empty(), "a binding token client is required");
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .context("cannot bind the run-local token endpoint")?;
+        .context("cannot bind the run-local token endpoint")
+        .map_err(super::operational)?;
     listener.set_nonblocking(true)?;
     let origin = format!("http://{}", listener.local_addr()?);
     let endpoint = format!("{origin}/oauth2/token");
@@ -945,6 +946,7 @@ mod tests {
                 principal: "sub".to_owned(),
                 purpose: false,
                 requires_postgis: false,
+                encrypts_fields: false,
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),

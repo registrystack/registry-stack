@@ -14,7 +14,7 @@
       "required": ["class", "message"],
       "properties": {
         "class": {
-          "description": "domain (exit 1): the request or the run's state was refused. usage (exit 2): the command line is wrong. operational (exit 3): the environment failed or resources need cleanup.",
+          "description": "domain (exit 1): the request or the run's state was refused. usage (exit 2): the command line is wrong. operational (exit 3): the environment failed, for example PostgreSQL was unreachable or refused the connection, a product process could not be started, or no loopback port was available, or resources need cleanup.",
           "enum": ["domain", "usage", "operational"]
         },
         "message": {"type": "string", "minLength": 1}
@@ -58,6 +58,10 @@
           }
         },
         "databases_and_roles": {"type": "array", "items": {"type": "string"}},
+        "field_encryption_key": {
+          "description": "Present when the run directory still holds the run's development field-encryption key file. The path only; the key itself is never reported.",
+          "type": "string"
+        },
         "unavailable": {"type": "string"},
         "reason": {"type": "string"}
       }

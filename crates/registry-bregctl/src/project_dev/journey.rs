@@ -732,6 +732,7 @@ mod tests {
                 principal: "sub".to_owned(),
                 purpose: false,
                 requires_postgis: false,
+                encrypts_fields: false,
                 named_clients: Default::default(),
             }),
             casework_principals: BTreeMap::new(),

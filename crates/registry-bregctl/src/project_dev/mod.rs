@@ -126,6 +126,9 @@ struct BregAuthority {
     principal: String,
     purpose: bool,
     requires_postgis: bool,
+    /// The compiled project declares encrypted fields, so the run draws its
+    /// own development data key.
+    encrypts_fields: bool,
     named_clients: BTreeSet<String>,
 }
 
@@ -138,8 +141,36 @@ struct Binaries {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 enum WorkerReply {
-    Ready { report: Value },
-    Failed { error: String },
+    Ready {
+        report: Value,
+    },
+    Failed {
+        error: String,
+        /// The environment failed rather than the project or plan, so the
+        /// supervisor reports the operational class.
+        #[serde(default)]
+        operational: bool,
+    },
+}
+
+impl WorkerReply {
+    fn failed(error: &anyhow::Error) -> Self {
+        Self::failure(format!("{error:#}"), error.is::<Operational>())
+    }
+
+    fn failure(error: String, operational: bool) -> Self {
+        Self::Failed { error, operational }
+    }
+}
+
+/// The supervisor's error for a failure its worker reported, in the class the
+/// worker gave it.
+fn restore_failure(error: String, operational: bool) -> anyhow::Error {
+    if operational {
+        Operational(error).into()
+    } else {
+        anyhow::anyhow!(error)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -205,6 +236,9 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
     {
         line(format!("database or role {}", name.as_str().unwrap_or("?")));
     }
+    if let Some(key) = facts["field_encryption_key"].as_str() {
+        line(format!("development field-encryption key {key}"));
+    }
     if let Some(reason) = facts["unavailable"].as_str() {
         line(format!("some facts are unavailable: {reason}"));
     }
@@ -224,7 +258,15 @@ fn lost_supervisor_facts(root: &Path, run_id: &str) -> Value {
         Ok(objects) => facts["objects"] = json!(objects),
         Err(error) => facts["unavailable"] = json!(format!("{error:#}")),
     }
+    name_field_key(root, &mut facts);
     facts
+}
+
+/// Name, never read, the development data key a run left behind.
+fn name_field_key(root: &Path, facts: &mut Value) {
+    if let Some(key) = products::field_key_file(root) {
+        facts["field_encryption_key"] = json!(key);
+    }
 }
 
 fn recorded_processes(root: &Path) -> Value {
@@ -313,12 +355,7 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
         return match worker(&root, stdout) {
             Ok(()) => 0,
             Err(error) => {
-                let _ = reply(
-                    stdout,
-                    &WorkerReply::Failed {
-                        error: format!("{error:#}"),
-                    },
-                );
+                let _ = reply(stdout, &WorkerReply::failed(&error));
                 3
             }
         };
@@ -380,6 +417,13 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 struct Operational(String);
+
+/// Classify `error` as an environment failure, such as an unreachable
+/// PostgreSQL server, a product binary that cannot be started, or no free
+/// loopback port. The message is unchanged.
+fn operational(error: anyhow::Error) -> anyhow::Error {
+    Operational(format!("{error:#}")).into()
+}
 
 /// The error envelope and exit code for a failed command. It is the launcher's
 /// `registry.rstack.error.v1` object, plus `run_id` and `recovery` when a run
@@ -661,8 +705,8 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     loop {
         match receiver.recv_timeout(POLL) {
             Ok(Ok(WorkerReply::Ready { report })) => return Ok(report),
-            Ok(Ok(WorkerReply::Failed { error })) => {
-                let error = anyhow::anyhow!(error);
+            Ok(Ok(WorkerReply::Failed { error, operational })) => {
+                let error = restore_failure(error, operational);
                 let kept_logs = failed_logs_dir(&base, &input.run_id);
                 if root.join("worker.lock").exists() {
                     if let Err(cleanup) = stop(&input.run_id) {
@@ -743,7 +787,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         let ca = env::var_os(CA_FILE)
             .map(|path| {
                 let bytes = plan::read(Path::new(&path), 1024 * 1024)
-                    .context("cannot read the PostgreSQL CA file")?;
+                    .context("cannot read the PostgreSQL CA file")
+                    .map_err(operational)?;
                 write_private(&root.join("postgres-ca"), &bytes)?;
                 Ok::<_, anyhow::Error>(bytes)
             })
@@ -776,7 +821,10 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     match prepared {
         Ok(report) => {
             if let Err(error) = reply(output, &WorkerReply::Ready { report }) {
-                failure = Some(format!("cannot report development run readiness: {error}"));
+                failure = Some(WorkerReply::failure(
+                    format!("cannot report development run readiness: {error}"),
+                    true,
+                ));
             } else {
                 let deadline = Instant::now() + Duration::from_secs(input.ttl_seconds);
                 while Instant::now() < deadline
@@ -790,7 +838,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 }
             }
         }
-        Err(error) => failure = Some(format!("{error:#}")),
+        Err(error) => failure = Some(WorkerReply::failed(&error)),
     }
     let stopped = simple_report(&input.run_id, "stopping");
     let mark_stopping = write_private(&root.join(REPORT), &serde_json::to_vec(&stopped)?);
@@ -805,13 +853,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         if cleanup.is_ok() {
             break;
         }
-        if let Some(error) = failure.as_ref().filter(|_| !told_parent) {
-            let _ = reply(
-                output,
-                &WorkerReply::Failed {
-                    error: error.clone(),
-                },
-            );
+        if let Some(failed) = failure.as_ref().filter(|_| !told_parent) {
+            let _ = reply(output, failed);
             told_parent = true;
         }
         let Some(delay) = delays.next() else {
@@ -836,12 +879,12 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         Ok(())
     }
     .and_then(|()| remove_run_dir(root));
-    if let Some(error) = failure.filter(|_| !told_parent) {
+    if let Some(WorkerReply::Failed { error, operational }) = failure.filter(|_| !told_parent) {
         let error = match removed.as_ref() {
             Ok(()) => error,
             Err(cleanup) => format!("{error}; run {} {cleanup}", input.run_id),
         };
-        reply(output, &WorkerReply::Failed { error })?;
+        reply(output, &WorkerReply::failure(error, operational))?;
     }
     removed?;
     // If the root is gone, no stale ready report could have survived.
@@ -896,6 +939,7 @@ fn pending_status(root: &Path, run_id: &str, pending: Value) -> Value {
         "databases_and_roles": pending["databases_and_roles"],
         "processes": pending["processes"],
     });
+    name_field_key(root, &mut report["recovery"]);
     report
 }
 
@@ -1300,7 +1344,10 @@ fn remove_run_dir(root: &Path) -> Result<()> {
 
 fn note_kept_logs(error: anyhow::Error, kept: Option<PathBuf>) -> anyhow::Error {
     match kept {
-        Some(path) => anyhow::anyhow!("{error:#}; logs kept at {}", path.display()),
+        Some(path) => restore_failure(
+            format!("{error:#}; logs kept at {}", path.display()),
+            error.is::<Operational>(),
+        ),
         None => error,
     }
 }
@@ -1346,7 +1393,8 @@ mod tests {
             "schema_people": [],
             "breg_authority": {
                 "principal": "p", "purpose": false,
-                "requires_postgis": postgis, "named_clients": []
+                "requires_postgis": postgis, "encrypts_fields": false,
+                "named_clients": []
             },
             "casework_principals": {},
             "binaries": {}
@@ -1426,6 +1474,45 @@ mod tests {
     }
 
     #[test]
+    fn recovery_names_a_field_key_left_in_the_run_directory() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        fake_run(
+            root,
+            json!([{"product": "breg", "project": ".", "audience": "registry"}]),
+            false,
+        );
+        let facts = lost_supervisor_facts(root, RUN_ID);
+        assert!(facts.get("field_encryption_key").is_none(), "{facts}");
+        let pending = pending_status(root, RUN_ID, pending_report(RUN_ID, vec![], json!([])));
+        assert!(
+            pending["recovery"].get("field_encryption_key").is_none(),
+            "{pending}"
+        );
+
+        let canary = "field-key-canary-value";
+        fs::write(root.join(products::FIELD_KEY), canary).unwrap();
+        let key = root.join(products::FIELD_KEY);
+        for facts in [
+            lost_supervisor_facts(root, RUN_ID),
+            pending_status(root, RUN_ID, pending_report(RUN_ID, vec![], json!([])))["recovery"]
+                .clone(),
+        ] {
+            assert_eq!(facts["field_encryption_key"], json!(key), "{facts}");
+            assert!(!facts.to_string().contains(canary), "{facts}");
+            let text = recovery_message(RUN_ID, &facts);
+            assert!(
+                text.contains(&format!(
+                    "development field-encryption key {}",
+                    key.display()
+                )),
+                "{text}"
+            );
+            assert!(!text.contains(canary), "{text}");
+        }
+    }
+
+    #[test]
     fn errors_map_to_the_envelope_class_and_exit_code() {
         let (report, code) = error_report(&anyhow::anyhow!("invalid test person name"));
         assert_eq!(
@@ -1475,6 +1562,31 @@ mod tests {
             message.contains("could not be recovered: no URL"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_worker_failure_keeps_its_class_through_the_supervisor() {
+        let class = |error: &anyhow::Error| error_report(error).0["error"]["class"].clone();
+        for (failure, expected) in [
+            (
+                anyhow::Error::new(Operational("server unreachable".into())).context("start"),
+                "operational",
+            ),
+            (anyhow::anyhow!("breg check failed"), "domain"),
+        ] {
+            let mut line = Vec::new();
+            reply(&mut line, &WorkerReply::failed(&failure)).unwrap();
+            let WorkerReply::Failed { error, operational } = serde_json::from_slice(&line).unwrap()
+            else {
+                panic!("the worker reported readiness");
+            };
+            let restored = restore_failure(error, operational);
+            assert_eq!(restored.to_string(), format!("{failure:#}"));
+            assert_eq!(class(&restored), expected);
+            let noted = note_kept_logs(restored, Some(PathBuf::from("/kept/logs")));
+            assert!(noted.to_string().ends_with("; logs kept at /kept/logs"));
+            assert_eq!(class(&noted), expected);
+        }
     }
 
     #[test]

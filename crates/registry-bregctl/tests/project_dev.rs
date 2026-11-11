@@ -475,6 +475,35 @@ fn check_validates_the_closed_plan_without_allocating_run_state() {
 }
 
 #[test]
+fn check_accepts_a_project_with_encrypted_fields_without_allocating_state() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    project(scratch.path(), "");
+    let registry = scratch.path().join("registry.yaml");
+    let source = fs::read_to_string(&registry).unwrap();
+    let encrypted = source
+        .replacen(
+            "mutationMode: mutable\n    display: {label: Record",
+            "mutationMode: mutable\n    classification: restricted\n    display: {label: Record",
+            1,
+        )
+        .replacen(
+            "- {id: name, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: internal}\n      - {id: owner",
+            "- {id: name, type: string, required: true, minimumLength: 1, maximumLength: 100, classification: restricted, encrypted: true}\n      - {id: owner",
+            1,
+        );
+    assert_eq!(encrypted.matches("encrypted: true").count(), 1);
+    fs::write(&registry, encrypted).unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(result.status.success(), "{report}");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert!(!state.exists());
+}
+
+#[test]
 fn check_and_start_reject_an_unknown_fixture_journey_without_allocating_state() {
     assert_dangling_schema_assignment(
         "schemaTestPeople:\n  \"private/journey~marker\":\n    real-step: operator\n",
@@ -1243,7 +1272,7 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
         .env_remove("RSTACK_DEV_DATABASE_URL")
         .output()
         .unwrap();
-    assert!(!result.status.success());
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_error_envelope(&report, "domain");
     assert!(report.get("diagnostics").is_none());
@@ -1278,20 +1307,71 @@ fn a_run_id_cannot_name_a_path() {
     assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
 }
 
+/// A system binary such as `true` or `false`, wherever this platform keeps it.
+fn system_binary(name: &str) -> std::path::PathBuf {
+    ["/usr/bin", "/bin"]
+        .into_iter()
+        .map(|directory| std::path::Path::new(directory).join(name))
+        .find(|path| path.is_file())
+        .unwrap()
+}
+
+/// A loopback port nothing listens on: it is reserved and released at once.
+fn closed_loopback_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Start a BReg run whose product tool and runtime are the given binaries and
+/// whose PostgreSQL administrator URL is `database_url`.
+fn start_with_breg_binaries(
+    root: &std::path::Path,
+    state: &std::path::Path,
+    (tool, runtime): (&std::path::Path, &std::path::Path),
+    database_url: &str,
+) -> std::process::Output {
+    let request = serde_json::json!({
+        "action": "start", "project": root, "json": true,
+    });
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("project-dev")
+        .env("RSTACK_PROJECT_DEV_REQUEST", request.to_string())
+        .env("RSTACK_DEV_STATE_DIR", state)
+        .env("RSTACK_DEV_DATABASE_URL", database_url)
+        .env_remove("RSTACK_DEV_DATABASE_CA")
+        .env("RSTACK_BREGCTL_BIN", tool)
+        .env("RSTACK_BREG_BIN", runtime)
+        .output()
+        .unwrap()
+}
+
+/// The run directories `state` still holds; kept logs of failed runs are not
+/// runs.
+fn live_runs(state: &std::path::Path) -> Vec<String> {
+    match fs::read_dir(state) {
+        Ok(entries) => entries
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "failed")
+            .collect(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => panic!("cannot read the run state: {error}"),
+    }
+}
+
 #[test]
 fn worker_restores_a_valid_plan_whose_captured_input_exceeds_512_kib() {
     let scratch = tempfile::tempdir().unwrap();
     let project_root = scratch.path().join("project");
     fs::create_dir(&project_root).unwrap();
-    fs::write(
-        project_root.join("registry.yaml"),
-        include_str!(
-            "../../../products/platform/conformance/projects/breg-project-dev/registry/registry.yaml"
-        ),
-    )
-    .unwrap();
+    fixture_project(&project_root, "");
     let raw = BASE64.encode(vec![b'x'; 400 * 1024]);
-    let mut plan = serde_json::json!({
+    // The captured input carries the plan's base64 body verbatim, so it is
+    // larger than the body itself.
+    assert!(raw.len() > 512 * 1024, "raw body: {}", raw.len());
+    let plan = serde_json::json!({
         "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
         "kind": "BRegProjectDev",
         "issuer": "https://issuer.example.invalid",
@@ -1320,48 +1400,57 @@ fn worker_restores_a_valid_plan_whose_captured_input_exceeds_512_kib() {
         "the substantial development plan was refused"
     );
 
-    let members = plan.as_object_mut().unwrap();
-    members.remove("apiVersion");
-    members.remove("kind");
-    let run_id = "0123456789abcdef0123456789abcdef";
+    // The supervisor captures the plan for its worker; a refusing product tool
+    // proves the worker restored that capture and reached the product check.
     let state = scratch.path().join("state");
-    let root = state.join(run_id);
-    fs::create_dir_all(&root).unwrap();
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-    let root = root.canonicalize().unwrap();
-    let false_binary = ["/usr/bin/false", "/bin/false"]
-        .into_iter()
-        .map(std::path::Path::new)
-        .find(|path| path.is_file())
-        .unwrap()
-        .canonicalize()
-        .unwrap();
-    let input = serde_json::to_vec(&serde_json::json!({
-        "run_id": run_id,
-        "project": project_root,
-        "plan": plan,
-        "ttl_seconds": 1,
-        "schema_people": [],
-        "breg_authority": {
-            "principal": "sub", "purpose": false, "requires_postgis": false,
-            "named_clients": []
-        },
-        "casework_principals": {},
-        "binaries": {"breg": {"tool": false_binary, "runtime": false_binary}}
-    }))
-    .unwrap();
-    assert!(input.len() > 512 * 1024, "captured input: {}", input.len());
-    fs::write(root.join("input.json"), input).unwrap();
-
-    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .args(["project-dev", "--worker"])
-        .arg(&root)
-        .env("RSTACK_DEV_STATE_DIR", &state)
-        .env_remove("RSTACK_DEV_DATABASE_URL")
-        .output()
-        .unwrap();
-    let reply: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    let error = reply["error"].as_str().unwrap();
+    let false_binary = system_binary("false");
+    let result = start_with_breg_binaries(
+        &project_root,
+        &state,
+        (&false_binary, &false_binary),
+        &format!("postgresql://127.0.0.1:{}/postgres", closed_loopback_port()),
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_error_envelope(&report, "domain");
+    assert_eq!(result.status.code(), Some(1), "{report}");
+    let error = report["error"]["message"].as_str().unwrap();
     assert!(error.contains("breg check failed"), "{error}");
     assert!(!error.contains("cannot restore the captured development plan"));
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+}
+
+#[test]
+fn start_reports_an_unreachable_postgresql_server_as_operational() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fixture_project(scratch.path(), "");
+    let canary = "rstack-dev-admin-password-canary";
+
+    let result = start_with_breg_binaries(
+        scratch.path(),
+        &state,
+        (&system_binary("true"), &system_binary("false")),
+        &format!(
+            "postgresql://admin:{canary}@127.0.0.1:{}/postgres",
+            closed_loopback_port()
+        ),
+    );
+
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_error_envelope(&report, "operational");
+    assert_eq!(result.status.code(), Some(3), "{report}");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot establish the PostgreSQL administrator session"),
+        "{report}"
+    );
+    // The run released everything itself, so there is nothing to recover.
+    assert!(report.get("run_id").is_none(), "{report}");
+    assert!(report.get("recovery").is_none(), "{report}");
+    assert_eq!(live_runs(&state), Vec::<String>::new());
+    for output in [&result.stdout, &result.stderr] {
+        assert!(!String::from_utf8_lossy(output).contains(canary));
+    }
 }

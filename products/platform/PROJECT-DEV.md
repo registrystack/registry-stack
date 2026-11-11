@@ -209,6 +209,28 @@ Stop and TTL expiry terminate the services and remove the databases, roles,
 keys, and run files. A spatial BReg run also creates a `NOLOGIN` role whose name
 starts with `breg_bbox_`; cleanup removes it with the others.
 
+### Encrypted fields
+
+A BReg project with encrypted fields runs without extra setup. `start` draws a
+development data key for the run from the operating system's random source and
+writes it as `field-key` in the run directory, readable only by your user. BReg
+reads it through its `local-file` key custody, which it accepts only for a
+local development database. The key is never printed, never written to the
+checkout, and is removed with the run directory on stop, TTL expiry and a
+failed start. When a run needs recovery, the report names the key file under
+`recovery.field_encryption_key` until `stop --recover` removes it. Every run
+gets a new key, so encrypted data does not outlive its run.
+
+The schema test that `start` runs before activation has no field-encryption
+key, so a step in `tests/journeys.yaml` that touches a Record type with an
+encrypted field fails it, and `start` reports `breg test failed
+(test.step.failed)`. Exercise those Record types in the plan's `journey`
+instead.
+
+This key custody is for development only. A deployment supplies its key as
+[BReg field encryption](../../docs/site/src/content/docs/configure/breg-field-encryption.mdx)
+describes.
+
 The state directory holds one directory per run. It defaults to
 `rstack-dev-UID` in the system temporary directory. Set `RSTACK_DEV_STATE_DIR`
 to use another location. A run directory is renamed to `.<run_id>.removing`
@@ -262,7 +284,8 @@ To release the resources by hand instead, in this order:
    each listed database.
 3. As the administrator, run `DROP ROLE IF EXISTS "NAME"` for each listed role,
    including a `breg_bbox_*` role from a spatial run.
-4. Remove the run directory.
+4. Remove the run directory. It holds the run's development field-encryption
+   key when `field_encryption_key` is listed.
 
 ### Errors and limitations
 
@@ -272,23 +295,23 @@ and stop prints one JSON object on standard output, validated by
 for failures before the helper starts, such as a missing component.
 
 - `schema_version` is `registry.rstack.error.v1` and `status` is `refused`.
-- `error.class` is `domain` (exit 1: the request or the run's state was
-  refused), `usage` (exit 2: the command line is wrong) or `operational`
-  (exit 3: the environment failed, a cleanup stalled, or a run needs its
-  resources released). `error.message` is the human-readable reason.
+- `error.class` is `domain` (exit 1: the request, the project, the plan or the
+  run's state was refused), `usage` (exit 2: the command line is wrong) or
+  `operational` (exit 3: the environment failed, a cleanup stalled, or a run
+  needs its resources released). Environment failures include a PostgreSQL
+  server that is unreachable, refuses the administrator session, or cannot
+  provision a run's databases and roles, a product binary that cannot be
+  started, and no free loopback port. `error.message` is the human-readable
+  reason.
 - `run_id` is present when the failure concerns a run that still has
   resources to release. Use it with `stop --recover`.
 - `recovery` accompanies `run_id` when the resources are known. It has `kind`
   (`lost-supervisor` or `cleanup-pending`), `run_directory`, `processes`,
-  `objects` or `databases_and_roles`, and `reason` when `--recover` could not
-  finish.
+  `objects` or `databases_and_roles`, `field_encryption_key` when the run
+  directory still holds the run's key file (the path, never the key), and
+  `reason` when `--recover` could not finish.
 
 Without `--json`, the message goes to standard error as `rstack dev: MESSAGE`
 with the same exit code. The reports of `rstack dev check` use `BRegCtlReport`
 instead. A helper started without the launcher's request prints a plain
 message and exits 2.
-
-`rstack dev` does not configure field encryption yet. `rstack dev check` and
-`start` refuse a BReg project with encrypted fields at the product's
-`/products/N/project` pointer, and the error names the encrypted
-`ENTITY.FIELD`; `start` refuses it before it provisions anything.

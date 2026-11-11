@@ -25,6 +25,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 STACK = Path(__file__).resolve().parents[3]
 NATIVE_REVIEW = STACK / "products/breg/acceptance/reviewed-evidence-journey"
 SPATIAL = STACK / "products/breg/acceptance/spatial-service-sites"
+MINIMAL = STACK / "products/breg/examples/minimal"
 HTTP = build_opener(ProxyHandler({}))
 
 
@@ -184,6 +185,11 @@ def files(root):
 
 
 def dev(bin_dir, env, cwd, *args, expected=0):
+    return dev_output(bin_dir, env, cwd, *args, expected=expected)[0]
+
+
+def dev_output(bin_dir, env, cwd, *args, expected=0):
+    """Run `rstack dev` and return its report with everything it printed."""
     install_root = Path(env["RSTACK_DEV_STATE_DIR"]).with_name("rstack-install")
     result = command(
         bin_dir / "rstack",
@@ -212,7 +218,7 @@ def dev(bin_dir, env, cwd, *args, expected=0):
         assert report["error"]["message"], report
     else:
         assert report["schema_version"] == "registry.rstack.dev.v1"
-    return report
+    return report, result.stdout + result.stderr
 
 
 def credential(bin_dir, env, cwd, run, alias):
@@ -418,6 +424,7 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
         verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
         verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env)
         verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env)
+        verify_field_encryption(root, bin_dir, pg, state, env, pg_env)
         if spatial:
             verify_spatial(
                 root, bin_dir, pg, {**env, "RSTACK_DEV_DATABASE_URL": url}, pg_env
@@ -565,7 +572,8 @@ def verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env):
             assert time.monotonic() < deadline, "the PostgreSQL lock was not acquired"
             time.sleep(0.1)
 
-        report = dev(bin_dir, env, checkout, "start", ".", expected=1)
+        report = dev(bin_dir, env, checkout, "start", ".", expected=3)
+        assert report["error"]["class"] == "operational", report
         error = report["error"]["message"]
         assert "cannot create an isolated PostgreSQL database" in error, report
         assert "statement deadline" in error, report
@@ -841,7 +849,8 @@ def verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env):
         "SELECT default_version FROM pg_available_extensions WHERE name = 'postgis';",
     ).strip()
     supported = bool(offered) and tuple(map(int, offered.split(".")[:2])) >= (3, 5)
-    report = dev(bin_dir, env, checkout, "start", ".", expected=1)
+    report = dev(bin_dir, env, checkout, "start", ".", expected=3)
+    assert report["error"]["class"] == "operational", report
     if supported:
         assert "must be allowed to CREATE EXTENSION postgis" in report["error"]["message"], report
     else:
@@ -849,6 +858,253 @@ def verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env):
     assert inventory(pg, pg_env) == baseline, report
     assert live_runs(state) == [], report
     print("A spatial start without PostGIS rights was refused and left nothing behind")
+
+
+def encrypted_project(root, name):
+    """Copy the minimal registry with a note Record type whose body is
+    encrypted, and write a plan that creates a note and reads it back.
+
+    The fixture journeys leave notes alone: `bregctl test` runs them without
+    field-encryption key state, so a fixture step that wrote an encrypted
+    field would be refused there before the run reached its own key."""
+    checkout = root / name
+    registry = checkout / "registry"
+    shutil.copytree(MINIMAL, registry)
+    source = (registry / "registry.yaml").read_text()
+    for anchor, addition in [
+        (
+            "\nactions:\n",
+            "  - id: note\n"
+            "    route: notes\n"
+            "    primaryDataset: directory\n"
+            "    mutationMode: mutable\n"
+            "    classification: restricted\n"
+            "    display: {label: Note, description: A note whose body is encrypted.}\n"
+            "    fields:\n"
+            "      - {id: title, type: string, required: true, minimumLength: 1,"
+            " maximumLength: 160, classification: internal}\n"
+            "      - {id: body, type: string, required: true, minimumLength: 1,"
+            " maximumLength: 2000, classification: restricted, encrypted: true}\n"
+            "      - {id: jurisdiction, type: string, required: true, minimumLength: 1,"
+            " maximumLength: 40, classification: internal}\n",
+        ),
+        (
+            "      actions:\n        - action: update-contact-email\n",
+            "        - recordType: note\n"
+            "          operations: [create, get]\n"
+            "          readableFields: [title, body, jurisdiction]\n"
+            "          writableFields: [title, body, jurisdiction]\n"
+            "          rowBoundaries:\n"
+            "            - {field: jurisdiction, claim: jurisdiction, operator: equals}\n",
+        ),
+    ]:
+        # Each addition goes in front of its anchor: the note after the
+        # contact Record type, and its grant after the contact grant.
+        assert source.count(anchor) == 1, anchor
+        source = source.replace(anchor, addition + anchor)
+    (registry / "registry.yaml").write_text(source)
+    # Both fixture principals hold the same grant, so each fixture step names
+    # the person whose jurisdiction it expects.
+    people = {
+        "synthetic-directory-editor": ("editor", "zone-a"),
+        "synthetic-foreign-editor": ("foreign-editor", "zone-b"),
+    }
+    schema_test_people = {}
+    steps = 0
+    for line in (registry / "tests/journeys.yaml").read_text().splitlines():
+        if match := re.fullmatch(r"  - id: (\S+)", line):
+            journey = schema_test_people.setdefault(match[1], {})
+        elif match := re.fullmatch(r"      - id: (\S+)", line):
+            step = match[1]
+            steps += 1
+        elif match := re.fullmatch(r" +principal: (\S+)", line):
+            journey[step] = people[match[1]][0]
+    assert steps and sum(map(len, schema_test_people.values())) == steps, (
+        schema_test_people
+    )
+    body = f"encrypted-note-{secrets.token_hex(8)}"
+    plan = {
+        "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
+        "kind": "BRegProjectDev",
+        "issuer": "https://directory-smoke.example.invalid",
+        "products": [
+            {"product": "breg", "project": "registry", "audience": "directory"}
+        ],
+        "people": {
+            alias: {
+                "subject": principal,
+                "client": "directory-smoke",
+                "grants": {
+                    "breg": {
+                        "profile": "directory-editor",
+                        "scopes": ["registry:directory:write"],
+                        "claims": {
+                            "jurisdiction": jurisdiction,
+                            "registry_actor_kind": "human",
+                            "registry_purpose": "directory-administration",
+                        },
+                    }
+                },
+            }
+            for principal, (alias, jurisdiction) in people.items()
+        },
+        "schemaTestPeople": schema_test_people,
+        "journey": {
+            "id": "encrypted-note",
+            "steps": [
+                {
+                    "id": "create-note",
+                    "product": "breg",
+                    "as": "editor",
+                    "method": "POST",
+                    "path": "/v1/records/notes",
+                    "headers": {"Idempotency-Key": "encrypted-note"},
+                    "body": {
+                        "data": {
+                            "title": "Encrypted note",
+                            "body": body,
+                            "jurisdiction": "zone-a",
+                        }
+                    },
+                    "expect": {"status": 201},
+                    "capture": {
+                        "note": {
+                            "type": "pointer",
+                            "pointer": "/data/recordIdentifier",
+                        }
+                    },
+                },
+                {
+                    "id": "read-note",
+                    "product": "breg",
+                    "as": "editor",
+                    "method": "GET",
+                    "path": "/v1/records/notes/{{note}}",
+                    "expect": {
+                        "status": 200,
+                        "json": {"/data/domainData/body": body},
+                    },
+                },
+            ],
+        },
+    }
+    (checkout / "dev.yaml").write_text(json.dumps(plan))
+    return checkout, body
+
+
+def field_key(state, run):
+    """The run's key, after checking its custody: an owner-only file in the
+    owner-only run directory holding 32 random bytes in base64."""
+    key = state / run / "field-key"
+    assert key.parent.stat().st_mode & 0o777 == 0o700, key
+    assert key.stat().st_mode & 0o777 == 0o600, key
+    encoded = key.read_bytes()
+    assert len(base64.b64decode(encoded, validate=True)) == 32, key
+    return encoded
+
+
+def tree_bytes(root, skip=()):
+    return [
+        path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and path not in skip
+    ]
+
+
+def without_key(encoded, outputs):
+    """No output carries the key, as base64 or as raw bytes. The assertion
+    names no value so a failure cannot print the key."""
+    raw = base64.b64decode(encoded)
+    for output in outputs:
+        assert encoded not in output and raw not in output, "the field key leaked"
+
+
+def stored_values(pg, pg_env, run):
+    """Every row of the run's BReg database, as text with byte columns hex
+    encoded, so plaintext is found whether it sits in text or bytes."""
+    dump = checked(
+        pg / "pg_dump",
+        "--data-only",
+        env={**pg_env, "PGDATABASE": f"rstack_{run}_breg"},
+    )
+    return lambda value: value.encode() in dump or value.encode().hex().encode() in dump
+
+
+def verify_field_encryption(root, bin_dir, pg, state, env, pg_env):
+    """A project with encrypted fields runs on a per-run key that stays in the
+    run directory and is removed on every cleanup path."""
+    checkout, body = encrypted_project(root, "encrypted")
+    before = files(checkout)
+    baseline = inventory(pg, pg_env)
+
+    report, printed = dev_output(bin_dir, env, checkout, "start", ".")
+    run = report["run_id"]
+    try:
+        assert report["journey"]["result"] == "passed", report
+        key = field_key(state, run)
+        credential(bin_dir, env, checkout, run, "editor")
+        _, token = dev_output(bin_dir, env, checkout, "token", run, "--as", "editor")
+        _, status = dev_output(bin_dir, env, checkout, "status", run)
+        without_key(
+            key,
+            [printed, token, status]
+            + tree_bytes(state / run, skip={state / run / "field-key"})
+            + tree_bytes(checkout),
+        )
+        stored = stored_values(pg, pg_env, run)
+        assert stored("Encrypted note") and stored("__bregEncryptedV1")
+        assert not stored(body), "the encrypted body is stored in plaintext"
+    finally:
+        stopped, printed = dev_output(bin_dir, env, checkout, "stop", run)
+    assert stopped["status"] == "stopped", stopped
+    assert not (state / run).exists()
+    without_key(key, [printed])
+    assert inventory(pg, pg_env) == baseline
+    print("An encrypted field round-tripped on an owner-only run key that stop removed")
+
+    short = dev(bin_dir, env, checkout, "start", ".", "--ttl", "5s")
+    field_key(state, short["run_id"])
+    wait_for_stop(bin_dir, env, checkout, short["run_id"])
+    assert not (state / short["run_id"]).exists()
+    assert live_runs(state) == []
+
+    # The runtime fixture copies the key it was given so the test can look
+    # for it in everything the failed start left behind.
+    seen = root / "failed-run-key"
+    failing = root / "failing-breg"
+    failing.write_text(
+        "#!/bin/sh\numask 077\n"
+        f"cp \"$(dirname \"$2\")/field-key\" '{seen}'\n"
+        "printf 'boom\\n' >&2\nexit 1\n"
+    )
+    failing.chmod(0o700)
+    failure_env = {**env, "RSTACK_BREG_BIN": str(failing)}
+    report, printed = dev_output(
+        bin_dir, failure_env, checkout, "start", ".", expected=1
+    )
+    assert "breg exited before readiness" in report["error"]["message"], report
+    logs = kept_logs(state, report["error"]["message"])
+    key = seen.read_bytes()
+    assert len(base64.b64decode(key, validate=True)) == 32
+    assert not list(state.rglob("field-key")), "a failed start kept its key"
+    without_key(key, [printed] + tree_bytes(logs.parent))
+    assert live_runs(state) == []
+    assert inventory(pg, pg_env) == baseline
+
+    report, run = lose_supervisor(bin_dir, checkout, state, env)
+    lost, printed = dev_output(bin_dir, env, checkout, "stop", run, expected=3)
+    key = field_key(state, run)
+    assert lost["recovery"]["field_encryption_key"] == str(state / run / "field-key")
+    without_key(key, [printed])
+    recovered, printed = dev_output(bin_dir, env, checkout, "stop", run, "--recover")
+    assert recovered["status"] == "stopped", recovered
+    assert not (state / run).exists()
+    without_key(key, [printed])
+    assert_nothing_listening(bin_dir, report["products"].values())
+    assert inventory(pg, pg_env) == baseline
+    assert live_runs(state) == []
+    assert files(checkout) == before
+    print("TTL expiry, a failed start and stop --recover removed the run's key")
 
 
 def verify_spatial(root, bin_dir, pg, env, pg_env):
