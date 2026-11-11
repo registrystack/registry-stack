@@ -470,10 +470,11 @@ impl Child {
 
 impl Drop for Child {
     fn drop(&mut self) {
-        if self.controller.take().is_some() {
-            if self.guard.wait().is_ok() {
-                let _ = complete_state(&self.state_file);
-            }
+        if self.controller.is_none() {
+            return;
+        }
+        if let Err(error) = self.stop() {
+            eprintln!("development process guard cleanup failed: {error:#}");
         }
     }
 }

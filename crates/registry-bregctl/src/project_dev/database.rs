@@ -219,6 +219,8 @@ fn read_recovery_identity(
     })
 }
 
+type AdminConnectionTask = tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>;
+
 fn open_admin_session(
     runtime: &Runtime,
     config: &Config,
@@ -226,11 +228,7 @@ fn open_admin_session(
     ownership_lock: &str,
     expected_identity: Option<&RecoveryIdentity>,
     deadline: Instant,
-) -> Result<(
-    Client,
-    tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
-    RecoveryIdentity,
-)> {
+) -> Result<(Client, AdminConnectionTask, RecoveryIdentity)> {
     let (client, connection) = runtime.block_on(bounded_connection(
         config.connect(tls.clone()),
         remaining_timeout(deadline, CONNECTION_TIMEOUT)?,
@@ -277,7 +275,7 @@ enum Acquisition {
 
 pub(super) struct Database {
     client: Client,
-    _connection_task: tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+    _connection_task: AdminConnectionTask,
     admin_session_failed: bool,
     tls: MakeRustlsConnect,
     admin_config: Config,
