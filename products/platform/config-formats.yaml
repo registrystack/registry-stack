@@ -4615,6 +4615,8 @@ outOfScope:
     reason: Coordinator operation input and output contracts, wire payloads governed by each product's API contract.
   - files: products/breg/contracts/event-record-view/EventRecordView.schema.json
     reason: Event record view, an inert client projection output governed by the client contract rather than a configuration format.
+  - files: products/platform/schemas/rstack-dev-error.v1.schema.json
+    reason: rstack error report printed on stdout with --json, a command output governed by PROJECT-DEV.md rather than a configuration format.
   - files: products/discovery/profile/schema/*.schema.json
     reason: Discovery provider description, a published wire resource.
   - files: products/identifiers/contracts/*.schema.json
