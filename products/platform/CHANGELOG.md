@@ -6,6 +6,18 @@
   projects together against a PostgreSQL server you supply. See
   [PROJECT-DEV.md](PROJECT-DEV.md). It is an alpha developer tool and may
   change.
+- `rstack dev stop RUN_ID --recover` releases a run whose supervisor is gone.
+  It stops each recorded process group whose leader still has the start time
+  recorded for it, drops the run's databases and roles, and removes the run
+  directory. Running it again after a partial failure is safe.
+- With `--json`, every `rstack dev` refusal or failure prints one
+  `registry.rstack.error.v1` object, published as
+  `schemas/rstack-dev-error.v1.schema.json`. Its `error.class` is `domain`
+  (exit 1), `usage` (exit 2) or `operational` (exit 3); a run that still holds
+  resources adds its `run_id` and a `recovery` object.
+- A BReg project with encrypted fields runs under `rstack dev` without extra
+  setup. Each run draws its own development data key into its run directory,
+  readable only by your user, and the key is removed with the run.
 
 ## 0.46.0 - 2026-11-08
 

@@ -25,8 +25,11 @@
   field encryption failed a record, list, snapshot or revision read with
   `503 source.unavailable` once a stored value was long enough for its
   encrypted envelope to exceed 57 bytes, and the value could not be read
-  until this fix. Writes and shorter values were unaffected. The fault was in the read path since v0.33.0, through v0.46.0; no
-  stored data changes and nothing needs migrating.
+  until this fix. A reviewed migration whose history journal capture read
+  such a value, such as a field-encryption flip that sealed one, failed its
+  apply, because the capture uses the same decoder. Writes and shorter values
+  were unaffected. The fault was in the read path since v0.33.0, through
+  v0.46.0; no stored data changes and nothing needs migrating.
 
 ## 0.46.0 - 2026-11-08
 
