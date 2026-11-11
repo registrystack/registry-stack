@@ -1,0 +1,235 @@
+{{- if .Values.evidence.operation.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "registry-stack.evidenceOperationName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: evidence-operation
+    registry.stack/operation: {{ .Values.evidence.operation.kind | quote }}
+    registrystack.org/operation-id: {{ .Values.evidence.operation.name | quote }}
+  annotations:
+    registrystack.org/package-digest: {{ .Values.evidence.bundle.expectedDigest | quote }}
+spec:
+  backoffLimit: {{ .Values.evidence.operation.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.evidence.operation.ttlSecondsAfterFinished }}
+  activeDeadlineSeconds: {{ .Values.evidence.operation.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "evidence-operation") | nindent 8 }}
+        registry.stack/operation: {{ .Values.evidence.operation.kind | quote }}
+        registrystack.org/operation-id: {{ .Values.evidence.operation.name | quote }}
+      annotations:
+        registrystack.org/package-digest: {{ .Values.evidence.bundle.expectedDigest | quote }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "registry-stack.podSecurityContext" . | nindent 8 }}
+      {{- include "registry-stack.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: stage-operation-inputs
+          image: {{ include "registry-stack.image" .Values.staging.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              mkdir -p /work/runtime/private
+              cp /staging/runtime/runtime.yaml /work/runtime/private/runtime.yaml
+              chmod 0700 /work/runtime/private
+              chmod 0400 /work/runtime/private/runtime.yaml
+              {{- if eq .Values.evidence.operation.kind "authority-activate" }}
+              mkdir -p /work/secrets/private /work/authority/private
+              for source in /staging/secrets/*; do
+                [ -f "$source" ] || continue
+                target="/work/secrets/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              cp /staging/authority/compiled-authority.yaml /work/authority/private/compiled-authority.yaml
+              chmod 0700 /work/secrets/private /work/authority/private
+              chmod 0400 /work/authority/private/compiled-authority.yaml
+              {{- end }}
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.staging.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-source
+              mountPath: /staging/runtime
+              readOnly: true
+            - name: runtime-private
+              mountPath: /work/runtime
+            {{- if eq .Values.evidence.operation.kind "authority-activate" }}
+            - name: activation-secret-source
+              mountPath: /staging/secrets
+              readOnly: true
+            - name: compiled-authority-source
+              mountPath: /staging/authority
+              readOnly: true
+            - name: secret-private
+              mountPath: /work/secrets
+            - name: compiled-authority-private
+              mountPath: /work/authority
+            {{- end }}
+      containers:
+        - name: evidence
+          image: {{ include "registry-stack.image" .Values.evidence.image | quote }}
+          imagePullPolicy: {{ .Values.evidence.image.pullPolicy }}
+          command:
+            - /usr/local/bin/evidence
+          args:
+          {{- if eq .Values.evidence.operation.kind "check" }}
+            - check
+            - --runtime-config
+            - /etc/registry-evidence/runtime.yaml
+            - --format
+            - json
+          {{- else if eq .Values.evidence.operation.kind "authority-activate" }}
+            - authority
+            - activate
+            - --runtime-config
+            - /etc/registry-evidence/runtime.yaml
+            - --document
+            - /etc/registry-evidence/compiled-authority.yaml
+            {{- with .Values.evidence.operation.operatorReference }}
+            - --operator-reference
+            - {{ . | quote }}
+            {{- end }}
+          {{- else if eq .Values.evidence.operation.kind "authority-history" }}
+            - authority
+            - history
+            - --runtime-config
+            - /etc/registry-evidence/runtime.yaml
+          {{- end }}
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.evidence.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-private
+              mountPath: /etc/registry-evidence/runtime.yaml
+              subPath: private/runtime.yaml
+              readOnly: true
+            {{- if ne .Values.evidence.operation.kind "authority-history" }}
+            - name: bundle
+              mountPath: {{ .Values.evidence.bundle.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if and (eq .Values.evidence.operation.kind "check") .Values.evidence.runtimeInputs.existingClaim }}
+            - name: runtime-inputs
+              mountPath: {{ .Values.evidence.runtimeInputs.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if eq .Values.evidence.operation.kind "authority-activate" }}
+            - name: secret-private
+              mountPath: /run/secrets/registry-evidence
+              subPath: private
+              readOnly: true
+            - name: compiled-authority-private
+              mountPath: {{ .Values.evidence.compiledAuthority.mountPath }}
+              subPath: private/compiled-authority.yaml
+              readOnly: true
+            - name: audit
+              mountPath: {{ .Values.evidence.audit.mountPath }}
+            - name: authority
+              mountPath: {{ .Values.evidence.authority.mountPath }}
+            {{- else if or (eq .Values.evidence.operation.kind "authority-history") (and (eq .Values.evidence.operation.kind "check") .Values.evidence.authority.existingClaim) }}
+            - name: authority
+              mountPath: {{ .Values.evidence.authority.mountPath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: runtime-source
+          configMap:
+            name: {{ .Values.evidence.runtimeConfig.configMapName }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.evidence.runtimeConfig.key }}
+                path: runtime.yaml
+        - name: runtime-private
+          emptyDir:
+            medium: Memory
+        {{- if ne .Values.evidence.operation.kind "authority-history" }}
+        - name: bundle
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.bundle.existingClaim }}
+            readOnly: true
+        {{- end }}
+        {{- if and (eq .Values.evidence.operation.kind "check") .Values.evidence.runtimeInputs.existingClaim }}
+        - name: runtime-inputs
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.runtimeInputs.existingClaim }}
+            readOnly: true
+        {{- end }}
+        {{- if eq .Values.evidence.operation.kind "authority-activate" }}
+        - name: activation-secret-source
+          secret:
+            secretName: {{ .Values.evidence.activationSecrets.secretName }}
+            defaultMode: 0444
+        - name: compiled-authority-source
+          configMap:
+            name: {{ .Values.evidence.compiledAuthority.configMapName }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.evidence.compiledAuthority.key }}
+                path: compiled-authority.yaml
+        - name: secret-private
+          emptyDir:
+            medium: Memory
+        - name: compiled-authority-private
+          emptyDir:
+            medium: Memory
+        - name: audit
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.audit.existingClaim }}
+        - name: authority
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.authority.existingClaim }}
+        {{- else if or (eq .Values.evidence.operation.kind "authority-history") (and (eq .Values.evidence.operation.kind "check") .Values.evidence.authority.existingClaim) }}
+        - name: authority
+          persistentVolumeClaim:
+            claimName: {{ .Values.evidence.authority.existingClaim }}
+            readOnly: true
+        {{- end }}
+      {{- with .Values.evidence.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.evidence.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.evidence.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.evidence.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "registry-stack.evidenceOperationName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: evidence-operation
+    registry.stack/operation: {{ .Values.evidence.operation.kind | quote }}
+    registrystack.org/operation-id: {{ .Values.evidence.operation.name | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "evidence-operation") | nindent 6 }}
+      registry.stack/operation: {{ .Values.evidence.operation.kind | quote }}
+      registrystack.org/operation-id: {{ .Values.evidence.operation.name | quote }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress: []
+{{- end }}
+{{- end }}

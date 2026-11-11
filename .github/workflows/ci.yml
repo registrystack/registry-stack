@@ -128,6 +128,19 @@ jobs:
       - name: Test CI event routing
         run: python3 .github/scripts/test_ci_event_routing.py
 
+      - name: Test deployment contracts
+        if: steps.filter.outputs.deployment == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="${RUNNER_TEMP}/registry-deployment-tools"
+          bash deploy/bin/install-helm.sh "${tools}"
+          python3 -B -m unittest discover -s deploy/tests
+          python3 -B -m unittest discover -s deploy/identity/tests
+          python3 -B -m unittest discover -s deploy/examples/casework-evidence/tests
+          python3 -B -m unittest discover -s deploy/examples/seaweedfs/tests
+          HELM_BIN="${tools}/helm" bash deploy/helm/registry-stack/tests/chart-contract.sh
+
       - name: Test Cargo runtime-library resolution
         run: >-
           python3 -m unittest

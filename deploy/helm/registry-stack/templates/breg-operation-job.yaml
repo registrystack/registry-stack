@@ -1,0 +1,282 @@
+{{- if .Values.breg.operation.enabled }}
+{{- $kind := .Values.breg.operation.kind }}
+{{- $candidate := .Values.breg.operation.candidate }}
+{{- if and (eq $kind "apply-successor") (not $candidate) }}
+{{- fail "A successor apply needs the candidate package claim and digest in addition to the active runtime inputs." }}
+{{- end }}
+{{- $targetPath := .Values.breg.package.mountPath }}
+{{- $targetDigest := .Values.breg.package.expectedDigest }}
+{{- with $candidate }}
+{{- if not (has $kind (list "plan" "apply-successor" "reconcile")) }}
+{{- fail "A separate candidate package is only used by plan, apply-successor, and reconcile." }}
+{{- end }}
+{{- if eq .existingClaim $.Values.breg.package.existingClaim }}
+{{- fail "A candidate package needs a separate claim from the active package." }}
+{{- end }}
+{{- $targetPath = "/var/lib/breg/candidate" }}
+{{- $targetDigest = .expectedDigest }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "registry-stack.operationName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: breg-operation
+    registry.stack/operation: {{ .Values.breg.operation.kind | quote }}
+    registrystack.org/operation-id: {{ .Values.breg.operation.name | quote }}
+  annotations:
+    registrystack.org/package-digest: {{ $targetDigest | quote }}
+spec:
+  backoffLimit: {{ .Values.breg.operation.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.breg.operation.ttlSecondsAfterFinished }}
+  activeDeadlineSeconds: {{ .Values.breg.operation.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "breg-operation") | nindent 8 }}
+        registry.stack/operation: {{ .Values.breg.operation.kind | quote }}
+        registrystack.org/operation-id: {{ .Values.breg.operation.name | quote }}
+      annotations:
+        registrystack.org/package-digest: {{ $targetDigest | quote }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "registry-stack.podSecurityContext" . | nindent 8 }}
+      {{- include "registry-stack.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.breg.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: stage-operation-inputs
+          image: {{ include "registry-stack.image" .Values.staging.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              mkdir -p /work/runtime/private /work/secrets/private
+              cp /staging/runtime/runtime.yaml /work/runtime/private/runtime.yaml
+              for directory in /staging/runtime-secrets /staging/migration-secrets; do
+                for source in "$directory"/*; do
+                  [ -f "$source" ] || continue
+                  target="/work/secrets/private/${source##*/}"
+                  [ ! -e "$target" ]
+                  cp "$source" "$target"
+                  chmod 0400 "$target"
+                done
+              done
+              chmod 0700 /work/runtime/private /work/secrets/private
+              chmod 0400 /work/runtime/private/runtime.yaml
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.staging.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-source
+              mountPath: /staging/runtime
+              readOnly: true
+            - name: runtime-secret-source
+              mountPath: /staging/runtime-secrets
+              readOnly: true
+            - name: migration-secret-source
+              mountPath: /staging/migration-secrets
+              readOnly: true
+            - name: runtime-private
+              mountPath: /work/runtime
+            - name: secret-private
+              mountPath: /work/secrets
+      containers:
+        - name: bregctl
+          image: {{ include "registry-stack.image" .Values.breg.image | quote }}
+          imagePullPolicy: {{ .Values.breg.image.pullPolicy }}
+          command:
+            - /usr/local/bin/bregctl
+          args:
+            - --format
+            - json
+          {{- if eq .Values.breg.operation.kind "verify" }}
+            - verify
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+          {{- else if eq .Values.breg.operation.kind "doctor" }}
+            - doctor
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+          {{- else if eq .Values.breg.operation.kind "status" }}
+            - status
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+          {{- else if eq .Values.breg.operation.kind "plan" }}
+            - plan
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+            - --package
+            - {{ $targetPath }}
+            - --expected-digest
+            - {{ $targetDigest | quote }}
+          {{- else if eq .Values.breg.operation.kind "apply-initial" }}
+            - apply
+            - --initial
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+            - --package
+            - /var/lib/breg/package
+            - --expected-digest
+            - {{ .Values.breg.package.expectedDigest | quote }}
+          {{- else if eq .Values.breg.operation.kind "apply-successor" }}
+            - apply
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+            - --package
+            - {{ $targetPath }}
+            - --expected-digest
+            - {{ $targetDigest | quote }}
+          {{- else if eq .Values.breg.operation.kind "claim-status" }}
+            - instance-claim
+            - status
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+          {{- else if eq .Values.breg.operation.kind "claim-adopt" }}
+            - instance-claim
+            - adopt
+            - --acknowledge-original-retired
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+          {{- else if eq .Values.breg.operation.kind "reconcile" }}
+            - migration
+            - reconcile
+            - --runtime-config
+            - /etc/breg-runtime/runtime.yaml
+            - --package
+            - {{ $targetPath }}
+            - --operator-reference
+            - helm-read-only-inspection
+          {{- end }}
+          env:
+            - name: REGISTRY_STACK_OPERATION_KIND
+              value: {{ .Values.breg.operation.kind | quote }}
+            {{- with .Values.breg.caBundleKey }}
+            - name: SSL_CERT_FILE
+              value: {{ printf "/etc/breg-secrets/%s" . | quote }}
+            {{- end }}
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.breg.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-private
+              mountPath: /etc/breg-runtime
+              subPath: private
+              readOnly: true
+            - name: secret-private
+              mountPath: /etc/breg-secrets
+              subPath: private
+              readOnly: true
+            - name: package
+              mountPath: {{ .Values.breg.package.mountPath }}
+              readOnly: true
+            {{- if $candidate }}
+            - name: candidate
+              mountPath: {{ $targetPath }}
+              readOnly: true
+            {{- end }}
+            - name: audit
+              mountPath: {{ .Values.breg.audit.mountPath }}
+      volumes:
+        - name: runtime-source
+          configMap:
+            name: {{ .Values.breg.runtimeConfig.configMapName }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.breg.runtimeConfig.key }}
+                path: runtime.yaml
+        - name: runtime-secret-source
+          secret:
+            secretName: {{ .Values.breg.runtimeSecrets.secretName }}
+            defaultMode: 0444
+        - name: migration-secret-source
+          secret:
+            secretName: {{ .Values.breg.migrationSecrets.secretName }}
+            defaultMode: 0444
+        - name: runtime-private
+          emptyDir:
+            medium: Memory
+        - name: secret-private
+          emptyDir:
+            medium: Memory
+        - name: package
+          persistentVolumeClaim:
+            claimName: {{ .Values.breg.package.existingClaim }}
+            readOnly: true
+        {{- with $candidate }}
+        - name: candidate
+          persistentVolumeClaim:
+            claimName: {{ .existingClaim }}
+            readOnly: true
+        {{- end }}
+        - name: audit
+          persistentVolumeClaim:
+            claimName: {{ .Values.breg.audit.existingClaim }}
+      {{- with .Values.breg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.breg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.breg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.breg.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "registry-stack.operationName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: breg-operation
+    registry.stack/operation: {{ .Values.breg.operation.kind | quote }}
+    registrystack.org/operation-id: {{ .Values.breg.operation.name | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "breg-operation") | nindent 6 }}
+      registry.stack/operation: {{ .Values.breg.operation.kind | quote }}
+      registrystack.org/operation-id: {{ .Values.breg.operation.name | quote }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  {{- if or .Values.breg.networkPolicy.dns.enabled .Values.breg.networkPolicy.dependencyEgress }}
+  egress:
+    {{- if .Values.breg.networkPolicy.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.breg.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.breg.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range .Values.breg.networkPolicy.dependencyEgress }}
+    - to:
+        - {{- toYaml .to | nindent 10 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- end }}
+{{- end }}

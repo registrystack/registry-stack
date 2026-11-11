@@ -1,0 +1,33 @@
+{{- if and .Values.appKit.enabled .Values.appKit.serve .Values.appKit.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "registry-stack.appKitName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app-kit
+  {{- with .Values.appKit.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.appKit.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ .Values.appKit.ingress.host | quote }}
+      secretName: {{ .Values.appKit.ingress.tls.secretName }}
+  rules:
+    - host: {{ .Values.appKit.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.appKit.ingress.path }}
+            pathType: {{ .Values.appKit.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "registry-stack.appKitName" . }}
+                port:
+                  name: http
+{{- end }}

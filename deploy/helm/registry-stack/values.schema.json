@@ -1,0 +1,737 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": {"type": "string", "maxLength": 63},
+    "fullnameOverride": {"type": "string", "maxLength": 63},
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/namedReference"}
+        }
+      }
+    },
+    "staging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {"$ref": "#/definitions/digestImage"},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "extensions": {"$ref": "#/definitions/extensions"},
+    "breg": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "serve": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/digestImageWithPolicy"},
+        "runtimeConfig": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMapName": {"$ref": "#/definitions/dnsName"},
+            "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}
+          }
+        },
+        "runtimeSecrets": {"$ref": "#/definitions/secretReference"},
+        "caBundleKey": {"$ref": "#/definitions/optionalSecretKey"},
+        "migrationSecrets": {"$ref": "#/definitions/secretReference"},
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingClaim": {"$ref": "#/definitions/dnsName"},
+            "expectedDigest": {"$ref": "#/definitions/digest"},
+            "mountPath": {"const": "/var/lib/breg/package"}
+          }
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingClaim": {"$ref": "#/definitions/dnsName"},
+            "mountPath": {"const": "/var/log/breg"}
+          }
+        },
+        "service": {"$ref": "#/definitions/service"},
+        "ingress": {"$ref": "#/definitions/ingress"},
+        "resources": {"$ref": "#/definitions/resources"},
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "name": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 30},
+            "kind": {"enum": ["verify", "doctor", "status", "plan", "apply-initial", "apply-successor", "claim-status", "claim-adopt", "reconcile"]},
+            "candidate": {
+              "type": "object", "additionalProperties": false, "required": ["existingClaim", "expectedDigest"],
+              "properties": {
+                "existingClaim": {"$ref": "#/definitions/requiredDnsName"},
+                "expectedDigest": {"$ref": "#/definitions/requiredDigest"}
+              }
+            },
+            "backoffLimit": {"type": "integer", "minimum": 0, "maximum": 3},
+            "ttlSecondsAfterFinished": {"type": "integer", "minimum": 60, "maximum": 604800},
+            "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 7200}
+          }
+        },
+        "networkPolicy": {"$ref": "#/definitions/networkPolicy"},
+        "hostAliases": {"$ref": "#/definitions/hostAliases"},
+        "nodeSelector": {"$ref": "#/definitions/stringMap"},
+        "tolerations": {"type": "array", "items": {"type": "object"}},
+        "affinity": {"type": "object"}
+      }
+    },
+    "appKit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "serve": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/digestImageWithPolicy"},
+        "containerPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "config": {"$ref": "#/definitions/mountedConfigMap"},
+        "secrets": {"$ref": "#/definitions/mountedSecret"},
+        "caBundleKey": {"$ref": "#/definitions/optionalSecretKey"},
+        "securityContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runAsUser", "runAsGroup"],
+          "properties": {
+            "runAsUser": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+            "runAsGroup": {"type": "integer", "minimum": 1, "maximum": 4294967295}
+          }
+        },
+        "service": {"$ref": "#/definitions/service"},
+        "ingress": {"$ref": "#/definitions/ingress"},
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "livenessPath": {"$ref": "#/definitions/optionalHttpPath"},
+            "readinessPath": {"$ref": "#/definitions/httpPath"},
+            "host": {"type": "string", "pattern": "^$|^[A-Za-z0-9.\\-]+(:[0-9]{1,5})?$", "maxLength": 260}
+          }
+        },
+        "resources": {"$ref": "#/definitions/resources"},
+        "networkPolicy": {"$ref": "#/definitions/networkPolicy"},
+        "hostAliases": {"$ref": "#/definitions/hostAliases"},
+        "nodeSelector": {"$ref": "#/definitions/stringMap"},
+        "tolerations": {"type": "array", "items": {"type": "object"}},
+        "affinity": {"type": "object"}
+      }
+    },
+    "casework": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "serve": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/digestImageWithPolicy"},
+        "runtimeConfig": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMapName": {"$ref": "#/definitions/dnsName"},
+            "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}
+          }
+        },
+        "runtimeSecrets": {"$ref": "#/definitions/secretReference"},
+        "migrationSecrets": {"$ref": "#/definitions/secretReference"},
+        "caBundleKey": {"$ref": "#/definitions/optionalSecretKey"},
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingClaim": {"$ref": "#/definitions/dnsName"},
+            "expectedDigest": {"$ref": "#/definitions/digest"},
+            "mountPath": {"const": "/var/lib/registry-casework/package"}
+          }
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingClaim": {"$ref": "#/definitions/dnsName"},
+            "mountPath": {"const": "/var/lib/registry-casework/audit"}
+          }
+        },
+        "service": {"allOf": [{"$ref": "#/definitions/service"}, {"properties": {"type": {"const": "ClusterIP"}}}]},
+        "ingress": {"$ref": "#/definitions/ingress"},
+        "resources": {"$ref": "#/definitions/resources"},
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "name": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 30},
+            "kind": {"enum": ["plan", "apply", "doctor"]},
+            "operatorReference": {"type": "string", "maxLength": 256},
+            "backupReferences": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+            "backoffLimit": {"type": "integer", "minimum": 0, "maximum": 3},
+            "ttlSecondsAfterFinished": {"type": "integer", "minimum": 60, "maximum": 604800},
+            "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 7200}
+          }
+        },
+        "networkPolicy": {"$ref": "#/definitions/caseworkNetworkPolicy"},
+        "nodeSelector": {"$ref": "#/definitions/stringMap"},
+        "tolerations": {"type": "array", "items": {"type": "object"}},
+        "affinity": {"type": "object"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "serve": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/digestImageWithPolicy"},
+        "runtimeConfig": {"$ref": "#/definitions/fileConfigMapReference"},
+        "runtimeSecrets": {"$ref": "#/definitions/secretReference"},
+        "activationSecrets": {"$ref": "#/definitions/secretReference"},
+        "runtimeInputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingClaim": {"$ref": "#/definitions/dnsName"},
+            "mountPath": {"const": "/etc/registry-evidence/inputs"}
+          }
+        },
+        "bundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingClaim": {"$ref": "#/definitions/dnsName"},
+            "expectedDigest": {"$ref": "#/definitions/digest"},
+            "mountPath": {"const": "/etc/registry-evidence/bundle"}
+          }
+        },
+        "compiledAuthority": {
+          "allOf": [
+            {"$ref": "#/definitions/fileConfigMapReference"},
+            {"properties": {"mountPath": {"const": "/etc/registry-evidence/compiled-authority.yaml"}}}
+          ]
+        },
+        "audit": {"$ref": "#/definitions/evidenceAuditStorage"},
+        "authority": {"$ref": "#/definitions/evidenceAuthorityStorage"},
+        "transitProxy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "image": {"$ref": "#/definitions/digestImageWithPolicy"},
+            "command": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "args": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "config": {"$ref": "#/definitions/fileConfigMapReference"},
+            "secrets": {"$ref": "#/definitions/secretReference"},
+            "securityContext": {"$ref": "#/definitions/nonRootIds"},
+            "resources": {"$ref": "#/definitions/resources"}
+          }
+        },
+        "service": {"allOf": [{"$ref": "#/definitions/service"}, {"properties": {"type": {"const": "ClusterIP"}}}]},
+        "ingress": {"$ref": "#/definitions/ingress"},
+        "resources": {"$ref": "#/definitions/resources"},
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "name": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 30},
+            "kind": {"enum": ["check", "authority-activate", "authority-history"]},
+            "operatorReference": {"type": "string", "maxLength": 256},
+            "backoffLimit": {"type": "integer", "minimum": 0, "maximum": 3},
+            "ttlSecondsAfterFinished": {"type": "integer", "minimum": 60, "maximum": 604800},
+            "activeDeadlineSeconds": {"type": "integer", "minimum": 60, "maximum": 7200}
+          }
+        },
+        "networkPolicy": {"$ref": "#/definitions/evidenceNetworkPolicy"},
+        "nodeSelector": {"$ref": "#/definitions/stringMap"},
+        "tolerations": {"type": "array", "items": {"type": "object"}},
+        "affinity": {"type": "object"}
+      }
+    }
+  },
+  "required": ["global", "staging", "breg", "appKit", "casework", "evidence"],
+  "allOf": [
+    {
+      "if": {"properties": {"breg": {"properties": {"serve": {"const": true}}}}},
+      "then": {"properties": {"breg": {"properties": {"enabled": {"const": true}}}}}
+    },
+    {
+      "if": {"properties": {"breg": {"properties": {"enabled": {"const": true}}}}},
+      "then": {
+        "properties": {
+          "staging": {"$ref": "#/definitions/requiredStaging"},
+          "breg": {"$ref": "#/definitions/requiredBreg"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"breg": {"properties": {"operation": {"properties": {"enabled": {"const": true}}}}}}},
+      "then": {
+        "properties": {
+          "staging": {"$ref": "#/definitions/requiredStaging"},
+          "breg": {"$ref": "#/definitions/requiredBregOperation"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"appKit": {"properties": {"enabled": {"const": true}}}}},
+      "then": {"properties": {"staging": {"$ref": "#/definitions/requiredStaging"}, "appKit": {"$ref": "#/definitions/requiredAppKit"}}}
+    },
+    {
+      "if": {"properties": {"appKit": {"properties": {"serve": {"const": true}}}}},
+      "then": {"properties": {"appKit": {"properties": {"enabled": {"const": true}}}}}
+    },
+    {
+      "if": {"properties": {"casework": {"properties": {"serve": {"const": true}}}}},
+      "then": {"properties": {"casework": {"properties": {"enabled": {"const": true}}}}}
+    },
+    {
+      "if": {"properties": {"casework": {"properties": {"enabled": {"const": true}}}}},
+      "then": {"properties": {"staging": {"$ref": "#/definitions/requiredStaging"}, "casework": {"$ref": "#/definitions/requiredCasework"}}}
+    },
+    {
+      "if": {"properties": {"casework": {"properties": {"operation": {"properties": {"enabled": {"const": true}}}}}}},
+      "then": {"properties": {"staging": {"$ref": "#/definitions/requiredStaging"}, "casework": {"$ref": "#/definitions/requiredCaseworkOperation"}}}
+    },
+    {
+      "if": {"properties": {"casework": {"properties": {"operation": {"properties": {"enabled": {"const": true}, "kind": {"const": "apply"}}}}}}},
+      "then": {"properties": {"casework": {"properties": {"migrationSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}}}}}}
+    },
+    {
+      "if": {"properties": {"evidence": {"properties": {"serve": {"const": true}}}}},
+      "then": {"properties": {"staging": {"$ref": "#/definitions/requiredStaging"}, "evidence": {"allOf": [{"properties": {"enabled": {"const": true}, "transitProxy": {"properties": {"enabled": {"const": true}}}}}, {"$ref": "#/definitions/requiredEvidenceServing"}]}}}
+    },
+    {
+      "if": {"properties": {"evidence": {"properties": {"operation": {"properties": {"enabled": {"const": true}}}}}}},
+      "then": {"properties": {"staging": {"$ref": "#/definitions/requiredStaging"}, "evidence": {"$ref": "#/definitions/requiredEvidenceOperation"}}}
+    },
+    {
+      "if": {"properties": {"evidence": {"properties": {"operation": {"properties": {"enabled": {"const": true}, "kind": {"const": "authority-activate"}}}}}}},
+      "then": {"properties": {"evidence": {"$ref": "#/definitions/requiredEvidenceActivation"}}}
+    },
+    {
+      "if": {"properties": {"evidence": {"properties": {"operation": {"properties": {"enabled": {"const": true}, "kind": {"const": "check"}}}}}}},
+      "then": {"properties": {"evidence": {"$ref": "#/definitions/requiredEvidenceCheck"}}}
+    },
+    {
+      "if": {"properties": {"evidence": {"properties": {"operation": {"properties": {"enabled": {"const": true}, "kind": {"const": "authority-history"}}}}}}},
+      "then": {"properties": {"evidence": {"$ref": "#/definitions/requiredEvidenceHistory"}}}
+    }
+  ],
+  "definitions": {
+    "extensionLabel": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63},
+    "extensionLabels": {
+      "type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}
+    },
+    "extensionSelector": {
+      "type": "object", "additionalProperties": false, "required": ["matchLabels"],
+      "properties": {"matchLabels": {"$ref": "#/definitions/extensionLabels"}}
+    },
+    "extensionPeer": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "namespaceSelector": {"$ref": "#/definitions/extensionSelector"},
+            "podSelector": {"$ref": "#/definitions/extensionSelector"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["ipBlock"],
+          "properties": {
+            "ipBlock": {
+              "type": "object", "additionalProperties": false, "required": ["cidr"],
+              "properties": {"cidr": {"type": "string", "pattern": "/[1-9][0-9]{0,2}$"}}
+            }
+          }
+        }
+      ]
+    },
+    "extensions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["namespace", "publicHost", "ingressClassName", "ingressNamespace", "ingressPodLabels", "tlsSecretName", "endpoints"],
+      "properties": {
+        "namespace": {"$ref": "#/definitions/extensionLabel"},
+        "publicHost": {
+          "type": "string", "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)+$"
+        },
+        "ingressClassName": {"$ref": "#/definitions/extensionLabel"},
+        "ingressNamespace": {"$ref": "#/definitions/extensionLabel"},
+        "ingressPodLabels": {"$ref": "#/definitions/extensionLabels"},
+        "ingressAnnotations": {"$ref": "#/definitions/stringMap"},
+        "tlsSecretName": {"$ref": "#/definitions/extensionLabel"},
+        "endpoints": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"allOf": [{"$ref": "#/definitions/extensionLabel"}, {"maxLength": 53}]},
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["image", "path", "port"],
+            "properties": {
+              "image": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+([.:-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$"
+              },
+              "imagePullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]},
+              "path": {"type": "string", "pattern": "^/extensions/[a-z0-9-]+(/[a-z0-9-]+)*$", "maxLength": 255},
+              "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+              "configMapName": {"$ref": "#/definitions/extensionLabel"},
+              "credentialsSecretName": {"$ref": "#/definitions/extensionLabel"},
+              "hostAliases": {"$ref": "#/definitions/hostAliases"},
+              "egress": {
+                "type": "array",
+                "items": {
+                  "type": "object", "additionalProperties": false, "required": ["to", "ports"],
+                  "properties": {
+                    "to": {"$ref": "#/definitions/extensionPeer"},
+                    "ports": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/networkPort"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "dnsName": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253},
+    "requiredDnsName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "minLength": 1, "maxLength": 253},
+    "digest": {"type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$"},
+    "requiredDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "httpPath": {"type": "string", "pattern": "^/"},
+    "optionalHttpPath": {"type": "string", "pattern": "^$|^/"},
+    "optionalSecretKey": {"type": "string", "pattern": "^$|^[A-Za-z0-9._-]+$", "maxLength": 253},
+    "namedReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {"name": {"$ref": "#/definitions/dnsName"}}
+    },
+    "secretReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"secretName": {"$ref": "#/definitions/dnsName"}}
+    },
+    "digestImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string", "pattern": "^$|^[^@]+$"},
+        "digest": {"$ref": "#/definitions/digest"}
+      }
+    },
+    "digestImageWithPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string", "pattern": "^$|^[^@]+$"},
+        "digest": {"$ref": "#/definitions/digest"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "requiredStaging": {
+      "type": "object",
+      "properties": {"image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}}}
+    },
+    "requiredBreg": {
+      "type": "object",
+      "properties": {
+        "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+        "runtimeConfig": {"required": ["configMapName", "key"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "runtimeSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "package": {"required": ["existingClaim", "expectedDigest", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}, "expectedDigest": {"$ref": "#/definitions/requiredDigest"}}},
+        "audit": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}}
+      }
+    },
+    "requiredBregOperation": {
+      "type": "object",
+      "properties": {
+        "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+        "runtimeConfig": {"required": ["configMapName", "key"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "runtimeSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "migrationSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "package": {"required": ["existingClaim", "expectedDigest", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}, "expectedDigest": {"$ref": "#/definitions/requiredDigest"}}},
+        "audit": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}},
+        "operation": {"required": ["name", "kind"], "properties": {"name": {"type": "string", "minLength": 1}}}
+      }
+    },
+    "requiredAppKit": {
+      "type": "object",
+      "properties": {
+        "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+        "config": {"required": ["configMapName", "mountPath"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "secrets": {"required": ["secretName", "mountPath"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}}
+      }
+    },
+    "requiredCasework": {
+      "type": "object",
+      "properties": {
+        "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+        "runtimeConfig": {"required": ["configMapName", "key"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "runtimeSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "package": {"required": ["existingClaim", "expectedDigest", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}, "expectedDigest": {"$ref": "#/definitions/requiredDigest"}}},
+        "audit": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}}
+      }
+    },
+    "requiredCaseworkOperation": {
+      "type": "object",
+      "properties": {
+        "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+        "runtimeConfig": {"required": ["configMapName", "key"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "runtimeSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "package": {"required": ["existingClaim", "expectedDigest", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}, "expectedDigest": {"$ref": "#/definitions/requiredDigest"}}},
+        "audit": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}},
+        "operation": {"required": ["name", "kind"], "properties": {"name": {"type": "string", "minLength": 1}}}
+      }
+    },
+    "requiredEvidenceCommon": {
+      "type": "object",
+      "properties": {
+        "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+        "runtimeConfig": {"required": ["configMapName", "key"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "bundle": {"required": ["existingClaim", "expectedDigest", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}, "expectedDigest": {"$ref": "#/definitions/requiredDigest"}}}
+      }
+    },
+    "requiredEvidenceServing": {
+      "allOf": [
+        {"$ref": "#/definitions/requiredEvidenceCommon"},
+        {"type": "object", "properties": {
+          "runtimeSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}},
+          "audit": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}},
+          "authority": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}},
+          "transitProxy": {"required": ["image", "command", "config", "secrets", "securityContext"], "properties": {
+            "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+            "command": {"minItems": 1},
+            "config": {"required": ["configMapName", "key"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+            "secrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}}
+          }}
+        }}
+      ]
+    },
+    "requiredEvidenceOperation": {
+      "type": "object",
+      "properties": {
+        "image": {"required": ["repository", "digest"], "properties": {"repository": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/definitions/requiredDigest"}}},
+        "runtimeConfig": {"required": ["configMapName", "key"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "bundle": {"required": ["expectedDigest"], "properties": {"expectedDigest": {"$ref": "#/definitions/requiredDigest"}}},
+        "operation": {"required": ["name", "kind"], "properties": {"name": {"type": "string", "minLength": 1}}}
+      }
+    },
+    "requiredEvidenceCheck": {
+      "$ref": "#/definitions/requiredEvidenceCommon"
+    },
+    "requiredEvidenceActivation": {
+      "type": "object",
+      "properties": {
+        "activationSecrets": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "bundle": {"required": ["existingClaim", "expectedDigest", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}, "expectedDigest": {"$ref": "#/definitions/requiredDigest"}}},
+        "compiledAuthority": {"required": ["configMapName", "key", "mountPath"], "properties": {"configMapName": {"$ref": "#/definitions/requiredDnsName"}}},
+        "audit": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}},
+        "authority": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}}
+      }
+    },
+    "requiredEvidenceHistory": {
+      "type": "object",
+      "properties": {"authority": {"required": ["existingClaim", "mountPath"], "properties": {"existingClaim": {"$ref": "#/definitions/requiredDnsName"}}}}
+    },
+    "fileConfigMapReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "configMapName": {"$ref": "#/definitions/dnsName"},
+        "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "mountPath": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "nonRootIds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runAsUser", "runAsGroup"],
+      "properties": {
+        "runAsUser": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "runAsGroup": {"type": "integer", "minimum": 1, "maximum": 4294967295}
+      }
+    },
+    "evidenceAuditStorage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"existingClaim": {"$ref": "#/definitions/dnsName"}, "mountPath": {"const": "/var/lib/registry-evidence/audit"}}
+    },
+    "evidenceAuthorityStorage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"existingClaim": {"$ref": "#/definitions/dnsName"}, "mountPath": {"const": "/var/lib/registry-evidence/authority"}}
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "hostAliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ip", "hostnames"],
+        "properties": {
+          "ip": {"type": "string", "minLength": 1},
+          "hostnames": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {"$ref": "#/definitions/resourcePair"},
+        "limits": {"$ref": "#/definitions/resourcePair"}
+      }
+    },
+    "resourcePair": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {"type": ["string", "number"]},
+        "memory": {"type": ["string", "number"]}
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer"]},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "annotations": {"$ref": "#/definitions/stringMap"}
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"type": "string"},
+        "annotations": {"$ref": "#/definitions/stringMap"},
+        "host": {"type": "string"},
+        "path": {"$ref": "#/definitions/httpPath"},
+        "pathType": {"enum": ["Exact", "Prefix", "ImplementationSpecific"]},
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"secretName": {"$ref": "#/definitions/dnsName"}}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"enabled": {"const": true}}},
+          "then": {"required": ["host", "tls"], "properties": {"host": {"type": "string", "minLength": 1}, "tls": {"required": ["secretName"], "properties": {"secretName": {"$ref": "#/definitions/requiredDnsName"}}}}}
+        }
+      ]
+    },
+    "mountedConfigMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "configMapName": {"$ref": "#/definitions/dnsName"},
+        "mountPath": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "mountedSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secretName": {"$ref": "#/definitions/dnsName"},
+        "mountPath": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "labelSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "matchLabels": {"$ref": "#/definitions/stringMap"},
+        "matchExpressions": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "networkPeer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "podSelector": {"$ref": "#/definitions/labelSelector"},
+        "namespaceSelector": {"$ref": "#/definitions/labelSelector"},
+        "ipBlock": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cidr"],
+          "properties": {
+            "cidr": {"type": "string"},
+            "except": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      },
+      "minProperties": 1
+    },
+    "networkPort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "protocol": {"enum": ["TCP", "UDP", "SCTP"]},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "egressRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["to", "ports"],
+      "properties": {
+        "to": {"$ref": "#/definitions/networkPeer"},
+        "ports": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/networkPort"}}
+      }
+    },
+    "dnsPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "namespaceSelector": {"$ref": "#/definitions/labelSelector"},
+        "podSelector": {"$ref": "#/definitions/labelSelector"}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ingress": {"type": "array", "items": {"$ref": "#/definitions/networkPeer"}},
+        "dns": {"$ref": "#/definitions/dnsPolicy"},
+        "dependencyEgress": {"type": "array", "items": {"$ref": "#/definitions/egressRule"}}
+      }
+    },
+    "caseworkNetworkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ingress": {"type": "array", "items": {"$ref": "#/definitions/networkPeer"}},
+        "dns": {"$ref": "#/definitions/dnsPolicy"},
+        "dependencyEgress": {"type": "array", "items": {"$ref": "#/definitions/egressRule"}},
+        "bregContextEgress": {"type": "array", "items": {"$ref": "#/definitions/egressRule"}}
+      }
+    },
+    "evidenceNetworkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ingress": {"type": "array", "items": {"$ref": "#/definitions/networkPeer"}},
+        "dns": {"$ref": "#/definitions/dnsPolicy"},
+        "dependencyEgress": {"type": "array", "items": {"$ref": "#/definitions/egressRule"}},
+        "transitEgress": {"type": "array", "items": {"$ref": "#/definitions/egressRule"}}
+      }
+    }
+  }
+}

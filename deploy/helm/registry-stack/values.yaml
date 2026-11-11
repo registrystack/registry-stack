@@ -1,0 +1,326 @@
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imagePullSecrets: []
+
+staging:
+  image:
+    repository: ""
+    digest: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+breg:
+  enabled: false
+  # Serving is a separate decision so an inactive staging release cannot admit traffic.
+  serve: false
+  image:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  runtimeConfig:
+    configMapName: ""
+    key: runtime.yaml
+  runtimeSecrets:
+    secretName: ""
+  # Optional key in runtimeSecrets holding PEM roots for native HTTPS clients.
+  caBundleKey: ""
+  migrationSecrets:
+    secretName: ""
+  package:
+    existingClaim: ""
+    expectedDigest: ""
+    mountPath: /var/lib/breg/package
+  audit:
+    existingClaim: ""
+    mountPath: /var/log/breg
+  service:
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    tls:
+      secretName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  operation:
+    enabled: false
+    name: ""
+    # verify, doctor, status and plan are non-mutating. Apply is always explicit.
+    kind: verify
+    backoffLimit: 0
+    ttlSecondsAfterFinished: 86400
+    activeDeadlineSeconds: 1800
+  networkPolicy:
+    enabled: true
+    # Each peer is a standard Kubernetes NetworkPolicyPeer. Admit the ingress
+    # controller and any direct trusted caller explicitly.
+    ingress: []
+    dns:
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    # Standard NetworkPolicy cannot select a DNS name. List dependency CIDRs
+    # or in-cluster namespace/pod selectors and their exact ports.
+    dependencyEgress: []
+  hostAliases: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+appKit:
+  enabled: false
+  serve: false
+  image:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  containerPort: 3100
+  config:
+    configMapName: ""
+    mountPath: /etc/registry-app-kit/config
+  secrets:
+    secretName: ""
+    mountPath: /etc/registry-app-kit/secrets
+  # Optional key in secrets holding PEM roots for the Node.js HTTPS client.
+  caBundleKey: ""
+  # Must match the non-root UID/GID baked into the prebuilt App Kit image.
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+  service:
+    type: ClusterIP
+    port: 3100
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    tls:
+      secretName: ""
+  probes:
+    # Defaults to the configured Ingress hostname. Use origin.host if it includes a port.
+    host: ""
+    # Leave empty unless the prebuilt host exposes a process-only liveness path.
+    livenessPath: ""
+    readinessPath: /health
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  networkPolicy:
+    enabled: true
+    ingress: []
+    dns:
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    dependencyEgress: []
+  hostAliases: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+casework:
+  enabled: false
+  # Serving remains fenced until the reviewed package is active.
+  serve: false
+  image:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  runtimeConfig:
+    configMapName: ""
+    key: runtime.yaml
+  runtimeSecrets:
+    secretName: ""
+  migrationSecrets:
+    secretName: ""
+  # Optional key in runtimeSecrets holding PEM roots for native HTTPS clients.
+  caBundleKey: ""
+  package:
+    existingClaim: ""
+    expectedDigest: ""
+    mountPath: /var/lib/registry-casework/package
+  audit:
+    existingClaim: ""
+    mountPath: /var/lib/registry-casework/audit
+  service:
+    type: ClusterIP
+    port: 8100
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    tls:
+      secretName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  operation:
+    enabled: false
+    name: ""
+    kind: plan
+    operatorReference: ""
+    backupReferences: []
+    backoffLimit: 0
+    ttlSecondsAfterFinished: 86400
+    activeDeadlineSeconds: 1800
+  networkPolicy:
+    enabled: true
+    ingress: []
+    dns:
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    dependencyEgress: []
+    # Optional current-source paths to BReg and its token endpoint.
+    bregContextEgress: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+evidence:
+  enabled: false
+  # Serving is fenced until the reviewed authority has been activated.
+  serve: false
+  image:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  runtimeConfig:
+    configMapName: ""
+    key: runtime.yaml
+  runtimeSecrets:
+    secretName: ""
+  # Only activation audit material, never source or signer credentials.
+  activationSecrets:
+    secretName: ""
+  runtimeInputs:
+    existingClaim: ""
+    mountPath: /etc/registry-evidence/inputs
+  bundle:
+    existingClaim: ""
+    expectedDigest: ""
+    mountPath: /etc/registry-evidence/bundle
+  compiledAuthority:
+    configMapName: ""
+    key: compiled-authority.yaml
+    mountPath: /etc/registry-evidence/compiled-authority.yaml
+  audit:
+    existingClaim: ""
+    mountPath: /var/lib/registry-evidence/audit
+  authority:
+    existingClaim: ""
+    mountPath: /var/lib/registry-evidence/authority
+  transitProxy:
+    enabled: false
+    image:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    command: []
+    args: []
+    config:
+      configMapName: ""
+      key: proxy.hcl
+    # Credentials are staged only for the proxy container.
+    secrets:
+      secretName: ""
+    securityContext:
+      runAsUser: 65532
+      runAsGroup: 65532
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+  service:
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    path: /
+    pathType: Prefix
+    tls:
+      secretName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  operation:
+    enabled: false
+    name: ""
+    kind: check
+    operatorReference: ""
+    backoffLimit: 0
+    ttlSecondsAfterFinished: 86400
+    activeDeadlineSeconds: 1800
+  networkPolicy:
+    enabled: true
+    ingress: []
+    dns:
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    dependencyEgress: []
+    transitEgress: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

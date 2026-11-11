@@ -1,0 +1,23 @@
+{{- if and .Values.casework.enabled .Values.casework.serve }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "registry-stack.caseworkName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: casework
+  {{- with .Values.casework.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.casework.service.type }}
+  selector:
+    {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "casework") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.casework.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

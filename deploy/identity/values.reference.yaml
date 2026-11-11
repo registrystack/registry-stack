@@ -1,0 +1,157 @@
+# Values for the upstream ThunderID 1.0.1 chart. The immutable chart and image
+# identities are recorded in chart-lock.json. This file contains no credential.
+fullnameOverride: thunderid
+
+deployment:
+  replicaCount: 1
+  securityContext:
+    seccompProfile:
+      enabled: true
+      type: RuntimeDefault
+  image:
+    registry: ghcr.io/thunder-id
+    repository: thunderid
+    tag: ""
+    digest: sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+  env:
+    - name: PGSSLROOTCERT
+      value: /opt/thunderid/config/resources/postgres-ca.pem
+  secretEnv:
+    - name: APP_KIT_CLIENT_SECRET
+      secretName: registry-identity-fixture-credentials
+      secretKey: app-kit-client-secret
+      optional: false
+    - name: QUALIFICATION_OFFICER_PASSWORD
+      secretName: registry-identity-fixture-credentials
+      secretKey: qualification-officer-password
+      optional: false
+
+hpa:
+  enabled: false
+
+ingress:
+  # edge.yaml terminates TLS because the upstream chart couples TLS ingress to
+  # an HTTPS backend. ThunderID deliberately serves plain HTTP only inside the
+  # namespace; its public issuer remains HTTPS.
+  enabled: false
+
+configuration:
+  server:
+    httpOnly: true
+    identifier: registry-identity-qualification
+    publicUrl: https://identity.registry-qualification.test
+  jwt:
+    issuer: https://identity.registry-qualification.test
+  database:
+    config:
+      type: postgres
+      postgres:
+        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        port: "5432"
+        name: thunderid_config
+        username: registry_identity
+        passwordRef:
+          name: registry-identity-postgres
+          key: password
+        sslmode: verify-full
+        max_open_conns: 20
+        max_idle_conns: 5
+    runtime_transient:
+      type: postgres
+      postgres:
+        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        port: "5432"
+        name: thunderid_runtime_transient
+        username: registry_identity
+        passwordRef:
+          name: registry-identity-postgres
+          key: password
+        sslmode: verify-full
+        max_open_conns: 20
+        max_idle_conns: 5
+    entity:
+      type: postgres
+      postgres:
+        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        port: "5432"
+        name: thunderid_entity
+        username: registry_identity
+        passwordRef:
+          name: registry-identity-postgres
+          key: password
+        sslmode: verify-full
+        max_open_conns: 20
+        max_idle_conns: 5
+    runtime_persistent:
+      type: postgres
+      postgres:
+        hostname: registry-postgres.registry-k3s-proof.svc.cluster.local
+        port: "5432"
+        name: thunderid_runtime_persistent
+        username: registry_identity
+        passwordRef:
+          name: registry-identity-postgres
+          key: password
+        sslmode: verify-full
+        max_open_conns: 20
+        max_idle_conns: 5
+  stores:
+    resource: composite
+    role: composite
+    theme: composite
+    layout: composite
+    identity_provider: composite
+
+setup:
+  enabled: true
+  preserveJob: true
+  admin:
+    usernameRef:
+      name: registry-identity-admin
+      key: username
+    passwordRef:
+      name: registry-identity-admin
+      key: password
+  env:
+    - name: PGSSLROOTCERT
+      value: /opt/thunderid/config/resources/postgres-ca.pem
+  secretEnv:
+    - name: APP_KIT_CLIENT_SECRET
+      secretName: registry-identity-fixture-credentials
+      secretKey: app-kit-client-secret
+      optional: false
+    - name: QUALIFICATION_OFFICER_PASSWORD
+      secretName: registry-identity-fixture-credentials
+      secretKey: qualification-officer-password
+      optional: false
+
+declarativeResources:
+  enabled: true
+  readOnly: true
+  configMap:
+    name: registry-identity-material
+    items:
+      - key: resources
+        path: resources.yaml
+      - key: postgres-ca.pem
+        path: postgres-ca.pem
+
+certs:
+  persistence:
+    storageClass: local-path
+    accessMode: ReadWriteOnce
+    size: 16Mi
+
+secrets:
+  persistence:
+    storageClass: local-path
+    accessMode: ReadWriteOnce
+    size: 16Mi

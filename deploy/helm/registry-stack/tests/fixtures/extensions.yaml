@@ -1,0 +1,16 @@
+extensions:
+  namespace: pilot-extensions
+  publicHost: service.example.test
+  ingressClassName: traefik
+  ingressNamespace: ingress-system
+  ingressPodLabels:
+    app.kubernetes.io/name: traefik
+  tlsSecretName: service-tls
+  endpoints:
+    intake:
+      image: ghcr.io/example/intake@sha256:1111111111111111111111111111111111111111111111111111111111111111
+      imagePullPolicy: IfNotPresent
+      path: /extensions/intake
+      port: 8080
+      configMapName: intake-config
+      credentialsSecretName: intake-client

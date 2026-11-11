@@ -1,0 +1,216 @@
+{{- if .Values.casework.operation.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "registry-stack.caseworkOperationName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: casework-operation
+    registry.stack/operation: {{ .Values.casework.operation.kind | quote }}
+    registrystack.org/operation-id: {{ .Values.casework.operation.name | quote }}
+  annotations:
+    registrystack.org/package-digest: {{ .Values.casework.package.expectedDigest | quote }}
+spec:
+  backoffLimit: {{ .Values.casework.operation.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.casework.operation.ttlSecondsAfterFinished }}
+  activeDeadlineSeconds: {{ .Values.casework.operation.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "casework-operation") | nindent 8 }}
+        registry.stack/operation: {{ .Values.casework.operation.kind | quote }}
+        registrystack.org/operation-id: {{ .Values.casework.operation.name | quote }}
+      annotations:
+        registrystack.org/package-digest: {{ .Values.casework.package.expectedDigest | quote }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "registry-stack.podSecurityContext" . | nindent 8 }}
+      {{- include "registry-stack.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: stage-operation-inputs
+          image: {{ include "registry-stack.image" .Values.staging.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              mkdir -p /work/runtime/private /work/secrets/private
+              cp /staging/runtime/runtime.yaml /work/runtime/private/runtime.yaml
+              for source in /staging/runtime-secrets/*; do
+                [ -f "$source" ] || continue
+                target="/work/secrets/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              {{- if eq .Values.casework.operation.kind "apply" }}
+              for source in /staging/migration-secrets/*; do
+                [ -f "$source" ] || continue
+                target="/work/secrets/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              {{- end }}
+              chmod 0700 /work/runtime/private /work/secrets/private
+              chmod 0400 /work/runtime/private/runtime.yaml
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.staging.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-source
+              mountPath: /staging/runtime
+              readOnly: true
+            - name: runtime-secret-source
+              mountPath: /staging/runtime-secrets
+              readOnly: true
+            {{- if eq .Values.casework.operation.kind "apply" }}
+            - name: migration-secret-source
+              mountPath: /staging/migration-secrets
+              readOnly: true
+            {{- end }}
+            - name: runtime-private
+              mountPath: /work/runtime
+            - name: secret-private
+              mountPath: /work/secrets
+      containers:
+        - name: caseworkctl
+          image: {{ include "registry-stack.image" .Values.casework.image | quote }}
+          imagePullPolicy: {{ .Values.casework.image.pullPolicy }}
+          command:
+            - /usr/local/bin/caseworkctl
+          args:
+            - --format
+            - json
+            - {{ .Values.casework.operation.kind }}
+            - --runtime-config
+            - /etc/registry-casework/runtime.yaml
+            {{- if eq .Values.casework.operation.kind "apply" }}
+            {{- with .Values.casework.operation.operatorReference }}
+            - --operator-reference
+            - {{ . | quote }}
+            {{- end }}
+            {{- range .Values.casework.operation.backupReferences }}
+            - --backup-reference
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+          env:
+            - name: REGISTRY_STACK_OPERATION_KIND
+              value: {{ .Values.casework.operation.kind | quote }}
+            {{- with .Values.casework.caBundleKey }}
+            - name: SSL_CERT_FILE
+              value: {{ printf "/etc/registry-casework/secrets/%s" . | quote }}
+            {{- end }}
+          securityContext:
+            {{- include "registry-stack.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.casework.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime-private
+              mountPath: /etc/registry-casework/runtime.yaml
+              subPath: private/runtime.yaml
+              readOnly: true
+            - name: secret-private
+              mountPath: /etc/registry-casework/secrets
+              subPath: private
+              readOnly: true
+            - name: package
+              mountPath: {{ .Values.casework.package.mountPath }}
+              readOnly: true
+            - name: audit
+              mountPath: {{ .Values.casework.audit.mountPath }}
+      volumes:
+        - name: runtime-source
+          configMap:
+            name: {{ .Values.casework.runtimeConfig.configMapName }}
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.casework.runtimeConfig.key }}
+                path: runtime.yaml
+        - name: runtime-secret-source
+          secret:
+            secretName: {{ .Values.casework.runtimeSecrets.secretName }}
+            defaultMode: 0444
+        {{- if eq .Values.casework.operation.kind "apply" }}
+        - name: migration-secret-source
+          secret:
+            secretName: {{ .Values.casework.migrationSecrets.secretName }}
+            defaultMode: 0444
+        {{- end }}
+        - name: runtime-private
+          emptyDir:
+            medium: Memory
+        - name: secret-private
+          emptyDir:
+            medium: Memory
+        - name: package
+          persistentVolumeClaim:
+            claimName: {{ .Values.casework.package.existingClaim }}
+            readOnly: true
+        - name: audit
+          persistentVolumeClaim:
+            claimName: {{ .Values.casework.audit.existingClaim }}
+      {{- with .Values.casework.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.casework.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.casework.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.casework.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "registry-stack.caseworkOperationName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: casework-operation
+    registry.stack/operation: {{ .Values.casework.operation.kind | quote }}
+    registrystack.org/operation-id: {{ .Values.casework.operation.name | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "casework-operation") | nindent 6 }}
+      registry.stack/operation: {{ .Values.casework.operation.kind | quote }}
+      registrystack.org/operation-id: {{ .Values.casework.operation.name | quote }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  {{- if or .Values.casework.networkPolicy.dns.enabled .Values.casework.networkPolicy.dependencyEgress .Values.casework.networkPolicy.bregContextEgress }}
+  egress:
+    {{- if .Values.casework.networkPolicy.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.casework.networkPolicy.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml .Values.casework.networkPolicy.dns.podSelector | nindent 12 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range concat .Values.casework.networkPolicy.dependencyEgress .Values.casework.networkPolicy.bregContextEgress }}
+    - to:
+        - {{- toYaml .to | nindent 10 }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+  {{- else }}
+  egress: []
+  {{- end }}
+{{- end }}
+{{- end }}

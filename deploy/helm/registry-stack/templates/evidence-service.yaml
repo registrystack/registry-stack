@@ -1,0 +1,23 @@
+{{- if and .Values.evidence.enabled .Values.evidence.serve }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "registry-stack.evidenceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: evidence
+  {{- with .Values.evidence.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "evidence") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.evidence.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/identity-deployment/identity-deployment.v1.schema.json
+apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1
+kind: PlatformIdentityDeployment
+organizationUnit:
+  handle: registry-qualification
+  name: Registry qualification
+  description: Synthetic K3s qualification identities only
+clients:
+  - id: qualification-client
+    publicJwksFile: keys/qualification-client.jwks.json
+    grants:
+      - product: breg
+        accessProfiles: [directory-editor]
+    claims:
+      registry_actor_kind: service
+      registry_principal: qualification-client
+      registry_purpose: directory-administration
+      jurisdiction: zone-a
+browserApps:
+  - id: app-kit
+    clientSecretRef: secret:env/APP_KIT_CLIENT_SECRET
+    origin: https://app.registry-qualification.test
+    redirectUris:
+      - https://app.registry-qualification.test/auth/callback
+    product: breg
+    tokenAttributes:
+      - registry_principal
+      - registry_purpose
+      - registry_actor_kind
+      - jurisdiction
+    grants:
+      - product: breg
+        accessProfiles: [directory-editor]
+users:
+  - id: qualification-officer
+    username: qualification-officer
+    email: qualification-officer@example.invalid
+    passwordRef: secret:env/QUALIFICATION_OFFICER_PASSWORD
+    claims:
+      registry_actor_kind: human
+      registry_principal: qualification-officer
+      registry_purpose: directory-administration
+      jurisdiction: zone-a
+    grants:
+      - product: breg
+        accessProfiles: [directory-editor]

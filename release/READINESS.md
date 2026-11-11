@@ -137,13 +137,11 @@ What 1.0 promises the institutions that run this.
       audit recovery, and version-matched rollback. It requires no database
       migration solely for issuance narrowing and does not claim a successful
       run until finalized-source and published-asset evidence are added.
-- [ ] Single-node Compose deployment behind an institution-owned reverse proxy,
-      IAM, and front rate limiter documented. Evidence:
-      [`single-node-compose-behind-proxy.mdx` as published at v0.19.0](https://github.com/registrystack/registry-stack/blob/v0.19.0/docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx)
-      (#13; the page was retired from the published docs with the Relay V1
-      cutover, so this evidence is pinned to the last release that carried it
-      and needs a Relay V2 replacement before 1.0). Kubernetes and
-      high-availability profiles remain outside the 1.0 deployment profile.
+- [ ] Accept the single-server Kubernetes deployment for the 1.0 profile
+      with institution-owned ingress, IAM, rate limiting, and recovery.
+      Candidate procedure: [Helm deployment](../deploy/README.md) and
+      [operations](../deploy/OPERATIONS.md). Qualify a high-availability
+      profile separately on the intended infrastructure.
 - [ ] Security-relevant configuration defaults inventoried and reviewed for
       secure-by-default (#172 and #171 are known open questions). Inventory
       evidence: [`security-config-defaults.md`](notes/security-config-defaults.md);

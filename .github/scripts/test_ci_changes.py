@@ -2438,6 +2438,13 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs"])
         self.assertFalse(outputs["docs_archives"])
 
+    def test_deployment_changes_run_chart_contract_without_rust(self) -> None:
+        outputs = classify(self.workspace, ("deploy/helm/registry-stack/values.yaml",), pull_request=True)
+        self.assertTrue(outputs["deployment"])
+        self.assertFalse(outputs["rust"])
+        self.assertFalse(classify(self.workspace, ("README.md",), pull_request=True)["deployment"])
+        self.assertTrue(classify(self.workspace, (), full_sweep=True)["deployment"])
+
     def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
         # A runtime change reaches the real Evidence router consumers, including
         # the Casework institutional exchange acceptance through its dev dependency.

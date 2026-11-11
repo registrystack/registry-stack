@@ -32,6 +32,7 @@ export const REPOSITORY_ROOTS = [
   'release',
   'docs',
   'docker',
+  'deploy',
   'external',
   'schemas',
   'scripts',

@@ -1,0 +1,149 @@
+{{- if and .Values.appKit.enabled .Values.appKit.serve }}
+{{- $host := required "App Kit probes need the host from the configured origin. Set appKit.probes.host or appKit.ingress.host." (default .Values.appKit.ingress.host .Values.appKit.probes.host) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "registry-stack.appKitName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app-kit
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "app-kit") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "registry-stack.selectorLabels" (dict "Chart" .Chart "Release" .Release "Values" .Values "component" "app-kit") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "registry-stack.appKitPodSecurityContext" . | nindent 8 }}
+      {{- include "registry-stack.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.appKit.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: stage-app-inputs
+          image: {{ include "registry-stack.image" .Values.staging.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              umask 077
+              mkdir -p /work/config/private /work/secrets/private
+              for source in /staging/config/*; do
+                [ -f "$source" ] || continue
+                target="/work/config/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              for source in /staging/secrets/*; do
+                [ -f "$source" ] || continue
+                target="/work/secrets/private/${source##*/}"
+                [ ! -e "$target" ]
+                cp "$source" "$target"
+                chmod 0400 "$target"
+              done
+              chmod 0700 /work/config/private /work/secrets/private
+          securityContext:
+            {{- include "registry-stack.appKitContainerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.staging.resources | nindent 12 }}
+          volumeMounts:
+            - name: config-source
+              mountPath: /staging/config
+              readOnly: true
+            - name: secret-source
+              mountPath: /staging/secrets
+              readOnly: true
+            - name: config-private
+              mountPath: /work/config
+            - name: secret-private
+              mountPath: /work/secrets
+      containers:
+        - name: app-kit
+          image: {{ include "registry-stack.image" .Values.appKit.image | quote }}
+          imagePullPolicy: {{ .Values.appKit.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.appKit.containerPort }}
+              protocol: TCP
+          env:
+            - name: APPKIT_HOST_CONFIG
+              value: {{ printf "%s/host.json" .Values.appKit.config.mountPath | quote }}
+          {{- with .Values.appKit.caBundleKey }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: {{ printf "%s/%s" $.Values.appKit.secrets.mountPath . | quote }}
+          {{- end }}
+          {{- with .Values.appKit.probes.livenessPath }}
+          livenessProbe:
+            httpGet:
+              path: {{ . }}
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ $host | quote }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.appKit.probes.readinessPath }}
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ $host | quote }}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          securityContext:
+            {{- include "registry-stack.appKitContainerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.appKit.resources | nindent 12 }}
+          volumeMounts:
+            - name: config-private
+              mountPath: {{ .Values.appKit.config.mountPath }}
+              subPath: private
+              readOnly: true
+            - name: secret-private
+              mountPath: {{ .Values.appKit.secrets.mountPath }}
+              subPath: private
+              readOnly: true
+      volumes:
+        - name: config-source
+          configMap:
+            name: {{ .Values.appKit.config.configMapName }}
+            defaultMode: 0444
+        - name: secret-source
+          secret:
+            secretName: {{ .Values.appKit.secrets.secretName }}
+            defaultMode: 0444
+        - name: config-private
+          emptyDir:
+            medium: Memory
+        - name: secret-private
+          emptyDir:
+            medium: Memory
+      {{- with .Values.appKit.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.appKit.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.appKit.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

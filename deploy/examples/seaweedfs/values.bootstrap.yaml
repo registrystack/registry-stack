@@ -1,0 +1,11 @@
+s3:
+  existingConfigSecret: registry-seaweedfs-s3-config-bootstrap
+  extraEnvironmentVars:
+    BREG_S3_BOOTSTRAP_ACCESS_KEY_ID:
+      secretKeyRef:
+        name: registry-seaweedfs-bootstrap
+        key: access-key-id
+    BREG_S3_BOOTSTRAP_SECRET_ACCESS_KEY:
+      secretKeyRef:
+        name: registry-seaweedfs-bootstrap
+        key: secret-access-key
