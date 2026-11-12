@@ -3,8 +3,10 @@
 This project accepts one approved instruction record identity, asks the bound
 Adapter payment connection to submit it, waits for the named `disbursement`
 completion, and reports an exact provider confirmation back to the owning
-instruction registry. Coordinator never receives the amount, recipient
-destination, funding account, provider request, or provider evidence.
+instruction registry. Adapter resolves the amount, recipient destination and
+funding account from the approved BReg instruction. Coordinator receives
+bounded, validated status and confirmation fields, including exact money,
+provider reference and provider-result digest.
 
 The three outcomes are deliberately narrow:
 
