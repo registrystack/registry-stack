@@ -45,7 +45,11 @@ async fn ordinary_nested_response_members_are_ignored() {
             "stages": [{
                 "id": "review", "queue": "reviews", "decidingProfiles": ["staff"],
                 "requiredApprovals": 1, "outcomes": ["approved"],
+                "publicProgressCode": "initial-verification",
                 "futureStageMember": true
+            }, {
+                "id": "confirm", "queue": "reviews", "decidingProfiles": ["staff"],
+                "requiredApprovals": 1
             }],
             "retention": {
                 "terminalRetentionDays": 30,
@@ -152,10 +156,16 @@ async fn ordinary_nested_response_members_are_ignored() {
         .await
         .expect("description with additive members");
     assert_eq!(returned.value.review_policies[0].id, "registry-correction");
+    let stages = &returned.value.review_policies[0].stages;
+    assert_eq!(stages[0].outcomes, Some(vec!["approved".to_owned()]));
     assert_eq!(
-        returned.value.review_policies[0].stages[0].outcomes,
-        Some(vec!["approved".to_owned()])
+        stages[0]
+            .public_progress_code
+            .as_ref()
+            .map(|code| code.as_str()),
+        Some("initial-verification")
     );
+    assert!(stages[1].public_progress_code.is_none());
     let returned = client
         .directory(CaseworkAuth::new(&token, "staff"))
         .await

@@ -189,6 +189,8 @@ struct ReviewStagePolicyWire {
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_progress_code: Option<registry_review_client::ReviewProgressCode>,
     queue: String,
     deciding_profiles: Vec<String>,
     required_approvals: u16,
