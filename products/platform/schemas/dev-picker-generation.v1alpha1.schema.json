@@ -1,0 +1,66 @@
+{
+  "$defs": {
+    "DevPickerGenerationStatus": {
+      "enum": [
+        "ready",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "DevPickerPersona": {
+      "enum": [
+        "holder",
+        "staff"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/dev-picker-generation/dev-picker-generation.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/dev-picker-generation/v1alpha1",
+      "type": "string"
+    },
+    "generation": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "kind": {
+      "const": "PlatformDevPickerGeneration",
+      "type": "string"
+    },
+    "picker": {
+      "$ref": "#/$defs/DevPickerPersona"
+    },
+    "runExpiresAt": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "runId": {
+      "maxLength": 32,
+      "minLength": 32,
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/DevPickerGenerationStatus"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "status",
+    "runId",
+    "picker",
+    "generation",
+    "runExpiresAt"
+  ],
+  "title": "DevPickerGeneration",
+  "type": "object"
+}

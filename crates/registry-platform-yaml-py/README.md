@@ -29,11 +29,15 @@ of the shared reader's JSON diagnostic objects. The reader caps the input at
 add one `config.too-many-problems` overflow diagnostic.
 Diagnostic messages do not repeat scalar values from the document. The
 binding additionally bounds the diagnostic file name to 4 KiB and each
-expected format identifier to 256 bytes. The registered Python connection and
-development workload-token envelopes are decoded into their closed native
-types at the same boundary, including their non-empty authority sets. Other
-formats receive the generic envelope and structural checks before their
-product-specific validation.
+expected format identifier to 256 bytes. The registered Python connection,
+development workload-token, development picker descriptor, picker
+person-token, and picker generation envelopes are decoded into their closed
+native types at the same boundary. Their collections and generated
+credentials are bounded, set-like lists refuse duplicates, and an inline
+picker bearer token is never repeated in a diagnostic. Cross-file
+consistency, path confinement, token claims, and live-run authority remain
+with the Python consumer. Other formats receive the generic envelope and
+structural checks before their product-specific validation.
 
 The standalone development import is:
 

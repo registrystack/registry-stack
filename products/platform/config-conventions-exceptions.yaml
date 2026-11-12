@@ -937,3 +937,15 @@ exceptions:
   class: exchange-model
   reason: "The development runner atomically writes the short-lived bearer only into its private mode-0600 state file, while the operator-authored connection holds a SecretReference to that file. The Python workload reader checks the run authority, expiry, and monotonic generation before each protected call."
   resolution: "Permanent for the dev-workload-token v1alpha1 producer-consumer contract. Remove this exception when a later format version no longer serializes the bearer in read-back state."
+- rule: CFG-SEC-1
+  format: platform/dev-picker-descriptor
+  location: products/platform/schemas/dev-picker-descriptor.v1alpha1.schema.json#/$defs/DevPickerCredential/properties/tokenFile
+  class: exchange-model
+  reason: "The generated descriptor names a bearer file relative to the owner-only picker directory. The Python picker checks file ownership, run confinement, live supervisor authority, and token claims before use; this relative file name is not an operator-authored SecretReference."
+  resolution: "Permanent for the dev-picker-descriptor v1alpha1 producer-consumer contract. Remove this exception when the format no longer names a private bearer file."
+- rule: CFG-SEC-1
+  format: platform/dev-picker-token
+  location: products/platform/schemas/dev-picker-token.v1alpha1.schema.json#/properties/token
+  class: exchange-model
+  reason: "The development runner atomically writes the short-lived bearer only to a private mode-0600 picker file. The Python picker checks the live run, exact person grant, expiry, and a consistent generation snapshot when admitting each protected request."
+  resolution: "Permanent for the dev-picker-token v1alpha1 producer-consumer contract. Remove this exception when a later format version no longer serializes the bearer in read-back state."

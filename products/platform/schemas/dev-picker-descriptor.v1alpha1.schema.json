@@ -1,0 +1,302 @@
+{
+  "$defs": {
+    "DevPickerCredential": {
+      "additionalProperties": false,
+      "properties": {
+        "audiences": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "principalClaim": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "profile": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "resource": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "tokenFile": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "tokenFile",
+        "profile",
+        "resource",
+        "audiences",
+        "scopes",
+        "principalClaim"
+      ],
+      "type": "object"
+    },
+    "DevPickerPerson": {
+      "additionalProperties": false,
+      "properties": {
+        "clientId": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "credentials": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DevPickerCredential"
+          },
+          "maxProperties": 2,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "enum": [
+              "breg",
+              "casework"
+            ]
+          },
+          "type": "object"
+        },
+        "label": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "principal": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "selector": {
+          "maxLength": 128,
+          "minLength": 20,
+          "pattern": "^[A-Za-z0-9_-]{20,128}$",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "selector",
+        "label",
+        "subject",
+        "principal",
+        "clientId",
+        "credentials"
+      ],
+      "type": "object"
+    },
+    "DevPickerPersona": {
+      "enum": [
+        "holder",
+        "staff"
+      ],
+      "type": "string"
+    },
+    "DevPickerProductTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "url",
+        "resource"
+      ],
+      "type": "object"
+    },
+    "DevPickerWorkload": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "additionalProperties": true,
+          "maxProperties": 64,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-passthrough": "Claim values are written into the workload token as declared."
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "default": {
+          "type": "boolean"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "name": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "type": "string"
+        },
+        "product": {
+          "$ref": "#/$defs/DevPickerWorkloadProduct"
+        },
+        "profile": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "resource": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "subject": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "name",
+        "product",
+        "default",
+        "url",
+        "issuer",
+        "subject",
+        "clientId",
+        "profile",
+        "resource",
+        "scopes",
+        "claims"
+      ],
+      "type": "object"
+    },
+    "DevPickerWorkloadProduct": {
+      "enum": [
+        "breg",
+        "messaging"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/dev-picker-descriptor/dev-picker-descriptor.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/dev-picker-descriptor/v1alpha1",
+      "type": "string"
+    },
+    "expiresAt": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "generationFile": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "issuedAt": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "kind": {
+      "const": "PlatformDevPickerDescriptor",
+      "type": "string"
+    },
+    "origin": {
+      "$ref": "#/$defs/Url"
+    },
+    "people": {
+      "items": {
+        "$ref": "#/$defs/DevPickerPerson"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    },
+    "persona": {
+      "$ref": "#/$defs/DevPickerPersona"
+    },
+    "products": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DevPickerProductTarget"
+      },
+      "maxProperties": 3,
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId",
+        "enum": [
+          "breg",
+          "casework",
+          "messaging"
+        ]
+      },
+      "type": "object"
+    },
+    "runId": {
+      "maxLength": 32,
+      "minLength": 32,
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "sessionNamespace": {
+      "maxLength": 128,
+      "minLength": 20,
+      "pattern": "^[A-Za-z0-9_-]{20,128}$",
+      "type": "string"
+    },
+    "workloadConnectionFile": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "workloads": {
+      "items": {
+        "$ref": "#/$defs/DevPickerWorkload"
+      },
+      "maxItems": 32,
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "runId",
+    "persona",
+    "origin",
+    "sessionNamespace",
+    "issuedAt",
+    "expiresAt",
+    "generationFile",
+    "products",
+    "people",
+    "workloads"
+  ],
+  "title": "DevPickerDescriptor",
+  "type": "object"
+}

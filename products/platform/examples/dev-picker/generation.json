@@ -1,0 +1,9 @@
+{
+  "apiVersion": "id.registrystack.org/formats/platform/dev-picker-generation/v1alpha1",
+  "kind": "PlatformDevPickerGeneration",
+  "status": "stopped",
+  "runId": "0123456789abcdef0123456789abcdef",
+  "picker": "holder",
+  "generation": 1,
+  "runExpiresAt": 1700000600
+}

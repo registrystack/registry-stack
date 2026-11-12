@@ -280,7 +280,7 @@ impl PickerCredentials {
                         (
                             product.name().to_owned(),
                             json!({
-                                "tokenRef": token_ref,
+                                "tokenFile": token_ref,
                                 "profile": grant.profile,
                                 "resource": self.input.plan.product(*product).audience,
                                 "audiences": audiences(&self.input, declared, *product),
@@ -320,16 +320,13 @@ impl PickerCredentials {
                 })
             })
             .collect::<Vec<_>>();
-        let connection_ref = if plan.workloads.is_empty() {
-            Value::Null
-        } else {
+        if !plan.workloads.is_empty() {
             ensure!(
                 self.workload_connection.is_some(),
                 "development picker workloads need the run's generated connection"
             );
-            json!("../../python-workload/python-connection.json")
-        };
-        Ok(json!({
+        }
+        let mut descriptor = json!({
             "apiVersion": DESCRIPTOR_FORMAT,
             "kind": DESCRIPTOR_KIND,
             "runId": self.input.run_id,
@@ -338,12 +335,16 @@ impl PickerCredentials {
             "sessionNamespace": picker.session_namespace,
             "issuedAt": issued_at,
             "expiresAt": self.run_expires,
-            "generationRef": GENERATION_FILE,
+            "generationFile": GENERATION_FILE,
             "products": products,
             "people": people,
-            "workloadConnectionRef": connection_ref,
             "workloads": workloads,
-        }))
+        });
+        if !plan.workloads.is_empty() {
+            descriptor["workloadConnectionFile"] =
+                json!("../../python-workload/python-connection.json");
+        }
+        Ok(descriptor)
     }
 
     fn token_metadata(
@@ -490,6 +491,41 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_omits_workload_reference_when_no_workloads_exist() {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(scratch.path(), PermissionsExt::from_mode(0o700)).unwrap();
+        let mut input = input(scratch.path());
+        let plan = &mut Arc::get_mut(&mut input).unwrap().plan;
+        plan.workloads.clear();
+        plan.development_pickers
+            .holder
+            .as_mut()
+            .unwrap()
+            .workloads
+            .clear();
+        let issuer = Arc::new(Issuer::create(scratch.path()).unwrap());
+        let now = super::super::clock().unwrap();
+        let credentials = PickerCredentials::prepare(
+            scratch.path(),
+            input,
+            issuer,
+            &BTreeMap::from([
+                (Product::Breg, "http://127.0.0.1:41001".to_owned()),
+                (Product::Casework, "http://127.0.0.1:41002".to_owned()),
+            ]),
+            None,
+            now,
+            now + 600,
+        )
+        .unwrap()
+        .unwrap();
+        let descriptor: Value =
+            serde_json::from_slice(&std::fs::read(&credentials.paths()["holder"]).unwrap())
+                .unwrap();
+        assert!(descriptor.get("workloadConnectionFile").is_none());
+    }
+
+    #[test]
     fn descriptor_and_tokens_are_bounded_to_one_live_run_and_rotate_as_a_set() {
         let scratch = tempfile::tempdir().unwrap();
         std::fs::set_permissions(scratch.path(), PermissionsExt::from_mode(0o700)).unwrap();
@@ -529,12 +565,12 @@ mod tests {
         assert_eq!(descriptor["people"][0]["label"], "applicant");
         assert_ne!(descriptor["people"][0]["selector"], "applicant");
         assert_eq!(
-            descriptor["people"][0]["credentials"]["breg"]["tokenRef"],
+            descriptor["people"][0]["credentials"]["breg"]["tokenFile"],
             "credential-0-breg.json"
         );
         assert_eq!(descriptor["workloads"][0]["name"], "notices");
         assert_eq!(
-            descriptor["workloadConnectionRef"],
+            descriptor["workloadConnectionFile"],
             "../../python-workload/python-connection.json"
         );
         let descriptor_text = String::from_utf8(descriptor_bytes).unwrap();

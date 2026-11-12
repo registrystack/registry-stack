@@ -1,0 +1,41 @@
+{
+  "apiVersion": "id.registrystack.org/formats/platform/dev-picker-descriptor/v1alpha1",
+  "kind": "PlatformDevPickerDescriptor",
+  "runId": "0123456789abcdef0123456789abcdef",
+  "persona": "holder",
+  "origin": "http://127.0.0.1:41000",
+  "sessionNamespace": "0123456789abcdef0123456789abcdef",
+  "issuedAt": 1700000000,
+  "expiresAt": 1700000600,
+  "generationFile": "generation.json",
+  "products": {
+    "breg": {
+      "url": "http://127.0.0.1:41001",
+      "resource": "urn:test:breg"
+    }
+  },
+  "people": [
+    {
+      "selector": "abcdef0123456789abcdef0123456789",
+      "label": "applicant",
+      "subject": "person-one",
+      "principal": "person-one",
+      "clientId": "portal-client",
+      "credentials": {
+        "breg": {
+          "tokenFile": "credential-0-breg.json",
+          "profile": "applicant",
+          "resource": "urn:test:breg",
+          "audiences": [
+            "urn:test:breg"
+          ],
+          "scopes": [
+            "breg:read"
+          ],
+          "principalClaim": "registry_principal"
+        }
+      }
+    }
+  ],
+  "workloads": []
+}

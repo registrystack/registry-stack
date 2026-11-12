@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextlib import redirect_stderr, redirect_stdout
 import fcntl
 import importlib
+import io
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -14,6 +17,7 @@ import tempfile
 import time
 import types
 import unittest
+from unittest import mock
 
 from fastapi import FastAPI, Request
 from flask import Flask, g, jsonify
@@ -24,8 +28,10 @@ SOURCE = Path(__file__).resolve().parents[1] / "python" / "registry_client"
 PACKAGE = "_registry_client_dev_picker_test"
 package = types.ModuleType(PACKAGE)
 package.__path__ = [str(SOURCE)]
+package.__version__ = "0.46.1"
 sys.modules[PACKAGE] = package
 yaml_module = types.ModuleType(f"{PACKAGE}.yaml")
+read_formats = []
 
 
 class ConfigReadError(ValueError):
@@ -35,6 +41,7 @@ class ConfigReadError(ValueError):
 
 
 def read_document(contents, *, file, api_version, kind):
+    read_formats.append((api_version, kind))
     try:
         value = json.loads(contents)
     except (UnicodeError, json.JSONDecodeError):
@@ -55,9 +62,11 @@ RUN_ID = "0123456789abcdef0123456789abcdef"
 
 
 def _segment(value):
-    return base64.urlsafe_b64encode(
-        json.dumps(value, separators=(",", ":")).encode()
-    ).rstrip(b"=").decode()
+    return (
+        base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode())
+        .rstrip(b"=")
+        .decode()
+    )
 
 
 def _token(*, product, persona, generation, issued, expires, **changes):
@@ -168,13 +177,15 @@ class LivePicker:
                 "service": f"rstack-dev-{RUN_ID}",
                 "audience": "service",
                 "secretProviders": {"file": {"root": str(self.workload_root.resolve())}},
-                "bindings": [{
-                    "name": "notices",
-                    "product": "messaging",
-                    "url": endpoint,
-                    "default": True,
-                    "credential": credential,
-                }],
+                "bindings": [
+                    {
+                        "name": "notices",
+                        "product": "messaging",
+                        "url": endpoint,
+                        "default": True,
+                        "credential": credential,
+                    }
+                ],
             },
         )
 
@@ -188,44 +199,54 @@ class LivePicker:
             "sessionNamespace": self.namespace,
             "issuedAt": self.now,
             "expiresAt": self.expires,
-            "generationRef": "generation.json",
+            "generationFile": "generation.json",
             "products": {
                 "breg": {"url": "http://127.0.0.1:49199", "resource": "urn:test:breg"},
-                "casework": {"url": "http://127.0.0.1:49200", "resource": "urn:test:casework"},
-                "messaging": {"url": "http://127.0.0.1:49201", "resource": "urn:test:messaging"},
-            },
-            "people": [{
-                "selector": self.selector,
-                "label": "Applicant One",
-                "subject": "person-one",
-                "principal": "person-one",
-                "clientId": "portal-client",
-                "credentials": {
-                    product: {
-                        "tokenRef": f"person-one-{product}.json",
-                        "profile": "applicant" if product == "breg" else "requester",
-                        "resource": f"urn:test:{product}",
-                        "audiences": [f"urn:test:{product}"],
-                        "scopes": [f"{product}:read"],
-                        "principalClaim": "registry_principal",
-                    }
-                    for product in ("breg", "casework")
+                "casework": {
+                    "url": "http://127.0.0.1:49200",
+                    "resource": "urn:test:casework",
                 },
-            }],
-            "workloadConnectionRef": "../../python-workload/python-connection.json",
-            "workloads": [{
-                "name": "notices",
-                "product": "messaging",
-                "default": True,
-                "url": "http://127.0.0.1:49201",
-                "issuer": "https://issuer.example.test",
-                "subject": "notice-service",
-                "clientId": "notice-client",
-                "profile": "service-sender",
-                "resource": "urn:test:messaging",
-                "scopes": ["messaging:send"],
-                "claims": {"registry_actor_kind": "service"},
-            }],
+                "messaging": {
+                    "url": "http://127.0.0.1:49201",
+                    "resource": "urn:test:messaging",
+                },
+            },
+            "people": [
+                {
+                    "selector": self.selector,
+                    "label": "Applicant One",
+                    "subject": "person-one",
+                    "principal": "person-one",
+                    "clientId": "portal-client",
+                    "credentials": {
+                        product: {
+                            "tokenFile": f"credential-0-{product}.json",
+                            "profile": "applicant" if product == "breg" else "requester",
+                            "resource": f"urn:test:{product}",
+                            "audiences": [f"urn:test:{product}"],
+                            "scopes": [f"{product}:read"],
+                            "principalClaim": "registry_principal",
+                        }
+                        for product in ("breg", "casework")
+                    },
+                }
+            ],
+            "workloadConnectionFile": "../../python-workload/python-connection.json",
+            "workloads": [
+                {
+                    "name": "notices",
+                    "product": "messaging",
+                    "default": True,
+                    "url": "http://127.0.0.1:49201",
+                    "issuer": "https://issuer.example.test",
+                    "subject": "notice-service",
+                    "clientId": "notice-client",
+                    "profile": "service-sender",
+                    "resource": "urn:test:messaging",
+                    "scopes": ["messaging:send"],
+                    "claims": {"registry_actor_kind": "service"},
+                }
+            ],
         }
         descriptor.update(changes)
         self._write_json(self.descriptor_path, descriptor)
@@ -275,7 +296,7 @@ class LivePicker:
             ),
         }
         state.update(changes)
-        self._write_json(self.picker_root / f"person-one-{product}.json", state)
+        self._write_json(self.picker_root / f"credential-0-{product}.json", state)
 
 
 class DevelopmentPickerTests(unittest.TestCase):
@@ -314,7 +335,249 @@ class DevelopmentPickerTests(unittest.TestCase):
         with self.assertRaisesRegex(dev_picker.PickerUnavailable, "live development run"):
             dev_picker.DevelopmentPicker.from_descriptor(self.live.descriptor_path)
 
-    def test_nonloopback_wrong_run_stopped_expired_and_copied_descriptors_are_refused(self):
+    def test_picker_state_uses_the_shared_typed_reader(self):
+        read_formats.clear()
+        self.select()
+        self.assertIn((dev_picker.DESCRIPTOR_VERSION, "PlatformDevPickerDescriptor"), read_formats)
+        self.assertIn((dev_picker.GENERATION_VERSION, "PlatformDevPickerGeneration"), read_formats)
+        self.assertIn((dev_picker.TOKEN_VERSION, "PlatformDevPickerToken"), read_formats)
+
+    def test_descriptor_without_workloads_omits_connection_reference(self):
+        descriptor = json.loads(self.live.descriptor_path.read_text(encoding="utf-8"))
+        descriptor.pop("workloadConnectionFile")
+        descriptor["workloads"] = []
+        self.live._write_json(self.live.descriptor_path, descriptor)
+        picker = self.picker()
+        self.assertEqual(picker._workloads, {})
+
+    def test_offline_picker_checker_routes_each_format_without_a_live_issuer(self):
+        checker = importlib.import_module(f"{PACKAGE}.check_dev_picker")
+        read_formats.clear()
+        for kind, path in (
+            ("descriptor", self.live.descriptor_path),
+            ("generation", self.live.picker_root / "generation.json"),
+            ("token", self.live.picker_root / "credential-0-breg.json"),
+        ):
+            with self.subTest(kind=kind):
+                checker.check_file(path, kind=kind)
+        self.assertIn((dev_picker.DESCRIPTOR_VERSION, "PlatformDevPickerDescriptor"), read_formats)
+        self.assertIn((dev_picker.GENERATION_VERSION, "PlatformDevPickerGeneration"), read_formats)
+        self.assertIn((dev_picker.TOKEN_VERSION, "PlatformDevPickerToken"), read_formats)
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(self.live.picker_root / "generation.json", kind="token")
+        link = self.live.root / "picker-link.json"
+        link.symlink_to(self.live.descriptor_path)
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(link, kind="descriptor")
+
+    def test_offline_descriptor_checks_run_authority_and_referenced_state(self):
+        checker = importlib.import_module(f"{PACKAGE}.check_dev_picker")
+
+        descriptor = json.loads(self.live.descriptor_path.read_text(encoding="utf-8"))
+        descriptor["origin"] = "https://portal.example.test"
+        self.live._write_json(self.live.descriptor_path, descriptor)
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(self.live.descriptor_path, kind="descriptor")
+
+        self.live.write_descriptor()
+        self.live.write_generation(1, run_id="f" * 32)
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(self.live.descriptor_path, kind="descriptor")
+
+        self.live.write_generation(1)
+        self.live.write_token("breg", 1, subject="other")
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(self.live.descriptor_path, kind="descriptor")
+
+        self.live.write_token(
+            "breg", 1, issuedAt=self.live.expires - 100, expiresAt=self.live.expires + 1
+        )
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(self.live.descriptor_path, kind="descriptor")
+
+        self.live.write_token("breg", 1)
+        self.live._write_connection(endpoint="http://127.0.0.1:49999")
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(self.live.descriptor_path, kind="descriptor")
+
+    def test_offline_live_bearer_requires_private_single_link_owner(self):
+        checker = importlib.import_module(f"{PACKAGE}.check_dev_picker")
+        token_path = self.live.picker_root / "credential-0-breg.json"
+
+        token_path.chmod(0o644)
+        with self.assertRaisesRegex(dev_picker.ConnectionError, "refused") as refused:
+            checker.check_file(token_path, kind="token")
+        self.assertNotIn(self.live.selector, str(refused.exception))
+
+        token_path.chmod(0o600)
+        linked = self.live.picker_root / "credential-linked.json"
+        os.link(token_path, linked)
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(token_path, kind="token")
+        linked.unlink()
+
+        with mock.patch.object(checker.os, "getuid", return_value=os.getuid() + 1):
+            with self.assertRaises(dev_picker.ConnectionError):
+                checker.check_file(token_path, kind="token")
+
+        self.live.write_token("breg", 1, status="stopped")
+        stopped = json.loads(token_path.read_text(encoding="utf-8"))
+        stopped.pop("token")
+        self.live._write_json(token_path, stopped)
+        token_path.chmod(0o644)
+        checker.check_file(token_path, kind="token")
+
+    def test_generation_and_token_references_cannot_escape_through_symlinks(self):
+        checker = importlib.import_module(f"{PACKAGE}.check_dev_picker")
+        outside = self.live.root / "outside-token.json"
+        outside.write_bytes((self.live.picker_root / "credential-0-breg.json").read_bytes())
+        outside.chmod(0o600)
+        token_path = self.live.picker_root / "credential-0-breg.json"
+        token_path.unlink()
+        token_path.symlink_to(outside)
+
+        with self.assertRaises(dev_picker.PickerUnavailable):
+            self.picker()
+        with self.assertRaises(dev_picker.ConnectionError):
+            checker.check_file(self.live.descriptor_path, kind="descriptor")
+
+    def test_offline_checker_json_report_is_structured_and_value_free(self):
+        checker = importlib.import_module(f"{PACKAGE}.check_dev_picker")
+        self.live.write_generation(1, run_id="f" * 32)
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "check_dev_picker",
+                    "--kind",
+                    "descriptor",
+                    os.fspath(self.live.descriptor_path),
+                    "--format",
+                    "json",
+                ],
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(checker.main(), 1)
+        report = json.loads(output.getvalue())
+        self.assertFalse(report["ok"])
+        self.assertEqual(list(report)[:5], ["ok", "command", "status", "apiVersion", "kind"])
+        self.assertEqual(report["command"], "dev-picker check")
+        self.assertEqual(report["status"], "domain-refusal")
+        self.assertEqual(
+            report["apiVersion"],
+            "id.registrystack.org/formats/platform/dev-picker-check-report/v1alpha1",
+        )
+        self.assertEqual(report["kind"], "PlatformDevPickerCheckReport")
+        self.assertEqual(report["version"], "0.46.1")
+        self.assertEqual(report["diagnostics"][0]["code"], "config.invalid-value")
+        self.assertEqual(
+            report["diagnostics"][0]["source"]["file"],
+            os.fspath(self.live.picker_root / "generation.json"),
+        )
+        self.assertEqual(report["diagnostics"][0]["path"], "/runId")
+        self.assertNotIn("f" * 32, output.getvalue())
+
+        self.live.write_generation(1)
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "check_dev_picker",
+                    "--kind",
+                    "descriptor",
+                    os.fspath(self.live.descriptor_path),
+                    "--format",
+                    "json",
+                    "--deny-warnings",
+                ],
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(checker.main(), 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["diagnostics"], [])
+        self.assertEqual(report["version"], "0.46.1")
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "check_dev_picker",
+                    "--kind",
+                    "unsupported",
+                    os.fspath(self.live.descriptor_path),
+                    "--format",
+                    "json",
+                ],
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(checker.main(), 2)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["status"], "usage-error")
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["version"], "0.46.1")
+        self.assertEqual(report["diagnostics"][0]["code"], "check-dev-picker.usage-error")
+
+    def test_offline_checker_boundary_and_human_refusals_are_diagnostic(self):
+        checker = importlib.import_module(f"{PACKAGE}.check_dev_picker")
+        link = self.live.root / "picker-link.json"
+        link.symlink_to(self.live.descriptor_path)
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "check_dev_picker",
+                    "--kind",
+                    "descriptor",
+                    os.fspath(link),
+                    "--format",
+                    "json",
+                ],
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(checker.main(), 1)
+        report = json.loads(output.getvalue())
+        self.assertTrue(report["diagnostics"])
+        self.assertEqual(report["diagnostics"][0]["code"], "config.invalid-value")
+
+        self.live.write_generation(1, run_id="f" * 32)
+        error = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "check_dev_picker",
+                    "--kind",
+                    "descriptor",
+                    os.fspath(self.live.descriptor_path),
+                ],
+            ),
+            redirect_stderr(error),
+        ):
+            self.assertEqual(checker.main(), 1)
+        lines = error.getvalue().splitlines()
+        self.assertRegex(lines[0], r"^error\[config\.invalid-value\] .+generation\.json /runId$")
+        self.assertTrue(lines[1].startswith("  "))
+        self.assertTrue(lines[2].startswith("  next: "))
+        self.assertEqual(lines[-1], "1 error, 0 warnings in 1 file")
+        self.assertNotIn("f" * 32, error.getvalue())
+
+    def test_nonloopback_wrong_run_stopped_expired_and_copied_descriptors_are_refused(
+        self,
+    ):
         cases = (
             {"origin": "https://portal.example.test"},
             {"runId": "f" * 32},
@@ -341,7 +604,12 @@ class DevelopmentPickerTests(unittest.TestCase):
         form = picker.begin()
         for selector, origin, host, csrf in (
             ("person-one", self.live.origin, "127.0.0.1:43891", form.csrf_token),
-            (self.live.selector, "http://127.0.0.1:1", "127.0.0.1:43891", form.csrf_token),
+            (
+                self.live.selector,
+                "http://127.0.0.1:1",
+                "127.0.0.1:43891",
+                form.csrf_token,
+            ),
             (self.live.selector, self.live.origin, "127.0.0.1:1", form.csrf_token),
             (self.live.selector, self.live.origin, "127.0.0.1:43891", "wrong"),
         ):
@@ -366,7 +634,9 @@ class DevelopmentPickerTests(unittest.TestCase):
             )
         self.assertEqual(picker.session_count(), 0)
 
-    def test_complete_session_tracks_rotation_and_refuses_mismatch_stop_or_old_run(self):
+    def test_complete_session_tracks_rotation_and_refuses_mismatch_stop_or_old_run(
+        self,
+    ):
         picker, session = self.select()
         context = picker.context(session.session_id)
         self.assertEqual(context.subject, "person-one")
@@ -414,13 +684,13 @@ class DevelopmentPickerTests(unittest.TestCase):
             person._context._token_for("breg"),
         )
         casework = person.casework
-        self.assertEqual(
-            casework._CaseworkWorkload__client.args[0], "http://127.0.0.1:49200"
-        )
+        self.assertEqual(casework._CaseworkWorkload__client.args[0], "http://127.0.0.1:49200")
         self.assertEqual(casework._CaseworkWorkload__profile, "requester")
         self.assertNotIn("http", repr(person))
 
-    def test_tampered_identity_audience_client_or_missing_product_opens_no_session(self):
+    def test_tampered_identity_audience_client_or_missing_product_opens_no_session(
+        self,
+    ):
         mutations = (
             ("breg", {"subject": "other"}),
             ("breg", {"clientId": "other-client"}),
@@ -442,7 +712,7 @@ class DevelopmentPickerTests(unittest.TestCase):
                     )
                 self.assertEqual(picker.session_count(), 0)
                 self.live.write_token(product, 1)
-        (self.live.picker_root / "person-one-casework.json").unlink()
+        (self.live.picker_root / "credential-0-casework.json").unlink()
         with self.assertRaises(dev_picker.PickerUnavailable):
             self.picker()
 
@@ -463,9 +733,7 @@ class DevelopmentPickerTests(unittest.TestCase):
         self.live._write_connection()
         connection_path = self.live.workload_root / "python-connection.json"
         connection = json.loads(connection_path.read_text(encoding="utf-8"))
-        connection["bindings"][0]["credential"]["claims"] = {
-            "registry_actor_kind": "human"
-        }
+        connection["bindings"][0]["credential"]["claims"] = {"registry_actor_kind": "human"}
         self.live._write_json(connection_path, connection)
         with self.assertRaisesRegex(dev_picker.PickerUnavailable, "workload"):
             self.picker().workloads
@@ -511,13 +779,14 @@ class FrameworkPickerTests(unittest.TestCase):
         self.assertNotIn(b"Bearer", login.data)
         form = self._form(login.data)
         refused = client.post(
-            "/auth/dev", base_url=base, data=form, headers={"Origin": "http://127.0.0.1:1"}
+            "/auth/dev",
+            base_url=base,
+            data=form,
+            headers={"Origin": "http://127.0.0.1:1"},
         )
         self.assertEqual(refused.status_code, 403)
         form = self._form(client.get("/auth/dev", base_url=base).data)
-        selected = client.post(
-            "/auth/dev", base_url=base, data=form, headers={"Origin": base}
-        )
+        selected = client.post("/auth/dev", base_url=base, data=form, headers={"Origin": base})
         self.assertEqual(selected.status_code, 302)
         self.assertIn(picker.session_cookie, selected.headers["Set-Cookie"])
         self.assertNotIn(picker.pending_cookie, selected.headers["Set-Cookie"])

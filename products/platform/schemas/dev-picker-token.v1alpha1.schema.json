@@ -1,0 +1,190 @@
+{
+  "$defs": {
+    "DevPickerPersonProduct": {
+      "enum": [
+        "breg",
+        "casework"
+      ],
+      "type": "string"
+    },
+    "DevPickerPersona": {
+      "enum": [
+        "holder",
+        "staff"
+      ],
+      "type": "string"
+    },
+    "DevPickerTokenStatus": {
+      "enum": [
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/dev-picker-token/dev-picker-token.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "status"
+        ]
+      },
+      "required": [
+        "token"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "token"
+        ]
+      },
+      "required": [
+        "status"
+      ]
+    }
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/dev-picker-token/v1alpha1",
+      "type": "string"
+    },
+    "audiences": {
+      "items": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "clientId": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "expiresAt": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "generation": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "issuedAt": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "issuer": {
+      "$ref": "#/$defs/Url"
+    },
+    "kind": {
+      "const": "PlatformDevPickerToken",
+      "type": "string"
+    },
+    "persona": {
+      "$ref": "#/$defs/DevPickerPersona"
+    },
+    "picker": {
+      "$ref": "#/$defs/DevPickerPersona"
+    },
+    "principal": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "principalClaim": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "product": {
+      "$ref": "#/$defs/DevPickerPersonProduct"
+    },
+    "profile": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "resource": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "runExpiresAt": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "runId": {
+      "maxLength": 32,
+      "minLength": 32,
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "scopes": {
+      "items": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "selector": {
+      "maxLength": 128,
+      "minLength": 20,
+      "pattern": "^[A-Za-z0-9_-]{20,128}$",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/DevPickerTokenStatus"
+    },
+    "subject": {
+      "$ref": "#/$defs/ExternalId"
+    },
+    "token": {
+      "maxLength": 8192,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "runId",
+    "picker",
+    "persona",
+    "selector",
+    "product",
+    "issuer",
+    "subject",
+    "principal",
+    "clientId",
+    "profile",
+    "resource",
+    "audiences",
+    "scopes",
+    "principalClaim",
+    "generation",
+    "issuedAt",
+    "expiresAt",
+    "runExpiresAt"
+  ],
+  "title": "DevPickerToken",
+  "type": "object"
+}

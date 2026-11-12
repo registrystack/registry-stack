@@ -140,7 +140,7 @@ fn expected_json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::
 }
 
 /// A product the development run can start.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Product {
@@ -291,8 +291,10 @@ impl PickerPersona {
 #[serde(deny_unknown_fields)]
 pub(super) struct DevelopmentPickers {
     /// A holder-only local admission simulation.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub holder: Option<DevelopmentPicker>,
     /// A staff-only local admission simulation.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub staff: Option<DevelopmentPicker>,
 }
 
@@ -319,7 +321,7 @@ pub(super) struct DevelopmentPicker {
     /// Test-person aliases eligible for this persona. The browser receives opaque selectors instead.
     pub people: Vec<String>,
     /// Complete person credential set required before a picker session opens.
-    pub person_products: Vec<Product>,
+    pub person_products: UniqueList<Product>,
     /// Service workload bindings available to this picker-backed application.
     #[serde(default)]
     pub workloads: Vec<String>,
@@ -974,10 +976,8 @@ impl Plan {
                     "Use separate synthetic test people for holder and staff services.",
                 )?;
             }
-            let person_products = picker.person_products.iter().collect::<BTreeSet<_>>();
             require(
-                !picker.person_products.is_empty()
-                    && person_products.len() == picker.person_products.len(),
+                !picker.person_products.is_empty(),
                 &format!("{field}/personProducts"),
                 "A development picker needs a distinct nonempty person product set.",
                 "List every product grant required before the local session opens.",
@@ -1597,7 +1597,7 @@ mod tests {
         plan.validate(&canonical(&root)).unwrap();
         let picker = plan.development_pickers.holder.as_ref().unwrap();
         assert_eq!(picker.people, ["operator"]);
-        assert_eq!(picker.person_products, [Product::Breg]);
+        assert_eq!(&picker.person_products[..], &[Product::Breg]);
         assert_eq!(picker.workloads, ["registry"]);
     }
 
@@ -1636,6 +1636,23 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("both local picker personas"));
+    }
+
+    #[test]
+    fn development_picker_defaults_and_duplicate_products_match_the_schema() {
+        assert_eq!(
+            serde_json::to_value(DevelopmentPickers::default()).unwrap(),
+            json!({})
+        );
+        let (_, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["developmentPickers"] = json!({
+            "holder": {"people": ["operator"], "personProducts": ["breg", "breg"]}
+        });
+        assert!(serde_json::from_value::<Plan>(value).is_err());
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "command": "dev-picker check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/platform/dev-picker-check-report/v1alpha1",
+  "kind": "PlatformDevPickerCheckReport",
+  "version": "0.46.1",
+  "filesChecked": 1,
+  "errors": 0,
+  "warnings": 0,
+  "diagnostics": []
+}

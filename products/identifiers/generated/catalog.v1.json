@@ -4996,7 +4996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/project-dev.v1alpha1.schema.json",
-        "sha256": "bcc5ba9b634220dbadfca00a5f630d1d645b2b1e16299dad461365da142b154c",
+        "sha256": "5da4995d2ec0dc8007bacada75ed4f8599daaa26890dd014c4bb138b26a1bbfe",
         "mediaType": "application/schema+json"
       }
     },
@@ -5919,6 +5919,60 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/platform/dev-picker-descriptor/dev-picker-descriptor.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "DevPickerDescriptor",
+      "description": "Registry Stack local development picker descriptor JSON Schema.",
+      "source": {
+        "path": "crates/registry-platform-yaml-py/src/formats.rs",
+        "sha256": "48e7f8f4dbe5c7e9a8289b6c5ef3379c82a8e93d951eb18b1b49b19c4151d2e8"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/dev-picker-descriptor.v1alpha1.schema.json",
+        "sha256": "0af9229be9a322dd6c23fed8527c3d65a09ac4538a1880fc5978c7ca290dc8a3",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/dev-picker-generation/dev-picker-generation.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "DevPickerGeneration",
+      "description": "Registry Stack local development picker generation JSON Schema.",
+      "source": {
+        "path": "crates/registry-platform-yaml-py/src/formats.rs",
+        "sha256": "48e7f8f4dbe5c7e9a8289b6c5ef3379c82a8e93d951eb18b1b49b19c4151d2e8"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/dev-picker-generation.v1alpha1.schema.json",
+        "sha256": "8480e2ff92cf609a29b4d6e768ee68551c36de6241137b7379c12f2db776b70f",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/dev-picker-token/dev-picker-token.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "DevPickerToken",
+      "description": "Registry Stack local development picker token JSON Schema.",
+      "source": {
+        "path": "crates/registry-platform-yaml-py/src/formats.rs",
+        "sha256": "48e7f8f4dbe5c7e9a8289b6c5ef3379c82a8e93d951eb18b1b49b19c4151d2e8"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/dev-picker-token.v1alpha1.schema.json",
+        "sha256": "48d7b5e126091c6eb47b3525d76f592ac6446ebc9dff218988c03c853257d7ed",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/platform/dev-workload-token/dev-workload-token.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -5928,7 +5982,7 @@
       "description": "Registry Stack local development workload token JSON Schema.",
       "source": {
         "path": "crates/registry-platform-yaml-py/src/formats.rs",
-        "sha256": "ffb0a64c7a943bdf86357f81dbb5dabb324d42b2856a237ab27be90f3e5def59"
+        "sha256": "48e7f8f4dbe5c7e9a8289b6c5ef3379c82a8e93d951eb18b1b49b19c4151d2e8"
       },
       "artifact": {
         "path": "products/platform/schemas/dev-workload-token.v1alpha1.schema.json",
@@ -6000,7 +6054,7 @@
       "description": "Registry Stack Python service connection JSON Schema.",
       "source": {
         "path": "crates/registry-platform-yaml-py/src/formats.rs",
-        "sha256": "ffb0a64c7a943bdf86357f81dbb5dabb324d42b2856a237ab27be90f3e5def59"
+        "sha256": "48e7f8f4dbe5c7e9a8289b6c5ef3379c82a8e93d951eb18b1b49b19c4151d2e8"
       },
       "artifact": {
         "path": "products/platform/schemas/python-connection.v1alpha1.schema.json",

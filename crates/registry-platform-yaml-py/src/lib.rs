@@ -17,7 +17,14 @@ use yaml_core::{
 #[cfg(feature = "schema")]
 pub use formats::schema_documents;
 pub use formats::{
-    read_dev_workload_token, read_python_connection, DevWorkloadToken, PythonConnection,
+    read_dev_picker_descriptor, read_dev_picker_generation, read_dev_picker_token,
+    read_dev_workload_token, read_python_connection, DevPickerDescriptor, DevPickerGeneration,
+    DevPickerToken, DevWorkloadToken, PythonConnection, DEV_PICKER_DESCRIPTOR_API_VERSION,
+    DEV_PICKER_DESCRIPTOR_FORMAT, DEV_PICKER_DESCRIPTOR_KIND, DEV_PICKER_DESCRIPTOR_SCHEMA_FILE,
+    DEV_PICKER_DESCRIPTOR_SCHEMA_ID, DEV_PICKER_GENERATION_API_VERSION,
+    DEV_PICKER_GENERATION_FORMAT, DEV_PICKER_GENERATION_KIND, DEV_PICKER_GENERATION_SCHEMA_FILE,
+    DEV_PICKER_GENERATION_SCHEMA_ID, DEV_PICKER_TOKEN_API_VERSION, DEV_PICKER_TOKEN_FORMAT,
+    DEV_PICKER_TOKEN_KIND, DEV_PICKER_TOKEN_SCHEMA_FILE, DEV_PICKER_TOKEN_SCHEMA_ID,
     DEV_WORKLOAD_TOKEN_API_VERSION, DEV_WORKLOAD_TOKEN_KIND, DEV_WORKLOAD_TOKEN_SCHEMA_FILE,
     DEV_WORKLOAD_TOKEN_SCHEMA_ID, PYTHON_CONNECTION_API_VERSION, PYTHON_CONNECTION_KIND,
     PYTHON_CONNECTION_SCHEMA_FILE, PYTHON_CONNECTION_SCHEMA_ID,
@@ -78,6 +85,25 @@ fn read_checked(
     }
     if (api_version, kind) == (DEV_WORKLOAD_TOKEN_API_VERSION, DEV_WORKLOAD_TOKEN_KIND) {
         return read_dev_workload_token(file, contents);
+    }
+    if (api_version, kind)
+        == (
+            DEV_PICKER_DESCRIPTOR_API_VERSION,
+            DEV_PICKER_DESCRIPTOR_KIND,
+        )
+    {
+        return read_dev_picker_descriptor(file, contents);
+    }
+    if (api_version, kind) == (DEV_PICKER_TOKEN_API_VERSION, DEV_PICKER_TOKEN_KIND) {
+        return read_dev_picker_token(file, contents);
+    }
+    if (api_version, kind)
+        == (
+            DEV_PICKER_GENERATION_API_VERSION,
+            DEV_PICKER_GENERATION_KIND,
+        )
+    {
+        return read_dev_picker_generation(file, contents);
     }
     let api_versions = [ApiVersion::current(api_version)];
     let format = FormatSpec {

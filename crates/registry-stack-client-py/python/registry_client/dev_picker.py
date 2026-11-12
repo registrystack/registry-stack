@@ -52,6 +52,15 @@ class PickerUnavailable(ValueError):
         super().__init__(f"{self.code}: {detail}")
 
 
+class PickerValidationError(PickerUnavailable):
+    """Value-free location for a picker document that failed semantic validation."""
+
+    def __init__(self, detail: str, *, path: str = "", source: Path | None = None) -> None:
+        super().__init__(detail)
+        self.path = path
+        self.source = source
+
+
 class PickerAdmissionError(ValueError):
     """A local browser selection did not establish one complete person."""
 
@@ -133,7 +142,8 @@ class DevelopmentPerson:
 
         return BRegWorkload(
             breg.BaseRegistryClient(
-                target["url"], authorization={"static": self._context._token_for("breg")}
+                target["url"],
+                authorization={"static": self._context._token_for("breg")},
             )
         )
 
@@ -184,14 +194,29 @@ class _StoredSession:
     expires_at: float
 
 
-def _json(path: Path) -> Any:
-    _private_file(path)
+def _json(
+    path: Path,
+    *,
+    api_version: str | None = None,
+    kind: str | None = None,
+    private: bool = True,
+) -> Any:
+    if private:
+        _private_file(path)
     try:
         contents = path.read_bytes()
     except OSError as exc:
         raise PickerUnavailable("runner state is unavailable") from exc
     if len(contents) > _MAXIMUM_FILE_BYTES:
         raise PickerUnavailable("runner state exceeds its size limit")
+
+    if api_version is not None and kind is not None:
+        from .yaml import ConfigReadError, read_document  # pyright: ignore[reportMissingImports]
+
+        try:
+            return read_document(contents, file=os.fspath(path), api_version=api_version, kind=kind)
+        except (ConfigReadError, ValueError) as exc:
+            raise PickerUnavailable("runner state is malformed") from exc
 
     def unique(pairs):
         value = {}
@@ -321,7 +346,167 @@ def _relative_file(root: Path, reference: Any, *, name: str, allow_parent: bool 
         resolved = (root / candidate).resolve(strict=True)
     except OSError as exc:
         raise PickerUnavailable(f"{name} is unavailable") from exc
+    if not allow_parent:
+        try:
+            resolved.relative_to(root.resolve(strict=True))
+        except (OSError, ValueError) as exc:
+            raise PickerUnavailable(f"{name} must be a runner-local file reference") from exc
     return resolved
+
+
+def _validate_generation_document(
+    state: Any,
+    *,
+    run_id: str | None = None,
+    picker: str | None = None,
+    run_expires_at: int | None = None,
+) -> Mapping[str, Any]:
+    state = _object(
+        state,
+        fields={
+            "apiVersion",
+            "kind",
+            "status",
+            "runId",
+            "picker",
+            "generation",
+            "runExpiresAt",
+        },
+        name="person generation",
+    )
+    state_run_id = _text(state["runId"], name="generation runId", maximum=32)
+    generation = state["generation"]
+    expires = _epoch(state["runExpiresAt"], name="generation runExpiresAt")
+    if (
+        state["apiVersion"] != GENERATION_VERSION
+        or state["kind"] != "PlatformDevPickerGeneration"
+        or state["status"] not in ("ready", "stopped")
+        or not _RUN_ID.fullmatch(state_run_id)
+        or state["picker"] not in ("holder", "staff")
+        or not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 1
+    ):
+        raise PickerValidationError("person credential generation is malformed")
+    if run_id is not None and state_run_id != run_id:
+        raise PickerValidationError(
+            "person credential generation is for another run", path="/runId"
+        )
+    if picker is not None and state["picker"] != picker:
+        raise PickerValidationError(
+            "person credential generation is for another picker", path="/picker"
+        )
+    if run_expires_at is not None and expires != run_expires_at:
+        raise PickerValidationError(
+            "person credential generation has another run lifetime",
+            path="/runExpiresAt",
+        )
+    return state
+
+
+def _validate_token_document(state: Any, *, current_time: bool = False) -> Mapping[str, Any]:
+    common = {
+        "apiVersion",
+        "kind",
+        "runId",
+        "picker",
+        "persona",
+        "selector",
+        "product",
+        "issuer",
+        "subject",
+        "principal",
+        "clientId",
+        "profile",
+        "resource",
+        "audiences",
+        "scopes",
+        "principalClaim",
+        "generation",
+        "issuedAt",
+        "expiresAt",
+        "runExpiresAt",
+    }
+    if not isinstance(state, dict) or set(state) not in (
+        common | {"token"},
+        common | {"status"},
+    ):
+        raise PickerUnavailable("person token has unsupported or missing fields")
+    run_id = _text(state["runId"], name="person token runId", maximum=32)
+    picker = state["picker"]
+    persona = state["persona"]
+    selector = _text(state["selector"], name="person token selector", maximum=128)
+    product = _text(state["product"], name="person token product", maximum=64)
+    issuer = _resource(state["issuer"], name="person token issuer")
+    subject = _text(state["subject"], name="person token subject")
+    principal = _text(state["principal"], name="person token principal")
+    client_id = _text(state["clientId"], name="person token clientId")
+    profile = _text(state["profile"], name="person token profile", maximum=64)
+    resource = _resource(state["resource"], name="person token resource")
+    audiences_raw = state["audiences"]
+    if (
+        not isinstance(audiences_raw, list)
+        or not 1 <= len(audiences_raw) <= 4
+        or len(set(audiences_raw)) != len(audiences_raw)
+    ):
+        raise PickerUnavailable("person token audiences are malformed")
+    audiences = tuple(_resource(value, name="person token audience") for value in audiences_raw)
+    scopes = _scopes(state["scopes"], name="person token scopes")
+    principal_claim = _text(
+        state["principalClaim"], name="person token principalClaim", maximum=128
+    )
+    generation = state["generation"]
+    issued = _epoch(state["issuedAt"], name="person token issuedAt")
+    expires = _epoch(state["expiresAt"], name="person token expiresAt")
+    run_expires = _epoch(state["runExpiresAt"], name="person token runExpiresAt")
+    if (
+        state["apiVersion"] != TOKEN_VERSION
+        or state["kind"] != "PlatformDevPickerToken"
+        or not _RUN_ID.fullmatch(run_id)
+        or picker not in ("holder", "staff")
+        or persona != picker
+        or not _OPAQUE.fullmatch(selector)
+        or not _LOCAL_NAME.fullmatch(product)
+        or not _LOCAL_NAME.fullmatch(profile)
+        or resource not in audiences
+        or not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 1
+        or issued > expires
+        or expires - issued > 300
+        or expires > run_expires
+        or (current_time and (issued > int(time.time()) + 60 or int(time.time()) >= expires))
+    ):
+        raise PickerUnavailable("person token is expired or has an invalid lifetime")
+    if "status" in state:
+        if state["status"] != "stopped":
+            raise PickerUnavailable("person token has an unsupported credential state")
+        return state
+    token = state["token"]
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > 8192
+        or any(character.isspace() for character in token)
+        or token.count(".") != 2
+    ):
+        raise PickerUnavailable("person token is malformed")
+    claims = _b64_json(token.split(".")[1])
+    audience = claims.get("aud")
+    token_audiences = [audience] if isinstance(audience, str) else audience
+    if (
+        claims.get("iss") != issuer
+        or token_audiences != list(audiences)
+        or claims.get("sub") != subject
+        or claims.get("client_id") != client_id
+        or claims.get("scope") != " ".join(sorted(scopes))
+        or claims.get(principal_claim) != principal
+        or claims.get("registry_dev_persona") != persona
+        or claims.get("iat") != issued
+        or claims.get("exp") != expires
+    ):
+        raise PickerUnavailable("person token claims differ from the declared run authority")
+    return state
 
 
 def _b64_json(segment: str) -> Mapping[str, Any]:
@@ -354,7 +539,7 @@ class DevelopmentPicker:
         self._issued_at = document["issuedAt"]
         self._expires_at = document["expiresAt"]
         self._generation_path = _relative_file(
-            self._picker_root, document["generationRef"], name="generationRef"
+            self._picker_root, document["generationFile"], name="generationFile"
         )
         self._products = document["products"]
         self._people = document["people"]
@@ -379,8 +564,10 @@ class DevelopmentPicker:
         for directory in (selected.parent, selected.parent.parent, selected.parents[2]):
             _private_directory(directory)
         raw = selected.read_bytes()
-        document = _json(selected)
-        document = cls._parse_descriptor(selected, document)
+        document = _json(
+            selected, api_version=DESCRIPTOR_VERSION, kind="PlatformDevPickerDescriptor"
+        )
+        document = cls._parse_descriptor(selected, document, live=True)
         picker = cls(selected, document, hashlib.sha256(raw).digest())
         picker._check_live()
         picker._read_generation()
@@ -388,23 +575,35 @@ class DevelopmentPicker:
         return picker
 
     @staticmethod
-    def _parse_descriptor(path: Path, document: Any) -> Mapping[str, Any]:
+    def _parse_descriptor(path: Path, document: Any, *, live: bool = False) -> Mapping[str, Any]:
         fields = {
-            "apiVersion", "kind", "runId", "persona", "origin", "sessionNamespace",
-            "issuedAt", "expiresAt", "generationRef", "products", "people",
-            "workloadConnectionRef", "workloads",
+            "apiVersion",
+            "kind",
+            "runId",
+            "persona",
+            "origin",
+            "sessionNamespace",
+            "issuedAt",
+            "expiresAt",
+            "generationFile",
+            "products",
+            "people",
+            "workloadConnectionFile",
+            "workloads",
         }
-        document = _object(document, fields=fields, name="picker descriptor")
+        required = fields - {"workloadConnectionFile"}
+        if not isinstance(document, dict) or not required <= set(document) <= fields:
+            raise PickerUnavailable("picker descriptor has unsupported or missing fields")
         if (
             document["apiVersion"] != DESCRIPTOR_VERSION
             or document["kind"] != "PlatformDevPickerDescriptor"
         ):
             raise PickerUnavailable("descriptor has an unsupported format")
         run_id = _text(document["runId"], name="runId", maximum=32)
-        if not _RUN_ID.fullmatch(run_id) or path.parents[2].name != run_id:
+        if not _RUN_ID.fullmatch(run_id) or (live and path.parents[2].name != run_id):
             raise PickerUnavailable("descriptor run does not match its private run directory")
         persona = document["persona"]
-        if persona not in ("holder", "staff") or path.parent.name != persona:
+        if persona not in ("holder", "staff") or (live and path.parent.name != persona):
             raise PickerUnavailable("descriptor persona does not match its private directory")
         document["origin"] = _loopback_origin(document["origin"], name="origin")
         namespace = _text(document["sessionNamespace"], name="sessionNamespace", maximum=64)
@@ -412,7 +611,7 @@ class DevelopmentPicker:
             raise PickerUnavailable("sessionNamespace must be opaque runner state")
         issued_at = _epoch(document["issuedAt"], name="issuedAt")
         expires_at = _epoch(document["expiresAt"], name="expiresAt")
-        if issued_at >= expires_at or expires_at <= int(time.time()):
+        if issued_at >= expires_at or (live and expires_at <= int(time.time())):
             raise PickerUnavailable("development run has expired")
         if not isinstance(document["products"], dict) or not document["products"]:
             raise PickerUnavailable("descriptor needs exact product endpoints")
@@ -421,10 +620,12 @@ class DevelopmentPicker:
             if not isinstance(product, str) or not _LOCAL_NAME.fullmatch(product):
                 raise PickerUnavailable("descriptor product name is malformed")
             raw = _object(raw, fields={"url", "resource"}, name=f"products.{product}")
-            products[product] = MappingProxyType({
-                "url": _loopback_origin(raw["url"], name=f"products.{product}.url"),
-                "resource": _resource(raw["resource"], name=f"products.{product}.resource"),
-            })
+            products[product] = MappingProxyType(
+                {
+                    "url": _loopback_origin(raw["url"], name=f"products.{product}.url"),
+                    "resource": _resource(raw["resource"], name=f"products.{product}.resource"),
+                }
+            )
         document["products"] = MappingProxyType(products)
         raw_people = document["people"]
         if not isinstance(raw_people, list) or not 1 <= len(raw_people) <= 32:
@@ -434,7 +635,14 @@ class DevelopmentPicker:
         for index, raw in enumerate(raw_people):
             raw = _object(
                 raw,
-                fields={"selector", "label", "subject", "principal", "clientId", "credentials"},
+                fields={
+                    "selector",
+                    "label",
+                    "subject",
+                    "principal",
+                    "clientId",
+                    "credentials",
+                },
                 name=f"people[{index}]",
             )
             selector = _text(raw["selector"], name="selector", maximum=128)
@@ -460,19 +668,25 @@ class DevelopmentPicker:
                 grant = _object(
                     grant,
                     fields={
-                        "tokenRef", "profile", "resource", "audiences", "scopes",
+                        "tokenFile",
+                        "profile",
+                        "resource",
+                        "audiences",
+                        "scopes",
                         "principalClaim",
                     },
                     name=f"people[{index}].credentials.{product}",
                 )
-                token_ref = _text(grant["tokenRef"], name="tokenRef", maximum=128)
-                _relative_file(path.parent, token_ref, name="tokenRef")
+                token_ref = _text(grant["tokenFile"], name="tokenFile", maximum=128)
+                _relative_file(path.parent, token_ref, name="tokenFile")
                 profile = _text(grant["profile"], name="profile", maximum=64)
                 if not _LOCAL_NAME.fullmatch(profile):
                     raise PickerUnavailable("person credential profile is malformed")
                 resource = _resource(grant["resource"], name="resource")
                 if resource != products[product]["resource"]:
-                    raise PickerUnavailable("person credential resource differs from its run product")
+                    raise PickerUnavailable(
+                        "person credential resource differs from its run product"
+                    )
                 audiences = grant["audiences"]
                 if (
                     not isinstance(audiences, list)
@@ -493,19 +707,26 @@ class DevelopmentPicker:
                     _text(grant["principalClaim"], name="principalClaim", maximum=128),
                 )
             people[selector] = _Person(
-                selector, label, subject, principal, client_id, MappingProxyType(credentials)
+                selector,
+                label,
+                subject,
+                principal,
+                client_id,
+                MappingProxyType(credentials),
             )
         document["people"] = MappingProxyType(people)
-        connection_reference = document["workloadConnectionRef"]
+        connection_reference = document.get("workloadConnectionFile")
         connection_path = None
         if connection_reference is not None:
             connection_path = _relative_file(
                 path.parent,
                 connection_reference,
-                name="workloadConnectionRef",
+                name="workloadConnectionFile",
                 allow_parent=True,
             )
-            run_root = path.parents[2]
+            run_root = (
+                path.parents[2] if path.parent.parent.name == "python-picker" else path.parent
+            )
             try:
                 connection_path.relative_to(run_root)
             except ValueError as exc:
@@ -513,14 +734,23 @@ class DevelopmentPicker:
                     "workload connection is outside the development run"
                 ) from exc
         document["workloadConnectionPath"] = connection_path
-        del document["workloadConnectionRef"]
+        document.pop("workloadConnectionFile", None)
         raw_workloads = document["workloads"]
         if not isinstance(raw_workloads, list) or len(raw_workloads) > 32:
             raise PickerUnavailable("descriptor workloads are malformed")
         workloads = {}
         workload_fields = {
-            "name", "product", "default", "url", "issuer", "subject", "clientId",
-            "profile", "resource", "scopes", "claims",
+            "name",
+            "product",
+            "default",
+            "url",
+            "issuer",
+            "subject",
+            "clientId",
+            "profile",
+            "resource",
+            "scopes",
+            "claims",
         }
         for index, raw in enumerate(raw_workloads):
             raw = _object(raw, fields=workload_fields, name=f"workloads[{index}]")
@@ -557,6 +787,63 @@ class DevelopmentPicker:
         document["workloads"] = MappingProxyType(workloads)
         return MappingProxyType(document)
 
+    @classmethod
+    def check_descriptor(cls, path: str | Path, document: Any) -> None:
+        """Check one generated descriptor bundle without requiring a live run."""
+        try:
+            selected = Path(path).resolve(strict=True)
+        except OSError as exc:
+            raise PickerUnavailable("descriptor is unavailable") from exc
+        parsed = cls._parse_descriptor(selected, document)
+        picker = cls(selected, parsed, b"")
+        try:
+            generation = picker._read_generation(private=False)
+        except PickerValidationError as exc:
+            exc.source = picker._generation_path
+            raise
+        for person in picker._people.values():
+            for product, credential in person.credentials.items():
+                token_path = _relative_file(
+                    picker._picker_root,
+                    credential.token_ref,
+                    name="person token reference",
+                )
+                try:
+                    state = _json(
+                        token_path,
+                        api_version=TOKEN_VERSION,
+                        kind="PlatformDevPickerToken",
+                        private=False,
+                    )
+                    state = _validate_token_document(state)
+                    picker._check_person_token_state(
+                        state,
+                        person=person,
+                        product=product,
+                        credential=credential,
+                        generation=generation,
+                        descriptor_issued_at=picker._issued_at,
+                    )
+                except PickerValidationError as exc:
+                    exc.source = token_path
+                    raise
+                except PickerUnavailable as exc:
+                    raise PickerValidationError(
+                        "person token state is malformed", source=token_path
+                    ) from exc
+                if "token" in state:
+                    _private_file(token_path)
+        try:
+            picker._validate_workload_connection(private=False)
+        except PickerValidationError as exc:
+            exc.source = picker._workload_connection_path
+            raise
+        except PickerUnavailable as exc:
+            raise PickerValidationError(
+                "workload connection state is malformed",
+                source=picker._workload_connection_path,
+            ) from exc
+
     @property
     def origin(self) -> str:
         return self._origin
@@ -576,8 +863,7 @@ class DevelopmentPicker:
     def choices(self) -> tuple[PickerChoice, ...]:
         self._check_live()
         return tuple(
-            PickerChoice(person.label, person.selector)
-            for person in self._people.values()
+            PickerChoice(person.label, person.selector) for person in self._people.values()
         )
 
     def begin(self) -> PickerForm:
@@ -587,9 +873,7 @@ class DevelopmentPicker:
         csrf_token = secrets.token_urlsafe(32)
         with self._lock:
             self._pending = {
-                key: pending
-                for key, pending in self._pending.items()
-                if pending[1] > now
+                key: pending for key, pending in self._pending.items() if pending[1] > now
             }
             self._pending[pending_id] = (csrf_token, min(now + 300, self._expires_at))
         return PickerForm(pending_id, csrf_token, self.choices())
@@ -685,9 +969,7 @@ class DevelopmentPicker:
         self, session_id: str, *, origin: str, csrf_token: str
     ) -> DevelopmentPerson:
         person = self.context(session_id)
-        if origin != self._origin or not hmac.compare_digest(
-            person.csrf_token, csrf_token
-        ):
+        if origin != self._origin or not hmac.compare_digest(person.csrf_token, csrf_token):
             raise CSRFError()
         return person
 
@@ -747,28 +1029,18 @@ class DevelopmentPicker:
         ):
             raise PickerUnavailable("descriptor is not owned by a ready live development run")
 
-    def _read_generation(self) -> Mapping[str, Any]:
-        state = _object(
-            _json(self._generation_path),
-            fields={
-                "apiVersion", "kind", "status", "runId", "picker", "generation",
-                "runExpiresAt",
-            },
-            name="person generation",
+    def _read_generation(self, *, private: bool = True) -> Mapping[str, Any]:
+        return _validate_generation_document(
+            _json(
+                self._generation_path,
+                api_version=GENERATION_VERSION,
+                kind="PlatformDevPickerGeneration",
+                private=private,
+            ),
+            run_id=self._run_id,
+            picker=self._persona,
+            run_expires_at=self._expires_at,
         )
-        if (
-            state["apiVersion"] != GENERATION_VERSION
-            or state["kind"] != "PlatformDevPickerGeneration"
-            or state["status"] not in ("ready", "stopped")
-            or state["runId"] != self._run_id
-            or state["picker"] != self._persona
-            or not isinstance(state["generation"], int)
-            or isinstance(state["generation"], bool)
-            or state["generation"] < 1
-            or state["runExpiresAt"] != self._expires_at
-        ):
-            raise PickerUnavailable("person credential generation is malformed")
-        return state
 
     def _person_tokens(self, person: _Person, *, admission: bool) -> Mapping[str, str]:
         first = self._read_generation()
@@ -779,12 +1051,15 @@ class DevelopmentPicker:
             path = _relative_file(
                 self._picker_root, credential.token_ref, name="person token reference"
             )
-            state = _json(path)
+            state = _json(path, api_version=TOKEN_VERSION, kind="PlatformDevPickerToken")
             if not isinstance(state, dict) or state.get("generation") != first["generation"]:
                 raise PickerUnavailable("person credentials rotated during admission")
             try:
                 tokens[product] = self._person_token(
-                    state, person=person, product=product, credential=credential,
+                    state,
+                    person=person,
+                    product=product,
+                    credential=credential,
                     generation=first["generation"],
                 )
             except PickerUnavailable:
@@ -805,13 +1080,29 @@ class DevelopmentPicker:
         credential: _Credential,
         generation: int,
     ) -> str:
-        fields = {
-            "apiVersion", "kind", "runId", "picker", "persona", "selector", "product",
-            "issuer", "subject", "principal", "clientId", "profile", "resource",
-            "audiences", "scopes", "principalClaim", "generation", "issuedAt",
-            "expiresAt", "runExpiresAt", "token",
-        }
-        state = _object(state, fields=fields, name="person token")
+        state = _validate_token_document(state, current_time=True)
+        self._check_person_token_state(
+            state,
+            person=person,
+            product=product,
+            credential=credential,
+            generation={"status": "ready", "generation": generation},
+            descriptor_issued_at=self._issued_at,
+        )
+        if "token" not in state:
+            raise PickerUnavailable("person token is not ready")
+        return state["token"]
+
+    def _check_person_token_state(
+        self,
+        state: Mapping[str, Any],
+        *,
+        person: _Person,
+        product: str,
+        credential: _Credential,
+        generation: Mapping[str, Any],
+        descriptor_issued_at: int,
+    ) -> None:
         expected = {
             "apiVersion": TOKEN_VERSION,
             "kind": "PlatformDevPickerToken",
@@ -828,59 +1119,40 @@ class DevelopmentPicker:
             "audiences": list(credential.audiences),
             "scopes": list(credential.scopes),
             "principalClaim": credential.principal_claim,
-            "generation": generation,
+            "generation": generation["generation"],
             "runExpiresAt": self._expires_at,
         }
-        if any(state.get(name) != value for name, value in expected.items()):
-            raise PickerUnavailable("person token differs from the declared run authority")
-        issuer = _resource(state["issuer"], name="person token issuer")
-        issued = _epoch(state["issuedAt"], name="person token issuedAt")
-        expires = _epoch(state["expiresAt"], name="person token expiresAt")
-        now = int(time.time())
-        if (
-            issued > now + 60
-            or issued > expires
-            or expires - issued > 300
-            or expires > self._expires_at
-            or now >= expires
-        ):
-            raise PickerUnavailable("person token is expired or has an invalid lifetime")
-        token = state["token"]
-        if (
-            not isinstance(token, str)
-            or not token
-            or len(token) > 8192
-            or any(character.isspace() for character in token)
-            or token.count(".") != 2
-        ):
-            raise PickerUnavailable("person token is malformed")
-        claims = _b64_json(token.split(".")[1])
-        audience = claims.get("aud")
-        token_audiences = [audience] if isinstance(audience, str) else audience
-        if (
-            claims.get("iss") != issuer
-            or token_audiences != list(credential.audiences)
-            or claims.get("sub") != person.subject
-            or claims.get("client_id") != person.client_id
-            or claims.get("scope") != " ".join(sorted(credential.scopes))
-            or claims.get(credential.principal_claim) != person.principal
-            or claims.get("registry_dev_persona") != self._persona
-            or claims.get("iat") != issued
-            or claims.get("exp") != expires
-        ):
-            raise PickerUnavailable("person token claims differ from the declared run authority")
-        return token
+        for name, value in expected.items():
+            if state.get(name) != value:
+                raise PickerValidationError(
+                    "person token differs from the declared run authority", path=f"/{name}"
+                )
+        if state["issuedAt"] < descriptor_issued_at:
+            raise PickerValidationError("person token predates the picker run", path="/issuedAt")
+        expected_state = "token" if generation["status"] == "ready" else "status"
+        if expected_state not in state:
+            raise PickerValidationError("person token state differs from its generation")
 
-    def _validate_workload_connection(self) -> None:
+    def _validate_workload_connection(self, *, private: bool = True) -> None:
         if self._workload_connection_path is None:
             if self._workloads:
                 raise PickerUnavailable("workload connection is incomplete for this picker run")
             return
-        document = _json(self._workload_connection_path)
+        document = _json(
+            self._workload_connection_path,
+            api_version=CONNECTION_VERSION,
+            kind="PlatformPythonConnection",
+            private=private,
+        )
         if not isinstance(document, dict):
             raise PickerUnavailable("workload connection is malformed")
         required = {
-            "apiVersion", "kind", "service", "audience", "secretProviders", "bindings"
+            "apiVersion",
+            "kind",
+            "service",
+            "audience",
+            "secretProviders",
+            "bindings",
         }
         if (
             set(document) != required
@@ -896,7 +1168,11 @@ class DevelopmentPicker:
         observed = {}
         for raw in document["bindings"]:
             if not isinstance(raw, dict) or set(raw) != {
-                "name", "product", "url", "default", "credential"
+                "name",
+                "product",
+                "url",
+                "default",
+                "credential",
             }:
                 raise PickerUnavailable("workload binding is malformed")
             name = raw.get("name")
@@ -906,9 +1182,19 @@ class DevelopmentPicker:
                 expected is None
                 or not isinstance(credential, dict)
                 or credential.get("type") != "runner-token"
-                or set(credential) != {
-                    "type", "tokenRef", "runId", "binding", "issuer", "subject",
-                    "clientId", "profile", "resource", "scopes", "claims",
+                or set(credential)
+                != {
+                    "type",
+                    "tokenRef",
+                    "runId",
+                    "binding",
+                    "issuer",
+                    "subject",
+                    "clientId",
+                    "profile",
+                    "resource",
+                    "scopes",
+                    "claims",
                     "runExpiresAt",
                 }
                 or raw.get("product") != expected["product"]
@@ -938,8 +1224,7 @@ class DevelopmentPicker:
 
 def _parse_form(content_type: str, body: bytes) -> Mapping[str, str]:
     if (
-        content_type.split(";", 1)[0].strip().lower()
-        != "application/x-www-form-urlencoded"
+        content_type.split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded"
         or not 1 <= len(body) <= _MAXIMUM_FORM_BYTES
     ):
         raise PickerAdmissionError()
@@ -967,7 +1252,7 @@ def _picker_html(form: PickerForm) -> str:
         for choice in form.choices
     )
     return (
-        "<!doctype html><meta charset=\"utf-8\"><title>Choose test person</title>"
+        '<!doctype html><meta charset="utf-8"><title>Choose test person</title>'
         '<form method="post" action="/auth/dev">'
         f'<input type="hidden" name="pending_id" value="{html.escape(form.pending_id, quote=True)}">'
         f'<input type="hidden" name="csrf_token" value="{html.escape(form.csrf_token, quote=True)}">'
@@ -977,8 +1262,14 @@ def _picker_html(form: PickerForm) -> str:
 
 def _clear_cookie(response: Any, name: str) -> None:
     response.set_cookie(
-        name, "", max_age=0, expires=0, secure=False, httponly=True,
-        samesite="strict", path="/",
+        name,
+        "",
+        max_age=0,
+        expires=0,
+        secure=False,
+        httponly=True,
+        samesite="strict",
+        path="/",
     )
 
 
@@ -1065,8 +1356,12 @@ def install_flask(
         form = picker.begin()
         response = Response(_picker_html(form), content_type="text/html; charset=utf-8")
         response.set_cookie(
-            picker.pending_cookie, form.pending_id, secure=False, httponly=True,
-            samesite="Strict", path="/auth/dev",
+            picker.pending_cookie,
+            form.pending_id,
+            secure=False,
+            httponly=True,
+            samesite="Strict",
+            path="/auth/dev",
         )
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -1088,8 +1383,12 @@ def install_flask(
             return error(PickerAdmissionError.code, 403)
         response = redirect("/")
         response.set_cookie(
-            picker.session_cookie, session.session_id, secure=False, httponly=True,
-            samesite="Strict", path="/",
+            picker.session_cookie,
+            session.session_id,
+            secure=False,
+            httponly=True,
+            samesite="Strict",
+            path="/",
         )
         _clear_cookie(response, picker.pending_cookie)
         response.headers["Cache-Control"] = "no-store"
@@ -1190,9 +1489,7 @@ def install_fastapi(
                     if request.method in ("GET", "HEAD", "OPTIONS")
                     else await authorized_mutation(request)
                 )
-                request.state.registry_person = await asyncio.to_thread(
-                    person_factory, context
-                )
+                request.state.registry_person = await asyncio.to_thread(person_factory, context)
             except ReauthenticationRequired:
                 return error(ReauthenticationRequired.code, 401)
             except (CSRFError, PickerAdmissionError):
@@ -1202,21 +1499,21 @@ def install_fastapi(
     @app.get("/auth/dev")
     async def registry_dev_login():
         form = await asyncio.to_thread(picker.begin)
-        response = HTMLResponse(
-            _picker_html(form), headers={"Cache-Control": "no-store"}
-        )
+        response = HTMLResponse(_picker_html(form), headers={"Cache-Control": "no-store"})
         response.set_cookie(
-            picker.pending_cookie, form.pending_id, secure=False, httponly=True,
-            samesite="strict", path="/auth/dev",
+            picker.pending_cookie,
+            form.pending_id,
+            secure=False,
+            httponly=True,
+            samesite="strict",
+            path="/auth/dev",
         )
         return response
 
     @app.post("/auth/dev")
     async def registry_dev_select(request: Request):
         try:
-            values = _parse_form(
-                request.headers.get("content-type", ""), await request.body()
-            )
+            values = _parse_form(request.headers.get("content-type", ""), await request.body())
             if request.cookies.get(picker.pending_cookie) != values["pending_id"]:
                 raise PickerAdmissionError()
             session = await asyncio.to_thread(
@@ -1231,8 +1528,12 @@ def install_fastapi(
             return error(PickerAdmissionError.code, 403)
         response = RedirectResponse("/", status_code=302)
         response.set_cookie(
-            picker.session_cookie, session.session_id, secure=False, httponly=True,
-            samesite="strict", path="/",
+            picker.session_cookie,
+            session.session_id,
+            secure=False,
+            httponly=True,
+            samesite="strict",
+            path="/",
         )
         _clear_cookie(response, picker.pending_cookie)
         response.headers["Cache-Control"] = "no-store"

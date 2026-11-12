@@ -189,7 +189,7 @@ class BuildLinuxPythonClientTest(unittest.TestCase):
         result = self.run_build(client="relay")
         self.assertEqual(result.returncode, 2)
         self.assertIn(
-            "client must be discovery, evidence, breg, casework, messaging, scheduling, coordinator, or render",
+            "client must be discovery, evidence, breg, casework, messaging, scheduling, coordinator, render, oidc, or yaml",
             result.stderr,
         )
         self.assertFalse(self.log.exists())

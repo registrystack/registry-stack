@@ -3693,6 +3693,263 @@ formats:
         whenOmitted: closed
     restrictingMembers: [/product, /profile, /resource, /scopes, /claims, /expiresAt, /runExpiresAt]
 
+  - id: platform/dev-picker-descriptor
+    product: platform
+    title: Development picker descriptor
+    files: [picker.json]
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-descriptor/v1alpha1
+      kind: PlatformDevPickerDescriptor
+      checkedBy:
+        file: crates/registry-platform-yaml-py/src/formats.rs
+        symbol: DEV_PICKER_DESCRIPTOR_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-descriptor/v1alpha1
+      kind: PlatformDevPickerDescriptor
+    schema:
+      path: products/platform/schemas/dev-picker-descriptor.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/platform/dev-picker-descriptor/dev-picker-descriptor.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-yaml-py --features schema --example python-formats-schema -- --output products/platform/schemas
+      driftCheck: crates/registry-platform-yaml-py/src/tests.rs
+    reader:
+      crate: registry-platform-yaml-py
+      file: crates/registry-platform-yaml-py/src/formats.rs
+      function: read_dev_picker_descriptor
+      type: DevPickerDescriptor
+    check: python -m registry_client.check_dev_picker --kind descriptor {file}
+    example: products/platform/examples/dev-picker/picker.json
+    conformance:
+      requiredText: /runId
+      optionalText: none
+      integer: /issuedAt
+      boolean: none
+      idList: none
+      set: /people/0/credentials/breg/scopes
+      reference: none
+      relativePath: /generationFile
+      operand: none
+    securityMembers:
+      - pointer: /runId
+        whenOmitted: refused
+      - pointer: /persona
+        whenOmitted: refused
+      - pointer: /origin
+        whenOmitted: refused
+      - pointer: /sessionNamespace
+        whenOmitted: refused
+      - pointer: /issuedAt
+        whenOmitted: refused
+      - pointer: /expiresAt
+        whenOmitted: refused
+      - pointer: /generationFile
+        whenOmitted: refused
+      - pointer: /products/*/url
+        whenOmitted: refused
+      - pointer: /products/*/resource
+        whenOmitted: refused
+      - pointer: /people/*/selector
+        whenOmitted: refused
+      - pointer: /people/*/subject
+        whenOmitted: refused
+      - pointer: /people/*/principal
+        whenOmitted: refused
+      - pointer: /people/*/clientId
+        whenOmitted: refused
+      - pointer: /people/*/credentials/*/tokenFile
+        whenOmitted: refused
+      - pointer: /people/*/credentials/*/profile
+        whenOmitted: refused
+      - pointer: /people/*/credentials/*/resource
+        whenOmitted: refused
+      - pointer: /people/*/credentials/*/audiences
+        whenOmitted: refused
+      - pointer: /people/*/credentials/*/scopes
+        whenOmitted: refused
+      - pointer: /people/*/credentials/*/principalClaim
+        whenOmitted: refused
+      - pointer: /workloadConnectionFile
+        whenOmitted: closed
+      - pointer: /workloads/*/product
+        whenOmitted: refused
+      - pointer: /workloads/*/default
+        whenOmitted: refused
+      - pointer: /workloads/*/url
+        whenOmitted: refused
+      - pointer: /workloads/*/issuer
+        whenOmitted: refused
+      - pointer: /workloads/*/subject
+        whenOmitted: refused
+      - pointer: /workloads/*/clientId
+        whenOmitted: refused
+      - pointer: /workloads/*/profile
+        whenOmitted: refused
+      - pointer: /workloads/*/resource
+        whenOmitted: refused
+      - pointer: /workloads/*/scopes
+        whenOmitted: refused
+      - pointer: /workloads/*/claims
+        whenOmitted: refused
+    restrictingMembers: [/persona, /origin, /expiresAt, /products/*/resource, /people/*/credentials/*/profile, /people/*/credentials/*/resource, /people/*/credentials/*/audiences, /people/*/credentials/*/scopes, /people/*/credentials/*/principalClaim, /workloadConnectionFile, /workloads/*/product, /workloads/*/profile, /workloads/*/resource, /workloads/*/scopes, /workloads/*/claims]
+
+  - id: platform/dev-picker-token
+    product: platform
+    title: Development picker person token state
+    files: ['credential-*.json']
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-token/v1alpha1
+      kind: PlatformDevPickerToken
+      checkedBy:
+        file: crates/registry-platform-yaml-py/src/formats.rs
+        symbol: DEV_PICKER_TOKEN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-token/v1alpha1
+      kind: PlatformDevPickerToken
+    schema:
+      path: products/platform/schemas/dev-picker-token.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/platform/dev-picker-token/dev-picker-token.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-yaml-py --features schema --example python-formats-schema -- --output products/platform/schemas
+      driftCheck: crates/registry-platform-yaml-py/src/tests.rs
+    reader:
+      crate: registry-platform-yaml-py
+      file: crates/registry-platform-yaml-py/src/formats.rs
+      function: read_dev_picker_token
+      type: DevPickerToken
+    check: python -m registry_client.check_dev_picker --kind token {file}
+    example: products/platform/examples/dev-picker/credential-0-breg.json
+    conformance:
+      requiredText: /runId
+      optionalText: none
+      integer: /generation
+      boolean: none
+      idList: none
+      set: /scopes
+      reference: none
+      operand: none
+    securityMembers:
+      - pointer: /runId
+        whenOmitted: refused
+      - pointer: /picker
+        whenOmitted: refused
+      - pointer: /persona
+        whenOmitted: refused
+      - pointer: /selector
+        whenOmitted: refused
+      - pointer: /product
+        whenOmitted: refused
+      - pointer: /issuer
+        whenOmitted: refused
+      - pointer: /subject
+        whenOmitted: refused
+      - pointer: /principal
+        whenOmitted: refused
+      - pointer: /clientId
+        whenOmitted: refused
+      - pointer: /profile
+        whenOmitted: refused
+      - pointer: /resource
+        whenOmitted: refused
+      - pointer: /audiences
+        whenOmitted: refused
+      - pointer: /scopes
+        whenOmitted: refused
+      - pointer: /principalClaim
+        whenOmitted: refused
+      - pointer: /generation
+        whenOmitted: refused
+      - pointer: /issuedAt
+        whenOmitted: refused
+      - pointer: /expiresAt
+        whenOmitted: refused
+      - pointer: /runExpiresAt
+        whenOmitted: refused
+      - pointer: /status
+        whenOmitted: open
+      - pointer: /token
+        whenOmitted: closed
+    restrictingMembers: [/persona, /product, /profile, /resource, /audiences, /scopes, /principalClaim, /expiresAt, /runExpiresAt]
+
+  - id: platform/dev-picker-generation
+    product: platform
+    title: Development picker credential generation state
+    files: [generation.json]
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-generation/v1alpha1
+      kind: PlatformDevPickerGeneration
+      checkedBy:
+        file: crates/registry-platform-yaml-py/src/formats.rs
+        symbol: DEV_PICKER_GENERATION_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-generation/v1alpha1
+      kind: PlatformDevPickerGeneration
+    schema:
+      path: products/platform/schemas/dev-picker-generation.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/platform/dev-picker-generation/dev-picker-generation.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-yaml-py --features schema --example python-formats-schema -- --output products/platform/schemas
+      driftCheck: crates/registry-platform-yaml-py/src/tests.rs
+    reader:
+      crate: registry-platform-yaml-py
+      file: crates/registry-platform-yaml-py/src/formats.rs
+      function: read_dev_picker_generation
+      type: DevPickerGeneration
+    check: python -m registry_client.check_dev_picker --kind generation {file}
+    example: products/platform/examples/dev-picker/generation.json
+    conformance:
+      requiredText: /runId
+      optionalText: none
+      integer: /generation
+      boolean: none
+      idList: none
+      set: none
+      reference: none
+      operand: none
+    securityMembers:
+      - pointer: /status
+        whenOmitted: refused
+      - pointer: /runId
+        whenOmitted: refused
+      - pointer: /picker
+        whenOmitted: refused
+      - pointer: /generation
+        whenOmitted: refused
+      - pointer: /runExpiresAt
+        whenOmitted: refused
+    restrictingMembers: [/status, /generation, /runExpiresAt]
+
+  - id: platform/dev-picker-check-report
+    product: platform
+    title: Development picker offline check report
+    files: []
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-check-report/v1alpha1
+      kind: PlatformDevPickerCheckReport
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/platform/dev-picker-check-report/v1alpha1
+      kind: PlatformDevPickerCheckReport
+    schema: none
+    reader: none
+    emittedBy: none
+    check: none
+    example: products/platform/examples/dev-picker/check-report.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
   - id: platform/package-sums
     product: platform
     title: Package SHA256SUMS

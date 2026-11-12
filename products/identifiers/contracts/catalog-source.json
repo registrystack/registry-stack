@@ -621,6 +621,30 @@
       "description": "Registry Stack local development workload token JSON Schema."
     },
     {
+      "glob": "products/platform/schemas/dev-picker-descriptor.v1alpha1.schema.json",
+      "sourcePath": "crates/registry-platform-yaml-py/src/formats.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack local development picker descriptor JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/dev-picker-token.v1alpha1.schema.json",
+      "sourcePath": "crates/registry-platform-yaml-py/src/formats.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack local development picker token JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/dev-picker-generation.v1alpha1.schema.json",
+      "sourcePath": "crates/registry-platform-yaml-py/src/formats.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack local development picker generation JSON Schema."
+    },
+    {
       "glob": "products/evidence/generated/oid4vci-runtime/*.schema.json",
       "sourcePath": "crates/registry-evidence-oid4vci/src/schema.rs",
       "owner": "evidence",

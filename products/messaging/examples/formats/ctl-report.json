@@ -7,8 +7,8 @@
   "version": "0.44.0-dev",
   "accessProfiles": [
     {
-      "actsAs": "sender",
       "actorKind": "service",
+      "actsAs": "sender",
       "id": "case-notices",
       "principalClaim": "sub",
       "requesterClients": [
@@ -19,8 +19,8 @@
       ]
     },
     {
-      "actsAs": "operator",
       "actorKind": null,
+      "actsAs": "operator",
       "id": "operations",
       "principalClaim": "sub",
       "requesterClients": [

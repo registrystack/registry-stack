@@ -212,7 +212,8 @@
           "items": {
             "$ref": "#/$defs/Product"
           },
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "workloads": {
           "default": [],
@@ -664,10 +665,7 @@
     },
     "developmentPickers": {
       "$ref": "#/$defs/DevelopmentPickers",
-      "default": {
-        "holder": null,
-        "staff": null
-      },
+      "default": {},
       "description": "Explicit local person-picker services. Omit this map for normal production-style connections."
     },
     "issuer": {
