@@ -59,10 +59,13 @@ pub enum PaymentsCommand {
 pub enum PaymentsFixturesCommand {
     /// Compare the pinned provider request and response mappings with fixtures.
     Replay {
+        /// Payment connection configuration used for replay.
         #[arg(value_name = "FILE")]
         file: PathBuf,
+        /// Provider pack pinned by the payment connection.
         #[arg(long, value_name = "FILE")]
         provider_pack: PathBuf,
+        /// Payment fixture file. Repeat to replay multiple files.
         #[arg(long, value_name = "FILE", required = true)]
         fixtures: Vec<PathBuf>,
     },
