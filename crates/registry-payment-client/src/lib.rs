@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Bounded client for the Adapter payment collection capability.
+//! Bounded client for Adapter collection and disbursement capabilities.
 //!
 //! The client sends only the authoritative bill identifier and version a
 //! service workflow supplies. Amount, provider state, and receipt evidence
@@ -19,7 +19,9 @@ pub use client::{PaymentClient, PaymentComplete};
 pub use config::PaymentClientConfig;
 pub use error::{PaymentClientError, PaymentProtocolFailure};
 pub use registry_payment_protocol::{
-    CollectionAccepted, CollectionState, CollectionStatus, Money, PaymentProblem,
-    PaymentProblemCode, ReadCollection, RecordReceipt, RegistryReceipt, RequestCollection,
+    CollectionAccepted, CollectionState, CollectionStatus, DisbursementAccepted, DisbursementState,
+    DisbursementStatus, Money, PaymentProblem, PaymentProblemCode, ProviderConfirmation,
+    ReadCollection, ReadDisbursement, RecordProviderConfirmation, RecordReceipt, RegistryReceipt,
+    RequestCollection, RequestDisbursement,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};

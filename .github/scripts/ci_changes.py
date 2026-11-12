@@ -110,6 +110,7 @@ SHARDS = {
         "registry-payment-protocol",
         "registry-payment-client",
         "registry-payment-simulator-connector",
+        "registry-payment-mifos-connector",
     ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (

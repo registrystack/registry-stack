@@ -1,0 +1,282 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: g2p-disbursement
+  canonicalBaseIri: https://g2p-disbursement.example.test
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: G2P disbursement instructions
+    description: Synthetic authoritative instructions with one Adapter-bound payout attempt and an exact provider confirmation.
+
+package:
+  sourceRevision: g2p-disbursement-0.1.0
+
+datasets:
+  - id: g2p-disbursements
+    display:
+      label: G2P disbursements
+      description: Authoritative instruction, payout binding, and provider-reported completion facts.
+
+vocabularies:
+  - id: disbursement-state
+    values: [instruction-ready, attempt-bound, provider-confirmed]
+
+recordTypes:
+  - id: disbursement-instruction
+    route: disbursement-instructions
+    primaryDataset: g2p-disbursements
+    mutationMode: mutable
+    constraints:
+      - id: instruction-id-unique
+        type: unique
+        fields: [instruction-id]
+      - id: payout-attempt-id-unique
+        type: unique
+        fields: [payout-attempt-id]
+      - id: provider-reference-unique
+        type: unique
+        fields: [provider-reference]
+      - id: portable-positive-instruction-version
+        type: int-range
+        field: instruction-version
+        minimum: 1
+        maximum: 9007199254740991
+      - id: portable-positive-amount-minor
+        type: int-range
+        field: amount-minor
+        minimum: 1
+        maximum: 9007199254740991
+      - id: portable-currency-scale
+        type: int-range
+        field: currency-scale
+        minimum: 0
+        maximum: 6
+    display:
+      label: Disbursement instruction
+      description: One authority-owned instruction whose payment facts never change after creation.
+    fields:
+      - {id: instruction-id, apiName: instructionId, type: uuid, required: true, classification: internal}
+      - {id: instruction-version, apiName: instructionVersion, type: int64, required: true, classification: internal}
+      - {id: instruction-digest, apiName: instructionDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, pattern: '^[0-9a-f]{64}$', classification: internal}
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: programme-id, apiName: programmeId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: cycle-id, apiName: cycleId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: beneficiary-id, apiName: beneficiaryId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: beneficiary-destination, apiName: beneficiaryDestination, type: string, required: true, minimumLength: 1, maximumLength: 128, pattern: '^[ -~]{1,128}$', classification: restricted}
+      - {id: funding-account-id, apiName: fundingAccountId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: amount-minor, apiName: amountMinor, type: int64, required: true, classification: internal}
+      - {id: currency, type: string, required: true, minimumLength: 3, maximumLength: 3, pattern: '^[A-Z]{3}$', classification: internal}
+      - {id: currency-scale, apiName: currencyScale, type: int64, required: true, classification: internal}
+      - {id: disbursement-state, apiName: disbursementState, type: vocabulary-code, vocabulary: disbursement-state, required: true, classification: internal}
+      - {id: payout-attempt-id, apiName: payoutAttemptId, type: uuid, required: false, classification: internal}
+      - {id: provider-binding-revision, apiName: providerBindingRevision, type: string, required: false, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: provider-status, apiName: providerStatus, type: string, required: false, minimumLength: 9, maximumLength: 9, pattern: '^COMPLETED$', classification: internal}
+      - {id: provider-reference, apiName: providerReference, type: string, required: false, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: provider-result-digest, apiName: providerResultDigest, type: string, required: false, minimumLength: 64, maximumLength: 64, pattern: '^[0-9a-f]{64}$', classification: internal}
+
+actions:
+  - id: create-disbursement-instruction
+    display:
+      label: Create disbursement instruction
+      description: Freeze one authority-owned instruction before payment processing begins.
+    execution: {mode: immediate}
+    inputs:
+      - {id: instruction-id, apiName: instructionId, type: uuid, required: true, classification: internal}
+      - {id: instruction-version, apiName: instructionVersion, type: int64, required: true, classification: internal}
+      - {id: instruction-digest, apiName: instructionDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: programme-id, apiName: programmeId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: cycle-id, apiName: cycleId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: beneficiary-id, apiName: beneficiaryId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: beneficiary-destination, apiName: beneficiaryDestination, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: funding-account-id, apiName: fundingAccountId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: amount-minor, apiName: amountMinor, type: int64, required: true, classification: internal}
+      - {id: currency, type: string, required: true, minimumLength: 3, maximumLength: 3, classification: internal}
+      - {id: currency-scale, apiName: currencyScale, type: int64, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: instruction
+          target: {recordType: disbursement-instruction}
+          operation: create
+          set:
+            instruction-id: {fromInput: instruction-id}
+            instruction-version: {fromInput: instruction-version}
+            instruction-digest: {fromInput: instruction-digest}
+            institution-id: {fromInput: institution-id}
+            service-id: {fromInput: service-id}
+            programme-id: {fromInput: programme-id}
+            cycle-id: {fromInput: cycle-id}
+            beneficiary-id: {fromInput: beneficiary-id}
+            beneficiary-destination: {fromInput: beneficiary-destination}
+            funding-account-id: {fromInput: funding-account-id}
+            amount-minor: {fromInput: amount-minor}
+            currency: {fromInput: currency}
+            currency-scale: {fromInput: currency-scale}
+            disbursement-state: {value: instruction-ready}
+
+  - id: bind-payout-attempt
+    display:
+      label: Bind payout attempt
+      description: Bind exactly one Adapter attempt and provider configuration before dispatch.
+    execution: {mode: immediate}
+    inputs:
+      - {id: instruction, apiName: instructionRecordId, type: reference, target: disbursement-instruction, required: true, classification: internal}
+      - {id: instruction-id, apiName: instructionId, type: uuid, required: true, classification: internal}
+      - {id: instruction-version, apiName: instructionVersion, type: int64, required: true, classification: internal}
+      - {id: instruction-digest, apiName: instructionDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: programme-id, apiName: programmeId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: cycle-id, apiName: cycleId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: beneficiary-id, apiName: beneficiaryId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: beneficiary-destination, apiName: beneficiaryDestination, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: funding-account-id, apiName: fundingAccountId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: amount-minor, apiName: amountMinor, type: int64, required: true, classification: internal}
+      - {id: currency, type: string, required: true, minimumLength: 3, maximumLength: 3, classification: internal}
+      - {id: currency-scale, apiName: currencyScale, type: int64, required: true, classification: internal}
+      - {id: payout-attempt-id, apiName: payoutAttemptId, type: uuid, required: true, classification: internal}
+      - {id: provider-binding-revision, apiName: providerBindingRevision, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+    commitGuards:
+      targets:
+        - {input: instruction, field: disbursement-state, equals: instruction-ready}
+        - {input: instruction, field: instruction-id, equalsFromInput: instruction-id}
+        - {input: instruction, field: instruction-version, equalsFromInput: instruction-version}
+        - {input: instruction, field: instruction-digest, equalsFromInput: instruction-digest}
+        - {input: instruction, field: institution-id, equalsFromInput: institution-id}
+        - {input: instruction, field: service-id, equalsFromInput: service-id}
+        - {input: instruction, field: programme-id, equalsFromInput: programme-id}
+        - {input: instruction, field: cycle-id, equalsFromInput: cycle-id}
+        - {input: instruction, field: beneficiary-id, equalsFromInput: beneficiary-id}
+        - {input: instruction, field: beneficiary-destination, equalsFromInput: beneficiary-destination}
+        - {input: instruction, field: funding-account-id, equalsFromInput: funding-account-id}
+        - {input: instruction, field: amount-minor, equalsFromInput: amount-minor}
+        - {input: instruction, field: currency, equalsFromInput: currency}
+        - {input: instruction, field: currency-scale, equalsFromInput: currency-scale}
+    plan:
+      type: fixed
+      effects:
+        - id: instruction
+          target: {fromInput: instruction}
+          operation: patch
+          set:
+            payout-attempt-id: {fromInput: payout-attempt-id}
+            provider-binding-revision: {fromInput: provider-binding-revision}
+            disbursement-state: {value: attempt-bound}
+
+  - id: record-provider-confirmation
+    display:
+      label: Record provider confirmation
+      description: Record the exact provider-reported completion for the one frozen payout attempt.
+    execution: {mode: immediate}
+    inputs:
+      - {id: instruction, apiName: instructionRecordId, type: reference, target: disbursement-instruction, required: true, classification: internal}
+      - {id: instruction-id, apiName: instructionId, type: uuid, required: true, classification: internal}
+      - {id: instruction-version, apiName: instructionVersion, type: int64, required: true, classification: internal}
+      - {id: instruction-digest, apiName: instructionDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: programme-id, apiName: programmeId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: cycle-id, apiName: cycleId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: beneficiary-id, apiName: beneficiaryId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: beneficiary-destination, apiName: beneficiaryDestination, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: funding-account-id, apiName: fundingAccountId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: amount-minor, apiName: amountMinor, type: int64, required: true, classification: internal}
+      - {id: currency, type: string, required: true, minimumLength: 3, maximumLength: 3, classification: internal}
+      - {id: currency-scale, apiName: currencyScale, type: int64, required: true, classification: internal}
+      - {id: payout-attempt-id, apiName: payoutAttemptId, type: uuid, required: true, classification: internal}
+      - {id: provider-binding-revision, apiName: providerBindingRevision, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: provider-status, apiName: providerStatus, type: string, required: true, minimumLength: 9, maximumLength: 9, classification: internal}
+      - {id: provider-reference, apiName: providerReference, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: provider-result-digest, apiName: providerResultDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+    commitGuards:
+      targets:
+        - {input: instruction, field: disbursement-state, equals: attempt-bound}
+        - {input: instruction, field: instruction-id, equalsFromInput: instruction-id}
+        - {input: instruction, field: instruction-version, equalsFromInput: instruction-version}
+        - {input: instruction, field: instruction-digest, equalsFromInput: instruction-digest}
+        - {input: instruction, field: institution-id, equalsFromInput: institution-id}
+        - {input: instruction, field: service-id, equalsFromInput: service-id}
+        - {input: instruction, field: programme-id, equalsFromInput: programme-id}
+        - {input: instruction, field: cycle-id, equalsFromInput: cycle-id}
+        - {input: instruction, field: beneficiary-id, equalsFromInput: beneficiary-id}
+        - {input: instruction, field: beneficiary-destination, equalsFromInput: beneficiary-destination}
+        - {input: instruction, field: funding-account-id, equalsFromInput: funding-account-id}
+        - {input: instruction, field: amount-minor, equalsFromInput: amount-minor}
+        - {input: instruction, field: currency, equalsFromInput: currency}
+        - {input: instruction, field: currency-scale, equalsFromInput: currency-scale}
+        - {input: instruction, field: payout-attempt-id, equalsFromInput: payout-attempt-id}
+        - {input: instruction, field: provider-binding-revision, equalsFromInput: provider-binding-revision}
+    plan:
+      type: fixed
+      effects:
+        - id: instruction
+          target: {fromInput: instruction}
+          operation: patch
+          set:
+            provider-status: {fromInput: provider-status}
+            provider-reference: {fromInput: provider-reference}
+            provider-result-digest: {fromInput: provider-result-digest}
+            disbursement-state: {value: provider-confirmed}
+
+accessProfiles:
+  - id: disbursement-authority
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [benefit-service]
+    requiredScopes: [registry:disbursement:create]
+    requiredPurposes: [benefit-disbursement]
+    permissions:
+      records:
+        - recordType: disbursement-instruction
+          operations: [get]
+          readableFields: [instruction-id, instruction-version, instruction-digest, institution-id, service-id, programme-id, cycle-id, beneficiary-id, beneficiary-destination, funding-account-id, amount-minor, currency, currency-scale, disbursement-state, payout-attempt-id, provider-binding-revision, provider-status, provider-reference, provider-result-digest]
+          rowBoundaries: unrestricted
+      actions:
+        - action: create-disbursement-instruction
+          operations: [invoke]
+          targets:
+            - {recordType: disbursement-instruction, rowBoundaries: unrestricted}
+          results: [instruction]
+
+  - id: payment-adapter-binder
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [payment-adapter]
+    requiredScopes: [registry:payout-attempt:bind]
+    requiredPurposes: [payment-processing]
+    permissions:
+      records:
+        - recordType: disbursement-instruction
+          operations: [get]
+          readableFields: [instruction-id, instruction-version, instruction-digest, institution-id, service-id, programme-id, cycle-id, beneficiary-id, beneficiary-destination, funding-account-id, amount-minor, currency, currency-scale, disbursement-state, payout-attempt-id, provider-binding-revision]
+          rowBoundaries: unrestricted
+      actions:
+        - action: bind-payout-attempt
+          operations: [invoke]
+          targets:
+            - {recordType: disbursement-instruction, rowBoundaries: unrestricted}
+          results: [instruction]
+
+  - id: payment-adapter-reporter
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [payment-adapter]
+    requiredScopes: [registry:payout-result:report]
+    requiredPurposes: [payment-processing]
+    permissions:
+      records:
+        - recordType: disbursement-instruction
+          operations: [get]
+          readableFields: [instruction-id, instruction-version, instruction-digest, institution-id, service-id, programme-id, cycle-id, beneficiary-id, beneficiary-destination, funding-account-id, amount-minor, currency, currency-scale, disbursement-state, payout-attempt-id, provider-binding-revision, provider-status, provider-reference, provider-result-digest]
+          rowBoundaries: unrestricted
+      actions:
+        - action: record-provider-confirmation
+          operations: [invoke]
+          targets:
+            - {recordType: disbursement-instruction, rowBoundaries: unrestricted}
+          results: [instruction]

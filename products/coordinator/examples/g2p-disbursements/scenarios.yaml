@@ -1,0 +1,252 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: provider-confirmed-disbursement-records-confirmation
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    instructionRecordId: 00000000-0000-4000-8000-000000000101
+    instructionVersion: 1
+  replies:
+    request-disbursement:
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+    record-provider-confirmation:
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        money: {value: '125.00', currency: USD, scale: 2}
+        providerReference: MIFOS-G2P-001
+        providerResultDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  waits:
+    await-disbursement:
+      type: event
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: provider-confirmed
+        money: {value: '125.00', currency: USD, scale: 2}
+        providerReference: MIFOS-G2P-001
+  expect:
+    path: [request-disbursement, await-disbursement, route-disbursement, record-provider-confirmation, confirmation-recorded]
+    state: completed
+    outcome: {type: named, value: confirmation-recorded}
+    output:
+      disbursementId: 00000000-0000-4000-8000-000000000201
+      instructionRecordId: 00000000-0000-4000-8000-000000000101
+      instructionId: 00000000-0000-4000-8000-000000000301
+      instructionVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      money: {value: '125.00', currency: USD, scale: 2}
+      providerReference: MIFOS-G2P-001
+      providerResultDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+- id: failed-disbursement-does-not-record-confirmation
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    instructionRecordId: 00000000-0000-4000-8000-000000000101
+    instructionVersion: 1
+  replies:
+    request-disbursement:
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+  waits:
+    await-disbursement:
+      type: event
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: failed
+        money: {value: '125.00', currency: USD, scale: 2}
+        failureReason: provider-rejected
+  expect:
+    path: [request-disbursement, await-disbursement, route-disbursement, disbursement-failed]
+    state: completed
+    outcome: {type: named, value: disbursement-failed}
+    output:
+      disbursementId: 00000000-0000-4000-8000-000000000201
+      instructionRecordId: 00000000-0000-4000-8000-000000000101
+      instructionId: 00000000-0000-4000-8000-000000000301
+      instructionVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      state: failed
+      money: {value: '125.00', currency: USD, scale: 2}
+      failureReason: provider-rejected
+- id: pending-until-timeout-remains-unresolved
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    instructionRecordId: 00000000-0000-4000-8000-000000000101
+    instructionVersion: 1
+  replies:
+    request-disbursement:
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+  waits:
+    await-disbursement: {type: timeout}
+  expect:
+    path: [request-disbursement, await-disbursement, disbursement-unresolved]
+    state: completed
+    outcome: {type: named, value: disbursement-unresolved}
+    output: null
+    workflowElapsedSeconds: 3600
+- id: uncertain-submit-is-held-without-a-fresh-send
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    instructionRecordId: 00000000-0000-4000-8000-000000000101
+    instructionVersion: 1
+  replies:
+    request-disbursement:
+    - type: uncertain
+      code: payment-outcome-unknown
+  expect:
+    path: [request-disbursement]
+    state: uncertain
+    outcome: {type: none}
+- id: read-only-reconciliation-recovers-original-acceptance
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    instructionRecordId: 00000000-0000-4000-8000-000000000101
+    instructionVersion: 1
+  replies:
+    request-disbursement:
+    - type: uncertain
+      code: payment-provider-protocol
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+    record-provider-confirmation:
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        money: {value: '125.00', currency: USD, scale: 2}
+        providerReference: MIFOS-G2P-001
+        providerResultDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  recovery:
+    request-disbursement: reconcile
+  waits:
+    await-disbursement:
+      type: event
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: provider-confirmed
+        money: {value: '125.00', currency: USD, scale: 2}
+        providerReference: MIFOS-G2P-001
+  expect:
+    path: [request-disbursement, await-disbursement, route-disbursement, record-provider-confirmation, confirmation-recorded]
+    state: completed
+    outcome: {type: named, value: confirmation-recorded}
+    output:
+      disbursementId: 00000000-0000-4000-8000-000000000201
+      instructionRecordId: 00000000-0000-4000-8000-000000000101
+      instructionId: 00000000-0000-4000-8000-000000000301
+      instructionVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      money: {value: '125.00', currency: USD, scale: 2}
+      providerReference: MIFOS-G2P-001
+      providerResultDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+- id: confirmation-report-retries-the-same-command
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    instructionRecordId: 00000000-0000-4000-8000-000000000101
+    instructionVersion: 1
+  replies:
+    request-disbursement:
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+    record-provider-confirmation:
+    - type: uncertain
+      code: payment-outcome-unknown
+    - type: success
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        money: {value: '125.00', currency: USD, scale: 2}
+        providerReference: MIFOS-G2P-001
+        providerResultDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  recovery:
+    record-provider-confirmation: retry-same
+  waits:
+    await-disbursement:
+      type: event
+      value:
+        disbursementId: 00000000-0000-4000-8000-000000000201
+        instructionRecordId: 00000000-0000-4000-8000-000000000101
+        instructionId: 00000000-0000-4000-8000-000000000301
+        instructionVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: provider-confirmed
+        money: {value: '125.00', currency: USD, scale: 2}
+        providerReference: MIFOS-G2P-001
+  expect:
+    path: [request-disbursement, await-disbursement, route-disbursement, record-provider-confirmation, confirmation-recorded]
+    state: completed
+    outcome: {type: named, value: confirmation-recorded}
+    output:
+      disbursementId: 00000000-0000-4000-8000-000000000201
+      instructionRecordId: 00000000-0000-4000-8000-000000000101
+      instructionId: 00000000-0000-4000-8000-000000000301
+      instructionVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      money: {value: '125.00', currency: USD, scale: 2}
+      providerReference: MIFOS-G2P-001
+      providerResultDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb

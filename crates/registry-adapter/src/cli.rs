@@ -35,6 +35,9 @@ pub enum Command {
         /// Typed payment connections hosted on this listener.
         #[arg(long, value_name = "ABSOLUTE_FILE")]
         payments_config: Option<PathBuf>,
+        /// Reviewed provider packs for current connections and retained attempts.
+        #[arg(long, value_name = "FILE", requires = "payments_config")]
+        payment_provider_pack: Vec<PathBuf>,
         /// The profile file; defaults to profile.yaml beside the project.
         #[arg(long, value_name = "FILE", requires = "project")]
         profile: Option<PathBuf>,
@@ -96,6 +99,26 @@ mod tests {
             "/runtime.yaml",
             "--payments-config",
             "/payments.yaml",
+            "--payment-provider-pack",
+            "/pack.yaml"
+        ])
+        .is_ok());
+        assert!(super::Cli::try_parse_from([
+            "adapter",
+            "serve",
+            "--runtime-config",
+            "/runtime.yaml",
+            "--payment-provider-pack",
+            "/pack.yaml"
+        ])
+        .is_err());
+        assert!(super::Cli::try_parse_from([
+            "adapter",
+            "serve",
+            "--runtime-config",
+            "/runtime.yaml",
+            "--payments-config",
+            "/payments.yaml",
             "--profile",
             "profile.yaml"
         ])
@@ -107,6 +130,37 @@ mod tests {
         assert_eq!(
             super::command().get_version(),
             Some(registry_platform_buildinfo::DISPLAY_VERSION)
+        );
+    }
+
+    #[test]
+    fn payment_provider_packs_can_be_repeated_for_retained_attempts() {
+        let parsed = super::Cli::try_parse_from([
+            "adapter",
+            "serve",
+            "--runtime-config",
+            "/runtime.yaml",
+            "--payments-config",
+            "/payments.yaml",
+            "--payment-provider-pack",
+            "/pack-a.yaml",
+            "--payment-provider-pack",
+            "/pack-b.yaml",
+        ])
+        .unwrap();
+        let super::Command::Serve {
+            payment_provider_pack,
+            ..
+        } = parsed.command
+        else {
+            panic!("the serve command was expected")
+        };
+        assert_eq!(
+            payment_provider_pack,
+            vec![
+                std::path::PathBuf::from("/pack-a.yaml"),
+                std::path::PathBuf::from("/pack-b.yaml")
+            ]
         );
     }
 }

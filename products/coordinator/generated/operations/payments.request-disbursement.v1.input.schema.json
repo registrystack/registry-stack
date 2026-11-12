@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A disbursement intent names an approved, immutable instruction held by the\nowning registry. The caller cannot supply amount, destination or funding.",
+  "properties": {
+    "instructionRecordId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "instructionVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "instructionRecordId",
+    "instructionVersion"
+  ],
+  "title": "payments.request-disbursement/v1 input",
+  "type": "object"
+}
