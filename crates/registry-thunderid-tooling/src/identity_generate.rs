@@ -630,21 +630,19 @@ fn claim_value(value: &ClaimValue) -> Value {
     }
 }
 
-/// A claim must be one a product declares, with the type it declares.
+/// A claim must be one a product declares, with the type it declares, or a
+/// scalar interactive claim declared by the exact bound extension user type.
+/// A product declaration always takes precedence over the extension schema.
 fn check_claim(
     findings: &mut Findings<'_>,
     facts: &MergedFacts,
     pointer: &str,
     name: &str,
     kind: ClaimType,
+    interactive: bool,
+    extension_declares: bool,
 ) {
     match facts.claims.get(name) {
-        None => findings.error(
-            pointer,
-            "identity.deployment.unknown-claim",
-            "no product declares a claim with this name",
-            "Declare the claim in the product's configuration, or remove it.",
-        ),
         Some(declared) if *declared != kind => findings.error(
             pointer,
             "identity.deployment.claim-type",
@@ -652,7 +650,46 @@ fn check_claim(
             "Write the value in the declared type: a string or a list of strings.",
         ),
         Some(_) => {}
+        None if extension_declares && kind == ClaimType::String => {}
+        None => {
+            let (message, remedy) = if interactive {
+                (
+                    "no product or bound extension user type declares a claim with this name",
+                    "Declare the claim in the product's configuration, or bind an interactive scalar claim through an extension user type; otherwise remove it.",
+                )
+            } else {
+                (
+                    "no product declares a machine claim with this name",
+                    "Declare the claim in the product's configuration, or remove it.",
+                )
+            };
+            findings.error(
+                pointer,
+                "identity.deployment.unknown-claim",
+                message,
+                remedy,
+            );
+        }
     }
+}
+
+fn extension_type_declares(
+    deployment: &IdentityDeployment,
+    user_type: Option<&str>,
+    name: &str,
+) -> bool {
+    user_type.is_some_and(|id| {
+        deployment
+            .user_types
+            .iter()
+            .find(|declared| declared.id == id)
+            .is_some_and(|declared| {
+                declared
+                    .attributes
+                    .iter()
+                    .any(|attribute| attribute == name)
+            })
+    })
 }
 
 /// A key file's refusal: code, message and fix. Repeats no value read.
@@ -1088,6 +1125,8 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 &format!("{pointer}/claims"),
                 name,
                 claim_kind(value),
+                false,
+                false,
             );
             attributes.insert(name.clone(), claim_value(value));
         }
@@ -1228,12 +1267,18 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             continue;
         };
         for name in &app.token_attributes {
+            let extension_declares = app
+                .user_types
+                .iter()
+                .any(|id| extension_type_declares(&deployment, Some(id), name));
             check_claim(
                 &mut findings,
                 &facts,
                 &format!("{pointer}/tokenAttributes"),
                 name,
                 ClaimType::String,
+                true,
+                extension_declares,
             );
         }
         // Every user is given registry_actor_kind when a product reads it
@@ -1345,6 +1390,8 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 &format!("{pointer}/claims"),
                 name,
                 ClaimType::String,
+                true,
+                extension_type_declares(&deployment, user.user_type.as_deref(), name),
             );
         }
         let mut user_claims: BTreeMap<String, Value> = user

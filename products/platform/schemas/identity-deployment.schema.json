@@ -51,7 +51,7 @@
           "uniqueItems": true
         },
         "tokenAttributes": {
-          "description": "Claims the application's tokens carry from the signed-in user.",
+          "description": "Claims the application's tokens carry from the signed-in user. Each\nis declared by a product or by an extension user type this application\nexplicitly admits. A product declaration remains authoritative.",
           "items": {
             "type": "string"
           },
@@ -213,6 +213,7 @@
           "additionalProperties": {
             "type": "string"
           },
+          "description": "Product claims, plus scalar issuer-owned attributes declared by this\nuser's exact extension type. `RegistryPerson` has no such extension.",
           "propertyNames": {
             "$ref": "#/$defs/ExternalId",
             "allOf": [
@@ -270,7 +271,7 @@
       "description": "An extension user type: an additional ThunderID user schema.",
       "properties": {
         "attributes": {
-          "description": "Optional string attributes beyond username, email and password.",
+          "description": "Optional issuer-owned string attributes beyond username, email and\npassword. They grant no product authority. A user may carry one only\nthrough this exact type, and an application may project one only when\nit explicitly admits a type that declares it. Product claim types and\nselectors remain authoritative where a product declares the same name.",
           "items": {
             "type": "string"
           },

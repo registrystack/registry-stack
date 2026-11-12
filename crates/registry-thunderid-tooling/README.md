@@ -239,8 +239,19 @@ resolves no secret.
   application's `product` remains its one default token audience. Its explicit
   grants may authorize the same admitted client for other products, and a user
   reaches such a product only when an eligible application grants the user's
-  exact profile there. A grant to a client a product does not admit, an unknown
+  exact profile there. An extension user type may declare issuer-owned scalar
+  attributes for application metadata. A user may carry one only through that
+  exact type, and an application may project one only when it explicitly admits
+  a type declaring it. These attributes grant no product permissions. Machine
+  and exchange clients still use product-declared claims only. If a product
+  declares the same claim name, its type, selectors and profile checks remain
+  authoritative. A grant to a client a product does not admit, any other unknown
   claim, or a JWK carrying `d`, `p`, `q`, `dp`, `dq` or `qi` is refused.
+- Generated users are declarative users. Authority-bearing extension attributes
+  must remain on those users in this deployment path. ThunderID database-backed
+  users of the same type can edit ordinary custom attributes through their
+  self-service user endpoint, so operators must not admit or separately provision
+  such mutable users of these types for authorization decisions.
 - The output directory must not exist. It holds `deployment.yaml` (server
   members to merge into the environment's own file), `resources/resources.yaml`
   (one multi-document file), `registry-schema/agent-type.yaml` and

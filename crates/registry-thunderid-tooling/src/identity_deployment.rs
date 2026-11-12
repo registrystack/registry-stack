@@ -110,7 +110,9 @@ pub struct BrowserApp {
     /// The `product` whose audience tokens carry by default. A request still
     /// produces a token for one audience.
     pub product: String,
-    /// Claims the application's tokens carry from the signed-in user.
+    /// Claims the application's tokens carry from the signed-in user. Each
+    /// is declared by a product or by an extension user type this application
+    /// explicitly admits. A product declaration remains authoritative.
     #[serde(deserialize_with = "set")]
     pub token_attributes: Vec<String>,
     /// Profiles granted to the application. A grant outside `product` also
@@ -147,6 +149,8 @@ pub struct User {
     /// An extension user type (id of `userTypes`); omitted is `RegistryPerson`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_type: Option<String>,
+    /// Product claims, plus scalar issuer-owned attributes declared by this
+    /// user's exact extension type. `RegistryPerson` has no such extension.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub claims: BTreeMap<String, String>,
     pub grants: Vec<Grant>,
@@ -161,7 +165,11 @@ pub struct UserType {
     pub id: String,
     /// The ThunderID type name users of this type carry.
     pub name: String,
-    /// Optional string attributes beyond username, email and password.
+    /// Optional issuer-owned string attributes beyond username, email and
+    /// password. They grant no product authority. A user may carry one only
+    /// through this exact type, and an application may project one only when
+    /// it explicitly admits a type that declares it. Product claim types and
+    /// selectors remain authoritative where a product declares the same name.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",

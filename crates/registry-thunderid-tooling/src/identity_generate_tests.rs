@@ -285,6 +285,133 @@ fn user_claims_are_validated_against_the_merged_facts() {
     assert_eq!(client_claim.refusal(), ["identity.deployment.claim-type"]);
 }
 
+fn typed_extension_claims_case() -> Case {
+    let mut case = case();
+    case.deployment = case
+        .deployment
+        .replace(
+            "tokenAttributes: [registry_actor_kind, registry_role]",
+            "tokenAttributes: [registry_actor_kind, registry_role, portal_role, casework_profile]",
+        )
+        .replace(
+            "      registry_role: farmer\n",
+            "      registry_role: farmer\n      portal_role: nurse\n      casework_profile: nursing\n",
+        )
+        .replace(
+            "    attributes: [national_id]",
+            "    attributes: [national_id, portal_role, casework_profile]",
+        );
+    case
+}
+
+#[test]
+fn a_bound_extension_type_declares_issuer_owned_user_claims_without_changing_grants() {
+    let generated = typed_extension_claims_case()
+        .run()
+        .expect("the bound extension claims generate");
+    let documents = resources(&generated);
+    let app = of_type(&documents, "application")[0];
+    assert_eq!(
+        app["inboundAuthConfig"][0]["config"]["token"]["accessToken"]["userConfig"]
+            ["attributes"],
+        serde_json::json!([
+            "registry_actor_kind",
+            "registry_role",
+            "portal_role",
+            "casework_profile",
+            "registry_purpose"
+        ])
+    );
+    let farmer = of_type(&documents, "user")
+        .into_iter()
+        .find(|user| user["attributes"]["username"] == "farmer-one")
+        .expect("farmer user");
+    assert_eq!(farmer["attributes"]["portal_role"], "nurse");
+    assert_eq!(farmer["attributes"]["casework_profile"], "nursing");
+    assert_eq!(
+        role_permissions(&documents, "User farmer-one", "urn:breg:example"),
+        ["records:get", "records:search"],
+        "issuer-owned attributes grant no product permission"
+    );
+    assert_eq!(
+        role_permissions(&documents, "Browser staff-portal", "urn:breg:example"),
+        ["records:get", "records:search"]
+    );
+}
+
+#[test]
+fn an_issuer_owned_claim_requires_the_exact_user_and_application_type_bindings() {
+    let mut untyped_user = typed_extension_claims_case();
+    untyped_user.deployment = untyped_user
+        .deployment
+        .replace("    userType: farmer\n", "");
+    assert_eq!(
+        untyped_user.refusal(),
+        ["identity.deployment.unknown-claim"; 2]
+    );
+
+    let mut unbound_app = typed_extension_claims_case();
+    unbound_app.deployment = unbound_app
+        .deployment
+        .replace("    userTypes: [farmer]\n", "");
+    assert_eq!(
+        unbound_app.refusal(),
+        [
+            "identity.deployment.unknown-claim",
+            "identity.deployment.unknown-claim",
+            "identity.deployment.client-not-admitted"
+        ]
+    );
+}
+
+#[test]
+fn extension_type_attributes_do_not_admit_machine_claims() {
+    let mut case = typed_extension_claims_case();
+    case.deployment = case.deployment.replacen(
+        "      registry_actor_kind: service\n",
+        "      registry_actor_kind: service\n      portal_role: nurse\n",
+        1,
+    );
+    assert_eq!(case.refusal(), ["identity.deployment.unknown-claim"]);
+    let error = case.run().expect_err("the machine claim is refused");
+    let diagnostic = error
+        .report()
+        .expect("the refusal has a report")
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "identity.deployment.unknown-claim")
+        .expect("unknown machine claim diagnostic");
+    assert_eq!(
+        diagnostic.suggested_action,
+        "Declare the claim in the product's configuration, or remove it."
+    );
+}
+
+#[test]
+fn product_claim_types_and_profile_selection_remain_authoritative() {
+    let mut conflicting_type = typed_extension_claims_case();
+    conflicting_type.facts[0].1 = conflicting_type.facts[0]
+        .1
+        .replace("  registry_role: string\n", "  registry_role: string\n  portal_role: string-array\n");
+    assert_eq!(
+        conflicting_type.refusal(),
+        ["identity.deployment.claim-type"; 2]
+    );
+
+    let mut selecting_profile = typed_extension_claims_case();
+    selecting_profile.facts[0].1 = selecting_profile.facts[0]
+        .1
+        .replace("  registry_role: string\n", "  registry_role: string\n  portal_role: string\n")
+        .replace(
+            "  - id: case-write\n    scopes: [records:patch]\n",
+            "  - id: case-write\n    scopes: [records:patch]\n  - id: nurse-write\n    scopes: [records:patch]\n    selectedBy: {portal_role: [nurse]}\n",
+        );
+    assert_eq!(
+        selecting_profile.refusal(),
+        ["identity.deployment.claims-select-ungranted-profile"]
+    );
+}
+
 #[test]
 fn several_purposes_need_an_explicit_choice() {
     let mut case = case();

@@ -181,6 +181,25 @@ fn an_explicit_actor_kind_is_one_the_runtime_parses() {
     }
 }
 
+#[test]
+fn extension_user_types_cannot_declare_protected_authority_attributes() {
+    for name in [
+        "registry_grant_id",
+        "registry_assertion_issuer",
+        "identity",
+        "registry_approver",
+    ] {
+        let bad = format!(
+            "{DEPLOYMENT}userTypes:\n  - id: staff\n    name: Staff\n    attributes: [{name}]\n"
+        );
+        assert_eq!(
+            codes(&bad),
+            ["identity.deployment.invalid-user-type"],
+            "accepted {name}"
+        );
+    }
+}
+
 /// Every list the format states as a set refuses a repeat at the repeat,
 /// naming the first, as every set does (CFG-ID-6).
 #[test]
