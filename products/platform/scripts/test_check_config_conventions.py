@@ -596,6 +596,20 @@ class RegistryAccuracyTests(ConventionsTestCase):
             "def report():\n    return REPORT_API_VERSION\n",
         )
         self.assertError(self.repo.run(), "is not a current header value")
+        self.repo.write(
+            source,
+            "REPORT_API_VERSION = make_version()\n"
+            'REPORT_KIND = "CaseworkCheckReport"\n'
+            "def report():\n    return REPORT_API_VERSION\n",
+        )
+        self.assertError(self.repo.run(), "is not a literal current header value")
+        self.repo.write(
+            source,
+            'REPORT_API_VERSION: str = "id.registrystack.org/formats/casework/check-report/v1alpha1"\n'
+            'REPORT_KIND = "CaseworkCheckReport"\n'
+            "def report():\n    return REPORT_API_VERSION\n",
+        )
+        self.assertEqual(self.repo.run().errors, [])
 
     def test_cfg_schema_1_refuses_checked_by_file_without_the_header_value(self) -> None:
         self.repo.fmt()["current"]["apiVersion"] = "registry.registrystack.org/casework/v1alpha1"

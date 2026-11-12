@@ -1293,15 +1293,19 @@ class Lint:
         if literal and literal.group(1) not in values:
             self.error(f"{fid}: checkedBy {current['checkedBy']['symbol']} is {literal.group(1)!r}, not a current header value")
         if str(current["checkedBy"]["file"]).endswith(".py"):
+            named = str(current["checkedBy"]["symbol"])
+            assignments = []
             for node in ast.parse(text).body:
-                if (
-                    isinstance(node, ast.Assign)
-                    and any(isinstance(target, ast.Name) and target.id == current["checkedBy"]["symbol"] for target in node.targets)
-                    and isinstance(node.value, ast.Constant)
-                    and isinstance(node.value.value, str)
-                    and node.value.value not in values
+                if isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id == named for target in node.targets
                 ):
-                    self.error(f"{fid}: checkedBy {current['checkedBy']['symbol']} is not a current header value")
+                    assignments.append(node.value)
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == named:
+                    assignments.append(node.value)
+            if len(assignments) != 1 or not isinstance(assignments[0], ast.Constant) or not isinstance(assignments[0].value, str):
+                self.error(f"{fid}: checkedBy {named} is not a literal current header value")
+            elif assignments[0].value not in values:
+                self.error(f"{fid}: checkedBy {named} is not a current header value")
 
     def check_target(self, fid: str, entry: dict, kinds: dict[str, list[str]]) -> None:
         target = entry["target"]
