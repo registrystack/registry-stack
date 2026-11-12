@@ -118,7 +118,8 @@ checksum-covered `.tar.gz` archive. Its name is the executable asset stem plus
 executable format. Every archive is flat and contains exactly one same-stem
 executable and `THIRD_PARTY_NOTICES`. Archives for commands linked to
 AWS-LC-FIPS contain one or more shared libraries. Starting with v0.44.0,
-`rstack` and `discovery` are plain two-file archives with no dylib;
+`rstack` and `discovery` are plain two-file archives with no dylib. Starting
+with v0.46.1, `registry-language-server` is also a plain two-file archive;
 `discoveryctl` and the other archived commands retain their FIPS libraries.
 Linux assets and releases through v0.32.0 retain their existing formats.
 
@@ -135,7 +136,7 @@ if (( major > 0 || minor >= 33 )); then
     stem="${bundle%.tar.gz}"
     require_libraries=1
     case "${stem}" in
-      rstack-*|discovery-v*) require_libraries=0 ;;
+      rstack-*|discovery-v*|registry-language-server-v*) require_libraries=0 ;;
     esac
     tar -tzf "${bundle}" | awk \
       -v executable="${stem}" \

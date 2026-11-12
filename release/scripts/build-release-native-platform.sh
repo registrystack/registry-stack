@@ -34,11 +34,12 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 usage() {
-  printf 'usage: %s [--include-casework] [--nightly-tag TAG] [--exclude-unit discovery] --group core|breg|bregctl|casework|scheduling|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--nightly-tag TAG] [--exclude-unit discovery] --group core|language-server|breg|bregctl|casework|scheduling|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
   exit 2
 }
 
-if [[ "${group}" != core && "${group}" != breg &&
+if [[ "${group}" != core && "${group}" != language-server &&
+      "${group}" != breg &&
       "${group}" != bregctl && "${group}" != casework &&
       "${group}" != scheduling && "${group}" != all ]]; then
   usage
@@ -137,6 +138,11 @@ if [[ "$(python3 "${script_dir}/release_roster.py" \
   rstack-in-release "${version}")" == true ]]; then
   include_rstack=1
 fi
+include_language_server=0
+if [[ "$(python3 "${script_dir}/release_roster.py" \
+  language-server-in-release "${version}")" == true ]]; then
+  include_language_server=1
+fi
 
 output_parent="$(dirname -- "${output}")"
 output_name="$(basename -- "${output}")"
@@ -170,7 +176,8 @@ stage() {
     # These programs do not link the release's AWS-LC FIPS dylib. Keep the list
     # explicit so a missing FIPS load on any required consumer still fails in
     # the strict FIPS packager instead of silently becoming plain.
-    if [[ "${binary}" == rstack || "${binary}" == discovery ]]; then
+    if [[ "${binary}" == rstack || "${binary}" == discovery ||
+      "${binary}" == registry-language-server ]]; then
       python3 "${packager}" archive-plain \
         --binary "${source}" \
         --asset-name "${destination}" \
@@ -225,12 +232,28 @@ check_version() {
   fi
 }
 
+build_language_server() {
+  if [[ "${include_language_server}" -ne 1 ]]; then
+    printf 'registry-language-server is not in release %s\n' "${version}" >&2
+    return 2
+  fi
+  "${cargo_bin}" build --release --locked \
+    -p registry-language-server --bin registry-language-server \
+    --target "${target}"
+  stage registry-language-server \
+    "registry-language-server-${tag}-${asset}"
+  check_version "registry-language-server ${version}"
+}
+
 build_core() {
   if [[ "${include_rstack}" -eq 1 ]]; then
     "${cargo_bin}" build --release --locked \
       -p registry-rstack --bin rstack --target "${target}"
     stage rstack "rstack-${tag}-${asset}"
     check_version "rstack ${display_version}"
+  fi
+  if [[ "${include_language_server}" -eq 1 ]]; then
+    build_language_server
   fi
   "${cargo_bin}" build --release --locked \
     -p registry-evidence -p registry-evidencectl \
@@ -353,6 +376,9 @@ if [[ "${group}" == core || "${group}" == all ]]; then
   build_core
   build_additional_platforms
 fi
+if [[ "${group}" == language-server ]]; then
+  build_language_server
+fi
 if [[ "${group}" == breg || "${group}" == all ]]; then
   build_breg
 fi
@@ -378,11 +404,17 @@ if [[ "${group}" == core || "${group}" == all ]]; then
   if [[ "${include_rstack}" -eq 1 ]]; then
     assets+=("rstack-${tag}-${asset}")
   fi
+  if [[ "${include_language_server}" -eq 1 ]]; then
+    assets+=("registry-language-server-${tag}-${asset}")
+  fi
   assets+=(
     "evidence-${tag}-${asset}"
     "evidencectl-${tag}-${asset}"
     "evidence-oid4vci-${tag}-${asset}"
   )
+fi
+if [[ "${group}" == language-server ]]; then
+  assets+=("registry-language-server-${tag}-${asset}")
 fi
 if [[ ("${group}" == breg || "${group}" == all) && "${include_breg}" -eq 1 ]]; then
   assets+=("breg-${tag}-${asset}")

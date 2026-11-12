@@ -51,7 +51,13 @@ binary and installer roster when its image release is enabled.
 `registry-stack.nightly-roster.v2.4` and `registry-stack.nightly-roster.v2.5`
 add the `adapter` and `adapterctl` binaries on all three
 platforms and the `adapter` installer to v2.2 and v2.3 respectively, from the
-base version that `ADAPTER_FIRST_RELEASE` names. No profile
+base version that `ADAPTER_FIRST_RELEASE` names.
+`registry-stack.nightly-roster.v2.6` and `registry-stack.nightly-roster.v2.7`
+add the standalone `registry-language-server` for Linux amd64 and macOS arm64
+to v2.4 and v2.5 respectively, from the base version that
+`LANGUAGE_SERVER_FIRST_RELEASE` names. Its `--version` reports the Cargo package
+version; `nightly.json`, the asset name, and its checksum authenticate the exact
+nightly source. No profile
 carries the Registry Document Store, which stays held out while
 `DOCUMENTS_FIRST_RELEASE` is `None`. An incompatible inventory requires a
 new schema and profile. The reader still accepts frozen

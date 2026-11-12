@@ -175,6 +175,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("adapter", "adapterctl")
     if REGISTRY_RELEASE.release_roster.rstack_in_release(version_tuple):
         inventory += ("rstack", "rstack-installer")
+    if REGISTRY_RELEASE.release_roster.language_server_in_release(version_tuple):
+        inventory += ("registry-language-server",)
     if REGISTRY_RELEASE.release_roster.scheduling_installer_in_release(version_tuple):
         inventory += ("scheduling-installer",)
     if version_tuple >= (0, 39, 0):
@@ -724,6 +726,25 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(
             [],
             owner.artifact_inventory_errors("0.44.0", current["artifacts"]),
+        )
+
+    def test_language_server_artifact_joins_only_the_v0_46_1_manifest_inventory(
+        self,
+    ) -> None:
+        owner = _load_registry_release()
+        historical = manifest("0.46.0", "beta-fixture", "v0.46.0", "candidate")
+        current = manifest("0.46.1", "beta-fixture", "v0.46.1", "candidate")
+        self.assertNotIn("registry-language-server", historical["artifacts"])
+        self.assertEqual(
+            "0.46.1", current["artifacts"]["registry-language-server"]
+        )
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.46.0", historical["artifacts"]),
+        )
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.46.1", current["artifacts"]),
         )
 
     @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))

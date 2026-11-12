@@ -406,6 +406,33 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         self.assertIn("rstack-v0.44.0-linux-amd64", current_rosters["core"])
         self.assertNotIn("rstack", dict(current_images))
 
+    def test_language_server_joins_the_core_shard_only_from_v0_46_1(self) -> None:
+        historical_rosters, _ = MODULE.rosters("0.46.0")
+        self.assertNotIn(
+            "registry-language-server-v0.46.0-linux-amd64",
+            historical_rosters["core"],
+        )
+        current_rosters, current_images = MODULE.rosters("0.46.1")
+        self.assertIn(
+            "registry-language-server-v0.46.1-linux-amd64",
+            current_rosters["core"],
+        )
+        self.assertNotIn("registry-language-server", dict(current_images))
+
+        recipe = (
+            ROOT / "release/scripts/build-release-binaries.sh"
+        ).read_text(encoding="utf-8")
+        block = recipe.split(
+            'if [[ "${include_language_server}" -eq 1 ]]; then\n', 1
+        )[1].split("fi\n", 1)[0]
+        self.assertIn(
+            "-p registry-language-server --bin registry-language-server",
+            block,
+        )
+        self.assertIn(
+            '"registry-language-server ${version}"', block
+        )
+
     @mock.patch.object(MODULE.release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_joins_the_core_shard_only_from_v0_42(self) -> None:
         rosters_040, images_040 = MODULE.rosters("0.40.0")

@@ -104,6 +104,16 @@
       "dependencies": ["breg-casework-evidence"],
       "candidate": null
     },
+    "language-server": {
+      "display_name": "Registry Stack Language Server",
+      "status": "held",
+      "tag_prefix": "language-server/",
+      "asset_prefix": "registry-language-server",
+      "members": ["registry-language-server"],
+      "artifact_patterns": ["registry-language-server-v*-*"],
+      "dependencies": [],
+      "candidate": null
+    },
     "manifest": {
       "display_name": "Registry Manifest",
       "status": "held",

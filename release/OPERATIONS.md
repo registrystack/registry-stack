@@ -747,7 +747,11 @@ retains its historical flat executable format. Each flat archive contains the
 same-stem executable and `THIRD_PARTY_NOTICES`. Commands that link AWS-LC-FIPS
 also include their complete shared-library closure. Starting with v0.44.0,
 `rstack` and `discovery` use plain two-file archives because they do not link
-the FIPS dylib; `discoveryctl` still requires its FIPS libraries. The native shard
+the FIPS dylib; `discoveryctl` still requires its FIPS libraries. Starting with
+v0.46.1, `registry-language-server` also uses a plain two-file archive and ships
+only for macOS arm64 and Linux amd64. Its `--version` output identifies the
+Stack version. The candidate manifest binds both assets to the exact source,
+and the public `SHA256SUMS` authenticates their bytes. The native shard
 builder must relocate each FIPS load to its adjacent packaged library, sign the
 changed Mach-O files, and verify the resulting loader closure before producing
 the deterministic archive. Keep each executable in its own archive because
