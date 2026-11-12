@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use tower_lsp_server::ls_types::{Position, Range};
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 
 #[derive(Clone, Debug)]
 pub(crate) struct YamlScalar {
@@ -177,6 +177,112 @@ pub(crate) fn parse_yaml(source: &str) -> Result<ParsedDocument> {
     })
 }
 
+/// One parsed YAML syntax tree and UTF-16 line index reused for every pointer in a bound document.
+#[derive(Debug)]
+pub(crate) struct YamlPointerResolver {
+    source: String,
+    tree: Tree,
+    line_starts: Vec<usize>,
+}
+
+impl YamlPointerResolver {
+    pub(crate) fn parse(source: String) -> Option<Self> {
+        let line_starts = source_line_starts(&source);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_yaml::LANGUAGE.into())
+            .ok()?;
+        let tree = parser.parse(&source, None)?;
+        Some(Self {
+            source,
+            tree,
+            line_starts,
+        })
+    }
+
+    pub(crate) fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// Resolve a JSON pointer into the exact YAML value range used by LSP navigation.
+    ///
+    /// Empty pointers name the whole document. Non-empty pointers retain the full syntax-node
+    /// range, including scalar quotes and collection delimiters, matching what an LSP client sees.
+    pub(crate) fn range_at_pointer(&self, pointer: &str) -> Option<Range> {
+        if pointer.is_empty() {
+            return Some(self.range(0, self.source.len()));
+        }
+        let segments = pointer_segments(pointer)?;
+        let mut node = unwrap_value_node(self.tree.root_node())?;
+        for segment in segments {
+            node = match node.kind() {
+                "block_mapping" | "flow_mapping" | "ERROR" => {
+                    let mut cursor = node.walk();
+                    let pair = node
+                        .named_children(&mut cursor)
+                        .filter(|child| matches!(child.kind(), "block_mapping_pair" | "flow_pair"))
+                        .find(|pair| {
+                            pair.child_by_field_name("key")
+                                .and_then(|key| scalar_parts(key, &self.source, 0))
+                                .is_some_and(|(key, _, _, _)| key == segment)
+                        })?;
+                    pair.child_by_field_name("value")?
+                }
+                "block_sequence" | "flow_sequence" => {
+                    let index = segment.parse::<usize>().ok()?;
+                    if index.to_string() != segment {
+                        return None;
+                    }
+                    meaningful_named_children(node).get(index).copied()?
+                }
+                _ => return None,
+            };
+            node = unwrap_value_node(node)?;
+        }
+        Some(self.range(node.start_byte(), node.end_byte()))
+    }
+
+    fn range(&self, start: usize, end: usize) -> Range {
+        Range::new(self.position(start), self.position(end))
+    }
+
+    fn position(&self, byte: usize) -> Position {
+        position_from_line_starts(&self.source, &self.line_starts, byte)
+    }
+}
+
+fn unwrap_value_node(mut node: Node<'_>) -> Option<Node<'_>> {
+    while matches!(
+        node.kind(),
+        "stream" | "document" | "block_node" | "flow_node" | "plain_scalar" | "block_sequence_item"
+    ) {
+        node = meaningful_named_children(node).last().copied()?;
+    }
+    Some(node)
+}
+
+fn pointer_segments(pointer: &str) -> Option<Vec<String>> {
+    let pointer = pointer.strip_prefix('/')?;
+    pointer.split('/').map(decode_pointer_segment).collect()
+}
+
+fn decode_pointer_segment(segment: &str) -> Option<String> {
+    let mut decoded = String::with_capacity(segment.len());
+    let mut characters = segment.chars();
+    while let Some(character) = characters.next() {
+        if character != '~' {
+            decoded.push(character);
+            continue;
+        }
+        decoded.push(match characters.next()? {
+            '0' => '~',
+            '1' => '/',
+            _ => return None,
+        });
+    }
+    Some(decoded)
+}
+
 /// Where a document stops parsing, as one range.
 ///
 /// tree-sitter reports a YAML syntax error by wrapping the whole document in a single ERROR node
@@ -274,6 +380,19 @@ fn scalar_from_node(
     source_map: &SourceMap<'_>,
     depth: usize,
 ) -> Option<YamlScalar> {
+    let (value, style, start_byte, end_byte) = scalar_parts(node, source, depth)?;
+    Some(YamlScalar {
+        value,
+        style,
+        range: source_map.range(start_byte, end_byte),
+    })
+}
+
+fn scalar_parts(
+    node: Node<'_>,
+    source: &str,
+    depth: usize,
+) -> Option<(String, ScalarStyle, usize, usize)> {
     if depth >= MAX_PARSE_DEPTH {
         return None;
     }
@@ -284,7 +403,7 @@ fn scalar_from_node(
         return meaningful_named_children(node)
             .last()
             .copied()
-            .and_then(|child| scalar_from_node(child, source, source_map, depth + 1));
+            .and_then(|child| scalar_parts(child, source, depth + 1));
     }
     if !node.kind().ends_with("_scalar") {
         return None;
@@ -317,7 +436,7 @@ fn scalar_from_node(
     // mistake `written_as` warns against for the double-quoted case above: a decoder that is not the
     // one the compiler reads with. An escape the reader refuses is refused here too, by the same
     // precedent that leaves a folded scalar out of the index rather than store its raw spelling.
-    let (value, style, start_byte, end_byte) = match node.kind() {
+    Some(match node.kind() {
         "double_quote_scalar" | "single_quote_scalar" => {
             let value = read_scalar(raw)?;
             let style = if node.kind() == "double_quote_scalar" {
@@ -338,11 +457,6 @@ fn scalar_from_node(
             node.start_byte(),
             node.end_byte(),
         ),
-    };
-    Some(YamlScalar {
-        value,
-        style,
-        range: source_map.range(start_byte, end_byte),
     })
 }
 
@@ -360,12 +474,7 @@ pub(crate) struct SourceMap<'a> {
 
 impl<'a> SourceMap<'a> {
     pub(crate) fn new(source: &'a str) -> Self {
-        let mut line_starts = vec![0];
-        for (index, byte) in source.bytes().enumerate() {
-            if byte == b'\n' {
-                line_starts.push(index + 1);
-            }
-        }
+        let line_starts = source_line_starts(source);
         Self {
             source,
             line_starts,
@@ -377,15 +486,28 @@ impl<'a> SourceMap<'a> {
     }
 
     pub(crate) fn position(&self, byte: usize) -> Position {
-        let byte = byte.min(self.source.len());
-        let line = self
-            .line_starts
-            .partition_point(|line_start| *line_start <= byte)
-            .saturating_sub(1);
-        let line_start = self.line_starts[line];
-        let character = self.source[line_start..byte].encode_utf16().count();
-        Position::new(line as u32, character as u32)
+        position_from_line_starts(self.source, &self.line_starts, byte)
     }
+}
+
+fn source_line_starts(source: &str) -> Vec<usize> {
+    let mut line_starts = vec![0];
+    for (index, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            line_starts.push(index + 1);
+        }
+    }
+    line_starts
+}
+
+fn position_from_line_starts(source: &str, line_starts: &[usize], byte: usize) -> Position {
+    let byte = byte.min(source.len());
+    let line = line_starts
+        .partition_point(|line_start| *line_start <= byte)
+        .saturating_sub(1);
+    let line_start = line_starts[line];
+    let character = source[line_start..byte].encode_utf16().count();
+    Position::new(line as u32, character as u32)
 }
 
 #[cfg(test)]
@@ -393,6 +515,38 @@ mod tests {
     use std::collections::BTreeMap;
 
     use registry_platform_yaml::{NodeValue, Reader};
+
+    #[test]
+    fn json_pointer_resolves_flow_sequence_scalar_with_utf16_range() {
+        let source = "steps:\n  - { label: \"🩺\", action: apply }\n";
+        let resolver = YamlPointerResolver::parse(source.to_owned()).expect("document parses");
+        let range = resolver
+            .range_at_pointer("/steps/0/action")
+            .expect("pointer resolves");
+        assert_eq!(range.start, Position::new(1, 27));
+        assert_eq!(range.end, Position::new(1, 32));
+
+        let service = "kind: PlatformService\nname: nursing\nmap:\n  steps:\n    - { label: \"🩺\", action: apply }\n";
+        let resolver = YamlPointerResolver::parse(service.to_owned()).expect("service parses");
+        let range = resolver
+            .range_at_pointer("/map/steps/0/action")
+            .expect("nested pointer resolves");
+        assert_eq!(range.start, Position::new(4, 29));
+        assert_eq!(range.end, Position::new(4, 34));
+
+        let quoted = "name: \"apply\"\nmap: { key: value }\n";
+        let resolver = YamlPointerResolver::parse(quoted.to_owned()).expect("document parses once");
+        let range = resolver
+            .range_at_pointer("/name")
+            .expect("quoted scalar resolves");
+        assert_eq!(range.start, Position::new(0, 6));
+        assert_eq!(range.end, Position::new(0, 13));
+        let range = resolver
+            .range_at_pointer("/map")
+            .expect("mapping resolves from the same tree");
+        assert_eq!(range.start, Position::new(1, 5));
+        assert_eq!(range.end, Position::new(1, 19));
+    }
 
     use super::*;
 

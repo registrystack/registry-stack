@@ -11,15 +11,19 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        (Some(arg), None) if arg == "--workspace-lsp" => {
+            registry_language_server::run_workspace_lsp_stdio().await;
+        }
         (Some(arg), None) if arg == "--version" => {
             println!("registry-language-server {}", env!("CARGO_PKG_VERSION"));
         }
         (Some(arg), None) if arg == "--help" => {
-            println!("Usage: registry-language-server [--workspace-analysis|--version|--help]");
+            println!("Usage: registry-language-server [--workspace-analysis|--workspace-lsp|--version|--help]");
             println!(
                 "Without options, serve the language protocol over standard input and output."
             );
             println!("--workspace-analysis reads one versioned JSON request from standard input.");
+            println!("--workspace-lsp serves stateless authorized workspace queries over LSP.");
         }
         _ => {
             eprintln!("error: unrecognized language-server arguments; run with --help");

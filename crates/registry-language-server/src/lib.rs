@@ -8,6 +8,7 @@ mod safety;
 mod server;
 mod workspace;
 mod workspace_analysis;
+mod workspace_lsp;
 mod yaml;
 
 pub use products::ProductKind;
@@ -19,6 +20,7 @@ pub use server::Backend;
 pub use workspace_analysis::{
     execute_workspace_analysis, run_workspace_analysis_stdio, WorkspaceAnalysisError,
 };
+pub use workspace_lsp::run_workspace_lsp_stdio;
 
 /// Serve the Registry Stack language protocol over standard input and output.
 pub async fn run_stdio() {
