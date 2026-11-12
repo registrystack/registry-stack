@@ -31,29 +31,9 @@ response times in that contract. This page lists the limits to plan around.
 
 ## Platform support
 
-This is the release artifact matrix for the current source roster, which first applies to version
-0.39.0. Version 0.38.0 is the last numbered release whose immutable archive contains Relay; its
-archived documentation and release manifest preserve that release's original platform roster.
-
-| Artifact | Linux amd64 | Linux arm64 | macOS Apple Silicon |
-| --- | --- | --- | --- |
-| `evidence`, `evidencectl`, and `evidence-oid4vci` | Published | Published | Published |
-| `breg` and `bregctl` | Published | Published | Published |
-| `breg-mcp` and `breg-review` | Published | Published | Published |
-| `casework` and `caseworkctl` | Published | Published | Published |
-| `schedulingctl` | Published | Published | Published |
-| `registry-manifest` | Published | None | None |
-| `discovery` and `discoveryctl` | Published | None | None |
-| `scheduling` | Published | None | None |
-| `messaging` and `messagingctl` | Published | None | None |
-| `registry-render` | Published | None | None |
-| `adapter` and `adapterctl`, from 0.46.0 | Published | Published | Published |
-| Container images | Published | None | None |
-| Client packages (`@registrystack/client`, `registry-stack-client`) | Published | Published | Published |
-
-The container row covers the retained service images: Registry Evidence, its OID4VCI adapter,
-Discovery, Base Registry Engine, `breg-mcp`, `breg-review`, Casework, Scheduling, Messaging, and
-Registry Render.
+Open the [release](https://github.com/registrystack/registry-stack/releases) for the version you
+deploy. Its assets list the installers, native binaries, and client packages available for each
+platform. The release manifest records the published container images and their digests.
 
 - The release publishes no Windows, Intel macOS, or musl Linux artifact. Installers refuse
   unsupported operating systems and architectures before downloading.
@@ -66,9 +46,10 @@ Registry Render.
   `manylinux_2_17`; no `musllinux` wheel is published.
 - Each container image is `linux/amd64`; no multi-architecture image index is published. An arm64
   container host therefore needs amd64 emulation.
-- Published macOS executables use arm64 bundles that include the executable, its shared
-  AWS-LC-FIPS libraries, and notices. The release publishes no Homebrew formula, `cargo binstall`
-  target, apt, apk, yum, Nix, winget, or Scoop package.
+- Published macOS executables target arm64. Registry Manifest ships as a standalone executable.
+  An archive includes the executable, notices, and any shared AWS-LC-FIPS libraries it uses.
+  The release publishes no Homebrew formula, `cargo binstall` target, apt, apk, yum, Nix,
+  winget, or Scoop package.
 
 {/* Evidence: release/scripts/release_candidate.py, _release_payload_inventory and _candidate_image_names;
     release/scripts/release_roster.py; release/glibc-floor.env;
