@@ -2,9 +2,9 @@
 
 Every test builds a small repository in a temporary directory: a convention
 page, a format registry, an exceptions register, schemas, an example, Rust
-sources, and an editor mapping. The baseline repository conforms, so each test
-plants one deviation and asserts the exact finding the lint reports. Test names
-cite the rule they prove.
+sources. The baseline repository conforms, so each test plants one deviation
+and asserts the exact finding the lint reports. Test names cite the rule they
+prove.
 
 Run with PyYAML available:
 
@@ -383,13 +383,13 @@ EXAMPLE_DOC = {
     "accessProfiles": {"reviewer": {"requiredScopes": ["casework.review"]}},
 }
 
-CONFIGURE_TEXT = """\
-SCHEMAS = {
-    "casework": (
-        ("products/casework/generated/project/project.schema.json", "casework.yaml"),
-    ),
-}
-"""
+def tooling_editor_text(file_glob: str, schema: str = PROJECT_SCHEMA) -> str:
+    return (
+        "EditorSchema {\n"
+        f'    file_glob: "{file_glob}",\n'
+        f'    document: include_str!("../../../{schema}"),\n'
+        "},\n"
+    )
 
 
 class Fixture:
@@ -430,7 +430,6 @@ class Fixture:
             "products/platform/scripts/check-config-conformance.py",
             f'CANONICAL_SCHEMA = "{CANONICAL}"\n',
         )
-        self.write("editors/configure.py", CONFIGURE_TEXT)
         self.write(
             REPORT_EXAMPLE,
             json.dumps(
@@ -1455,11 +1454,24 @@ class SchemaTests(ConventionsTestCase):
         self.assertFinding(report, "CFG-SCHEMA-5", P, at(PROJECT_SCHEMA, "/$defs/RawListenerConfig"))
         self.assertFinding(report, "CFG-SCHEMA-5", P, at(PROJECT_SCHEMA, "/$defs/ProjectIdentity"))
 
-    def test_cfg_schema_6_reports_a_format_editors_do_not_map(self) -> None:
-        self.repo.write("editors/configure.py", "SCHEMAS = {}\n")
-        self.assertFinding(self.repo.run(), "CFG-SCHEMA-6", P, at("editors/configure.py", "/SCHEMAS/casework"))
+    def test_cfg_schema_6_does_not_require_a_retired_repository_editor_helper(self) -> None:
+        self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-6")
+
+    def test_cfg_schema_6_does_not_apply_a_different_schema_with_the_same_filename(self) -> None:
+        self.repo.write(
+            "crates/registry-evidencectl/src/tooling_editor.rs",
+            tooling_editor_text(
+                "evidence.yaml",
+                "crates/registry-evidencectl/schemas/authoring/project.schema.json",
+            ),
+        )
+        self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-6")
 
     def test_cfg_schema_6_reports_a_registered_file_pattern_editors_do_not_map(self) -> None:
+        self.repo.write(
+            "crates/registry-evidencectl/src/tooling_editor.rs",
+            tooling_editor_text("casework.yaml"),
+        )
         self.repo.fmt()["files"] = ["casework.yaml", "casework-test.yaml", "queues/*.yaml"]
         report = self.repo.run()
         self.assertFinding(report, "CFG-SCHEMA-6", P, at(REGISTRY, "/files/1"))
@@ -1475,8 +1487,10 @@ class SchemaTests(ConventionsTestCase):
             with self.subTest(registered=registered, mapped=mapped):
                 self.setUp()
                 self.repo.fmt()["files"] = ["casework.yaml", registered]
-                self.repo.write("editors/configure.py", CONFIGURE_TEXT.replace(
-                    '"casework.yaml"),', f'"casework.yaml"),\n        ("{PROJECT_SCHEMA}", "{mapped}"),'))
+                self.repo.write(
+                    "crates/registry-evidencectl/src/tooling_editor.rs",
+                    tooling_editor_text("casework.yaml") + tooling_editor_text(mapped),
+                )
                 self.assertFinding(self.repo.run(), "CFG-SCHEMA-6", P, at(REGISTRY, "/files/1"))
 
     def test_cfg_schema_6_accepts_a_mapping_that_covers_the_registered_pattern(self) -> None:
@@ -1491,20 +1505,22 @@ class SchemaTests(ConventionsTestCase):
             with self.subTest(registered=registered, mapped=mapped):
                 self.setUp()
                 self.repo.fmt()["files"] = [registered]
-                self.repo.write("editors/configure.py", CONFIGURE_TEXT.replace('"casework.yaml"),', f'"{mapped}"),'))
+                self.repo.write(
+                    "crates/registry-evidencectl/src/tooling_editor.rs",
+                    tooling_editor_text(mapped),
+                )
                 self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-6")
 
     def test_cfg_schema_6_holds_a_schema_the_adopter_tool_maps_to_its_own_pattern(self) -> None:
-        self.repo.write("editors/configure.py", "SCHEMAS = {}\n")
-        catalog = (
-            'EditorSchema {{\n    filename: "project.schema.json",\n    file_glob: "{glob}",\n'
-            '    document: include_str!("../../../{schema}"),\n}},\n'
+        self.repo.write(
+            "crates/registry-evidencectl/src/tooling_editor.rs",
+            tooling_editor_text("casework.yaml"),
         )
-        self.repo.write("crates/registry-evidencectl/src/tooling_editor.rs",
-                        catalog.format(glob="casework.yaml", schema=PROJECT_SCHEMA))
         self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-6")
-        self.repo.write("crates/registry-evidencectl/src/tooling_editor.rs",
-                        catalog.format(glob="questions/*.yml", schema=PROJECT_SCHEMA))
+        self.repo.write(
+            "crates/registry-evidencectl/src/tooling_editor.rs",
+            tooling_editor_text("questions/*.yml"),
+        )
         self.assertFinding(self.repo.run(), "CFG-SCHEMA-6", P, at(REGISTRY, "/files/0"))
 
     def test_cfg_schema_6_and_2_exempt_read_back_formats(self) -> None:

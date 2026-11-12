@@ -60,7 +60,7 @@ fn every_top_level_command_is_listed_and_dispatchable() {
 }
 
 /// The complete `tooling` subcommand set, held to the same rule.
-const TOOLING_COMMANDS: [&str; 2] = ["editor", "language-server"];
+const TOOLING_COMMANDS: [&str; 1] = ["editor"];
 
 #[test]
 fn tooling_lists_and_dispatches_every_subcommand() {
@@ -81,6 +81,23 @@ fn tooling_lists_and_dispatches_every_subcommand() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn retired_language_server_is_refused() {
+    let help = evidencectl(&["tooling", "--help"]);
+    assert!(!help.contains("language-server"), "{help}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["tooling", "language-server"])
+        .output()
+        .expect("run evidencectl");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("error[evidencectl.usage]"),
+        "retired tooling command did not use the standard usage refusal: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

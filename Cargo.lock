@@ -7311,7 +7311,6 @@ dependencies = [
  "registry-evidence",
  "registry-evidence-authoring",
  "registry-evidence-client",
- "registry-language-server",
  "registry-platform-audit",
  "registry-platform-buildinfo",
  "registry-platform-config",

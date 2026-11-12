@@ -84,7 +84,6 @@ jobs:
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
-      editors: ${{ steps.filter.outputs.editors }}
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
       release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
@@ -579,7 +578,7 @@ jobs:
         run: cargo deny check
 
       - name: Standalone Cargo lockfiles
-        # Fuzz, SDK and editor workspaces keep their own Cargo.lock, and most
+        # Fuzz and SDK workspaces keep their own Cargo.lock, and most
         # build root crates by path, so a root change can leave one stale.
         # Resolving with --locked fails on a stale lock and reads only the
         # registry index, not crate sources.
@@ -3223,51 +3222,6 @@ jobs:
         working-directory: docs/site
         run: npm run check:archives
 
-  editor-extensions:
-    name: Editor extensions
-    needs:
-      - changes
-      - rust-policy
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.editors == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          submodules: false
-
-      - name: Setup Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24.11.0
-          cache: npm
-          cache-dependency-path: editors/vscode/package-lock.json
-
-      - name: Test editor installer
-        run: |
-          bash editors/tests/install_test.sh
-          python3 -m unittest discover -s editors/tests -p 'test_*.py'
-
-      - name: Package and test VS Code integration
-        working-directory: editors/vscode
-        run: |
-          npm ci
-          npm run package:dev
-          cargo build --locked -p registry-language-server
-          xvfb-run -a npm test
-          cmp ../../LICENSE LICENSE
-
-      - name: Install Zed extension target
-        run: rustup target add wasm32-wasip2
-
-      - name: Check Zed extension
-        run: |
-          cargo test --locked --manifest-path editors/zed/Cargo.toml
-          cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
-          cmp LICENSE editors/zed/LICENSE
-
   client-bindings:
     name: Native client bindings
     needs: changes
@@ -3569,7 +3523,6 @@ jobs:
       - breg-evidence-composition
       - evidence-anchors
       - docs
-      - editor-extensions
       - client-bindings
       - release-linux-node-clients
     runs-on: ubuntu-slim

@@ -521,18 +521,18 @@ test('reports a line reference the anchor continued with a dot', (t) => {
 
 test('reads a JavaScript or TypeScript sibling as a citation, not a dotted key path', (t) => {
   const root = repository(t);
-  write(root, 'editors/vscode/src/extension.ts', 'export const activateEditor = 1;\n');
-  write(root, 'editors/vscode/src/projectRoot.ts', 'export const rootOf = 2;\n');
+  write(root, 'external/demo/src/extension.ts', 'export const activateClient = 1;\n');
+  write(root, 'external/demo/src/projectRoot.ts', 'export const rootOf = 2;\n');
   write(root, 'crates/demo/client.js', 'export const requestShape = 3;\n');
   write(root, 'crates/demo/index.js', 'export const entryShape = 4;\n');
   // Read as a dotted key path instead, the name would demand a symbol spelled `ts`.
   assert.deepEqual(
-    parseAnchor('editors/vscode/src/extension.ts and projectRoot.ts hold it.').symbols,
+    parseAnchor('external/demo/src/extension.ts and projectRoot.ts hold it.').symbols,
     [],
   );
   const typescript = check(
     root,
-    '{/* Evidence: editors/vscode/src/extension.ts and projectRoot.ts, rootOf. */}',
+    '{/* Evidence: external/demo/src/extension.ts and projectRoot.ts, rootOf. */}',
   );
   assert.deepEqual(typescript.errors, []);
   assert.equal(typescript.paths, 2);
@@ -919,19 +919,19 @@ test('fails closed when a tracked top-level directory is missing from REPOSITORY
 
 test('reads a citation into a top-level directory beside the crates and products', (t) => {
   const root = repository(t);
-  write(root, 'editors/vscode/package.json', '{ "contributes": { "packageRevision": 1 } }\n');
+  write(root, 'external/demo/package.json', '{ "contributes": { "packageRevision": 1 } }\n');
   write(root, 'docker/compose/docker-compose.yaml', 'services:\n  evidence: {}\n');
   write(root, '.cargo/config.toml', '[build]\nrustflags = ["--cfg", "source_neutral"]\n');
   const passing = check(
     root,
-    '{/* Evidence: editors/vscode/package.json, packageRevision; docker/compose/docker-compose.yaml; .cargo/config.toml, source_neutral. */}',
+    '{/* Evidence: external/demo/package.json, packageRevision; docker/compose/docker-compose.yaml; .cargo/config.toml, source_neutral. */}',
   );
   assert.deepEqual(passing.errors, []);
   assert.equal(passing.paths, 3);
 
-  const failing = check(root, '{/* Evidence: editors/vscode/absent.json carries it. */}');
+  const failing = check(root, '{/* Evidence: external/demo/absent.json carries it. */}');
   assert.equal(failing.errors.length, 1);
-  assert.match(failing.errors[0], /editors\/vscode\/absent\.json/);
+  assert.match(failing.errors[0], /external\/demo\/absent\.json/);
   assert.match(failing.errors[0], /does not exist/);
 });
 

@@ -31,7 +31,7 @@ release manifests, and docs.
 | Build a writable registry backed by PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Publish an index of registry providers | [Publish and consume a Registry Discovery index](https://docs.registrystack.org/dev/tutorials/publish-and-consume-discovery-index/) |
 | Explore separate and combined product projects | [Individual and combined examples](#explore-individual-and-combined-examples) |
-| Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
+| Build semantic navigation for an LSP client | [Registry Stack language server](crates/registry-language-server/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |
 | Review release evidence | See [Release And External Inputs](#release-and-external-inputs) |
@@ -189,7 +189,6 @@ flowchart LR
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
 - `docs/site/`: the public Registry Stack docs site.
-- `editors/`: source-installed VS Code and Zed semantic navigation integrations.
 - `release/`: stack release manifests, schemas, import audit records, and public
   release and conformance tooling.
 - `external/`: notes for external inputs that intentionally stay outside this

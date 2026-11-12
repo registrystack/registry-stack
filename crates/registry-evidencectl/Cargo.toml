@@ -34,7 +34,6 @@ rand.workspace = true
 rand_chacha.workspace = true
 registry-evidence-authoring.workspace = true
 registry-evidence-client.workspace = true
-registry-language-server.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true

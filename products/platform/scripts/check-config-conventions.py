@@ -42,7 +42,6 @@ Run with PyYAML available:
 from __future__ import annotations
 
 import argparse
-import ast
 import importlib.util
 import json
 import re
@@ -66,7 +65,6 @@ ROOT = Path(__file__).resolve().parents[3]
 REGISTRY = "products/platform/config-formats.yaml"
 REGISTER = "products/platform/config-conventions-exceptions.yaml"
 CONVENTION = "products/platform/CONFIG-CONVENTIONS.md"
-CONFIGURE = "editors/configure.py"
 TOOLING_EDITOR = "crates/registry-evidencectl/src/tooling_editor.rs"
 LINT_TEST = "products/platform/scripts/test_check_config_conventions.py"
 CORPUS = "products/platform/conformance/yaml"
@@ -1605,7 +1603,7 @@ class Lint:
 
     # Registry-level rules ---------------------------------------------------
 
-    def registry_rules(self, entry: dict, configure: dict[str, set[str]], tooling: dict[str, set[str]]) -> None:
+    def registry_rules(self, entry: dict, tooling: dict[str, set[str]]) -> None:
         fid = entry["id"]
         current = entry["current"]
         target = entry["target"] if isinstance(entry["target"], dict) else {}
@@ -1662,21 +1660,15 @@ class Lint:
                 if finding is not None:
                     finding.file, finding.pointer = str(schema["path"]), "/$id"
                     self.findings.setdefault(finding.key, finding)
-        if entry["audience"] in ("authored", "operator"):
-            mapped = isinstance(schema, dict) and (
-                str(schema["path"]) in configure or Path(str(schema["path"])).name in tooling
-            )
-            if not mapped:
-                if self.applies(entry, "CFG-SCHEMA-6"):
-                    self.find("CFG-SCHEMA-6", fid, CONFIGURE, f"/SCHEMAS/{product}",
-                              "the format is not mapped for editors",
-                              f"Map {schema['path'] if isinstance(schema, dict) else 'its schema'} in editors/configure.py")
-            else:
-                patterns = configure.get(str(schema["path"]), set()) | tooling.get(Path(str(schema["path"])).name, set())
+        if entry["audience"] in ("authored", "operator") and isinstance(schema, dict):
+            schema_path = str(schema["path"])
+            if schema_path in tooling:
+                patterns = tooling[schema_path]
                 for index, pattern in enumerate(entry["files"]):
                     if not any(covers(theirs, str(pattern)) for theirs in patterns):
-                        rule("CFG-SCHEMA-6", f"/files/{index}", f"no editor mapping covers the file pattern {pattern}",
-                             f"Map {pattern} to {schema['path']} in editors/configure.py, or register the pattern editors map")
+                        rule("CFG-SCHEMA-6", f"/files/{index}",
+                             f"no released adopter-tool editor mapping covers the file pattern {pattern}",
+                             f"Map {pattern} to {schema['path']} in evidencectl tooling editor, or narrow the registered pattern")
         if entry["check"] == "none":
             rule("CFG-CHECK-1", "/check", "a read format with no offline check command",
                  "Add an offline check command")
@@ -2518,41 +2510,28 @@ def derive_format(kind: str, prefix: str) -> str:
     return "-".join(part.lower() for part in re.findall(r"[A-Z][a-z0-9]*", stem))
 
 
-def editor_mappings(root: Path, lint: Lint) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """The file patterns each schema is mapped to, by `editors/configure.py` and by `evidencectl tooling editor`.
+def editor_mappings(root: Path) -> dict[str, set[str]]:
+    """The file patterns each schema is mapped to by `evidencectl tooling editor`.
 
-    The first is keyed by schema path, the second by schema file name.
+    The mapping is keyed by the schema's repository-relative path.
     """
 
-    configured: dict[str, set[str]] = {}
-    path = root / CONFIGURE
-    if not path.is_file():
-        lint.error(f"{CONFIGURE} does not exist")
-    else:
-        try:
-            module = ast.parse(path.read_text(encoding="utf-8"))
-            for statement in module.body:
-                targets = statement.targets if isinstance(statement, ast.Assign) else (
-                    [statement.target] if isinstance(statement, ast.AnnAssign) else []
-                )
-                if any(isinstance(target, ast.Name) and target.id == "SCHEMAS" for target in targets):
-                    schemas = ast.literal_eval(statement.value)
-                    for pairs in schemas.values():
-                        for pair in pairs:
-                            configured.setdefault(str(pair[0]), set()).add(str(pair[1]))
-        except (SyntaxError, ValueError) as problem:
-            lint.error(f"{CONFIGURE}: SCHEMAS does not parse as a literal: {problem}")
     tooling: dict[str, set[str]] = {}
     editor = root / TOOLING_EDITOR
     if editor.is_file():
         text = editor.read_text(encoding="utf-8")
-        for name in re.findall(r"include_str!\(\s*\"([^\"]+)\"\s*\)", text):
-            tooling.setdefault(Path(name).name, set())
-        for glob, name in re.findall(
-            r"file_glob:\s*\"([^\"]+)\"\s*,\s*document:\s*include_str!\(\s*\"([^\"]+)\"\s*\)", text
-        ):
-            tooling[Path(name).name].add(glob)
-    return configured, tooling
+        for block in re.findall(r"EditorSchema\s*\{(.*?)\n\s*\},", text, re.DOTALL):
+            document = re.search(r"document:\s*include_str!\(\s*\"([^\"]+)\"\s*\)", block)
+            primary = re.search(r"file_glob:\s*\"([^\"]+)\"", block)
+            if document is None or primary is None:
+                continue
+            schema_path = (editor.parent / document.group(1)).resolve().relative_to(root.resolve()).as_posix()
+            patterns = {primary.group(1)}
+            additional = re.search(r"additional_file_globs:\s*&\[(.*?)\]", block, re.DOTALL)
+            if additional is not None:
+                patterns.update(re.findall(r'"([^\"]+)"', additional.group(1)))
+            tooling[schema_path] = patterns
+    return tooling
 
 
 def run(root: Path, base: str | None = None, strict: bool = False) -> Report:
@@ -2564,9 +2543,9 @@ def run(root: Path, base: str | None = None, strict: bool = False) -> Report:
     if registry is None:
         return report
     lint.check_registry(registry)
-    configured, tooling = editor_mappings(root, lint)
+    tooling = editor_mappings(root)
     for entry in lint.formats:
-        lint.registry_rules(entry, configured, tooling)
+        lint.registry_rules(entry, tooling)
         schema = entry["schema"]
         if entry.get("exceptionClass") == "external-format" or not isinstance(schema, dict):
             continue

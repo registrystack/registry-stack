@@ -1469,12 +1469,11 @@ that release PR.
 
 The surfaces to move are the ones `registry-release prepare` holds equal to
 the workspace version in its `workspace-versions`, `client-package-versions`,
-`excluded-fuzz-locks`, `editor-versions`, and `openapi-versions` checks: path
-dependencies and `Cargo.lock`, the native client packages and generated
-loaders, the lockfiles in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, the VS Code and
-Zed extension manifests and lockfiles in `EDITOR_RELEASE_SURFACE_PATHS`, and
-the committed OpenAPI documents. The Rust tests also hold two committed report
-examples to a development build's `<version>-dev`:
+`excluded-fuzz-locks`, and `openapi-versions` checks: path dependencies and
+`Cargo.lock`, the native client packages and generated loaders, the lockfiles
+in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, and the committed OpenAPI documents. The
+Rust tests also hold two committed report examples to a development build's
+`<version>-dev`:
 `products/breg/examples/formats/ctl-report.json` and
 `products/casework/examples/formats/reports/check-report.json`; move their
 `version` member in the same PR.

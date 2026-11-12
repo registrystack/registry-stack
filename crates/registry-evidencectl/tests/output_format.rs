@@ -77,7 +77,6 @@ const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
             "contracts.json",
         ],
     ),
-    ("tooling language-server", &["tooling", "language-server"]),
     (
         "__dev-supervisor",
         &[
@@ -386,8 +385,9 @@ fn legacy_json_flags_render_usage_errors_as_json() {
 }
 
 #[test]
-fn retired_policy_and_nested_verify_commands_are_usage_refusals() {
+fn retired_commands_are_usage_refusals() {
     for arguments in [
+        vec!["tooling", "language-server"],
         vec![
             "access",
             "policy",

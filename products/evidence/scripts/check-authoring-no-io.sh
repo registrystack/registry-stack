@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# `registry-evidence-authoring` is linked into the language server, which is
-# hosted by `evidencectl` and speaks JSON-RPC over standard
-# input and output. Its licence to run in that process is that it reads no file,
+# `registry-evidence-authoring` is linked into the standalone language server,
+# which speaks JSON-RPC over standard input and output. Its licence to run in
+# that process is that it reads no file,
 # opens no socket, starts no process and touches neither standard stream.
 #
 # `crates/registry-evidence-authoring/clippy.toml` is what holds that, by

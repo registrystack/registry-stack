@@ -135,12 +135,11 @@ updates:
         update-types:
           - "version-update:semver-major"
 
-  # Remaining standalone cargo workspaces: the Zed editor extension and the
-  # cargo-fuzz targets. Each has its own Cargo.lock outside the root
+  # Remaining standalone cargo workspaces: the cargo-fuzz targets. Each has
+  # its own Cargo.lock outside the root
   # workspace and none carry a version pin that needs protecting.
   - package-ecosystem: cargo
     directories:
-      - "/editors/zed"
       - "/products/evidence/fuzz"
       - "/products/manifest/fuzz"
       - "/products/platform/fuzz"
@@ -257,42 +256,9 @@ updates:
       - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-major"
-      # TypeScript 7 moves with the editor extension's TypeScript 7 upgrade
+      # Move TypeScript 7 across the native client packages as one change
       # (#1667).
       - dependency-name: "typescript"
-        update-types:
-          - "version-update:semver-major"
-
-  # Editor extension (VS Code) dependencies.
-  - package-ecosystem: npm
-    directory: "/editors/vscode"
-    schedule:
-      interval: monthly
-      time: "06:00"
-      timezone: Etc/UTC
-    open-pull-requests-limit: 1
-    groups:
-      npm-minor-patch:
-        update-types:
-          - minor
-          - patch
-      npm-major:
-        update-types:
-          - major
-    # @types/vscode is pinned to the engines.vscode floor: vsce refuses to
-    # package when the types are newer than the oldest supported editor.
-    # Move both together when the floor is raised.
-    ignore:
-      - dependency-name: "@types/vscode"
-      # TypeScript 7 needs tsconfig changes before the extension type-checks
-      # (#1667).
-      - dependency-name: "typescript"
-        update-types:
-          - "version-update:semver-major"
-      # @types/node tracks the Node.js runtime the extension targets (the
-      # esbuild bundle targets node20 for the engines.vscode floor), not the
-      # latest Node.js; move it deliberately with that floor.
-      - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-major"
 

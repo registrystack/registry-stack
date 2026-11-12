@@ -10,10 +10,6 @@ description = "Ignore the generated, gitignored docs repository cache."
 paths = ["^docs/site/\\.repo-docs-cache/"]
 
 [[allowlists]]
-description = "Ignore the generated, gitignored VS Code test installation."
-paths = ["^editors/vscode/\\.vscode-test/"]
-
-[[allowlists]]
 description = "Allow synthetic JWT fixtures used only by the Evidence fuzz harnesses."
 paths = [
   "^products/evidence/fuzz/corpus/verifier_holder_proof/holder_proof\\.jwt$",

@@ -224,7 +224,6 @@ CONFIG_CONVENTIONS_INPUTS = (
     "products/platform/config-conventions-exceptions.yaml",
     "products/platform/CONFIG-CONVENTIONS.md",
     "products/platform/scripts/*config-conventions*",
-    "editors/configure.py",
     "products/*/generated/*.schema.json",
     "products/*/contracts/*.schema.json",
     "products/*/contracts/*.schema.yaml",
@@ -1473,33 +1472,6 @@ def classify(
     docs_archives = full_sweep or (
         not pull_request and any(path in DOCS_ARCHIVE_INPUTS for path in changed)
     )
-    editors = (
-        complete
-        or any(path.startswith("editors/") for path in paths)
-        # The shared editor configurator copies these product-owned schemas.
-        # Exercise its real settings generation when a copied contract changes.
-        or any(
-            path.startswith(prefix)
-            for path in paths
-            for prefix in (
-                "products/breg/generated/authoring/",
-                "products/breg/generated/runtime/",
-                "products/breg/generated/tools/",
-                "products/casework/generated/project/",
-                "products/casework/generated/runtime/",
-                "products/scheduling/generated/runtime/",
-                "products/scheduling/generated/project/",
-                "products/scheduling/generated/records/",
-                "products/scheduling/generated/fixture/",
-                "products/messaging/generated/authoring/",
-                "products/messaging/generated/runtime/",
-                "products/documents/generated/project/",
-                "products/documents/generated/runtime/",
-                "products/discovery/schemas/",
-            )
-        )
-        or "registry-language-server" in affected
-    )
     # Reverse dependents, not changed paths: bindings are Cargo path dependents
     # of each SDK, so an SDK or shared HTTP-contract change can move a native
     # surface without touching a binding crate.
@@ -1643,7 +1615,6 @@ def classify(
         "release_source_proof": release_source_proof,
         "docs": docs,
         "docs_archives": docs_archives,
-        "editors": editors,
         "client_bindings": client_bindings,
         "release_linux_node_clients": release_linux_node_clients,
         "evidence_tutorial": evidence_tutorial,
