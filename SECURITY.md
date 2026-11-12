@@ -20,7 +20,7 @@ redaction failure, audit integrity failure, signing-key handling bugs, source
 connector data leakage, and privacy regressions that expose raw subject
 identifiers.
 
-Known pilot limitations such as no revocation service, no
+Known limitations such as no revocation service, no
 `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure
 workflow should be reported as product gaps unless they create an exploitable
 security or privacy issue beyond the documented limitation. Evidence Gateway
@@ -55,7 +55,7 @@ cosign verify-blob SHA256SUMS \
 sha256sum --check --strict SHA256SUMS
 ```
 
-Ordinary Beta releases do not publish a second generic SLSA provenance asset.
+Ordinary releases do not publish a second generic SLSA provenance asset.
 Earlier releases may instead use per-file `.sig` and `.pem` pairs or a generic
 SLSA provenance file. Follow the `release/VERIFY.md` committed at the release's
 tag rather than applying the current asset contract to historical releases.

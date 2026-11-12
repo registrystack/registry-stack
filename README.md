@@ -16,8 +16,8 @@ turning the registry into a shared database.
 This repository is the monorepo source of truth for Registry Stack product code,
 release manifests, and docs.
 
-> **Status:** Registry Stack is pre-1.0 Beta software for self-hosted
-> institutional pilots. APIs and deployment contracts may still change.
+> **Status:** Registry Stack ships versioned `v0.x` releases for self-hosted
+> deployments. APIs and deployment contracts may still change before 1.0.
 > Adopters should use matching release artifacts and documentation for one
 > version.
 
