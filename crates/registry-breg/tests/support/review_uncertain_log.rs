@@ -24,13 +24,8 @@ async fn uncertain_submission_logs_one_bounded_value_free_transition() {
         .unwrap();
     });
     let remote = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
-    let logs = Logs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(logs.clone())
-        .finish();
-    let capture = tracing::subscriber::set_default(subscriber);
+    let logs = CapturedDiagnosticLogs::default();
+    let subscriber = logs.subscriber_with_max_level(tracing::Level::DEBUG);
     let client = fixture.pool.get_for_test().await.unwrap();
     assert!(run_one_submission(
         &**client,
@@ -40,15 +35,15 @@ async fn uncertain_submission_logs_one_bounded_value_free_transition() {
         &BearerToken::new(OUTGOING_TOKEN).unwrap(),
         30
     )
+    .with_subscriber(subscriber)
     .await
     .unwrap());
-    drop(capture);
     server.abort();
     let delivered = job(&fixture, id).await;
     assert_eq!(delivered["state"], "uncertain");
     assert_eq!(delivered["error"], "remote-uncertain");
     assert!(delivered["lease"].is_null());
-    let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let output = logs.text();
     let transitions = output
         .lines()
         .filter(|line| line.contains("uncertain") && line.contains("\"level\":\"WARN\""))
