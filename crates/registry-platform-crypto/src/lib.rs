@@ -15,6 +15,8 @@ pub mod sealed_value;
 pub mod transit_datakey;
 #[cfg(all(test, unix, feature = "transit"))]
 mod transit_mock;
+#[cfg(feature = "transit")]
+pub mod transit_rsa_no_oid;
 #[cfg(feature = "xchacha-seal")]
 pub mod xchacha_seal;
 
@@ -1162,13 +1164,18 @@ fn transit_public_jwk(pem: &str) -> Result<PublicJwk, SigningError> {
 
 #[cfg(feature = "transit")]
 fn build_transit_client(socket_path: &Path) -> Result<reqwest::Client, SigningError> {
+    transit_client_builder(socket_path)?
+        .build()
+        .map_err(|_| transit_error("transit provider configuration is invalid"))
+}
+
+#[cfg(feature = "transit")]
+fn transit_client_builder(socket_path: &Path) -> Result<reqwest::ClientBuilder, SigningError> {
     #[cfg(unix)]
     {
-        reqwest::Client::builder()
+        Ok(reqwest::Client::builder()
             .no_proxy()
-            .unix_socket(socket_path.to_path_buf())
-            .build()
-            .map_err(|_| transit_error("transit provider configuration is invalid"))
+            .unix_socket(socket_path.to_path_buf()))
     }
     #[cfg(not(unix))]
     {
@@ -1177,6 +1184,16 @@ fn build_transit_client(socket_path: &Path) -> Result<reqwest::Client, SigningEr
             "transit provider requires Unix-domain socket support",
         ))
     }
+}
+
+/// Build the Unix-socket Transit client for a boundary where even a local
+/// redirect must not change the fixed endpoint selected by the caller.
+#[cfg(feature = "transit")]
+fn build_transit_client_no_redirects(socket_path: &Path) -> Result<reqwest::Client, SigningError> {
+    transit_client_builder(socket_path)?
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| transit_error("transit provider configuration is invalid"))
 }
 
 #[cfg(feature = "transit")]

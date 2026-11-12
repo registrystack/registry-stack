@@ -240,6 +240,16 @@ interoperability and security policy.
   key, so the caller anchors it before relying on a signature: it requests a
   certificate for the key, or checks the key against the certificate that
   certifies it, as a document seal does.
+- `transit_rsa_no_oid` is the opt-in raw Transit primitive for a reviewed
+  legacy profile that signs a 64-byte lowercase hexadecimal digest with RSA
+  PKCS#1 v1.5 and no digest OID. It pins the exact RSA public SPKI DER SHA-256
+  and key version, revalidates that binding and custody metadata before every
+  sign or verify, uses fixed `/none` endpoints through the bounded Unix-socket
+  proxy with redirects disabled, and verifies each signer result through the
+  pinned key before release. The signer requires a service-created key. The
+  `imported_key` flag records the origin of the verification entry. Operators
+  import only the provider's public key for that entry and grant the trusted
+  proxy verify-only access to it.
 - Readiness-gated live apply should use `KeyReadinessSnapshot`; only
   `status = active` plus `readiness = ready` is accepted. Degraded,
   not-ready, unknown, publish-only, and disabled keys fail closed before
