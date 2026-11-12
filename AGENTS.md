@@ -292,8 +292,11 @@ and its bindings) owns its reviewed workflow packages, durable run state,
 prepared commands, waits, and audit journal, and never product authority,
 data, eligibility, or capacity. A wait never renews an approval or creates
 downstream authority. The runtime may depend on product clients, product
-cores, `registry-record`, and `registry-platform-*`, never on a product
-runtime, adopter tooling, a supporting service, or a binding; it reaches
+cores, `registry-record`, and `registry-platform-*`. It may depend directly on
+the runtime-free `registry-review-protocol` handoff contract and may reach
+`registry-payment-protocol` only through `registry-payment-client`; these do
+not admit other protocol crates. It never depends on a product runtime,
+adopter tooling, a supporting service, or a binding; it reaches
 Casework through `registry-casework-client` alone; its client reaches
 `registry-platform-*` only. No product crate depends on a Coordinator crate
 (only `registry-cli-docs` may), and the Casework, Scheduling, and Messaging

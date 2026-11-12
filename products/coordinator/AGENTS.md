@@ -13,13 +13,16 @@ receives the call, which decides it under its own authorization.
 
 - Reach a product only over its public HTTP contract, through its maintained
   Rust client. The runtime may depend on product clients, product cores,
-  `registry-record`, and `registry-platform-*`; never on a product runtime,
-  adopter tooling, a supporting service, or a language binding. Never write
-  to another product's database. Tests compose with another product the same
-  way, through its built executable and public HTTP contract, never through a
-  runtime dev-dependency. Its combined CLI may use `registry-cli-api` for
-  product-neutral HTTP and connection handling; that helper carries no
-  product runtime or authority.
+  `registry-record`, and `registry-platform-*`. It may depend directly on the
+  runtime-free `registry-review-protocol` handoff contract and may reach
+  `registry-payment-protocol` only through `registry-payment-client`; these
+  are not a general allowance for protocol crates. It never depends on a
+  product runtime, adopter tooling, a supporting service, or a language binding.
+  Never write to another product's database. Tests compose with another
+  product the same way, through its built executable and public HTTP contract,
+  never through a runtime dev-dependency. Its combined CLI may use
+  `registry-cli-api` for product-neutral HTTP and connection handling; that
+  helper carries no product runtime or authority.
 - The Coordinator inherits no authorization. A caller allowed to start a run
   is not thereby allowed the effects its workflow requests: every product decides
   each call it receives under its own policy, and a wait never renews an

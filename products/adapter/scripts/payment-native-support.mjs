@@ -80,26 +80,35 @@ export function start(binary, args, logPath, env = process.env) {
   };
 }
 
-export function loopback(origin) {
-  const url = new URL(origin);
+function numericLoopbackHttp(value, message) {
+  let url;
+  try { url = new URL(value); } catch { assert.fail(message); }
   assert(url.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(url.hostname)
-    && !url.username && !url.password && !url.search && !url.hash && url.pathname === '/',
-  'native payment acceptance requires a numeric loopback HTTP origin');
+    && !url.username && !url.password, message);
+  return url;
+}
+
+export function loopback(origin) {
+  const message = 'native payment acceptance requires a numeric loopback HTTP origin';
+  const url = numericLoopbackHttp(origin, message);
+  assert(!url.search && !url.hash && url.pathname === '/', message);
   return url.origin;
 }
 
 export async function exchange(method, url, { token, body, key, expected = [200] } = {}) {
+  const requestUrl = numericLoopbackHttp(url,
+    'native payment acceptance requires a numeric loopback HTTP request without user information').href;
   const headers = {};
   if (token) headers.Authorization = `Bearer ${token}`;
   if (key) headers['Idempotency-Key'] = key;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const response = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+  const response = await fetch(requestUrl, { method, headers, body: body === undefined ? undefined : JSON.stringify(body),
     redirect: 'manual', signal: AbortSignal.timeout(20000) });
   const bytes = await response.arrayBuffer();
   assert(bytes.byteLength <= 1048576, 'native response exceeded its fixture bound');
   const value = bytes.byteLength ? JSON.parse(Buffer.from(bytes).toString()) : null;
   const code = typeof value?.code === 'string' && /^[a-z][a-z0-9_.-]{1,100}$/.test(value.code) ? ` (${value.code})` : '';
-  assert(expected.includes(response.status), `native ${method} ${new URL(url).pathname} returned HTTP ${response.status}${code}`);
+  assert(expected.includes(response.status), `native ${method} ${new URL(requestUrl).pathname} returned HTTP ${response.status}${code}`);
   return { status: response.status, body: value };
 }
 

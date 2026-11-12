@@ -2,11 +2,12 @@
 """Check Coordinator dependency direction from Cargo's resolved graph.
 
 The Coordinator composes products only through their public product clients.
-Its runtime may reach product clients, product cores, `registry-record` and
-shared platform primitives, and nothing else of the workspace: never another
-product's runtime, adopter tooling, supporting service or binding. A core named
-below is reached only through its product client, never as a direct dependency
-of the runtime. Its client
+Its runtime may reach product clients, their named runtime-free support
+contracts, product cores, `registry-record` and shared platform primitives,
+and nothing else of the workspace: never another product's runtime, adopter
+tooling, supporting service or binding. A support package or core in a
+client-only map below is reached only through its product client, never as a
+direct dependency of the runtime. Its client
 reaches the runtime over the public HTTP contract only and links shared
 platform primitives alone. No crate outside the Coordinator depends on a
 Coordinator crate unless it is named below.
@@ -40,6 +41,12 @@ COORDINATOR_CLIENTS = (
 # with the product client that carries it.
 CLIENT_SUPPORT = {
     "registry-review-protocol": "the review handoff contract registry-casework-client carries",
+}
+
+# Runtime-free contracts the runtime reaches only through their product client.
+# Keep this exact: a `*-protocol` suffix does not by itself make a package safe.
+CLIENT_ONLY_SUPPORT = {
+    "registry-payment-protocol": "registry-payment-client",
 }
 
 # The combined Coordinator crate also publishes coordinatorctl. This helper
@@ -88,16 +95,22 @@ def package_graph(
     return names, every, linked
 
 
-def closure(start: str, every: dict[str, set[str]], linked: dict[str, set[str]]) -> set[str]:
+def closure(
+    start: str,
+    every: dict[str, set[str]],
+    linked: dict[str, set[str]],
+    excluded: set[str] | None = None,
+) -> set[str]:
     """Every package the start builds with, its own dev-dependencies included."""
+    excluded = excluded or set()
     seen: set[str] = set()
-    pending = list(every.get(start, set()))
+    pending = list(every.get(start, set()) - excluded)
     while pending:
         package = pending.pop()
         if package in seen:
             continue
         seen.add(package)
-        pending.extend(linked.get(package, set()) - seen)
+        pending.extend(linked.get(package, set()) - seen - excluded)
     return seen
 
 
@@ -107,6 +120,8 @@ def runtime_may_reach(name: str) -> bool:
     if name.startswith("registry-platform-") or name == "registry-record":
         return True
     if name in CLIENT_SUPPORT:
+        return True
+    if name in CLIENT_ONLY_SUPPORT:
         return True
     if name in CLI_SUPPORT:
         return True
@@ -123,17 +138,36 @@ def client_may_reach(name: str) -> bool:
 
 def violations(metadata: dict) -> list[str]:
     names, every, linked = package_graph(metadata)
+    package_ids = {name: package_id for package_id, name in names.items()}
     failures: list[str] = []
     for package_id, name in sorted(names.items(), key=lambda item: item[1]):
-        reached = {names[item] for item in closure(package_id, every, linked)}
+        reached_ids = closure(package_id, every, linked)
+        reached = {names[item] for item in reached_ids}
         if name == COORDINATOR_RUNTIME:
             refused = sorted(item for item in reached if not runtime_may_reach(item))
             if refused:
                 failures.append(
-                    f"{name} reaches package(s) outside product clients, product cores, "
-                    f"registry-record and registry-platform-*: {', '.join(refused)}"
+                    f"{name} reaches package(s) outside product clients, named client "
+                    f"support, product cores, registry-record and registry-platform-*: "
+                    f"{', '.join(refused)}"
                 )
             direct = sorted(names[item] for item in every.get(package_id, set()))
+            for support in (item for item in direct if item in CLIENT_ONLY_SUPPORT):
+                failures.append(
+                    f"{name} depends on {support} directly; "
+                    f"reach it through {CLIENT_ONLY_SUPPORT[support]}"
+                )
+            for support, client in CLIENT_ONLY_SUPPORT.items():
+                support_id = package_ids.get(support)
+                client_id = package_ids.get(client)
+                if support_id not in reached_ids or support in direct:
+                    continue
+                excluded = {client_id} if client_id else set()
+                if support_id in closure(package_id, every, linked, excluded):
+                    failures.append(
+                        f"{name} reaches {support} by a path outside {client}; "
+                        f"reach it only through {client}"
+                    )
             for core in (item for item in direct if item in CLIENT_ONLY_CORES):
                 failures.append(
                     f"{name} depends on {core} directly; "

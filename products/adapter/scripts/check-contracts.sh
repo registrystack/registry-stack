@@ -10,6 +10,7 @@ cd "$repo_root"
 source "$repo_root/products/adapter/scripts/contract-lane-cache.sh"
 python3 -m unittest discover -s products/adapter/scripts -p 'test_contract_lane_cache.py'
 python3 -m unittest discover -s products/adapter/scripts -p 'test_effective_contract_example.py'
+node --test "$repo_root/products/adapter/scripts/payment-native-support.test.mjs"
 node --test "$repo_root"/products/adapter/examples/govstack-wg-demo/test_*.mjs
 
 # The dependency-direction gate runs first, before any cargo build: its
