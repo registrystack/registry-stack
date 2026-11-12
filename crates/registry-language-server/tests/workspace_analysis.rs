@@ -298,6 +298,43 @@ fn impact_keeps_removed_edges_and_transitive_unchanged_consumers() {
 }
 
 #[test]
+fn impact_keeps_check_groups_from_a_removed_product_source() {
+    let mapped = json!({
+        "owner": identity("records", "licence"),
+        "authored": { "kind": "authored-file", "path": "actions/a.yaml" },
+        "generated": { "kind": "generated-file", "path": "registry/registry.yaml" },
+        "product": "breg",
+        "file": "actions/a.yaml",
+        "pointer": ""
+    });
+    let mut input = request("impact");
+    input["facts"]["definitions"] = json!([definition("records", "licence", "actions/a.yaml")]);
+    input["before"] = json!({
+        "workspaceBinding": "workspace:test",
+        "revision": "revision-0",
+        "files": [file("actions/a.yaml", "YWJj", ABC_SHA256)],
+        "facts": {
+            "definitions": [definition("records", "licence", "actions/a.yaml")],
+            "mentions": [],
+            "mappings": [mapped],
+            "coverageGaps": [{
+                "code": "reference-family-unavailable",
+                "message": "Only normalized test facts were supplied."
+            }],
+            "checkGroups": ["workspace-v1"]
+        }
+    });
+    input["targets"] = json!([identity("records", "licence")]);
+
+    let output = execute_workspace_analysis(input).expect("impact succeeds");
+    assert_eq!(output["impact"]["products"], json!(["breg"]));
+    assert_eq!(
+        output["impact"]["checkGroups"],
+        json!(["product:breg", "workspace-v1"])
+    );
+}
+
+#[test]
 fn generation_facts_require_the_exact_snapshot() {
     let mut input = request("analyze");
     input["facts"]["definitions"] = json!([definition("actions", "apply", "actions/a.yaml")]);

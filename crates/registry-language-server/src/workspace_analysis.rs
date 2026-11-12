@@ -1524,6 +1524,12 @@ fn analyze_impact(
             }
         }
     }
+    let check_groups: BTreeSet<&str> = before
+        .into_iter()
+        .flat_map(|analysis| analysis.check_groups.iter())
+        .chain(after.check_groups.iter())
+        .map(String::as_str)
+        .collect();
     Ok(json!({
         "after": after.snapshot,
         "before": before.map(|analysis| &analysis.snapshot),
@@ -1531,7 +1537,7 @@ fn analyze_impact(
         "affected": affected_values,
         "affectedFiles": affected_files,
         "products": products,
-        "checkGroups": after.check_groups,
+        "checkGroups": check_groups,
         "paths": paths,
         "changes": {
             "files": changed_files,
