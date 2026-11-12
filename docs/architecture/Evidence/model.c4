@@ -1,6 +1,6 @@
 // Evidence structure and its implemented integration boundaries.
 // Components inside evidence are responsibilities in one Rust process, not services.
-// Source links follow main; the audit model describes the unreleased shared writer.
+// Source links follow main; the audit model describes the shared writer.
 model {
   evidenceOperator = actor 'Evidence operator' {
     description 'Reviews one disclosure surface, compiles and checks deployment candidates, provisions process-local bindings and operates the audit stream.'

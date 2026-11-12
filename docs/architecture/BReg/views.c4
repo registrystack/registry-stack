@@ -37,7 +37,7 @@ views {
   view events {
     title 'BReg / 03. Events and delivery boundaries'
     description '''
-      A package declares created, patched, tombstoned or request-lifecycle events.
+      A package declares created, patched, tombstoned or Proposal lifecycle events.
       Event projection and delivery intent commit with the owning record/request,
       history in one PostgreSQL transaction. A nonmatching event condition
       permits the write without producing that event; capture failure rolls it back.
@@ -164,7 +164,7 @@ views {
       purpose, source issuer, deadline, approved subjects and complete bounds. BReg
       requires the grant bounds to equal the compiled profile permissions; wider,
       narrower and partial bounds are refused. The task profile permits governed
-      change-request work and reads, never direct target-record mutation. A new submission
+      Proposal work and reads, never direct target-record mutation. A new submission
       checks the presented grant. Later approval or application checks the retained original
       grant. All must complete before the original grant deadline, at most 900 seconds
       after Casework task approval. After acquiring the applicable record or proposal lock,
@@ -177,10 +177,10 @@ views {
       An exact completed receipt can be recovered under current disclosure without
       another status check; a different grant conflicts and cannot reapply the change.
     '''
-    taskAgent -> breg.api 'Submits task-bound change-request work with an exchanged token'
+    taskAgent -> breg.api 'Submits task-bound Proposal work with an exchanged token'
     breg.api -> breg.access 'Verifies token identity, actor kind, requester client and profile permissions'
     breg.access -> breg.task_grants 'Binds profile source issuer, permitted client, required purpose, BReg audience, subjects and equal bounds'
-    breg.api -> breg.writes 'Dispatches the governed change-request submission'
+    breg.api -> breg.writes 'Dispatches the governed Proposal submission'
     breg.writes -> breg.audit 'Accepts request audit before protected I/O'
     breg.audit -> bregAuditStore 'Persists the minimized attempt'
     breg.writes -> postgres 'Locks current request state and checks idempotency or completed recovery'

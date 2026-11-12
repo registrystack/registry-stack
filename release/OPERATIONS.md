@@ -18,8 +18,10 @@ its source because the nightly version marker makes the bytes distinct.
 
 ## Independent Discovery tooling, deferred until after 1.0
 
-Registry Stack 1.0 is one Stack cut: the five promised products graduate
-together under the Stack version and `vMAJOR.MINOR.PATCH` tag. Keep Discovery
+Registry Stack 1.0 is one Stack cut: the five promised products (Base Registry
+Engine, Evidence, Casework, Discovery, and Manifest, as listed in the
+[API stability promise](../docs/site/src/content/docs/reference/api-stability.mdx))
+graduate together under the Stack version and `vMAJOR.MINOR.PATCH` tag. Keep Discovery
 on that release train through 1.0. The independent-unit machinery below is
 retained for a later pilot; it is not the 1.0 publication path.
 

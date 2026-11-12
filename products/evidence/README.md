@@ -30,8 +30,10 @@ require explicit package and matched-grant permission. Holder-bound assertions
 and bounded holder batches retain their separate key-confirmation and
 presentation-verification rules. `registry-evidence-verifier` provides portable
 offline verification without the serving runtime or source access. The optional
-OID4VCI adapter is a separate consumer; Evidence has no wallet or OID4VCI runtime
-dependency.
+OID4VCI adapter is a separate consumer; Evidence has no OID4VCI runtime dependency.
+The default `wallet-presentation` Cargo feature links `registry-evidence-presentation`,
+which verifies a credential a holder presented from a wallet without I/O; building
+without the feature removes that verification.
 
 Each AssertionDefinition names one Source. That Source binds a pinned Adapter
 pack version and route to one target connection, and maps only authorized

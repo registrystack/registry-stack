@@ -3,18 +3,18 @@
 Use these diagrams to understand BReg, Casework and Evidence responsibilities,
 follow requests and events, and inspect the contracts between independently deployed products.
 The BReg and Evidence models retain source revision `c02e470085f48eae0204ba8400f9f919c5d05500`, reviewed on
-13 September 2026. It includes unreleased contextual authorization changes and does
-not describe the published v0.30.0 release. The audit models additionally describe the
-unreleased shared-writer change reviewed on 25 September 2026. The product model files link to
-maintained source on `main`; those links are not a claim that the unreleased audit behavior has
-shipped. The other models retain their earlier source links. Audit sequences illustrate the
-default durable file destination; stdout is best-effort.
+13 September 2026, which includes the contextual authorization changes first released in v0.31.0.
+The audit models additionally describe the shared-writer change reviewed on 25 September 2026.
+The product model files link to maintained source on `main`. The other models retain their
+earlier source links. Audit sequences illustrate the default durable file destination;
+stdout is best-effort.
 
-The Casework model and its shared composition relationships describe the unreleased
-review-only replacement checked on 14 October 2026. They use the maintained source
-links on `main`. Submitted and current-source review share one lifecycle; source
-application remains independently authorized. Other product models retain their
-earlier source baseline and are not evidence for the complete current stack.
+The Casework model and its shared composition relationships describe the review-only
+replacement checked on 14 October 2026. They use the maintained source links on `main`.
+Submitted and current-source review share one lifecycle; source application remains
+independently authorized. The diagrams cover BReg, Casework and Evidence only; Scheduling,
+Messaging, Coordinator, Discovery, Adapter and Document Store have no model here, and the
+models are not evidence for the complete current stack.
 
 ## Open the explorer
 
