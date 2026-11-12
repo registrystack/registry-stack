@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Read one saved disbursement and its current provider observation.",
+  "properties": {
+    "disbursementId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    }
+  },
+  "required": [
+    "disbursementId"
+  ],
+  "title": "payments.read-disbursement/v1 input",
+  "type": "object"
+}

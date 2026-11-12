@@ -3,8 +3,9 @@
 use std::fmt;
 
 use registry_payment_protocol::{
-    CollectionAccepted, CollectionStatus, PaymentProblem, ReadCollection, RecordReceipt,
-    RegistryReceipt, RequestCollection,
+    CollectionAccepted, CollectionStatus, DisbursementAccepted, DisbursementStatus, PaymentProblem,
+    ProviderConfirmation, ReadCollection, ReadDisbursement, RecordProviderConfirmation,
+    RecordReceipt, RegistryReceipt, RequestCollection, RequestDisbursement,
 };
 use registry_platform_httpsec::response_trace_id;
 use registry_platform_httputil::client::{
@@ -186,6 +187,118 @@ impl PaymentClient {
         Ok(answer)
     }
 
+    /// Submit one authoritative instruction. This sends once: the released
+    /// Mifos bulk profile does not prove provider deduplication on replay.
+    pub async fn request_disbursement(
+        &self,
+        token: &BearerToken,
+        idempotency_key: &str,
+        request: &RequestDisbursement,
+    ) -> Result<PaymentComplete<DisbursementAccepted>, PaymentClientError> {
+        validate_key(idempotency_key)?;
+        request.validate().map_err(|_| {
+            PaymentClientError::invalid_request("the instruction identity is invalid")
+        })?;
+        let builder = self
+            .http
+            .post(self.path_url(&["disbursements"])?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE)
+            .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+            .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
+            .json(request);
+        let answer: PaymentComplete<DisbursementAccepted> =
+            self.json_answer(builder, StatusCode::ACCEPTED).await?;
+        validate_disbursement_acceptance(
+            &answer.value,
+            request,
+            StatusCode::ACCEPTED,
+            &answer.trace_id,
+        )?;
+        Ok(answer)
+    }
+
+    /// Recover only a known original request, without another provider send.
+    pub async fn disbursement_receipt(
+        &self,
+        token: &BearerToken,
+        idempotency_key: &str,
+        request: &RequestDisbursement,
+    ) -> Result<PaymentComplete<DisbursementAccepted>, PaymentClientError> {
+        validate_key(idempotency_key)?;
+        request.validate().map_err(|_| {
+            PaymentClientError::invalid_request("the instruction identity is invalid")
+        })?;
+        let builder = self
+            .http
+            .post(self.path_url(&["disbursements", "receipt"])?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE)
+            .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+            .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
+            .json(request);
+        let answer = self.json_answer(builder, StatusCode::OK).await?;
+        validate_disbursement_acceptance(&answer.value, request, StatusCode::OK, &answer.trace_id)?;
+        Ok(answer)
+    }
+
+    /// Observe one saved payout without initiating a new instruction.
+    pub async fn read_disbursement(
+        &self,
+        token: &BearerToken,
+        request: &ReadDisbursement,
+    ) -> Result<PaymentComplete<DisbursementStatus>, PaymentClientError> {
+        validate_collection_id(request.disbursement_id)?;
+        let builder = self
+            .http
+            .get(self.path_url(&["disbursements", &request.disbursement_id.to_string()])?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE);
+        let answer: PaymentComplete<DisbursementStatus> =
+            self.json_answer(builder, StatusCode::OK).await?;
+        answer
+            .value
+            .validate()
+            .map_err(|_| body_protocol(StatusCode::OK, Some(answer.trace_id.clone())))?;
+        if answer.value.disbursement_id != request.disbursement_id {
+            return Err(correlation_protocol(StatusCode::OK, Some(answer.trace_id)));
+        }
+        Ok(answer)
+    }
+
+    /// Report exact provider confirmation using the saved Adapter evidence.
+    pub async fn record_provider_confirmation(
+        &self,
+        token: &BearerToken,
+        idempotency_key: &str,
+        request: &RecordProviderConfirmation,
+    ) -> Result<PaymentComplete<ProviderConfirmation>, PaymentClientError> {
+        validate_key(idempotency_key)?;
+        validate_collection_id(request.disbursement_id)?;
+        let builder = self
+            .http
+            .post(self.path_url(&[
+                "disbursements",
+                &request.disbursement_id.to_string(),
+                "record-provider-confirmation",
+            ])?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE)
+            .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+            .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
+            .json(request);
+        let answer: PaymentComplete<ProviderConfirmation> =
+            self.send_keyed_json(builder, StatusCode::OK).await?;
+        answer
+            .value
+            .validate()
+            .map_err(|_| body_protocol(StatusCode::OK, Some(answer.trace_id.clone())))?;
+        if answer.value.disbursement_id != request.disbursement_id {
+            return Err(correlation_protocol(StatusCode::OK, Some(answer.trace_id)));
+        }
+        Ok(answer)
+    }
+
     fn collections_url(&self) -> Result<Url, PaymentClientError> {
         self.path_url(&["collections"])
     }
@@ -316,6 +429,23 @@ fn validate_acceptance(
         .validate()
         .map_err(|_| body_protocol(status, Some(trace_id.to_owned())))?;
     if answer.bill_id != request.bill_id || answer.bill_version != request.bill_version {
+        return Err(correlation_protocol(status, Some(trace_id.to_owned())));
+    }
+    Ok(())
+}
+
+fn validate_disbursement_acceptance(
+    answer: &DisbursementAccepted,
+    request: &RequestDisbursement,
+    status: StatusCode,
+    trace_id: &str,
+) -> Result<(), PaymentClientError> {
+    answer
+        .validate()
+        .map_err(|_| body_protocol(status, Some(trace_id.to_owned())))?;
+    if answer.instruction_record_id != request.instruction_record_id
+        || answer.instruction_version != request.instruction_version
+    {
         return Err(correlation_protocol(status, Some(trace_id.to_owned())));
     }
     Ok(())

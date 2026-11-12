@@ -28,6 +28,7 @@ async fn main() {
             runtime_config,
             project,
             payments_config,
+            payment_provider_pack,
             profile,
             pack,
         } => registry_adapter::serve::run_configured(
@@ -36,6 +37,7 @@ async fn main() {
             pack.as_deref(),
             &runtime_config,
             payments_config.as_deref(),
+            &payment_provider_pack,
         )
         .await
         .map_err(|error| error.to_string()),

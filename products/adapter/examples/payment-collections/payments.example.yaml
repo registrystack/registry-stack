@@ -17,12 +17,14 @@ connections:
       # recovery sends for only this bounded window after the first dispatch.
       replayWindowSeconds: 3600
       provider:
-        baseUrl: http://127.0.0.1:8099/
-        tenant: pilot
-        biller: ministry
-        billerName: Ministry
-        callbackUrl: https://programme.example.test/callback
-        payerFiBic: SIMBANK
+        type: simulator
+        connection:
+          baseUrl: http://127.0.0.1:8099/
+          tenant: pilot
+          biller: ministry
+          billerName: Ministry
+          callbackUrl: https://programme.example.test/callback
+          payerFiBic: SIMBANK
       registry:
         baseUrl: http://127.0.0.1:8080/
         recordType: service-fee-bill
