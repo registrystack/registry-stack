@@ -4492,12 +4492,13 @@ formats:
     reader:
       crate: registry-adapterctl
       file: crates/registry-adapterctl/src/payment_fixtures.rs
-      function: replay_mapped
+      function: read_fixture
       type: FixtureDocument
-    check: adapterctl payments fixtures replay {payments} --provider-pack {pack}/pack.yaml --fixtures {file}
+    check: adapterctl payments check {payments} --provider-pack {pack} --fixtures {file}
     example: products/adapter/examples/payment-provider-fixture.yaml
     conformance:
-      requiredText: /type
+      # The shared type and direction fields use tag and enum diagnostics.
+      requiredText: none
       optionalText: none
       integer: /acceptance/response/httpStatus
       boolean: none
@@ -4531,7 +4532,7 @@ formats:
       file: crates/registry-adapter/src/payments/pack.rs
       function: from_yaml
       type: PaymentProviderPack
-    check: adapterctl payments check-pack {file}
+    check: adapterctl payments check {payments} --provider-pack {file}
     example: products/adapter/packs/payment-simulator/pack.yaml
     conformance:
       requiredText: /id

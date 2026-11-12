@@ -134,7 +134,7 @@ impl ProviderPackRegistry {
                 message: "A payment provider pack could not be read.",
                 action: "Correct the provider pack path and retry.",
             })?;
-            let pack = PaymentProviderPack::from_yaml(&bytes)
+            let pack = PaymentProviderPack::from_yaml_at(path.display().to_string(), &bytes)
                 .map_err(|report| ProviderPackLoadError::Diagnostics(report.into_diagnostics()))?;
             if pack.validate().is_err() {
                 return Err(ProviderPackLoadError::Problem {
@@ -251,7 +251,7 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
                 )]),
                 unavailable: true,
                 deny_warnings,
-            }
+            };
         }
     };
     let check = RuntimeConfigLoader::new(RuntimeEnvelope {
@@ -260,6 +260,7 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
     })
     .check_offline::<PaymentsConfig>(&absolute, true, |_| DEFAULT_STAND_IN);
     let mut additional = Vec::new();
+    let mut companion_diagnostics = Vec::new();
     let mut value = json!({});
     if let Some(loaded) = &check.loaded {
         if loaded.config.validate().is_err() {
@@ -268,15 +269,18 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
                 "Check connection scopes, unique caller identities, currency and synthetic provider bindings; then retry."));
         } else {
             match ProviderPackRegistry::load(provider_packs) {
-                Ok(registry) => check_provider_pack_bindings(
-                    &check,
-                    &loaded.config,
-                    &registry,
-                    fixtures,
-                    &mut additional,
-                ),
+                Ok(registry) => {
+                    check_provider_pack_bindings(
+                        &check,
+                        &loaded.config,
+                        &registry,
+                        &mut additional,
+                    );
+                    companion_diagnostics =
+                        check_payment_fixtures(&check, &registry, fixtures, &mut additional);
+                }
                 Err(ProviderPackLoadError::Diagnostics(diagnostics)) => {
-                    additional.extend(diagnostics);
+                    companion_diagnostics = diagnostics;
                 }
                 Err(ProviderPackLoadError::Problem {
                     code,
@@ -292,9 +296,11 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
             }
         }
     }
+    let mut checked = check.report_with(KIND, additional);
+    checked.extend(Report::new(companion_diagnostics));
     PaymentCheck {
         value,
-        checked: check.report_with(KIND, additional),
+        checked,
         unavailable: check.unavailable,
         deny_warnings,
     }
@@ -304,10 +310,8 @@ fn check_provider_pack_bindings(
     check: &registry_platform_config::RuntimeFileCheck<PaymentsConfig>,
     config: &PaymentsConfig,
     registry: &ProviderPackRegistry,
-    fixtures: &[PathBuf],
     additional: &mut Vec<Diagnostic>,
 ) {
-    check_payment_fixtures(check, registry, fixtures, additional);
     for (index, connection) in config.connections.iter().enumerate() {
         let path = format!("/connections/{index}/binding/providerPack");
         let Some(pin) = connection.binding.provider_pack.as_ref() else {
@@ -436,9 +440,9 @@ fn check_payment_fixtures(
     registry: &ProviderPackRegistry,
     fixtures: &[PathBuf],
     additional: &mut Vec<Diagnostic>,
-) {
+) -> Vec<Diagnostic> {
     if fixtures.is_empty() {
-        return;
+        return Vec::new();
     }
     let Some(selected) = registry.only() else {
         let (code, message, action) = if registry.by_digest.is_empty() {
@@ -455,8 +459,9 @@ fn check_payment_fixtures(
             )
         };
         additional.push(check.error_at(KIND, code, "/fixtures", message, action));
-        return;
+        return Vec::new();
     };
+    let mut companion_diagnostics = Vec::new();
     for fixture in fixtures {
         let replay = if selected.pack.connector == ConnectorKind::AdapterPaymentHttpV1 {
             payment_fixtures::replay_mapped(
@@ -470,6 +475,10 @@ fn check_payment_fixtures(
         };
         if let Err(error) = replay {
             let (code, message, action) = match error {
+                FixtureError::Diagnostics(diagnostics) => {
+                    companion_diagnostics.extend(diagnostics);
+                    continue;
+                }
                 FixtureError::Unavailable => (
                     "adapter.payment.fixture-unavailable",
                     "A payment provider fixture could not be read.",
@@ -484,6 +493,7 @@ fn check_payment_fixtures(
             additional.push(check.error_at(KIND, code, "/fixtures", message, action));
         }
     }
+    companion_diagnostics
 }
 
 fn check_pack(file: &PathBuf) -> PaymentCheck {
@@ -500,10 +510,13 @@ fn check_pack(file: &PathBuf) -> PaymentCheck {
                 )]),
                 unavailable: true,
                 deny_warnings: false,
-            }
+            };
         }
     };
-    let (value, checked) = match PaymentProviderPack::from_yaml(&bytes) {
+    let (value, checked) = match PaymentProviderPack::from_yaml_at(
+        file.display().to_string(),
+        &bytes,
+    ) {
         Ok(pack)
             if pack.validate().is_ok()
                 && (pack.connector != ConnectorKind::AdapterPaymentHttpV1

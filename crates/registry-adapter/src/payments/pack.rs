@@ -2,7 +2,10 @@
 //! Reviewed provider selection for the typed payment host.
 
 use registry_adapter_core::{RhaiExpression, ScriptReference};
-use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report};
+use registry_platform_config::AuthoredExpressions;
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report, UniqueList,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
@@ -39,6 +42,34 @@ pub struct PaymentProviderPack {
     pub mapping: Option<PaymentProviderMapping>,
 }
 
+/// Reader-only types apply the shared authored constraints while preserving
+/// the public pack model and its generated schema.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PaymentProviderPackReader {
+    id: String,
+    version: String,
+    connector: ConnectorKind,
+    capabilities: UniqueList<PaymentCapability>,
+    #[serde(default)]
+    tested_versions: Vec<String>,
+    #[serde(default)]
+    mapping: Option<PaymentProviderMapping>,
+}
+
+impl From<PaymentProviderPackReader> for PaymentProviderPack {
+    fn from(reader: PaymentProviderPackReader) -> Self {
+        Self {
+            id: reader.id,
+            version: reader.version,
+            connector: reader.connector,
+            capabilities: reader.capabilities.into_vec(),
+            tested_versions: reader.tested_versions,
+            mapping: reader.mapping,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ConnectorKind {
@@ -52,7 +83,7 @@ pub enum ConnectorKind {
     AdapterPaymentHttpV1,
 }
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum PaymentCapability {
@@ -127,8 +158,17 @@ pub struct PackError;
 impl PaymentProviderPack {
     /// Decode one authored pack using the common strict YAML and envelope reader.
     pub fn from_yaml(bytes: &[u8]) -> Result<Self, Report> {
-        let decoded = Reader::new("pack.yaml").decode::<Self>(bytes, &Expect::one(&FORMAT))?;
-        Ok(decoded.value)
+        Self::from_yaml_at("pack.yaml", bytes)
+    }
+
+    /// Decode one authored pack and retain the caller's displayed file path in
+    /// every located diagnostic.
+    pub fn from_yaml_at(file: impl Into<String>, bytes: &[u8]) -> Result<Self, Report> {
+        let mut authored = AuthoredExpressions;
+        let decoded = Reader::new(file)
+            .with_hook(&mut authored)
+            .decode::<PaymentProviderPackReader>(bytes, &Expect::one(&FORMAT))?;
+        Ok(decoded.value.into())
     }
 
     pub fn validate(&self) -> Result<(), PackError> {

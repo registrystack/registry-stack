@@ -403,6 +403,22 @@ formats:
       profile: {from: products/adapter/profiles/breg-records}
       pack: {from: products/adapter/packs/dhis2-tracker}
       fixtures: {from: products/adapter/fixtures/dhis2-tracker}
+  adapter/payment-provider-pack:
+    copies:
+      payments: {from: products/adapter/examples/payment-collections/payments.example.yaml}
+  adapter/payment-provider-fixture:
+    copies:
+      payments: {from: products/adapter/examples/payment-collections/payments.example.yaml}
+    values:
+      pack: "{project}/payment-provider-fixture-pack.yaml"
+    write:
+      payment-provider-fixture-pack.yaml: |
+        apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1
+        kind: AdapterPaymentProviderPack
+        id: mifos-legacy-fixture
+        version: '1'
+        connector: mifos-ph-ee-legacy/v1
+        capabilities: [collection]
   # `adapterctl job check` compiles the job's workspace, which resolves
   # the endpoint credential references; the staged runtime points them at
   # the variable the runner sets for every check.

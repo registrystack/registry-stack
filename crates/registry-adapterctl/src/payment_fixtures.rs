@@ -14,6 +14,7 @@ use registry_payment_mifos_connector::{
     BatchObservation, CollectionAccepted, CollectionCommand, CollectionObservation,
     CONNECTOR_PROFILE,
 };
+use registry_platform_config::AuthoredExpressions;
 use registry_platform_yaml::{
     ApiVersion, BoundedU32, EnvelopeRule, Expect, FormatSpec, LocalId, Reader,
 };
@@ -95,10 +96,11 @@ pub(crate) enum Direction {
 }
 
 /// All errors are value-free so authored provider payloads never enter ctl reports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FixtureError {
     Unavailable,
     Refused,
+    Diagnostics(Vec<registry_platform_yaml::Diagnostic>),
 }
 
 struct MappedFixture {
@@ -165,11 +167,7 @@ pub(crate) fn replay_mapped(
     pack_bytes: &[u8],
 ) -> Result<(), FixtureError> {
     let program = compile_mapped_pack(pack_path, pack, pack_bytes)?;
-    let bytes = std::fs::read(fixture_path).map_err(|_| FixtureError::Unavailable)?;
-    let document = Reader::new(fixture_path.display().to_string())
-        .decode::<FixtureDocument>(&bytes, &Expect::one(&FORMAT))
-        .map_err(|_| FixtureError::Refused)?
-        .value;
+    let document = read_fixture(fixture_path)?;
     let FixtureDocument::Mapped {
         direction,
         intent,
@@ -319,10 +317,6 @@ pub(crate) fn replay(path: &Path, connector: ConnectorKind) -> Result<(), Fixtur
     if connector != ConnectorKind::MifosPhEeLegacyV1 {
         return Err(FixtureError::Refused);
     }
-    let bytes = std::fs::read(path).map_err(|_| FixtureError::Unavailable)?;
-    let decoded = Reader::new(path.display().to_string())
-        .decode::<FixtureDocument>(&bytes, &Expect::one(&FORMAT))
-        .map_err(|_| FixtureError::Refused)?;
     let FixtureDocument::Compiled {
         connector_profile,
         direction,
@@ -330,7 +324,7 @@ pub(crate) fn replay(path: &Path, connector: ConnectorKind) -> Result<(), Fixtur
         expected_request,
         acceptance,
         status,
-    } = decoded.value
+    } = read_fixture(path)?
     else {
         return Err(FixtureError::Refused);
     };
@@ -392,6 +386,16 @@ pub(crate) fn replay(path: &Path, connector: ConnectorKind) -> Result<(), Fixtur
         }
     }
     Ok(())
+}
+
+fn read_fixture(path: &Path) -> Result<FixtureDocument, FixtureError> {
+    let bytes = std::fs::read(path).map_err(|_| FixtureError::Unavailable)?;
+    let mut hook = AuthoredExpressions;
+    Reader::new(path.display().to_string())
+        .with_hook(&mut hook)
+        .decode::<FixtureDocument>(&bytes, &Expect::one(&FORMAT))
+        .map(|decoded| decoded.value)
+        .map_err(|report| FixtureError::Diagnostics(report.into_diagnostics()))
 }
 
 fn matches_expected<T: serde::Serialize>(actual: &T, expected: Value) -> Result<(), FixtureError> {
@@ -462,20 +466,101 @@ status:
             ),
         )
         .unwrap();
-        assert_eq!(
-            replay(file.path(), ConnectorKind::MifosPhEeLegacyV1),
-            Err(FixtureError::Refused)
-        );
+        let diagnostics = diagnostic_error(replay(file.path(), ConnectorKind::MifosPhEeLegacyV1));
+        let unknown = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.unknown-key")
+            .unwrap();
+        assert_eq!(unknown.artifact.as_deref(), Some(KIND));
+        assert_eq!(unknown.path, "/secret");
         std::fs::write(file.path(), COLLECTION).unwrap();
         assert_eq!(
             replay(file.path(), ConnectorKind::SimulatorP2gV1),
             Err(FixtureError::Refused)
         );
         std::fs::write(file.path(), COLLECTION.replace("type: compiled\n", "")).unwrap();
-        assert_eq!(
-            replay(file.path(), ConnectorKind::MifosPhEeLegacyV1),
-            Err(FixtureError::Refused)
-        );
+        let diagnostics = diagnostic_error(replay(file.path(), ConnectorKind::MifosPhEeLegacyV1));
+        let missing_type = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.missing-key")
+            .unwrap();
+        assert_eq!(missing_type.artifact.as_deref(), Some(KIND));
+        assert_eq!(missing_type.path, "");
+        assert!(missing_type.message.contains("`type`"));
+    }
+
+    #[test]
+    fn fixture_type_reports_malformed_tags_at_their_source() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        for (value, code, column) in [
+            ("", "config.null-value", 1),
+            (" null", "config.null-value", 7),
+            (" true", "config.invalid-type", 7),
+            (" 42", "config.invalid-type", 7),
+            (" 3.14", "config.invalid-type", 7),
+        ] {
+            let fixture = COLLECTION.replace("type: compiled", &format!("type:{value}"));
+            std::fs::write(file.path(), fixture).unwrap();
+            let diagnostics = diagnostic_error(read_fixture(file.path()));
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == code && diagnostic.path == "/type")
+                .unwrap();
+            assert_eq!(diagnostic.artifact.as_deref(), Some(KIND));
+            let source = diagnostic.source.as_ref().unwrap();
+            assert_eq!(source.file, file.path().display().to_string());
+            assert_eq!(source.line, Some(3));
+            assert_eq!(source.column, Some(column));
+        }
+    }
+
+    #[test]
+    fn both_fixture_variants_preserve_authored_reader_artifact_and_source_locations() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        for fixture_type in ["compiled", "mapped"] {
+            let substituted = format!(
+                "apiVersion: {VERSION}\nkind: {KIND}\ntype: {fixture_type}\ndirection: ${{DIRECTION}}\n"
+            );
+            std::fs::write(file.path(), substituted).unwrap();
+            let diagnostics = diagnostic_error(read_fixture(file.path()));
+            let substitution = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.substitution-not-allowed")
+                .unwrap();
+            assert_eq!(substitution.artifact.as_deref(), Some(KIND));
+            assert_eq!(substitution.path, "/direction");
+            let substitution_source = substitution.source.as_ref().unwrap();
+            assert_eq!(substitution_source.file, file.path().display().to_string());
+            assert_eq!(substitution_source.line, Some(4));
+            assert_eq!(substitution_source.column, Some(12));
+
+            let unknown_member = match fixture_type {
+                "compiled" => format!(
+                    "apiVersion: {VERSION}\nkind: {KIND}\ntype: compiled\nconnectorProfile: profile\ndirection: p2g-collection\ncommand: {{}}\nexpectedRequest: {{}}\nacceptance:\n  response: {{httpStatus: 200, body: {{}}}}\n  expected: {{}}\nstatus:\n  response: {{httpStatus: 200, body: {{}}}}\n  expected: {{}}\nunexpected: true\n"
+                ),
+                "mapped" => format!(
+                    "apiVersion: {VERSION}\nkind: {KIND}\ntype: mapped\ndirection: g2p-disbursement\nintent: {{}}\nsettings: {{}}\nsubmit:\n  expectedRequest: {{}}\n  response: {{status: 200, bodyJson: '{{}}'}}\n  expected: {{}}\nstatus:\n  expectedRequest: {{}}\n  response: {{status: 200, bodyJson: '{{}}'}}\n  expected: {{}}\nunexpected: true\n"
+                ),
+                _ => unreachable!(),
+            };
+            let unexpected_line = unknown_member
+                .lines()
+                .position(|line| line == "unexpected: true")
+                .unwrap()
+                + 1;
+            std::fs::write(file.path(), unknown_member).unwrap();
+            let diagnostics = diagnostic_error(read_fixture(file.path()));
+            let unknown = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "config.unknown-key")
+                .unwrap();
+            assert_eq!(unknown.artifact.as_deref(), Some(KIND));
+            assert_eq!(unknown.path, "/unexpected");
+            let unknown_source = unknown.source.as_ref().unwrap();
+            assert_eq!(unknown_source.file, file.path().display().to_string());
+            assert_eq!(unknown_source.line, Some(unexpected_line));
+            assert_eq!(unknown_source.column, Some(1));
+        }
     }
 
     #[test]
@@ -530,10 +615,16 @@ fn status_response(intent, settings, acceptance, response) {
                 fixture.replacen("status: 202", &format!("status: {invalid_status}"), 1),
             )
             .unwrap();
-            assert_eq!(
-                replay_mapped(&fixture_path, &pack_path, &parsed, pack.as_bytes()),
-                Err(FixtureError::Refused)
-            );
+            let diagnostics = diagnostic_error(replay_mapped(
+                &fixture_path,
+                &pack_path,
+                &parsed,
+                pack.as_bytes(),
+            ));
+            assert!(diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "config.out-of-range"
+                    && diagnostic.path == "/submit/response/status"
+            }));
         }
         std::fs::write(
             &fixture_path,
@@ -552,10 +643,16 @@ fn status_response(intent, settings, acceptance, response) {
             ),
         )
         .unwrap();
-        assert_eq!(
-            replay_mapped(&fixture_path, &pack_path, &parsed, pack.as_bytes()),
-            Err(FixtureError::Refused)
-        );
+        let diagnostics = diagnostic_error(replay_mapped(
+            &fixture_path,
+            &pack_path,
+            &parsed,
+            pack.as_bytes(),
+        ));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "config.invalid-value"
+                && diagnostic.path == "/status/acceptance/references/Transfer.ID"
+        }));
         std::fs::write(
             scripts.join("provider.rhai"),
             format!("{script}\n// changed"),
@@ -595,5 +692,16 @@ fn status_response(intent, settings, acceptance, response) {
             canonical_pack_root(bare).unwrap(),
             std::fs::canonicalize(".").unwrap()
         );
+    }
+
+    fn diagnostic_error<T>(
+        result: Result<T, FixtureError>,
+    ) -> Vec<registry_platform_yaml::Diagnostic> {
+        match result {
+            Err(FixtureError::Diagnostics(diagnostics)) => diagnostics,
+            Ok(_) | Err(FixtureError::Unavailable | FixtureError::Refused) => {
+                panic!("expected authored reader diagnostics")
+            }
+        }
     }
 }
