@@ -3974,16 +3974,12 @@ exit 1
     #[cfg(unix)]
     #[test]
     fn version_mismatch_leaves_no_destination() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temporary = crate::canonical_tempdir();
         let bregctl = temporary.path().join("bregctl");
-        fs::write(
+        crate::write_executable_stub(
             &bregctl,
             "#!/bin/sh\nprintf '%s\\n' 'bregctl incompatible-release-canary'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let project = temporary.path().join("review");
         let error = add(
             &project,
