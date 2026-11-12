@@ -12,7 +12,7 @@ fn refuse() {
 #[test]
 fn capture_sees_a_callsite_first_reached_by_an_unsubscribed_thread() {
     let captured = CapturedDiagnosticLogs::default();
-    let dispatch = captured.subscriber();
+    let dispatch = captured.subscriber_with_max_level(tracing::Level::DEBUG);
 
     std::thread::spawn(refuse)
         .join()
@@ -20,4 +20,6 @@ fn capture_sees_a_callsite_first_reached_by_an_unsubscribed_thread() {
     tracing::dispatcher::with_default(&dispatch, refuse);
 
     assert_eq!(captured.text().lines().count(), 1, "{}", captured.text());
+    tracing::dispatcher::with_default(&dispatch, || tracing::debug!("debug capture"));
+    assert!(captured.text().contains("\"level\":\"DEBUG\""));
 }
