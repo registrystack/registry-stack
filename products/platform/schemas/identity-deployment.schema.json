@@ -13,6 +13,7 @@
           ]
         },
         "grants": {
+          "description": "Profiles granted to the application. A grant outside `product` also\nlets an eligible signed-in user's matching profile reach that product;\nit does not change the default audience.",
           "items": {
             "$ref": "#/$defs/Grant"
           },
@@ -39,7 +40,7 @@
           "type": "string"
         },
         "product": {
-          "description": "The `product` whose audience the application's tokens carry.",
+          "description": "The `product` whose audience tokens carry by default. A request still\nproduces a token for one audience.",
           "type": "string"
         },
         "redirectUris": {

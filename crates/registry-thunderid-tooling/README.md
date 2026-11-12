@@ -235,9 +235,12 @@ resolves no secret.
   issuer identically.
 - The deployment file states the organization unit, each client's public JWKS
   file and grants, browser applications, users with explicit claims, extension
-  user types, and a `secret:env/NAME` reference for every secret. A grant to a
-  client a product does not admit, an unknown claim, or a JWK carrying `d`,
-  `p`, `q`, `dp`, `dq` or `qi` is refused.
+  user types, and a `secret:env/NAME` reference for every secret. A browser
+  application's `product` remains its one default token audience. Its explicit
+  grants may authorize the same admitted client for other products, and a user
+  reaches such a product only when an eligible application grants the user's
+  exact profile there. A grant to a client a product does not admit, an unknown
+  claim, or a JWK carrying `d`, `p`, `q`, `dp`, `dq` or `qi` is refused.
 - The output directory must not exist. It holds `deployment.yaml` (server
   members to merge into the environment's own file), `resources/resources.yaml`
   (one multi-document file), `registry-schema/agent-type.yaml` and

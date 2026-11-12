@@ -142,15 +142,16 @@ fn admits_any(product: &ProductFacts, profile: &AccessProfile, clients: &[String
         })
 }
 
-/// Resolve grants against the merged facts. `clients` are the client ids
-/// whose tokens reach the product for this principal: the client itself, or
-/// for a user every browser application that signs them in.
+/// Resolve grants against the merged facts. `reaching` returns the client ids
+/// whose tokens reach one product profile for this principal: the client
+/// itself, or for a user every browser application authorized to carry that
+/// profile and sign them in.
 fn resolve_grants<'a>(
     findings: &mut Findings<'_>,
     facts: &'a MergedFacts,
     pointer: &str,
     grants: &'a [Grant],
-    reaching: &dyn Fn(&str) -> Vec<String>,
+    reaching: &dyn Fn(&str, &str) -> Vec<String>,
 ) -> Granted<'a> {
     let mut resolved = Vec::new();
     for (index, grant) in grants.iter().enumerate() {
@@ -174,7 +175,7 @@ fn resolve_grants<'a>(
                 );
                 continue;
             };
-            let reachable = reaching(product);
+            let reachable = reaching(product, &profile.id);
             if !reachable.iter().any(|client| {
                 product_facts.allowed_clients.admits(client) && requester_allows(profile, client)
             }) {
@@ -182,7 +183,7 @@ fn resolve_grants<'a>(
                     &format!("{at}/accessProfiles/{position}"),
                     "identity.deployment.client-not-admitted",
                     "the product does not admit the client that would present this profile",
-                    "Admit the client in the product's configuration and regenerate its facts, list the user's type on a browser application of the product, or remove the grant.",
+                    "Admit the client in the product's configuration and regenerate its facts. For a user, list its type on a browser application and grant that application the same profile outside its default product. Otherwise remove the grant.",
                 );
                 continue;
             }
@@ -493,9 +494,10 @@ fn settle_actor_kind(
 /// A profile none of the principal's `reaching` clients can present is
 /// never selected for it, whatever its claims: Messaging resolves a profile
 /// by client id before it reads a scope, so two profiles may require the
-/// same scopes for disjoint requester clients. A user reaches a product
-/// through any of that product's browser applications that sign in the
-/// user's type, as for its grants.
+/// same scopes for disjoint requester clients. A user's native client reaches
+/// every profile the product admits once an eligible browser application names
+/// it as the default or carries any grant for it. The API sees the client and
+/// claims, not which declaration made that application eligible.
 ///
 /// That skip is safe only while every product that selects by claims states a
 /// selector on each such profile. Evidence does: it requires at least one
@@ -1007,16 +1009,38 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             .map(|server| server.id.clone())
     };
 
-    // A user reaches a product only through that product's browser
-    // applications that sign in the user's type: every application admits
-    // `RegistryPerson`, and an extension type only where its `userTypes`
-    // list it.
-    let user_reaching = |user_type: Option<&str>, product: &str| {
+    // A user reaches the application's default product as before. A different
+    // product is reachable only where the application explicitly grants that
+    // same profile. In both cases the application must sign in the user's
+    // type: every application admits `RegistryPerson`, and an extension type
+    // only where its `userTypes` lists it.
+    let user_reaching = |user_type: Option<&str>, product: &str, profile: &str| {
         deployment
             .browser_apps
             .iter()
             .filter(|app| {
-                app.product == product
+                let product_reachable = app.product == product
+                    || app.grants.iter().any(|grant| {
+                        grant.product == product
+                            && grant
+                                .access_profiles
+                                .iter()
+                                .any(|granted| granted == profile)
+                    });
+                product_reachable
+                    && user_type.is_none_or(|wanted| app.user_types.iter().any(|id| id == wanted))
+            })
+            .map(|app| app.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let user_native_reaching = |user_type: Option<&str>, product: &str| {
+        deployment
+            .browser_apps
+            .iter()
+            .filter(|app| {
+                let product_reachable = app.product == product
+                    || app.grants.iter().any(|grant| grant.product == product);
+                product_reachable
                     && user_type.is_none_or(|wanted| app.user_types.iter().any(|id| id == wanted))
             })
             .map(|app| app.id.clone())
@@ -1036,7 +1060,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
 
     for (index, client) in deployment.clients.iter().enumerate() {
         let pointer = format!("/clients/{index}");
-        let reaching = |_: &str| vec![client.id.clone()];
+        let reaching = |_: &str, _: &str| vec![client.id.clone()];
         let found_before = findings.found.len();
         let granted = resolve_grants(&mut findings, &facts, &pointer, &client.grants, &reaching);
         let resolved = findings.found.len() == found_before;
@@ -1074,6 +1098,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             check_refused_claims(&mut findings, &pointer, &granted, &attributes);
         }
         if resolved && settled {
+            let selection_reaching = |_: &str| vec![client.id.clone()];
             check_selection(
                 &mut findings,
                 &facts,
@@ -1081,7 +1106,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 &attributes,
                 &granted,
                 false,
-                &reaching,
+                &selection_reaching,
             );
             check_scope_claims(&mut findings, &facts, &pointer, &attributes, &granted);
         }
@@ -1173,7 +1198,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
 
     for (index, app) in deployment.browser_apps.iter().enumerate() {
         let pointer = format!("/browserApps/{index}");
-        let reaching = |_: &str| vec![app.id.clone()];
+        let reaching = |_: &str, _: &str| vec![app.id.clone()];
         let granted = resolve_grants(&mut findings, &facts, &pointer, &app.grants, &reaching);
         if granted
             .iter()
@@ -1206,15 +1231,22 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         }
         // Every user is given registry_actor_kind when a product reads it
         // (BReg refuses a non-delegated token without it), and the purpose
-        // their grants give when the application's product requires one
-        // (BReg refuses a token for such a profile without it). The
+        // their grants give when any product reachable through the application
+        // requires one (BReg refuses a token for such a profile without it). The
         // application's tokens carry both as a machine client's do, listed
         // or not.
-        let reads_purpose = reads_purpose(product)
+        let default_reads_purpose = reads_purpose(product)
             && product
                 .access_profiles
                 .values()
                 .any(|profile| profile.exchange.is_none() && !profile.purposes.is_empty());
+        let granted_reads_purpose = granted.iter().any(|(granted_product, profile)| {
+            *granted_product != app.product
+                && profile.exchange.is_none()
+                && !profile.purposes.is_empty()
+                && reads_purpose(&facts.products[*granted_product])
+        });
+        let projects_purpose = default_reads_purpose || granted_reads_purpose;
         let required = [
             (
                 ACTOR_KIND,
@@ -1225,9 +1257,9 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             ),
             (
                 PURPOSE,
-                reads_purpose,
+                projects_purpose,
                 "identity.deployment.purpose-not-projected",
-                "the application lists the most token attributes it may carry, so its tokens cannot also carry registry_purpose, which its product requires",
+                "the application lists the most token attributes it may carry, so its tokens cannot also carry registry_purpose, which a reachable product requires",
                 "List registry_purpose among the token attributes, or remove one so the generator can add it.",
             ),
         ];
@@ -1282,7 +1314,9 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
 
     for (index, user) in deployment.users.iter().enumerate() {
         let pointer = format!("/users/{index}");
-        let reaching = |product: &str| user_reaching(user.user_type.as_deref(), product);
+        let reaching = |product: &str, profile: &str| {
+            user_reaching(user.user_type.as_deref(), product, profile)
+        };
         let found_before = findings.found.len();
         let granted = resolve_grants(&mut findings, &facts, &pointer, &user.grants, &reaching);
         let resolved = findings.found.len() == found_before;
@@ -1329,7 +1363,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             if profile.exchange.is_some() {
                 continue;
             }
-            for app in user_reaching(user.user_type.as_deref(), product) {
+            for app in user_reaching(user.user_type.as_deref(), product, &profile.id) {
                 projected_requirements
                     .entry(app)
                     .or_default()
@@ -1337,6 +1371,8 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             }
         }
         if resolved {
+            let selection_reaching =
+                |product: &str| user_native_reaching(user.user_type.as_deref(), product);
             check_selection(
                 &mut findings,
                 &facts,
@@ -1344,7 +1380,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 &user_claims,
                 &granted,
                 true,
-                &reaching,
+                &selection_reaching,
             );
             check_scope_claims(&mut findings, &facts, &pointer, &user_claims, &granted);
         }

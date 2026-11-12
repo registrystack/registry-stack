@@ -107,11 +107,15 @@ pub struct BrowserApp {
     pub origin: String,
     #[serde(deserialize_with = "set")]
     pub redirect_uris: Vec<String>,
-    /// The `product` whose audience the application's tokens carry.
+    /// The `product` whose audience tokens carry by default. A request still
+    /// produces a token for one audience.
     pub product: String,
     /// Claims the application's tokens carry from the signed-in user.
     #[serde(deserialize_with = "set")]
     pub token_attributes: Vec<String>,
+    /// Profiles granted to the application. A grant outside `product` also
+    /// lets an eligible signed-in user's matching profile reach that product;
+    /// it does not change the default audience.
     pub grants: Vec<Grant>,
     /// Extension user types (ids of `userTypes`) that may sign in, beside
     /// the generated `RegistryPerson`.

@@ -620,6 +620,68 @@ fn of_type<'a>(documents: &'a [serde_json::Value], kind: &str) -> Vec<&'a serde_
         .collect()
 }
 
+fn role_permissions(
+    documents: &[serde_json::Value],
+    role_name: &str,
+    audience: &str,
+) -> Vec<String> {
+    let server = of_type(documents, "resource_server")
+        .into_iter()
+        .find(|server| server["identifier"] == audience)
+        .expect("resource server");
+    let role = of_type(documents, "role")
+        .into_iter()
+        .find(|role| role["name"] == role_name)
+        .expect("role");
+    role["permissions"]
+        .as_array()
+        .expect("role permissions")
+        .iter()
+        .find(|permission| permission["resourceServerId"] == server["id"])
+        .expect("resource permission")["permissions"]
+        .as_array()
+        .expect("permission names")
+        .iter()
+        .map(|permission| permission.as_str().expect("permission").to_owned())
+        .collect()
+}
+
+const CASEWORK_BROWSER: &str = "apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: casework\nissuer: https://id.registry.example\naudience: urn:casework:example\nallowedClients:\n  - staff-portal\nclaims:\n  registry_actor_kind: string\naccessProfiles:\n  - id: review\n    scopes: [casework:review]\n    actorKind: human\n  - id: intake\n    scopes: [casework:intake]\n    actorKind: human\n";
+
+fn cross_resource_browser_case(app_profile: &str) -> Case {
+    let mut case = case();
+    case.facts
+        .push(("casework".into(), CASEWORK_BROWSER.into()));
+    case.deployment = case
+        .deployment
+        .replace(
+            "      - product: breg\n        accessProfiles: [case-read]\nusers:\n",
+            &format!(
+                "      - product: breg\n        accessProfiles: [case-read]\n      - product: casework\n        accessProfiles: [{app_profile}]\nusers:\n"
+            ),
+        )
+        .replace(
+            "      - product: breg\n        accessProfiles: [case-read, case-write]\n  - id: farmer-one\n",
+            "      - product: breg\n        accessProfiles: [case-read, case-write]\n      - product: casework\n        accessProfiles: [review]\n  - id: farmer-one\n",
+        );
+    case
+}
+
+fn reverse_cross_resource_browser_case() -> Case {
+    let mut case = cross_resource_browser_case("review");
+    case.deployment = case
+        .deployment
+        .replace(
+            "    redirectUris: [https://staff.registry.example/auth/callback]\n    product: breg\n",
+            "    redirectUris: [https://staff.registry.example/auth/callback]\n    product: casework\n",
+        )
+        .replace(
+            "        accessProfiles: [case-read, case-write]\n      - product: casework",
+            "        accessProfiles: [case-read]\n      - product: casework",
+        );
+    case
+}
+
 #[test]
 fn machine_clients_carry_public_keys_roles_claims_and_the_crates_ids() {
     let generated = case().run().unwrap();
@@ -731,6 +793,108 @@ fn browser_apps_users_and_extension_types_render_without_secrets_or_a_logo_by_de
     assert_eq!(farmer["credentials"]["password"], "{{.FARMER_ONE_PASSWORD}}");
     let organization = of_type(&documents, "organization_unit");
     assert_eq!(organization[0]["handle"], "registry");
+}
+
+#[test]
+fn one_browser_app_carries_default_and_explicit_cross_resource_grants() {
+    let generated = cross_resource_browser_case("review")
+        .run()
+        .expect("the admitted browser app reaches both products");
+    let documents = resources(&generated);
+    let app = of_type(&documents, "application")[0];
+    assert_eq!(
+        app["inboundAuthConfig"][0]["config"]["token"]["accessToken"]["defaultAudience"],
+        "urn:breg:example",
+        "BrowserApp.product remains the token's one default audience"
+    );
+    assert_eq!(
+        role_permissions(&documents, "Browser staff-portal", "urn:breg:example"),
+        ["records:get", "records:search"]
+    );
+    assert_eq!(
+        role_permissions(
+            &documents,
+            "Browser staff-portal",
+            "urn:casework:example"
+        ),
+        ["casework:review"]
+    );
+    assert_eq!(
+        role_permissions(&documents, "User officer-one", "urn:breg:example"),
+        ["records:get", "records:patch", "records:search"],
+        "the default product still lets a user's grant exceed the app's own profile"
+    );
+    assert_eq!(
+        role_permissions(&documents, "User officer-one", "urn:casework:example"),
+        ["casework:review"]
+    );
+}
+
+#[test]
+fn a_cross_resource_user_grant_requires_the_apps_same_access_profile() {
+    assert_eq!(
+        cross_resource_browser_case("intake").refusal(),
+        ["identity.deployment.client-not-admitted"]
+    );
+}
+
+#[test]
+fn a_cross_resource_apps_client_checks_every_profile_selected_by_user_claims() {
+    let mut case = cross_resource_browser_case("review");
+    case.facts[2].1 = case.facts[2]
+        .1
+        .replace(
+            "  registry_actor_kind: string\n",
+            "  registry_actor_kind: string\n  casework_role: string\n",
+        )
+        .replace(
+            "    actorKind: human\n  - id: intake",
+            "    actorKind: human\n    selectedBy: {casework_role: [staff]}\n  - id: intake",
+        )
+        .replace(
+            "    scopes: [casework:intake]\n    actorKind: human\n",
+            "    scopes: [casework:intake]\n    actorKind: human\n    selectedBy: {casework_role: [staff]}\n",
+        );
+    case.deployment = case
+        .deployment
+        .replace(
+            "tokenAttributes: [registry_actor_kind, registry_role]",
+            "tokenAttributes: [registry_actor_kind, registry_role, casework_role]",
+        )
+        .replace(
+            "      registry_role: officer\n",
+            "      registry_role: officer\n      casework_role: staff\n",
+        );
+    assert_eq!(
+        case.refusal(),
+        ["identity.deployment.claims-select-ungranted-profile"]
+    );
+}
+
+#[test]
+fn a_non_default_purpose_grant_is_projected_without_changing_the_default_audience() {
+    let generated = reverse_cross_resource_browser_case()
+        .run()
+        .expect("the reverse cross-resource deployment generates");
+    let documents = resources(&generated);
+    let app = of_type(&documents, "application")[0];
+    let token = &app["inboundAuthConfig"][0]["config"]["token"];
+    assert_eq!(
+        token["accessToken"]["defaultAudience"],
+        "urn:casework:example"
+    );
+    for projection in [
+        &token["accessToken"]["userConfig"]["attributes"],
+        &token["idToken"]["userAttributes"],
+    ] {
+        assert!(
+            projection
+                .as_array()
+                .expect("projected attributes")
+                .contains(&serde_json::json!("registry_purpose")),
+            "the BReg grant's purpose must be projected"
+        );
+    }
 }
 
 #[test]
