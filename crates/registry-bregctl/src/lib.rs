@@ -15282,13 +15282,19 @@ fn write_failure(
     let exit = if report
         .diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.code.ends_with(".unavailable"))
+        .any(tool_diagnostic_is_operational)
     {
         OPERATIONAL_FAILURE_EXIT
     } else {
         DOMAIN_REFUSAL_EXIT
     };
     write_failure_with_exit(report, format, stdout, stderr, exit)
+}
+
+fn tool_diagnostic_is_operational(diagnostic: &ToolDiagnostic) -> bool {
+    diagnostic.code.ends_with(".unavailable")
+        || (diagnostic.artifact == DiagnosticArtifact::SchemaTestDatabase
+            && diagnostic.suggested_action == SuggestedAction::PrepareSchemaTestDatabase)
 }
 
 fn write_failure_with_exit(
@@ -15476,6 +15482,71 @@ mod tests {
             value["diagnostics"][0]["code"],
             "status.database.unavailable"
         );
+    }
+
+    #[test]
+    fn schema_test_connection_causes_keep_their_result_class() {
+        use registry_breg::postgres::DatabaseConnectionCause;
+
+        for (cause, code, exit, status) in [
+            (
+                DatabaseConnectionCause::Unreachable,
+                "test.database.unreachable",
+                OPERATIONAL_FAILURE_EXIT,
+                "operational-failure",
+            ),
+            (
+                DatabaseConnectionCause::Capacity,
+                "test.database.capacity-exhausted",
+                OPERATIONAL_FAILURE_EXIT,
+                "operational-failure",
+            ),
+            (
+                DatabaseConnectionCause::Tls,
+                "test.database.tls-refused",
+                OPERATIONAL_FAILURE_EXIT,
+                "operational-failure",
+            ),
+            (
+                DatabaseConnectionCause::Authentication,
+                "test.database.authentication-refused",
+                OPERATIONAL_FAILURE_EXIT,
+                "operational-failure",
+            ),
+            (
+                DatabaseConnectionCause::DatabaseMissing,
+                "test.database.missing",
+                OPERATIONAL_FAILURE_EXIT,
+                "operational-failure",
+            ),
+            (
+                DatabaseConnectionCause::Timeout,
+                "test.database.timeout",
+                OPERATIONAL_FAILURE_EXIT,
+                "operational-failure",
+            ),
+            (
+                DatabaseConnectionCause::Configuration,
+                "test.database.configuration-refused",
+                DOMAIN_REFUSAL_EXIT,
+                "domain-refusal",
+            ),
+            (
+                DatabaseConnectionCause::Secret,
+                "test.database.secret-refused",
+                DOMAIN_REFUSAL_EXIT,
+                "domain-refusal",
+            ),
+        ] {
+            let report = schema_test_database_connection_failure(cause);
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let actual_exit = write_failure(&report, OutputFormat::Json, &mut stdout, &mut stderr);
+            assert_eq!(actual_exit, ExitCode::from(exit), "{code}");
+            assert!(stderr.is_empty(), "{code}");
+            let value: Value = serde_json::from_slice(&stdout).unwrap();
+            assert_eq!(value["diagnostics"][0]["code"], code);
+            assert_eq!(value["status"], status, "{code}");
+        }
     }
 
     #[test]
