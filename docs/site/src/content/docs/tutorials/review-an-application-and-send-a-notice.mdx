@@ -31,12 +31,16 @@ approval email from Registry Messaging. Coordinator does the rest, even across a
 
 ## Prepare verified release assets
 
-Choose a [published release](https://github.com/registrystack/registry-stack/releases)
-from v0.44.0 onward. Download its source archive and follow `release/VERIFY.md`
-at that tag to verify the manifest and asset checksums. Keep the verified
-manifest, `SHA256SUMS`, the unified Python wheel for your platform, and the six
-native assets named below in one directory. Extract the source archive in a
-fresh directory and work from its root.
+Coordinator release assets are available from v0.44.0. This exercise passed on
+macOS arm64 using the published v0.45.0 assets and the release's Linux amd64
+Messaging image. The v0.46.0 source archive's session helper exits before
+Coordinator starts.
+
+Download the source archive for your chosen [release](https://github.com/registrystack/registry-stack/releases)
+and follow `release/VERIFY.md` at that tag to verify the manifest and asset
+checksums. Keep the verified manifest, `SHA256SUMS`, the unified Python wheel
+for your platform, and the six native assets named below in one directory.
+Extract the source archive in a fresh directory and work from its root.
 
 :::note[Original candidate evaluation]
 The first run used v0.44.0 candidate tools and wheel on macOS arm64 under
