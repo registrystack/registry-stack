@@ -208,8 +208,8 @@ updates:
         update-types:
           - major
     ignore:
-      # astro-mermaid accepts only mermaid 10 and 11, and mermaid 12 re-lays
-      # out existing diagrams (#1697).
+      # Mermaid 12 re-lays out existing diagrams (#1697); review their output
+      # before allowing this major update.
       - dependency-name: "mermaid"
         update-types:
           - "version-update:semver-major"

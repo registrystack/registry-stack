@@ -101,17 +101,14 @@ RUNTIME_ROOT_NORMALIZATION = (
 )
 DEBIAN_PREPARATION = (
     "docker.io/library/debian:trixie-slim@sha256:"
-    "a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f"
+    "a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2"
 )
-# This index carries libssl3t64 3.5.7-1~deb13u2 and zlib1g
-# 1:1.3.dfsg+really1.3.1-1+b1 on both supported Linux architectures. Earlier
-# bytes fail the release policy on fixable OpenSSL CVEs, and these fail it on
-# fixable OpenSSL and zlib CVEs. The runtime package overlay above replaces both
-# packages with the fixed releases; once an index carries a fixed release itself,
-# that package can leave the overlay.
+# The runtime package overlay above pins the reviewed Debian security releases
+# independently of the Distroless index. Remove a package from the overlay only
+# after the replacement index itself passes the release advisory policy.
 DISTROLESS_RUNTIME = (
     "gcr.io/distroless/cc-debian13:nonroot@sha256:"
-    "e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2"
+    "cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab"
 )
 DOCKERFILE_FRONTEND = (
     "docker/dockerfile:1.7@sha256:"
