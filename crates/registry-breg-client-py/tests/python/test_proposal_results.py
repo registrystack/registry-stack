@@ -444,6 +444,50 @@ class ProposalResultTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, 'invalid-request')
         self.assertNotIn('private-canary', str(raised.exception))
 
+    def test_review_progress_is_an_explicit_status_projection(self):
+        self.value = document()
+        self.value['state'] = 'submitted'
+        del self.value['application']
+        for name, suffix, operation in [('reviewStatus', 'review-status', 'get-review-status'), ('reviewContext', 'review-context', 'get-review-context')]:
+            self.value['links'][name] = {'method': 'GET', 'path': '/v1/proposals/' + ID + '/' + suffix,
+                                         'accessProfile': 'reader', 'operation': operation}
+        prior = self.client.get_proposal(self.binding, ID)
+        progress = {'id': ID, 'actionId': 'correct', 'actionRevision': DIGEST, 'submissionVersion': 2, 'revision': 8,
+                    'effectDigest': DIGEST, 'subject': {'source': 'directory', 'subjectType': 'proposal', 'id': ID,
+                                                       'version': '2', 'digest': DIGEST},
+                    'context': {'reference': 'breg:directory:correct:' + ID + ':2'}, 'reviewable': True,
+                    'authority': 'review-provider', 'policy': {'id': 'review', 'version': '1', 'digest': DIGEST},
+                    'requestId': ID, 'handoff': {'state': 'accepted'}, 'result': {'state': 'pending'},
+                    'progressCode': 'awaiting-assignment'}
+        self.value = copy.deepcopy(progress)
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.read_proposal_review_status(prior)
+        observed = self.client.read_proposal_review_status_with_progress(prior)['value']
+        self.assertEqual(observed['progressCode'], 'awaiting-assignment')
+        self.assertEqual(self.requests[-1][0], '/tenant/v1/proposals/' + ID + '/review-status?accessProfile=reader&include=progress')
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.read_proposal_review_context(prior)
+
+        self.value = copy.deepcopy(progress)
+        del self.value['progressCode']
+        self.assertNotIn('progressCode', self.client.read_proposal_review_status_with_progress(prior)['value'])
+        invalid = []
+        for field, value in [('reviewable', False), ('handoff', {'state': 'failed', 'reason': 'remote-refused'}),
+                             ('result', {'state': 'approved', 'resultId': TARGET,
+                                         'completedAt': '2026-10-01T00:00:00.000000Z',
+                                         'availableUntil': '2026-10-02T00:00:00.000000Z'}),
+                             ('progressCode', 'Invalid Progress')]:
+            candidate = copy.deepcopy(progress)
+            candidate[field] = value
+            invalid.append(candidate)
+        missing_request = copy.deepcopy(progress)
+        del missing_request['requestId']
+        invalid.append(missing_request)
+        for candidate in invalid:
+            self.value = candidate
+            with self.subTest(candidate=candidate), self.assertRaises(BaseRegistryClientError):
+                self.client.read_proposal_review_status_with_progress(prior)
+
     def test_non_rebase_transitions_and_attachment_writes_preserve_action_revision(self):
         successor = 'sha256:' + 'b' * 64
         self.value = document()

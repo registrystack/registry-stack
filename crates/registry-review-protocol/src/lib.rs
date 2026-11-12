@@ -127,6 +127,82 @@ impl<'de> Deserialize<'de> for ContentDigest {
 
 pub type SubmissionDigest = ContentDigest;
 
+/// A producer-visible, policy-authored description of review progress.
+///
+/// The code is deliberately opaque to the shared protocol. Providers map it
+/// to applicant language without exposing internal stage identifiers.
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ReviewProgressCode(String);
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ReviewProgressCode {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ReviewProgressCode".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type":"string",
+            "pattern":"^[a-z][a-z0-9_-]{0,63}$",
+            "minLength":1,
+            "maxLength":64
+        })
+    }
+}
+
+impl ReviewProgressCode {
+    pub fn parse(value: &str) -> Result<Self, ProtocolError> {
+        let mut bytes = value.bytes();
+        if value.len() > 64
+            || !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+            || bytes.any(|byte| {
+                !byte.is_ascii_lowercase() && !byte.is_ascii_digit() && byte != b'_' && byte != b'-'
+            })
+        {
+            return Err(ProtocolError::ProgressCode);
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ReviewProgressCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ReviewProgressCode")
+            .field(&self.0)
+            .finish()
+    }
+}
+
+impl fmt::Display for ReviewProgressCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ReviewProgressCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ReviewProgressCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -414,6 +490,8 @@ pub struct ReviewRequestView {
     pub lifecycle: ReviewRequestLifecycle,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_code: Option<ReviewProgressCode>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -654,6 +732,8 @@ pub enum ProtocolError {
     PolicySelection,
     #[error("digest must be a lowercase sha256 digest")]
     Digest,
+    #[error("a review progress code must be a lowercase local identifier")]
+    ProgressCode,
     #[error("a required text value is empty, unbounded, or contains controls")]
     Text,
     #[error("the review context exceeds the protocol bound")]
@@ -764,6 +844,66 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<PolicySelection>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn progress_codes_follow_the_shared_local_identifier_grammar() {
+        for accepted in [
+            "a",
+            "reviewing",
+            "identity-check_2",
+            &format!("a{}", "b".repeat(63)),
+        ] {
+            let code = ReviewProgressCode::parse(accepted).expect("valid progress code");
+            assert_eq!(code.as_str(), accepted);
+            assert_eq!(serde_json::to_value(&code).unwrap(), json!(accepted));
+            assert_eq!(
+                serde_json::from_value::<ReviewProgressCode>(json!(accepted)).unwrap(),
+                code
+            );
+        }
+        for refused in [
+            "".to_owned(),
+            "First".to_owned(),
+            "1st".to_owned(),
+            "_first".to_owned(),
+            "first.review".to_owned(),
+            "first review".to_owned(),
+            format!("a{}", "b".repeat(64)),
+        ] {
+            assert_eq!(
+                ReviewProgressCode::parse(&refused),
+                Err(ProtocolError::ProgressCode),
+                "{refused}"
+            );
+            assert!(serde_json::from_value::<ReviewProgressCode>(json!(refused)).is_err());
+        }
+    }
+
+    #[test]
+    fn request_view_omits_absent_progress_for_wire_compatibility() {
+        let view = ReviewRequestView {
+            request_id: Uuid::from_u128(7),
+            subject: request().subject,
+            policy: PolicyBinding {
+                id: "registry-correction".to_owned(),
+                version: "1".to_owned(),
+                digest: ContentDigest::for_bytes(b"policy"),
+            },
+            submission_digest: ContentDigest::for_bytes(b"submission"),
+            requester_reference: "proposal-7".to_owned(),
+            lifecycle: ReviewRequestLifecycle::Reviewing,
+            active_stage: Some("legal".to_owned()),
+            progress_code: None,
+            created_at: Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 9, 19, 0, 0, 1).unwrap(),
+        };
+        let value = serde_json::to_value(&view).unwrap();
+        assert!(value.get("progressCode").is_none());
+        assert_eq!(
+            serde_json::from_value::<ReviewRequestView>(value).unwrap(),
+            view
+        );
     }
 
     #[test]

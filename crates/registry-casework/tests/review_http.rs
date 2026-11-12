@@ -250,6 +250,9 @@ fn project(issuer: &str) -> CaseworkProject {
                 stages: vec![ReviewStagePolicy {
                     id: "review".to_owned(),
                     label: None,
+                    public_progress_code: Some(
+                        ReviewProgressCode::parse("initial-review").unwrap(),
+                    ),
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
@@ -289,6 +292,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 stages: vec![ReviewStagePolicy {
                     id: "answer".to_owned(),
                     label: None,
+                    public_progress_code: None,
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
@@ -1744,6 +1748,68 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         .expect("pending result response");
     assert_eq!(pending.status(), StatusCode::ACCEPTED);
 
+    let plain_request = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-requests/{}", created.request_id))
+                .header("authorization", format!("Bearer {token}"))
+                .header(REVIEW_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("plain request view"),
+        )
+        .await
+        .expect("plain request response");
+    assert_eq!(plain_request.status(), StatusCode::OK);
+    let plain_request: Value = serde_json::from_slice(
+        &to_bytes(plain_request.into_body(), 32 * 1024)
+            .await
+            .expect("bounded plain request response"),
+    )
+    .expect("plain request JSON");
+    assert!(plain_request.get("progressCode").is_none());
+
+    let progress_request = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}?include=progress",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {token}"))
+                .header(REVIEW_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("progress request view"),
+        )
+        .await
+        .expect("progress request response");
+    assert_eq!(progress_request.status(), StatusCode::OK);
+    let progress_request: Value = serde_json::from_slice(
+        &to_bytes(progress_request.into_body(), 32 * 1024)
+            .await
+            .expect("bounded progress request response"),
+    )
+    .expect("progress request JSON");
+    assert_eq!(progress_request["progressCode"], "initial-review");
+
+    let invalid_projection = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}?include=stage",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {token}"))
+                .header(REVIEW_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("invalid progress option"),
+        )
+        .await
+        .expect("invalid progress response");
+    assert_eq!(invalid_projection.status(), StatusCode::BAD_REQUEST);
+
     let source_scoped = app
         .oneshot(
             Request::builder()
@@ -1757,6 +1823,42 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         .await
         .expect("source-scoped response");
     assert_eq!(source_scoped.status(), StatusCode::BAD_REQUEST);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn producer_progress_omits_an_unmapped_active_stage() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_database(&idp).await;
+    let (accepted, _) = create_answer_task(&app, &database, &idp, "unmapped-progress").await;
+    let producer_token = token(&idp);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}?include=progress",
+                    accepted.request_id
+                ))
+                .header("authorization", format!("Bearer {producer_token}"))
+                .header(REVIEW_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("unmapped progress request"),
+        )
+        .await
+        .expect("unmapped progress response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), 32 * 1024)
+            .await
+            .expect("bounded unmapped progress response"),
+    )
+    .expect("unmapped progress JSON");
+    assert_eq!(response["lifecycle"], "reviewing");
+    assert_eq!(response["activeStage"], "answer");
+    assert!(response.get("progressCode").is_none());
 
     idp.stop().await;
 }

@@ -195,6 +195,33 @@ from submissions whose Action requires no review.
 Refetch status for the intended submission after Revise or Rebase; do not use a
 previous submission's request ID for new work.
 
+To show an applicant where their current submission is in review, set
+`readableReviewProgress: true` on the Action's caller-owned Proposal grant
+that includes `get-review-status`. Have the Review provider declare the codes
+it can release. With Casework, set `publicProgressCode` on the stages that
+should appear to the applicant.
+
+Follow the Proposal's `reviewStatus` link with `include=progress` and the
+applicant's BReg credential. In the SDK, use
+`read_proposal_review_status_with_progress` or
+`readProposalReviewStatusWithProgress`. A successful response can add
+`progressCode`, a local identifier you can map to a translated label.
+BReg checks current Proposal visibility, fetches the code for the exact
+accepted review under its own producer credential, and checks the current
+round again before release. The ordinary read and the Review authority's
+machine status read use the local status projection.
+When the selected grant enables progress, the opt-in response omits the
+Proposal ETag because Casework can advance independently of the Proposal
+revision. Use the ordinary Proposal read for lifecycle conditions.
+
+When the active stage has no code, the handoff is pending, the round has
+ended, or the provider cannot answer promptly with the exact binding, the
+response omits `progressCode`. Render the current handoff and result in that
+case. After a return and resubmission, read status again for the new round.
+Use `progressCode` for display. The terminal result and BReg's application
+state govern any follow-up that depends on a decision or committed change.
+See the [paired example](../casework/examples/canonical-review/README.md#show-review-progress-to-the-applicant).
+
 For an audit investigation, correlate the exact Proposal, Action revision,
 submission version and effect digest with the accepted `requestId` and retained
 `resultId`. Read Casework's request history and Decisions under separate current

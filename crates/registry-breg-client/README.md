@@ -278,7 +278,12 @@ The built-in executor uses its own governed system grant.
 `select_proposals` and `list_proposals` read one bounded page; advance its
 cursor explicitly. `read_proposal_review_status` and
 `read_proposal_review_context` use the Proposal's separately promoted review
-links. `upload_proposal_attachment`, `download_proposal_attachment`, and
+links. `read_proposal_review_status_with_progress` appends the fixed
+`include=progress` query to the verified status link to request the provider's
+optional coarse `progressCode`. Plain status and
+context reads reject that field. A progress code is accepted only while the
+reviewable request has an accepted handoff, a request ID, and a pending current
+result. `upload_proposal_attachment`, `download_proposal_attachment`, and
 `delete_proposal_attachment` use its governed slot links, not record fields.
 Mutation receipts retain the selected slot. Disclosed upload metadata must match
 those exact bytes, media type and length; deletion must not retain a disclosed

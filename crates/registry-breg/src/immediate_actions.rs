@@ -2764,6 +2764,7 @@ fn compile_execution(
                     || !grant.readable_attachments.is_empty()
                     || !grant.writable_attachments.is_empty()
                     || grant.writable_inputs.is_some()
+                    || grant.readable_review_progress
                 {
                     errors.push(Diagnostic::error(
                         "breg.proposal.review-status-authority-invalid",
@@ -2771,6 +2772,20 @@ fn compile_execution(
                         "a named review authority requires a service-only GetReviewStatus grant with no Record targets or projected fields",
                     ));
                 }
+            }
+            if grant.readable_review_progress
+                && (!matches!(review, CompiledProposalReview::Required { .. })
+                    || authority_status
+                    || !grant
+                        .operations
+                        .contains(&ProposalOperation::GetReviewStatus)
+                    || grant.ownership != Some(ProposalOwnership::Caller))
+            {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.review-progress-grant-invalid",
+                    "accessProfiles[].permissions.proposals[].readableReviewProgress",
+                    "review progress requires caller-owned GetReviewStatus authority for an Action with required review, and cannot be enabled on the named review-authority service grant",
+                ));
             }
 
             if profile.actor_kind == Some(ActorKindSource::Agent)
@@ -2943,6 +2958,7 @@ fn compile_execution(
             permissions.push(CompiledProposalPermission {
                 profile_id: profile.id.clone(),
                 review_authority: grant.review_authority.clone(),
+                readable_review_progress: grant.readable_review_progress,
                 default: profile.default,
                 actor_kind: profile.actor_kind,
                 task_grant: profile.task_grant.clone(),

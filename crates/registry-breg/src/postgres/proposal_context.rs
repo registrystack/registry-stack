@@ -25,6 +25,7 @@ pub(crate) struct ProposalAuthority {
     pub(crate) common: ActionClaimContext,
     pub(crate) operation: ProposalAuthorityOperation,
     pub(crate) ownership: Option<ProposalOwnership>,
+    pub(crate) readable_review_progress: bool,
     pub(crate) targets: BTreeMap<String, Vec<RowBoundaryContext>>,
     pub(crate) task_grant: Option<crate::task_grant::TaskGrantBinding>,
     pub(crate) proposal_scope: Option<BTreeSet<Uuid>>,
@@ -64,6 +65,7 @@ impl ProposalAuthority {
             return Err(invalid_context());
         };
         let ownership;
+        let readable_review_progress;
         let expected = match operation {
             ProposalAuthorityOperation::Start => {
                 let permission = action
@@ -72,6 +74,7 @@ impl ProposalAuthority {
                     .find(|p| p.profile_id == profile && p.operations.contains(&Operation::Start))
                     .ok_or_else(invalid_context)?;
                 ownership = None;
+                readable_review_progress = false;
                 permission
                     .targets
                     .iter()
@@ -85,6 +88,7 @@ impl ProposalAuthority {
                     .find(|p| p.profile_id == profile && p.operations.contains(&operation))
                     .ok_or_else(invalid_context)?;
                 ownership = permission.ownership;
+                readable_review_progress = permission.readable_review_progress;
                 permission
                     .targets
                     .iter()
@@ -115,6 +119,7 @@ impl ProposalAuthority {
             )?,
             operation,
             ownership,
+            readable_review_progress,
             targets,
             task_grant: None,
             proposal_scope: None,
@@ -238,6 +243,7 @@ impl ProposalAuthority {
             )?,
             operation: ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply),
             ownership: None,
+            readable_review_progress: false,
             targets,
             task_grant: None,
             proposal_scope: Some(BTreeSet::from([proposal_id])),

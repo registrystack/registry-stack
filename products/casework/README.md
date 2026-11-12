@@ -104,6 +104,18 @@ later cancellation and result access. Creation and recovery responses include
 `Registry-Review-Producer`, naming the admitted producer explicitly so a source
 can diagnose a producer-ID configuration mismatch without guessing from a digest.
 
+A stage may declare `publicProgressCode`, a lowercase local identifier such as
+`identity-check`. The code is part of the frozen policy digest. The admitted
+producer can request the current mapped code with
+`GET /v1/review-requests/{requestId}?include=progress`.
+Casework includes `progressCode` only when a reviewing request's active stage
+declares one. Producers map the code to applicant-facing language and verify the exact accepted
+request, subject, policy and submission digest before displaying it.
+Upgrade clients that decode full policy or task-context closures before
+activating a policy that sets progress codes. Older Casework clients may
+reject the added stage field.
+Policies that omit the field retain the earlier closure shape and digest.
+
 The same admitted producer can cancel an open Review even when its current source
 conceals the item. Cancellation uses the retained exact subject binding, settles
 its tasks and clocks, and retains the terminal evidence without reading source

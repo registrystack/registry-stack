@@ -695,6 +695,8 @@ pub struct ProposalPermissionSource {
     pub action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_authority: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub readable_review_progress: bool,
     pub operations: UniqueSet<ProposalOperation>,
     #[serde(default)]
     pub ownership: Option<ProposalOwnership>,

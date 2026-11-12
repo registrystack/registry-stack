@@ -23,9 +23,10 @@ declare const explainedStage: ReviewStagePolicy
 declare const explainedRule: RoutingRule
 const policyLabel: string | undefined = explainedPolicy.label
 const stageLabel: string | undefined = explainedStage.label
+const stagePublicProgressCode: string | undefined = explainedStage.publicProgressCode
 const stageOutcomes: ReadonlyArray<string> | undefined = explainedStage.outcomes
 const ruleLabel: string | undefined = explainedRule.label
-void policyLabel; void stageLabel; void stageOutcomes; void ruleLabel
+void policyLabel; void stageLabel; void stagePublicProgressCode; void stageOutcomes; void ruleLabel
 const submitted: ReviewCreateRequest = { policy, subject, requesterReference: 'proposal-1', context: { mode: 'submitted', snapshot: { reference: 'proposal-1' } } }
 const current: ReviewCreateRequest = { ...submitted, context: { mode: 'current-source', binding: { reference: 'proposal-1' } } }
 void client.createOrRecoverReviewRequest(token, 'requester', 'submit-1', current, digest)

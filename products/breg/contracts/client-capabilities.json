@@ -502,9 +502,9 @@
     },
     {
       "id": "proposal-review",
-      "rust": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"],
-      "node": ["readProposalReviewContextBatch", "readProposalReviewContext", "readProposalReviewStatus", "readProposalReviewById", "downloadProposalReviewDocument"],
-      "python": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"]
+      "rust": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_status_with_progress", "read_proposal_review_by_id", "download_proposal_review_document"],
+      "node": ["readProposalReviewContextBatch", "readProposalReviewContext", "readProposalReviewStatus", "readProposalReviewStatusWithProgress", "readProposalReviewById", "downloadProposalReviewDocument"],
+      "python": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_status_with_progress", "read_proposal_review_by_id", "download_proposal_review_document"]
     },
     {
       "id": "event-record-view",

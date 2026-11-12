@@ -11,6 +11,17 @@ use crate::postgres::{begin_proposal_transaction, ProposalAuthority, ProposalAut
 use crate::proposal_store;
 use std::collections::{BTreeMap, BTreeSet};
 
+const REVIEW_PROGRESS_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const REVIEW_PROGRESS_FINAL_READ_RESERVE: std::time::Duration =
+    std::time::Duration::from_millis(250);
+
+struct ProposalReviewSnapshot {
+    document: proposal_store::ProposalDocument,
+    value: Value,
+    etag: String,
+    progress_binding: Option<crate::review_store::ReviewProgressBinding>,
+}
+
 // Keep status selection in the single candidate query before its scan bound.
 // Caller ownership is exact here, so another holder's Proposal never reaches a
 // per-candidate read; `$4` pairs each `$1` Action with the caller's owner
@@ -89,7 +100,21 @@ impl PostgresRecordMutationService {
         correlation: &crate::correlation::RequestCorrelation,
         deadline: tokio::time::Instant,
     ) -> Result<deadpool_postgres::Client, MutationError> {
-        let result = tokio::time::timeout_at(deadline, async {
+        let result = self.proposal_read_client(authority, deadline).await;
+        if result.is_err() {
+            self.coordinator
+                .record_proposal_refusal(authority, method, correlation)
+                .await?;
+        }
+        result
+    }
+
+    async fn proposal_read_client(
+        &self,
+        authority: &ProposalAuthority,
+        deadline: tokio::time::Instant,
+    ) -> Result<deadpool_postgres::Client, MutationError> {
+        tokio::time::timeout_at(deadline, async {
             if let Some(binding) = &authority.task_grant {
                 self.coordinator.check_task_authority(binding).await?;
             }
@@ -100,13 +125,7 @@ impl PostgresRecordMutationService {
         })
         .await
         .map_err(|_| MutationError::Unavailable)
-        .and_then(|result| result);
-        if result.is_err() {
-            self.coordinator
-                .record_proposal_refusal(authority, method, correlation)
-                .await?;
-        }
-        result
+        .and_then(|result| result)
     }
     pub(crate) async fn record_proposal_http_refusal(
         &self,
@@ -440,7 +459,7 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(authority, crate::model::HttpMethod::Get, Some(&document), 1, false, correlation)
+                .finish_proposal_read_audit(authority, crate::model::HttpMethod::Get, Some(&document), 1, None, correlation)
                 .await?;
             Ok((attachment.metadata.content_type, bytes))
         })
@@ -734,7 +753,10 @@ impl PostgresRecordMutationService {
                     crate::model::HttpMethod::Get,
                     Some(&document),
                     1,
-                    value.pointer("/decision/publicReason").is_some(),
+                    value
+                        .pointer("/decision/publicReason")
+                        .is_some()
+                        .then_some(crate::mutation::PUBLIC_REASON_REFERENCE),
                     correlation,
                 )
                 .await?;
@@ -844,7 +866,8 @@ impl PostgresRecordMutationService {
                     usize::from(value.is_some()),
                     value
                         .as_ref()
-                        .is_some_and(|value| value.pointer("/decision/publicReason").is_some()),
+                        .is_some_and(|value| value.pointer("/decision/publicReason").is_some())
+                        .then_some(crate::mutation::PUBLIC_REASON_REFERENCE),
                     correlation,
                 )
                 .await?;
@@ -874,21 +897,98 @@ impl PostgresRecordMutationService {
         id: Uuid,
         authority: &ProposalAuthority,
         records: &BTreeMap<String, crate::api::proposals::ProposalRecordReadAuthority>,
+        include_progress: bool,
         correlation: &crate::correlation::RequestCorrelation,
-    ) -> Result<(Value, String), MutationError> {
+    ) -> Result<(Value, Option<String>), MutationError> {
         let _attempt = self
             .coordinator
             .begin_proposal_read_audit(authority, crate::model::HttpMethod::Get, correlation)
             .await?;
         let deadline = tokio::time::Instant::now() + self.action_timeout;
-        let client = self
-            .admitted_proposal_read_client(
-                authority,
-                crate::model::HttpMethod::Get,
-                correlation,
-                deadline,
-            )
-            .await?;
+        let progress_representation = include_progress && authority.readable_review_progress;
+        let result = tokio::time::timeout_at(deadline, async {
+            let first = self
+                .proposal_review_snapshot(id, authority, records, progress_representation, deadline)
+                .await?;
+            let Some(expected) = first.progress_binding else {
+                self.coordinator
+                    .finish_proposal_read_audit(
+                        authority,
+                        crate::model::HttpMethod::Get,
+                        Some(&first.document),
+                        1,
+                        None,
+                        correlation,
+                    )
+                    .await?;
+                return Ok((
+                    first.value,
+                    (!progress_representation).then_some(first.etag),
+                ));
+            };
+
+            let now = tokio::time::Instant::now();
+            let latest_progress_end = deadline
+                .checked_sub(REVIEW_PROGRESS_FINAL_READ_RESERVE)
+                .unwrap_or(now);
+            let progress_deadline = (now + REVIEW_PROGRESS_LOOKUP_TIMEOUT).min(latest_progress_end);
+            let progress = if progress_deadline > now {
+                match tokio::time::timeout_at(
+                    progress_deadline,
+                    self.coordinator.request_review_progress(&expected),
+                )
+                .await
+                {
+                    Ok(Ok(progress)) => progress,
+                    Ok(Err(_)) | Err(_) => {
+                        tracing::warn!("optional review progress lookup did not complete");
+                        None
+                    }
+                }
+            } else {
+                tracing::warn!("optional review progress lookup had no remaining time budget");
+                None
+            };
+
+            let mut fresh = self
+                .proposal_review_snapshot(id, authority, records, true, deadline)
+                .await?;
+            let progress_served =
+                fresh.progress_binding.as_ref() == Some(&expected) && progress.is_some();
+            if progress_served {
+                fresh.value["progressCode"] = json!(progress);
+            }
+            self.coordinator
+                .finish_proposal_read_audit(
+                    authority,
+                    crate::model::HttpMethod::Get,
+                    Some(&fresh.document),
+                    1,
+                    progress_served.then_some(crate::mutation::REVIEW_PROGRESS_REFERENCE),
+                    correlation,
+                )
+                .await?;
+            Ok((fresh.value, None))
+        })
+        .await
+        .unwrap_or(Err(MutationError::Unavailable));
+        if result.is_err() {
+            self.coordinator
+                .record_proposal_refusal(authority, crate::model::HttpMethod::Get, correlation)
+                .await?;
+        }
+        result
+    }
+
+    async fn proposal_review_snapshot(
+        &self,
+        id: Uuid,
+        authority: &ProposalAuthority,
+        records: &BTreeMap<String, crate::api::proposals::ProposalRecordReadAuthority>,
+        include_progress: bool,
+        deadline: tokio::time::Instant,
+    ) -> Result<ProposalReviewSnapshot, MutationError> {
+        let client = self.proposal_read_client(authority, deadline).await?;
         let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         let result = tokio::time::timeout_at(deadline, async {
             let guarded = begin_proposal_transaction(
@@ -934,6 +1034,32 @@ impl PostgresRecordMutationService {
                     None,
                 )
                 .await?;
+            let progress_binding = if include_progress
+                && document.header.state == "submitted"
+                && document.blocked_reason.is_none()
+                && value["reviewable"] == true
+            {
+                let workflow = proposal_store::load(
+                    guarded.transaction(),
+                    &document.action_id,
+                    document.proposal_id,
+                    false,
+                )
+                .await?;
+                let frozen = workflow
+                    .current_proposal()
+                    .ok_or(MutationError::PreconditionFailed)?;
+                crate::review_store::load_progress_binding(
+                    guarded.transaction(),
+                    &self.registry,
+                    &document.action_id,
+                    document.proposal_id,
+                    frozen,
+                )
+                .await?
+            } else {
+                None
+            };
             let etag = self.coordinator.proposal_etag(&document, authority)?;
             if authority
                 .task_grant
@@ -946,20 +1072,15 @@ impl PostgresRecordMutationService {
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-            self.coordinator
-                .finish_proposal_read_audit(
-                    authority,
-                    crate::model::HttpMethod::Get,
-                    Some(&document),
-                    1,
-                    false,
-                    correlation,
-                )
-                .await?;
-            Ok((value, etag))
+            Ok(ProposalReviewSnapshot {
+                document,
+                value,
+                etag,
+                progress_binding,
+            })
         })
         .await;
-        let result = match result {
+        match result {
             Ok(result) => {
                 guard.disarm();
                 result
@@ -968,13 +1089,7 @@ impl PostgresRecordMutationService {
                 guard.cancel_and_discard().await;
                 Err(MutationError::Unavailable)
             }
-        };
-        if result.is_err() {
-            self.coordinator
-                .record_proposal_refusal(authority, crate::model::HttpMethod::Get, correlation)
-                .await?;
         }
-        result
     }
 
     pub(crate) async fn proposal_task_context_read(
@@ -1064,7 +1179,7 @@ impl PostgresRecordMutationService {
                     crate::model::HttpMethod::Post,
                     Some(&document),
                     1,
-                    false,
+                    None,
                     correlation,
                 )
                 .await?;
@@ -1408,12 +1523,15 @@ impl PostgresRecordMutationService {
                             })
                             .count()
                     }),
-                    value["items"].as_array().is_some_and(|items| {
-                        items.iter().any(|item| {
-                            item["actionId"].as_str() == Some(authority.common.action_id())
-                                && item.pointer("/decision/publicReason").is_some()
+                    value["items"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items.iter().any(|item| {
+                                item["actionId"].as_str() == Some(authority.common.action_id())
+                                    && item.pointer("/decision/publicReason").is_some()
+                            })
                         })
-                    }),
+                        .then_some(crate::mutation::PUBLIC_REASON_REFERENCE),
                     correlation,
                 )
                 .await?;

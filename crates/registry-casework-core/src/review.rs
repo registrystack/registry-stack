@@ -3,8 +3,8 @@ use std::{cmp::Ordering, collections::BTreeMap, fmt};
 use chrono::{DateTime, Utc};
 use jsonschema::{Draft, JSONSchema};
 use registry_review_protocol::{
-    check_public_reason, ContentDigest, PolicyBinding, ReviewResultStatus, SubjectBinding,
-    MAXIMUM_PUBLIC_REASON_BYTES,
+    check_public_reason, ContentDigest, PolicyBinding, ReviewProgressCode, ReviewResultStatus,
+    SubjectBinding, MAXIMUM_PUBLIC_REASON_BYTES,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
@@ -225,6 +225,10 @@ pub struct ReviewStagePolicy {
         schemars(with = "Option<registry_platform_yaml::DisplayText>")
     )]
     pub label: Option<String>,
+    /// Optional producer-visible progress code for this stage. Omission keeps
+    /// the stage private and preserves the previous policy wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_progress_code: Option<ReviewProgressCode>,
     pub queue: String,
     pub deciding_profiles: Vec<String>,
     #[serde(
@@ -2980,6 +2984,7 @@ mod tests {
         ReviewStagePolicy {
             id: id.to_owned(),
             label: None,
+            public_progress_code: None,
             queue: "review".to_owned(),
             deciding_profiles: vec!["reviewer".to_owned()],
             required_approvals,
@@ -3366,6 +3371,25 @@ mod tests {
 
     #[test]
     fn policy_closure_digest_pins_every_stage_rule() {
+        let stage_without_progress = stage("first", 1);
+        assert!(serde_json::to_value(&stage_without_progress)
+            .unwrap()
+            .get("publicProgressCode")
+            .is_none());
+        let without_progress = approval_policy(vec![stage_without_progress.clone()])
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        let mut stage_with_progress = stage_without_progress;
+        stage_with_progress.public_progress_code =
+            Some(ReviewProgressCode::parse("initial-review").unwrap());
+        let with_progress = approval_policy(vec![stage_with_progress])
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        assert_ne!(
+            without_progress.identity.digest,
+            with_progress.identity.digest
+        );
+
         let mut snapshot = approval_policy(vec![stage("first", 1)])
             .closure_with(crate::ReviewPolicyDependencies::default())
             .unwrap();
@@ -3382,6 +3406,16 @@ mod tests {
         snapshot.stages[0].exclude_initiator = true;
         snapshot.stages[0].outcomes = Some(vec!["approved".to_owned()]);
         assert_eq!(snapshot.verify(), Err(ReviewPolicyError::DigestMismatch));
+
+        let mut progress_snapshot = approval_policy(vec![stage("first", 1)])
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        progress_snapshot.stages[0].public_progress_code =
+            Some(ReviewProgressCode::parse("initial-review").unwrap());
+        assert_eq!(
+            progress_snapshot.verify(),
+            Err(ReviewPolicyError::DigestMismatch)
+        );
 
         let mut advisory_snapshot = approval_policy(vec![stage("first", 1), stage("final", 1)])
             .closure_with(crate::ReviewPolicyDependencies::default())
@@ -3441,6 +3475,7 @@ mod tests {
                 .map(|stage_index| ReviewStagePolicy {
                     id: identifier('s', stage_index),
                     label: None,
+                    public_progress_code: None,
                     queue: identifier('q', stage_index),
                     deciding_profiles: (0..MAXIMUM_REVIEW_PROFILES_PER_STAGE)
                         .map(|profile_index| identifier('p', profile_index))

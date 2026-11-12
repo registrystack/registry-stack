@@ -1381,6 +1381,32 @@ impl BaseRegistryClient {
         }
     }
 
+    pub(crate) async fn proposal_review_progress_exchange(
+        &self,
+        link: &BRegProposalLink,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        if link.method() != "GET" || link.operation() != "get-review-status" {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the selected Base Registry Engine Proposal review status link is invalid",
+            ));
+        }
+        let segments = fixed_operation_segments(link.path())?;
+        let mut pairs = access_profile_query(Some(link.access_profile()))?;
+        pairs.push(("include".to_owned(), "progress".to_owned()));
+        let url = self.url_with_query(&segments, &pairs)?;
+        let builder = self
+            .authorize(
+                self.transport
+                    .http
+                    .get(url)
+                    .header(ACCEPT, APPLICATION_JSON),
+                Credential::Optional,
+            )
+            .await?;
+        self.decode_proposal_response(self.transport.send(builder).await?)
+            .await
+    }
+
     fn proposal_request(
         &self,
         link: &BRegProposalLink,

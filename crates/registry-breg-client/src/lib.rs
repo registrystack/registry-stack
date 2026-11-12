@@ -68,7 +68,7 @@ pub use registry_record::{
     REGISTRY_RECORD_CONTEXT_IDENTIFIER, REGISTRY_RECORD_PROFILE_IDENTIFIER,
     REGISTRY_RECORD_SCHEMA_IDENTIFIER,
 };
-pub use registry_review_protocol::PolicySelection;
+pub use registry_review_protocol::{PolicySelection, ReviewProgressCode};
 pub use response::*;
 pub use statistics::*;
 pub use uuid::Uuid;

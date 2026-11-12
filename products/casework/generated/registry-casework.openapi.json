@@ -1287,6 +1287,12 @@
         ],
         "type": "string"
       },
+      "InputReviewRequestInclude": {
+        "enum": [
+          "progress"
+        ],
+        "type": "string"
+      },
       "InputReviewTaskOwnership": {
         "description": "Select active review tasks by their current holder. Selection never grants\nreviewer eligibility or source authority.",
         "enum": [
@@ -3654,6 +3660,12 @@
         ],
         "type": "object"
       },
+      "ReviewProgressCode": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+        "type": "string"
+      },
       "ReviewPublicReasonRule": {
         "description": "Whether a decision gives a public reason with an outcome.",
         "enum": [
@@ -3707,6 +3719,22 @@
         ],
         "type": "string"
       },
+      "ReviewRequestQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "include": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputReviewRequestInclude"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ReviewRequestView": {
         "additionalProperties": false,
         "properties": {
@@ -3725,6 +3753,16 @@
           },
           "policy": {
             "$ref": "#/components/schemas/PolicyBinding"
+          },
+          "progressCode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewProgressCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "requestId": {
             "format": "uuid",
@@ -4064,6 +4102,17 @@
               "null"
             ],
             "uniqueItems": true
+          },
+          "publicProgressCode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewProgressCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional producer-visible progress code for this stage. Omission keeps\nthe stage private and preserves the previous policy wire shape."
           },
           "queue": {
             "type": "string"
@@ -12995,6 +13044,22 @@
             "schema": {
               "format": "uuid",
               "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/InputReviewRequestInclude"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           }
         ],

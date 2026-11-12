@@ -742,6 +742,7 @@ class ReviewContextProviderPolicy(TypedDict):
 class ReviewStagePolicy(TypedDict):
     id: str
     label: NotRequired[str]
+    publicProgressCode: NotRequired[str]
     queue: str
     decidingProfiles: list[str]
     requiredApprovals: SafeInteger

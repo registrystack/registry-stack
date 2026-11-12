@@ -2847,6 +2847,22 @@ impl BaseRegistryClient {
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &response.value, &response.metadata)
     }
+    fn read_proposal_review_status_with_progress<'py>(
+        &self,
+        py: Python<'py>,
+        proposal: PyRef<'_, Proposal>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let proposal = proposal.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .read_proposal_review_status_with_progress(&proposal),
+                )
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
     fn read_proposal_review_context<'py>(
         &self,
         py: Python<'py>,

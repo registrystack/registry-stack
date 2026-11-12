@@ -511,6 +511,7 @@ class TypingContractTests(unittest.TestCase):
         )
         self.assertEqual(annotations["outcomes"], "NotRequired[list[str]]")
         self.assertEqual(annotations["label"], "NotRequired[str]")
+        self.assertEqual(annotations["publicProgressCode"], "NotRequired[str]")
         routing = classes["RoutingRule"]
         routing_annotations = {
             node.target.id: ast.unparse(node.annotation)

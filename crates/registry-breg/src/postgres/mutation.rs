@@ -363,7 +363,8 @@ impl PostgresRecordMutationService {
         self.coordinator = self
             .coordinator
             .with_review_authorities(Arc::clone(&source));
-        self.review_result_source = Some(source);
+        let result_source: Arc<dyn crate::review_store::ReviewResultSource> = source.clone();
+        self.review_result_source = Some(result_source);
         self
     }
 

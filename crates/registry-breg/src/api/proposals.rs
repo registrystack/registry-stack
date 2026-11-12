@@ -420,6 +420,30 @@ pub(super) fn selected_profile(raw: Option<&str>) -> Result<Option<String>, ()> 
     Ok(options.access_profile().cloned())
 }
 
+fn review_status_options(raw: Option<&str>) -> Result<(Option<String>, bool), ()> {
+    let Some(raw) = raw else {
+        return Ok((None, false));
+    };
+    if raw.is_empty() || raw.len() > MAX_RAW_QUERY_BYTES {
+        return Err(());
+    }
+    let mut ordinary = Vec::new();
+    let mut include_progress = false;
+    for pair in raw.split('&') {
+        let (name, value) = pair.split_once('=').ok_or(())?;
+        if percent_decode(name).map_err(|_| ())? == "include" {
+            if include_progress || percent_decode(value).map_err(|_| ())? != "progress" {
+                return Err(());
+            }
+            include_progress = true;
+        } else {
+            ordinary.push(pair);
+        }
+    }
+    let ordinary = (!ordinary.is_empty()).then(|| ordinary.join("&"));
+    Ok((selected_profile(ordinary.as_deref())?, include_progress))
+}
+
 fn parse_input(action: &CompiledAction, value: &Value) -> Result<Map<String, Value>, ()> {
     let supplied = value.as_object().ok_or(())?;
     let mut input = Map::new();
@@ -1464,7 +1488,11 @@ async fn review_read(
     let Ok(id) = Uuid::parse_str(&id) else {
         return concealed();
     };
-    let Ok(selected) = selected_profile(raw.as_deref()) else {
+    let Ok((selected, include_progress)) = (if operation == ProposalOperation::GetReviewStatus {
+        review_status_options(raw.as_deref())
+    } else {
+        selected_profile(raw.as_deref()).map(|selected| (selected, false))
+    }) else {
         return concealed();
     };
     let action_id = match mutations.proposal_action_id(id).await {
@@ -1519,10 +1547,10 @@ async fn review_read(
         .await;
     };
     match mutations
-        .proposal_review_read(id, &authority, &records, &correlation)
+        .proposal_review_read(id, &authority, &records, include_progress, &correlation)
         .await
     {
-        Ok((value, etag)) => json_response(value, Some(&etag)),
+        Ok((value, etag)) => json_response(value, etag.as_deref()),
         Err(MutationError::PreconditionFailed) => concealed(),
         Err(error) => proposal_problem(error),
     }

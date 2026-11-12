@@ -32,6 +32,15 @@ pinned and built without its default features. No automated check pins that
 feature set, so a change that unifies a default feature back on is not caught
 by CI.
 
+**Applicant review progress.** A current caller-owned status grant can opt in
+to a provider-authored code (BREG-SEC-208). BReg authorizes and audits the read
+before using the configured Review producer credential for a single bounded
+lookup. It compares the whole accepted review binding, then rechecks Proposal
+visibility and the live review round before the response audit and release.
+Failure to observe the exact round yields the authorized local status with
+progress omitted. A code is display data. It grants no approval or application
+authority.
+
 Read-boundary rationale. Row-level security on the entity tables is the single
 read boundary, and `FORCE ROW LEVEL SECURITY` is on for every one. Entity
 source views are created `security_invoker=true` and deliberately without
@@ -108,6 +117,11 @@ For the invariants to hold, a deployment must do the following.
     grant's `ownership: caller` restricts which Proposal documents the caller
     may touch, not the target Records, which stay bounded by the grant's
     `rowBoundaries`.
+    Enable `readableReviewProgress` only on the applicant grants intended to
+    receive it. Choose public stage codes at the review provider with the
+    applicant audience in mind. A change in code presence can reveal a
+    transition, so assign the same coarse code across stages whose distinction
+    should stay private.
 11. **Keep delegated agent review context disabled** until the institution has
     approved the reviewer population and source ceiling for the standing-agent
     profile that holds `get-review-context`.

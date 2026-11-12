@@ -298,6 +298,7 @@ fn project(version: &str) -> CaseworkProject {
                 ReviewStagePolicy {
                     id: "primary".to_owned(),
                     label: None,
+                    public_progress_code: None,
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
@@ -309,6 +310,7 @@ fn project(version: &str) -> CaseworkProject {
                 ReviewStagePolicy {
                     id: "secondary".to_owned(),
                     label: None,
+                    public_progress_code: None,
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,

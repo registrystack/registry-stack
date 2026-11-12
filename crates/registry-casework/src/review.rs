@@ -326,9 +326,28 @@ impl CaseworkService {
         actor: &ActorContext,
         request_id: Uuid,
     ) -> Result<ReviewRequestView, ReviewRuntimeError> {
+        self.review_request_with_progress(actor, request_id, false)
+            .await
+    }
+
+    pub async fn review_request_progress(
+        &self,
+        actor: &ActorContext,
+        request_id: Uuid,
+    ) -> Result<ReviewRequestView, ReviewRuntimeError> {
+        self.review_request_with_progress(actor, request_id, true)
+            .await
+    }
+
+    async fn review_request_with_progress(
+        &self,
+        actor: &ActorContext,
+        request_id: Uuid,
+        include_progress: bool,
+    ) -> Result<ReviewRequestView, ReviewRuntimeError> {
         let admission = self.producer_for_actor(actor)?;
         self.store
-            .review_request(&admission.producer, request_id)
+            .review_request(&admission.producer, request_id, include_progress)
             .await
     }
 
@@ -2931,11 +2950,12 @@ impl PostgresStore {
         &self,
         producer: &registry_casework_core::ReviewProducerPolicy,
         request_id: Uuid,
+        include_progress: bool,
     ) -> Result<ReviewRequestView, ReviewRuntimeError> {
         let client = self.client().await?;
         let record = load_request_client(&client, producer, request_id).await?;
         ensure_review_result_retained(&record)?;
-        Ok(request_view(&record))
+        Ok(request_view(&record, include_progress))
     }
 
     async fn recheck_review_access(
@@ -5968,7 +5988,10 @@ fn accepted(record: &ReviewRequestRecord) -> ReviewRequestAccepted {
     }
 }
 
-fn request_view(record: &ReviewRequestRecord) -> ReviewRequestView {
+fn request_view(record: &ReviewRequestRecord, include_progress: bool) -> ReviewRequestView {
+    let active_stage = record
+        .active_stage
+        .and_then(|index| record.policy.stages.get(usize::from(index)));
     ReviewRequestView {
         request_id: record.request_id,
         subject: record.subject.clone(),
@@ -5976,10 +5999,10 @@ fn request_view(record: &ReviewRequestRecord) -> ReviewRequestView {
         submission_digest: record.submission_digest.clone(),
         requester_reference: record.requester_reference.clone(),
         lifecycle: record.lifecycle,
-        active_stage: record
-            .active_stage
-            .and_then(|index| record.policy.stages.get(usize::from(index)))
-            .map(|stage| stage.id.clone()),
+        active_stage: active_stage.map(|stage| stage.id.clone()),
+        progress_code: (include_progress && record.lifecycle == ReviewRequestLifecycle::Reviewing)
+            .then(|| active_stage.and_then(|stage| stage.public_progress_code.clone()))
+            .flatten(),
         created_at: record.created_at,
         updated_at: record.updated_at,
     }

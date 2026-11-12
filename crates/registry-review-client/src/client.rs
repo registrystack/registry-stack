@@ -10,10 +10,11 @@ use registry_platform_httputil::{
 };
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestLifecycle,
-    ReviewRequestView, ReviewResult, ReviewResultFeedPage, ReviewResultStatus, SubmissionDigest,
-    REVIEW_PRODUCER_HEADER, REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH,
-    REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
+    ReviewCancelResponse, ReviewCreateRequest, ReviewProgressCode, ReviewRequestAccepted,
+    ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedPage,
+    ReviewResultStatus, SubmissionDigest, REVIEW_PRODUCER_HEADER, REVIEW_PROFILE_HEADER,
+    REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH, REVIEW_VALIDATION_PATH_HEADER,
+    REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -93,6 +94,8 @@ struct ReviewRequestViewWire {
     lifecycle: ReviewRequestLifecycle,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    progress_code: Option<ReviewProgressCode>,
     created_at: String,
     updated_at: String,
 }
@@ -384,7 +387,44 @@ impl ReviewClient {
             .send_json(self.authorized(self.http.get(url), &auth)?, StatusCode::OK)
             .await?;
         check_request_view(&complete.value, request_id, &complete.trace_id)?;
+        if complete.value.progress_code.is_some() {
+            return Err(protocol(
+                StatusCode::OK,
+                ReviewProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
         Ok(complete)
+    }
+
+    /// Reads the provider's optional, policy-authored progress projection.
+    ///
+    /// The accepted binding must be the complete tuple returned by the
+    /// original handoff. The client makes one request and refuses a response
+    /// for any other request, subject, policy, or submission digest.
+    pub async fn request_progress(
+        &self,
+        auth: ReviewAuth<'_>,
+        expected: &ReviewRequestAccepted,
+    ) -> Result<Option<ReviewProgressCode>, ReviewClientError> {
+        check_expected_request(expected)?;
+        let mut url = self.url_from_constant(&review_request_path(expected.request_id))?;
+        url.query_pairs_mut().append_pair("include", "progress");
+        let complete = self
+            .send_json(self.authorized(self.http.get(url), &auth)?, StatusCode::OK)
+            .await?;
+        check_request_view(&complete.value, expected.request_id, &complete.trace_id)?;
+        if complete.value.subject != expected.subject
+            || complete.value.policy != expected.policy
+            || complete.value.submission_digest != expected.submission_digest
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                ReviewProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete.value.progress_code)
     }
 
     pub async fn result(
@@ -867,8 +907,11 @@ fn check_request_view(
         registry_review_protocol::ReviewRequestLifecycle::Reviewing => value.active_stage.is_some(),
         _ => value.active_stage.is_none(),
     };
+    let progress_code_is_consistent =
+        value.lifecycle == ReviewRequestLifecycle::Reviewing || value.progress_code.is_none();
     if value.request_id != expected_request_id
         || !active_stage_is_consistent
+        || !progress_code_is_consistent
         || value.requester_reference.is_empty()
         || value.requester_reference.len() > 256
         || value.requester_reference.chars().any(char::is_control)
@@ -884,6 +927,20 @@ fn check_request_view(
         ));
     }
     Ok(())
+}
+
+fn check_expected_request(expected: &ReviewRequestAccepted) -> Result<(), ReviewClientError> {
+    if expected.request_id.is_nil() {
+        return Err(ReviewClientError::invalid_request(
+            "the accepted review request identifier is invalid",
+        ));
+    }
+    expected.subject.check().map_err(|_| {
+        ReviewClientError::invalid_request("the accepted review subject binding is invalid")
+    })?;
+    expected.policy.check().map_err(|_| {
+        ReviewClientError::invalid_request("the accepted review policy binding is invalid")
+    })
 }
 
 fn validate_idempotency_key(value: &str) -> Result<(), ReviewClientError> {

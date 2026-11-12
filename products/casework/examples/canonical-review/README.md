@@ -68,3 +68,49 @@ same Staff header and checks `decidedByCaller` before printing
 `decisionReceipt`. The retained receipt uses current Casework authority.
 If the decision response is lost, read that exact task with the same
 reviewer identity and check the receipt before attempting another write.
+
+## Show review progress to the applicant
+
+On your copy of the paired facility project, enable `readableReviewProgress: true`
+on the `facility-correction-author` grant for `correct-address`.
+That grant already declares `ownership: caller` and `get-review-status`.
+In the paired Casework project, configure the stages of `facility-address-review`
+with the codes you want applicants to see.
+
+```yaml
+stages:
+  - id: address-review
+    publicProgressCode: initial-verification
+    queue: facility-addresses
+    decidingProfiles: [staff]
+    excludeInitiator: true
+    requiredApprovals: 1
+  - id: address-validation
+    publicProgressCode: final-validation
+    queue: facility-addresses
+    decidingProfiles: [supervisor]
+    excludePreviousStageReviewers: true
+    requiredApprovals: 1
+```
+
+Make sure the second stage has an eligible supervisor.
+Recheck and package both projects, and update any strict review policy pin to
+the new binding for future submissions.
+Start and submit the Proposal as the applicant.
+Using only that applicant's BReg credential, read
+`GET /v1/proposals/{id}/review-status?accessProfile=facility-correction-author&include=progress`.
+After acceptance, the first stage supplies `initial-verification`.
+Approve the first task as Staff using the procedure above, then read the same
+BReg URL to see `final-validation`.
+Omit a stage's `publicProgressCode` when its status should stay internal.
+If progress is absent, show the handoff and result from the same response.
+
+The paired PostgreSQL test drives the real BReg and Casework HTTP routes through
+both stages and a return and resubmission.
+With `BREG_TEST_DATABASE_URL` and `CASEWORK_REVIEW_TEST_DATABASE_URL` set to
+disposable PostgreSQL databases, run from the Registry Stack checkout.
+
+```sh
+cargo test --locked -p registry-casework --features postgres-test \
+  --test breg_review_journey native_proposal_requires_pinned_casework_approval_before_breg_apply
+```

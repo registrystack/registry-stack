@@ -435,7 +435,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         path: "/v1/review-requests/{request_id}",
         success_statuses: &[200],
         extracts_path: true,
-        extracts_query: false,
+        extracts_query: true,
         accepts_json: false,
         problems: READ,
     },

@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ReviewCancelRequest,
         ReviewTaskDecisionRequest,
         ReviewTaskDraftInput,
+        ReviewRequestQuery,
         AssignmentRequest,
         DelegateRequest,
         ReviewNoteRequest,

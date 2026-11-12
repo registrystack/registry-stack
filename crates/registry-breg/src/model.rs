@@ -24,6 +24,10 @@ pub(crate) fn is_zero_i32(value: &i32) -> bool {
     *value == 0
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(feature = "runtime")]
 pub(crate) const MAX_TARGET_CONTEXT_FIELDS: usize = 128;
 
@@ -534,6 +538,8 @@ pub struct CompiledProposalPermission {
     pub profile_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_authority: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub readable_review_progress: bool,
     pub default: bool,
     pub actor_kind: Option<crate::contract::ActorKindSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

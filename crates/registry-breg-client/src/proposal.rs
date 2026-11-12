@@ -298,6 +298,9 @@ pub struct BRegProposalReviewDocument {
     /// Provider correlation for the exact accepted submission, on status reads only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Coarse provider progress, disclosed only by the explicit progress status read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_code: Option<ReviewProgressCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1246,7 +1249,7 @@ impl BaseRegistryClient {
             })
             || document.proposal.authority.is_none()
             || fields.as_ref() != Some(&requested)
-            || !valid_review_document(&document.proposal, true)
+            || !valid_review_document(&document.proposal, true, false)
         {
             return Err(refusal());
         }
@@ -1282,7 +1285,7 @@ impl BaseRegistryClient {
         let is_context = binding.operation == "get-review-context";
         if document.id != id
             || document.action_id != binding.action
-            || !valid_review_document(&document, is_context)
+            || !valid_review_document(&document, is_context, false)
         {
             return Err(refusal());
         }
@@ -1347,7 +1350,7 @@ impl BaseRegistryClient {
                     if id == *expected
                         && context.id == id
                         && context.action_id == binding.action
-                        && valid_review_document(&context, true) =>
+                        && valid_review_document(&context, true, false) =>
                 {
                     values.push(Some(*context))
                 }
@@ -1393,24 +1396,46 @@ impl BaseRegistryClient {
         &self,
         proposal: &BRegProposal,
     ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
-        self.read_proposal_review(proposal, "reviewStatus").await
+        self.read_proposal_review(proposal, "reviewStatus", false)
+            .await
+    }
+    /// Read status with the provider's optional coarse progress code.
+    ///
+    /// This is a distinct opt-in exchange. The client appends the fixed
+    /// `include=progress` query only after validating the Proposal's exact
+    /// status link, profile and origin.
+    pub async fn read_proposal_review_status_with_progress(
+        &self,
+        proposal: &BRegProposal,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        self.read_proposal_review(proposal, "reviewStatus", true)
+            .await
     }
     pub async fn read_proposal_review_context(
         &self,
         proposal: &BRegProposal,
     ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
-        self.read_proposal_review(proposal, "reviewContext").await
+        self.read_proposal_review(proposal, "reviewContext", false)
+            .await
     }
     async fn read_proposal_review(
         &self,
         proposal: &BRegProposal,
         operation: &str,
+        include_progress: bool,
     ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
         if proposal.source.as_deref() != Some(self.source_binding().as_str()) {
             return Err(refusal());
         }
         let link = proposal.links.get(operation).ok_or_else(refusal)?;
-        let response = self.proposal_exchange(link, None, None).await?;
+        let response = if include_progress {
+            if operation != "reviewStatus" {
+                return Err(refusal());
+            }
+            self.proposal_review_progress_exchange(link).await?
+        } else {
+            self.proposal_exchange(link, None, None).await?
+        };
         let value =
             crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
         let document: BRegProposalReviewDocument =
@@ -1424,7 +1449,7 @@ impl BaseRegistryClient {
                 .effect_digest
                 .as_deref()
                 .is_some_and(|digest| digest != document.effect_digest)
-            || !valid_review_document(&document, operation == "reviewContext")
+            || !valid_review_document(&document, operation == "reviewContext", include_progress)
         {
             return Err(refusal());
         }
@@ -1977,7 +2002,11 @@ fn transition_target(
         _ => None,
     }
 }
-fn valid_review_document(document: &BRegProposalReviewDocument, is_context: bool) -> bool {
+fn valid_review_document(
+    document: &BRegProposalReviewDocument,
+    is_context: bool,
+    include_progress: bool,
+) -> bool {
     canonical_proposal_id(&document.id)
         && identifier(&document.action_id)
         && digest(&document.action_revision)
@@ -2004,16 +2033,21 @@ fn valid_review_document(document: &BRegProposalReviewDocument, is_context: bool
             .policy
             .as_ref()
             .is_none_or(|policy| policy.check().is_ok())
-        && valid_review_projection(document, is_context)
+        && valid_review_projection(document, is_context, include_progress)
 }
 
-fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bool) -> bool {
+fn valid_review_projection(
+    document: &BRegProposalReviewDocument,
+    is_context: bool,
+    include_progress: bool,
+) -> bool {
     if is_context {
         document.context.contract.is_some()
             && document.context.fields.is_some()
             && document.result.is_none()
             && document.request_id.is_none()
             && document.handoff.is_none()
+            && document.progress_code.is_none()
     } else {
         document.context.fields.is_none()
             && document
@@ -2038,6 +2072,18 @@ fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bo
             && document.result.as_ref().is_none_or(|result| {
                 valid_review_result(result)
                     && (result.state == "pending" || document.request_id.is_some())
+            })
+            && document.progress_code.as_ref().is_none_or(|_| {
+                include_progress
+                    && document.reviewable
+                    && document.request_id.is_some()
+                    && document.handoff.as_ref().is_some_and(|handoff| {
+                        handoff.state == BRegProposalReviewHandoffState::Accepted
+                    })
+                    && document
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.state == "pending")
             })
     }
 }
@@ -3265,6 +3311,124 @@ mod tests {
         }
         *response.lock().unwrap() = no_review;
         assert!(client.read_proposal_review_status(&prior).await.is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn review_progress_requires_the_explicit_status_read_and_pending_accepted_handoff() {
+        use axum::{
+            extract::{OriginalUri, State},
+            routing::any,
+            Json, Router,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
+            "submissionVersion":1,"revision":2,"effectDigest":REVISION,
+            "subject":{"source":"directory","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},
+            "context":{"reference":"breg:directory:correct-address:proposal:1"},"reviewable":true,
+            "authority":"review","policy":{"id":"address-review"},"result":{"state":"pending"},
+            "requestId":ID,"handoff":{"state":"accepted"},"progressCode":"awaiting-assignment"});
+        let response = Arc::new(Mutex::new(valid.clone()));
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let app =
+            Router::new()
+                .fallback(any(
+                    |OriginalUri(uri): OriginalUri,
+                     State((value, requests)): State<(
+                        Arc<Mutex<Value>>,
+                        Arc<Mutex<Vec<String>>>,
+                    )>| async move {
+                        requests.lock().unwrap().push(uri.to_string());
+                        (
+                            [
+                                (
+                                    "traceparent",
+                                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                                ),
+                                ("cache-control", "no-store"),
+                                ("vary", "authorization, accept"),
+                            ],
+                            Json(value.lock().unwrap().clone()),
+                        )
+                    },
+                ))
+                .with_state((response.clone(), requests.clone()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = client(&format!("http://{address}/"));
+        let mut prior = document();
+        prior["links"]["reviewStatus"] = json!({"method":"GET","path":format!("/v1/proposals/{ID}/review-status"),"accessProfile":"author","operation":"get-review-status"});
+        prior["links"]["reviewContext"] = json!({"method":"GET","path":format!("/v1/proposals/{ID}/review-context"),"accessProfile":"author","operation":"get-review-context"});
+        let prior = proposal(&client, prior);
+
+        assert!(client.read_proposal_review_status(&prior).await.is_err());
+        let plain_status_path = format!("/v1/proposals/{ID}/review-status?accessProfile=author");
+        assert_eq!(
+            requests.lock().unwrap().last().cloned(),
+            Some(plain_status_path)
+        );
+        let observed = client
+            .read_proposal_review_status_with_progress(&prior)
+            .await
+            .unwrap();
+        assert_eq!(
+            observed
+                .value
+                .progress_code
+                .as_ref()
+                .map(|code| code.as_str()),
+            Some("awaiting-assignment")
+        );
+        let progress_status_path =
+            format!("/v1/proposals/{ID}/review-status?accessProfile=author&include=progress");
+        assert_eq!(
+            requests.lock().unwrap().last().cloned(),
+            Some(progress_status_path)
+        );
+        assert!(client.read_proposal_review_context(&prior).await.is_err());
+
+        let mut absent = valid.clone();
+        absent.as_object_mut().unwrap().remove("progressCode");
+        *response.lock().unwrap() = absent;
+        assert!(client
+            .read_proposal_review_status_with_progress(&prior)
+            .await
+            .unwrap()
+            .value
+            .progress_code
+            .is_none());
+
+        let mut invalid = Vec::new();
+        for (field, value) in [
+            ("reviewable", json!(false)),
+            (
+                "handoff",
+                json!({"state":"failed","reason":"remote-refused"}),
+            ),
+            (
+                "result",
+                json!({"state":"approved","resultId":ID,
+                    "completedAt":"2026-09-19T00:01:00.000001Z",
+                    "availableUntil":"2026-09-20T00:01:00.000001Z"}),
+            ),
+            ("progressCode", json!("Invalid Progress")),
+        ] {
+            let mut document = valid.clone();
+            document[field] = value;
+            invalid.push(document);
+        }
+        let mut missing_request = valid;
+        missing_request.as_object_mut().unwrap().remove("requestId");
+        invalid.push(missing_request);
+        for document in invalid {
+            *response.lock().unwrap() = document;
+            assert!(client
+                .read_proposal_review_status_with_progress(&prior)
+                .await
+                .is_err());
+        }
         server.abort();
     }
 

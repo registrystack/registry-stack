@@ -443,7 +443,7 @@ impl MutationTransaction {
         method: HttpMethod,
         document: Option<&ProposalDocument>,
         count: usize,
-        public_reason_served: bool,
+        field_set_reference: Option<&'static str>,
         correlation: &RequestCorrelation,
     ) -> Result<(), MutationError> {
         let reference = document
@@ -479,10 +479,9 @@ impl MutationTransaction {
                 record_reference: reference,
                 record_revision: document.map(|document| document.header.workflow_revision),
                 result_count: Some(count),
-                // A served public reason is recorded as a fixed marker; its
-                // text never reaches the journal.
-                field_set_reference: public_reason_served
-                    .then(|| PUBLIC_REASON_REFERENCE.to_owned()),
+                // Optional review disclosures use fixed markers; their
+                // released values never reach the journal.
+                field_set_reference: field_set_reference.map(str::to_owned),
                 correlation: correlation.clone(),
             },
         )?;
@@ -4009,6 +4008,7 @@ pub(crate) fn proposal_turn(
 
 /// The audit marker of a read that served a decision's public reason.
 pub(crate) const PUBLIC_REASON_REFERENCE: &str = "proposal-review-public-reason";
+pub(crate) const REVIEW_PROGRESS_REFERENCE: &str = "proposal-review-progress";
 
 /// Why the review authority refused one submission's hand-off for good, as
 /// the allowlisted code recorded when it refused. A hand-off still pending,

@@ -18,6 +18,12 @@ requires the accepted request binding and refuses a response unless its
 request, subject, policy, and submission digest all match exactly. A producer
 must persist that accepted binding before consuming a terminal result.
 
+`request_progress` performs one `GET` with `include=progress` and returns the
+optional bounded `ReviewProgressCode`. It refuses a response unless the full
+accepted request, subject, policy and submission digest match exactly, and it
+refuses a progress code on terminal work. It does not infer progress from the
+provider's raw stage identifier or retain an earlier code across failures.
+
 `create_or_recover_request_for_producer` also compares the expected configured
 producer ID with `Registry-Review-Producer` when the provider supplies it.
 An acceptance naming another producer returns `ProducerIdentityMismatch` only

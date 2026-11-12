@@ -10,6 +10,7 @@ mod proposal;
 pub(crate) use proposal::{
     proposal_operation_name, CheckedProposalTaskAuthority, ProposalApplyPreflight,
 };
+pub(crate) use proposal::{PUBLIC_REASON_REFERENCE, REVIEW_PROGRESS_REFERENCE};
 mod timer;
 pub(crate) use timer::{
     begin_record_timer_staging, lock_timer_control, refreshed_timer_metadata,
@@ -854,6 +855,17 @@ impl MutationTransaction {
     ) -> Self {
         self.review_authorities = Some(authorities);
         self
+    }
+
+    pub(crate) async fn request_review_progress(
+        &self,
+        binding: &crate::review_store::ReviewProgressBinding,
+    ) -> Result<Option<String>, MutationError> {
+        self.review_authorities
+            .as_ref()
+            .ok_or(MutationError::Unavailable)?
+            .request_progress(binding)
+            .await
     }
 
     pub fn with_task_status(
