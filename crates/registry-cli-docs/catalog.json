@@ -1537,9 +1537,9 @@
               "options": [
                 {
                   "display": "--provider-pack <FILE>",
-                  "description": "Exact provider pack pinned by the payment connections",
+                  "description": "Exact provider pack pinned by a payment connection. Repeat for every active pin",
                   "always_required": false,
-                  "repeatable": false,
+                  "repeatable": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1609,9 +1609,9 @@
               "options": [
                 {
                   "display": "--provider-pack <FILE>",
-                  "description": "Exact provider pack pinned by the payment connections",
+                  "description": "Exact provider pack pinned by a payment connection. Repeat for every active pin",
                   "always_required": false,
-                  "repeatable": false,
+                  "repeatable": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
