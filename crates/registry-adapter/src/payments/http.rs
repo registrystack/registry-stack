@@ -135,7 +135,10 @@ fn mapping_auth_matches(
 }
 
 fn live_disbursement_auth_supported(auth: PaymentProviderAuth) -> bool {
-    matches!(auth, PaymentProviderAuth::Bearer)
+    matches!(
+        auth,
+        PaymentProviderAuth::Bearer | PaymentProviderAuth::MifosLegacySignature
+    )
 }
 
 const MAX_PAYMENT_PROVIDER_PACKS: usize = 32;
@@ -294,10 +297,11 @@ pub async fn load_router(
         }
     }
     for connection in &config.disbursements {
-        for reference in [
+        let references = [
             connection.binding.provider.credential_ref(),
             &connection.binding.registry.credential_ref,
-        ] {
+        ];
+        for reference in references {
             let value = resolver
                 .resolve(reference.as_str())
                 .map_err(|_| refused("a payment credential could not be resolved"))?;
@@ -333,10 +337,18 @@ pub async fn load_router(
             .await
             .map_err(|_| refused("G2P runtime role lacks required table or sequence privileges"))?;
     }
+    let g2p_provider_bindings = config
+        .disbursements
+        .iter()
+        .map(|connection| connection.binding.provider.clone())
+        .collect::<Vec<_>>();
+    let g2p_provider = HttpG2pProvider::initialize(resolver.clone(), &g2p_provider_bindings)
+        .await
+        .map_err(|_| refused("payment disbursement authentication initialization failed"))?;
     let g2p = G2pService::new(
         g2p_store,
         Arc::new(BregG2pBridge::new(resolver.clone())),
-        Arc::new(HttpG2pProvider::new(resolver.clone())),
+        Arc::new(g2p_provider),
     );
     let g2p = if let Some(mapping) = packs.mapping.clone() {
         g2p.with_mapping(mapping)
@@ -958,11 +970,11 @@ mapping:
     }
 
     #[test]
-    fn startup_refuses_disbursement_auth_without_a_runtime_signer_and_verifier() {
+    fn startup_accepts_only_authentication_profiles_with_host_implementations() {
         assert!(live_disbursement_auth_supported(
             PaymentProviderAuth::Bearer
         ));
-        assert!(!live_disbursement_auth_supported(
+        assert!(live_disbursement_auth_supported(
             PaymentProviderAuth::MifosLegacySignature
         ));
     }
