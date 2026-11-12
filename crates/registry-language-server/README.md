@@ -151,8 +151,9 @@ cargo run --locked -p registry-language-server
 Use `registry-language-server --version` to identify a built binary. The server
 version follows the Registry Stack workspace version.
 
-The server communicates over standard input and output and expects the opened workspace (or a
-nested directory) to be inside a Registry Stack or Evidence authoring project.
+In its default mode, the server communicates over standard input and output and expects the
+opened workspace (or a nested directory) to be inside a Registry Stack or Evidence authoring
+project.
 
 For a caller-supplied Workspace v1 snapshot, `registry-language-server --workspace-analysis`
 reads one `id.registrystack.org/formats/platform/workspace-analysis/v1alpha1` JSON request
@@ -160,3 +161,11 @@ from standard input and writes one JSON response. The caller supplies the exact 
 file digests, workspace binding and declarative facts; this mode does not read source paths
 from disk. Responses distinguish resolved references and impact from incomplete native or
 generated coverage.
+
+For a Studio Workspace v1 draft, `registry-language-server --workspace-lsp` serves LSP over
+standard input and output. Each `registryStudio/authorizedQuery` request carries the caller's
+authorization; a ready authorization supplies exact snapshot bytes and URI bindings. The server
+reads no workspace paths from disk in this mode and retains no snapshot between requests. Direct
+definition and references requests have no authorization payload and are refused. The embedding
+caller must authorize each query before forwarding it; this process analyzes only the supplied
+bytes.
