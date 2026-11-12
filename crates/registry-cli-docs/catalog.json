@@ -1646,7 +1646,7 @@
             {
               "name": "fixtures",
               "invocation": "adapterctl payments fixtures",
-              "about": "Replay provider mappings without connecting to Mifos or BReg",
+              "about": "Replay provider mappings offline",
               "long_about": null,
               "usage": "adapterctl payments fixtures [OPTIONS] <COMMAND>",
               "arguments": [],
