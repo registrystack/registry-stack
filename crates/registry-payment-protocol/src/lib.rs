@@ -207,6 +207,210 @@ pub struct RequestCollection {
     pub bill_version: u64,
 }
 
+/// A disbursement intent names an approved, immutable instruction held by the
+/// owning registry. The caller cannot supply amount, destination or funding.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequestDisbursement {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub instruction_record_id: Uuid,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = 9_007_199_254_740_991_u64))
+    )]
+    pub instruction_version: u64,
+}
+
+/// Read one saved disbursement and its current provider observation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadDisbursement {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub disbursement_id: Uuid,
+}
+
+impl RequestDisbursement {
+    /// # Errors
+    /// Refuses a nil identifier or a nonportable/nonpositive version.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        validate_bill(self.instruction_record_id, self.instruction_version)
+    }
+}
+
+/// A provider accepted the exact instruction command for asynchronous work.
+/// This is not confirmation that the recipient was paid.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisbursementAccepted {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub disbursement_id: Uuid,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub instruction_record_id: Uuid,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub instruction_id: Uuid,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = 9_007_199_254_740_991_u64))
+    )]
+    pub instruction_version: u64,
+    pub binding_revision: String,
+    pub simulation: bool,
+}
+
+impl DisbursementAccepted {
+    /// # Errors
+    /// Refuses a missing or malformed durable identity.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        validate_bill(self.instruction_record_id, self.instruction_version)?;
+        if self.instruction_id.is_nil() {
+            return Err(ContractError("invalid instruction identity"));
+        }
+        if self.disbursement_id.is_nil() || !bounded_text(&self.binding_revision, 128) {
+            return Err(ContractError("invalid disbursement binding"));
+        }
+        Ok(())
+    }
+}
+
+/// Only provider-confirmed means the pinned provider reported completion.
+/// It does not by itself claim end-recipient credit or settlement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum DisbursementState {
+    Accepted,
+    Pending,
+    ProviderConfirmed,
+    Failed,
+    Unknown,
+}
+
+/// A bounded observation of one saved disbursement instruction.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisbursementStatus {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub disbursement_id: Uuid,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub instruction_record_id: Uuid,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub instruction_id: Uuid,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = 9_007_199_254_740_991_u64))
+    )]
+    pub instruction_version: u64,
+    pub binding_revision: String,
+    pub simulation: bool,
+    pub state: DisbursementState,
+    pub money: Money,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+impl DisbursementStatus {
+    /// # Errors
+    /// Refuses a status that carries contradictory provider evidence.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        DisbursementAccepted {
+            disbursement_id: self.disbursement_id,
+            instruction_record_id: self.instruction_record_id,
+            instruction_id: self.instruction_id,
+            instruction_version: self.instruction_version,
+            binding_revision: self.binding_revision.clone(),
+            simulation: self.simulation,
+        }
+        .validate()?;
+        self.money.minor_units()?;
+        if (self.state == DisbursementState::ProviderConfirmed)
+            != self
+                .provider_reference
+                .as_ref()
+                .is_some_and(|value| bounded_text(value, 128))
+            || (self.state != DisbursementState::ProviderConfirmed
+                && self.provider_reference.is_some())
+            || (self.state == DisbursementState::Failed)
+                != self
+                    .failure_reason
+                    .as_ref()
+                    .is_some_and(|value| bounded_text(value, 128))
+            || (self.state != DisbursementState::Failed && self.failure_reason.is_some())
+        {
+            return Err(ContractError("state and evidence disagree"));
+        }
+        Ok(())
+    }
+}
+
+/// Ask the Adapter to report a previously verified provider completion to
+/// the instruction registry. The caller supplies no status or evidence.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordProviderConfirmation {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub disbursement_id: Uuid,
+}
+
+/// The exact provider completion reported to the authoritative instruction.
+/// This does not claim beneficiary credit or final settlement.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderConfirmation {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub disbursement_id: Uuid,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub instruction_record_id: Uuid,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "non_nil_uuid_schema"))]
+    pub instruction_id: Uuid,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = 9_007_199_254_740_991_u64))
+    )]
+    pub instruction_version: u64,
+    pub binding_revision: String,
+    pub simulation: bool,
+    pub money: Money,
+    pub provider_reference: String,
+    pub provider_result_digest: String,
+}
+
+impl ProviderConfirmation {
+    /// # Errors
+    /// Refuses a confirmation without exact binding and provider evidence.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        DisbursementStatus {
+            disbursement_id: self.disbursement_id,
+            instruction_record_id: self.instruction_record_id,
+            instruction_id: self.instruction_id,
+            instruction_version: self.instruction_version,
+            binding_revision: self.binding_revision.clone(),
+            simulation: self.simulation,
+            state: DisbursementState::ProviderConfirmed,
+            money: self.money.clone(),
+            provider_reference: Some(self.provider_reference.clone()),
+            failure_reason: None,
+        }
+        .validate()?;
+        if self.provider_result_digest.len() != 64
+            || !self
+                .provider_result_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ContractError("invalid provider result digest"));
+        }
+        Ok(())
+    }
+}
+
 impl RequestCollection {
     /// # Errors
     /// Refuses a nil identifier or a nonportable/nonpositive bill version.

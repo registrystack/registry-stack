@@ -85,6 +85,18 @@ use std::sync::Arc;
 #[cfg(feature = "transit")]
 use std::time::Duration;
 use thiserror::Error;
+
+/// SHA3-256 using the platform's maintained AWS-LC backend.
+///
+/// Protocol consumers own the exact bytes to hash and the representation of
+/// this result. This primitive does not imply a JWS or signing profile.
+#[must_use]
+pub fn sha3_256(bytes: &[u8]) -> [u8; 32] {
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA3_256, bytes);
+    let mut output = [0u8; 32];
+    output.copy_from_slice(digest.as_ref());
+    output
+}
 use url::Host;
 use zeroize::{Zeroize, Zeroizing};
 

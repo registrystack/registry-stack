@@ -13,9 +13,10 @@ use registry_messaging_client::{
     MessagingClient, MessagingClientConfig, MessagingClientError, ProblemCode, SubmitMessageRequest,
 };
 use registry_payment_client::{
-    CollectionAccepted, CollectionState, CollectionStatus, PaymentClient, PaymentClientConfig,
-    PaymentClientError, PaymentProblemCode, PaymentProtocolFailure, ReadCollection, RecordReceipt,
-    RequestCollection,
+    CollectionAccepted, CollectionState, CollectionStatus, DisbursementAccepted, DisbursementState,
+    DisbursementStatus, PaymentClient, PaymentClientConfig, PaymentClientError, PaymentProblemCode,
+    PaymentProtocolFailure, ReadCollection, ReadDisbursement, RecordProviderConfirmation,
+    RecordReceipt, RequestCollection, RequestDisbursement,
 };
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{
@@ -443,8 +444,10 @@ fn payment_failure(error: PaymentClientError, operation: Operation) -> CallOutco
             code: PaymentProblemCode::ReceiptExpired,
             ..
         }
-    ) && operation == Operation::RequestCollection
-    {
+    ) && matches!(
+        operation,
+        Operation::RequestCollection | Operation::RequestDisbursement
+    ) {
         return CallOutcome::ReceiptExpired;
     }
     if operation.has_dispatch_risk() && error.is_outcome_unknown() {
@@ -576,7 +579,148 @@ async fn payment_call(connection: &PaymentConnection, request: &CallRequest) -> 
                 Err(error) => payment_failure(error, request.operation),
             }
         }
+        Operation::RequestDisbursement => {
+            let input: RequestDisbursement = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let Some(key) = request.idempotency_key.as_deref() else {
+                return refused("invalid-command");
+            };
+            match connection
+                .client
+                .request_disbursement(&token, key, &input)
+                .await
+            {
+                Ok(answer) => payment_success(answer.value, request.operation),
+                Err(error) => payment_failure(error, request.operation),
+            }
+        }
+        Operation::ReadDisbursement => {
+            let input: ReadDisbursement = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            if request.idempotency_key.is_some() {
+                return refused("invalid-command");
+            }
+            match connection.client.read_disbursement(&token, &input).await {
+                Ok(answer) => payment_success(answer.value, request.operation),
+                Err(error) => payment_failure(error, request.operation),
+            }
+        }
+        Operation::RecordProviderConfirmation => {
+            let input: RecordProviderConfirmation =
+                match serde_json::from_value(request.input.clone()) {
+                    Ok(input) => input,
+                    Err(_) => return refused("invalid-command"),
+                };
+            let Some(key) = request.idempotency_key.as_deref() else {
+                return refused("invalid-command");
+            };
+            match connection
+                .client
+                .record_provider_confirmation(&token, key, &input)
+                .await
+            {
+                Ok(answer) => payment_success(answer.value, request.operation),
+                Err(error) => payment_failure(error, request.operation),
+            }
+        }
         _ => refused("operation-unbound"),
+    }
+}
+
+fn disbursement_acceptance(status: &DisbursementStatus) -> DisbursementAccepted {
+    DisbursementAccepted {
+        disbursement_id: status.disbursement_id,
+        instruction_record_id: status.instruction_record_id,
+        instruction_id: status.instruction_id,
+        instruction_version: status.instruction_version,
+        binding_revision: status.binding_revision.clone(),
+        simulation: status.simulation,
+    }
+}
+
+fn payment_disbursement_accepted(
+    operation: Operation,
+    value: &serde_json::Value,
+) -> Option<DisbursementAccepted> {
+    match operation {
+        Operation::RequestDisbursement => serde_json::from_value(value.clone()).ok(),
+        Operation::ReadDisbursement => serde_json::from_value::<DisbursementStatus>(value.clone())
+            .ok()
+            .map(|status| disbursement_acceptance(&status)),
+        _ => None,
+    }
+}
+
+async fn payment_disbursement_observe(
+    connection: &PaymentConnection,
+    request: &CallRequest,
+    accepted: &serde_json::Value,
+) -> CompletionObservation {
+    let Some(expected) = payment_disbursement_accepted(request.operation, accepted)
+        .filter(|accepted| accepted.validate().is_ok())
+    else {
+        return CompletionObservation::Hold {
+            code: "payment-invalid-response".into(),
+        };
+    };
+    let token = match connection.tokens.bearer_token().await {
+        Ok(token) => token,
+        Err(_) => {
+            return CompletionObservation::Retryable {
+                code: "completion-unavailable".into(),
+                retry_after: None,
+            }
+        }
+    };
+    match connection
+        .client
+        .read_disbursement(
+            &token,
+            &ReadDisbursement {
+                disbursement_id: expected.disbursement_id,
+            },
+        )
+        .await
+    {
+        Ok(answer) if disbursement_acceptance(&answer.value) != expected => {
+            CompletionObservation::Hold {
+                code: "payment-correlation-mismatch".into(),
+            }
+        }
+        Ok(answer) => match answer.value.state {
+            DisbursementState::Accepted
+            | DisbursementState::Pending
+            | DisbursementState::Unknown => CompletionObservation::Pending { retry_after: None },
+            DisbursementState::ProviderConfirmed | DisbursementState::Failed => {
+                match serde_json::to_value(answer.value) {
+                    Ok(value) => CompletionObservation::Settled(value),
+                    Err(_) => CompletionObservation::Hold {
+                        code: "payment-invalid-response".into(),
+                    },
+                }
+            }
+        },
+        Err(PaymentClientError::Transport { .. })
+        | Err(PaymentClientError::Problem {
+            code: PaymentProblemCode::Unavailable,
+            ..
+        }) => CompletionObservation::Retryable {
+            code: "completion-unavailable".into(),
+            retry_after: None,
+        },
+        Err(PaymentClientError::Protocol {
+            failure: PaymentProtocolFailure::Correlation,
+            ..
+        }) => CompletionObservation::Hold {
+            code: "payment-correlation-mismatch".into(),
+        },
+        Err(_) => CompletionObservation::Hold {
+            code: "payment-unknown".into(),
+        },
     }
 }
 
@@ -1109,6 +1253,11 @@ impl AdapterSet for HttpAdapters {
             {
                 payment_observe(connection, request, accepted).await
             }
+            (CompletionKind::PaymentDisbursement {}, Some(Connection::Payments(connection)))
+                if request.operation.follows_disbursement() =>
+            {
+                payment_disbursement_observe(connection, request, accepted).await
+            }
             _ => CompletionObservation::Hold {
                 code: "operation-unbound".into(),
             },
@@ -1147,6 +1296,7 @@ impl AdapterSet for HttpAdapters {
             crate::definition::CompletionKind::CaseworkResult {}
                 | crate::definition::CompletionKind::BregProposal {}
                 | crate::definition::CompletionKind::PaymentCollection {}
+                | crate::definition::CompletionKind::PaymentDisbursement {}
         ) {
             self.config.minimum_observation_interval_seconds.get()
         } else {
@@ -1224,6 +1374,36 @@ impl AdapterSet for HttpAdapters {
                 match connection
                     .client
                     .collection_receipt(&token, idempotency_key, &input)
+                    .await
+                {
+                    Ok(answer) => match serde_json::to_value(answer.value) {
+                        Ok(value) => ReconciliationOutcome::Confirmed(value),
+                        Err(_) => unresolved("invalid-observation"),
+                    },
+                    Err(PaymentClientError::Problem {
+                        code:
+                            PaymentProblemCode::ReceiptUnresolved
+                            | PaymentProblemCode::ReceiptExpired
+                            | PaymentProblemCode::RecoveryHeld
+                            | PaymentProblemCode::OutcomeUnknown,
+                        ..
+                    }) => unresolved("receipt-unresolved"),
+                    Err(_) => unresolved("observation-unavailable"),
+                }
+            }
+            (Some(Connection::Payments(connection)), Operation::RequestDisbursement) => {
+                let input: RequestDisbursement = match serde_json::from_value(request.input.clone())
+                {
+                    Ok(input) => input,
+                    Err(_) => return unresolved("invalid-command"),
+                };
+                let token = match connection.tokens.bearer_token().await {
+                    Ok(token) => token,
+                    Err(_) => return unresolved("observation-unavailable"),
+                };
+                match connection
+                    .client
+                    .disbursement_receipt(&token, idempotency_key, &input)
                     .await
                 {
                     Ok(answer) => match serde_json::to_value(answer.value) {

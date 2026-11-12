@@ -2834,6 +2834,357 @@
       "type": "object"
     }
   },
+  "payments.read-disbursement/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": {
+        "acceptedBinding": [
+          "disbursementId",
+          "instructionRecordId",
+          "instructionId",
+          "instructionVersion",
+          "bindingRevision",
+          "simulation"
+        ],
+        "authenticatedWake": false,
+        "authority": "current-bound-payment-connection",
+        "deadline": "original-wait-timeout-within-original-run-deadline",
+        "defaultIntervalSeconds": 900,
+        "maximumRetryAfterSeconds": 86400,
+        "minimumIntervalSeconds": 30,
+        "name": "disbursement",
+        "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+        "paymentSuccessState": "provider-confirmed",
+        "pendingStates": [
+          "accepted",
+          "pending",
+          "unknown"
+        ],
+        "profile": "payment-disbursement",
+        "settledStates": [
+          "provider-confirmed",
+          "failed"
+        ],
+        "signalCarriesResult": false,
+        "terminalEvidence": "validated-authoritative-disbursement-read"
+      },
+      "connectionInterface": "payments",
+      "identity": {
+        "effect": "read",
+        "id": "payments.read-disbursement/v1",
+        "keyRequirement": "none",
+        "product": "payments",
+        "readReceipt": false,
+        "recovery": "read-again",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "attemptTimeoutMilliseconds": 2000,
+          "connectTimeoutMilliseconds": 1000,
+          "maximumMutationRetries": 0,
+          "maximumResponseBytes": 65536
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Read one saved disbursement and its current provider observation.",
+      "properties": {
+        "disbursementId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "disbursementId"
+      ],
+      "title": "payments.read-disbursement/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "DisbursementState": {
+          "description": "Only provider-confirmed means the pinned provider reported completion.\nIt does not by itself claim end-recipient credit or settlement.",
+          "enum": [
+            "accepted",
+            "pending",
+            "provider-confirmed",
+            "failed",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "Money": {
+          "additionalProperties": false,
+          "description": "An exact positive decimal amount. Scale belongs to the configured currency\npolicy; wire amounts are strings so no binary floating-point rounding occurs.",
+          "properties": {
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            "scale": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "value": {
+              "maxLength": 24,
+              "minLength": 1,
+              "not": {
+                "pattern": "^0(\\.0{1,6})?$"
+              },
+              "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,6})?$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "currency",
+            "scale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "A bounded observation of one saved disbursement instruction.",
+      "properties": {
+        "bindingRevision": {
+          "type": "string"
+        },
+        "disbursementId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "failureReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionRecordId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "money": {
+          "$ref": "#/$defs/Money"
+        },
+        "providerReference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "simulation": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/DisbursementState"
+        }
+      },
+      "required": [
+        "disbursementId",
+        "instructionRecordId",
+        "instructionId",
+        "instructionVersion",
+        "bindingRevision",
+        "simulation",
+        "state",
+        "money"
+      ],
+      "title": "payments.read-disbursement/v1 output",
+      "type": "object"
+    }
+  },
+  "payments.record-provider-confirmation/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "payments",
+      "identity": {
+        "effect": "mutation",
+        "id": "payments.record-provider-confirmation/v1",
+        "keyRequirement": "required",
+        "product": "payments",
+        "readReceipt": false,
+        "recovery": "same-command",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "attemptTimeoutMilliseconds": 2000,
+          "connectTimeoutMilliseconds": 1000,
+          "maximumMutationRetries": 0,
+          "maximumResponseBytes": 65536
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Ask the Adapter to report a previously verified provider completion to\nthe instruction registry. The caller supplies no status or evidence.",
+      "properties": {
+        "disbursementId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "disbursementId"
+      ],
+      "title": "payments.record-provider-confirmation/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "Money": {
+          "additionalProperties": false,
+          "description": "An exact positive decimal amount. Scale belongs to the configured currency\npolicy; wire amounts are strings so no binary floating-point rounding occurs.",
+          "properties": {
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            "scale": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "value": {
+              "maxLength": 24,
+              "minLength": 1,
+              "not": {
+                "pattern": "^0(\\.0{1,6})?$"
+              },
+              "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,6})?$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "currency",
+            "scale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "The exact provider completion reported to the authoritative instruction.\nThis does not claim beneficiary credit or final settlement.",
+      "properties": {
+        "bindingRevision": {
+          "type": "string"
+        },
+        "disbursementId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionRecordId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "money": {
+          "$ref": "#/$defs/Money"
+        },
+        "providerReference": {
+          "type": "string"
+        },
+        "providerResultDigest": {
+          "type": "string"
+        },
+        "simulation": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "disbursementId",
+        "instructionRecordId",
+        "instructionId",
+        "instructionVersion",
+        "bindingRevision",
+        "simulation",
+        "money",
+        "providerReference",
+        "providerResultDigest"
+      ],
+      "title": "payments.record-provider-confirmation/v1 output",
+      "type": "object"
+    }
+  },
   "payments.record-receipt/v1": {
     "host": {
       "authority": "current-bound-connection-authority",
@@ -3108,6 +3459,149 @@
         "simulation"
       ],
       "title": "payments.request-collection/v1 output",
+      "type": "object"
+    }
+  },
+  "payments.request-disbursement/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": {
+        "acceptedBinding": [
+          "disbursementId",
+          "instructionRecordId",
+          "instructionId",
+          "instructionVersion",
+          "bindingRevision",
+          "simulation"
+        ],
+        "authenticatedWake": false,
+        "authority": "current-bound-payment-connection",
+        "deadline": "original-wait-timeout-within-original-run-deadline",
+        "defaultIntervalSeconds": 900,
+        "maximumRetryAfterSeconds": 86400,
+        "minimumIntervalSeconds": 30,
+        "name": "disbursement",
+        "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+        "paymentSuccessState": "provider-confirmed",
+        "pendingStates": [
+          "accepted",
+          "pending",
+          "unknown"
+        ],
+        "profile": "payment-disbursement",
+        "settledStates": [
+          "provider-confirmed",
+          "failed"
+        ],
+        "signalCarriesResult": false,
+        "terminalEvidence": "validated-authoritative-disbursement-read"
+      },
+      "connectionInterface": "payments",
+      "identity": {
+        "effect": "mutation",
+        "id": "payments.request-disbursement/v1",
+        "keyRequirement": "required",
+        "product": "payments",
+        "readReceipt": true,
+        "recovery": "hold-after-dispatch",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "attemptTimeoutMilliseconds": 2000,
+          "connectTimeoutMilliseconds": 1000,
+          "maximumMutationRetries": 0,
+          "maximumResponseBytes": 65536
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "A disbursement intent names an approved, immutable instruction held by the\nowning registry. The caller cannot supply amount, destination or funding.",
+      "properties": {
+        "instructionRecordId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instructionRecordId",
+        "instructionVersion"
+      ],
+      "title": "payments.request-disbursement/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "A provider accepted the exact instruction command for asynchronous work.\nThis is not confirmation that the recipient was paid.",
+      "properties": {
+        "bindingRevision": {
+          "type": "string"
+        },
+        "disbursementId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionRecordId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "instructionVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "simulation": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "disbursementId",
+        "instructionRecordId",
+        "instructionId",
+        "instructionVersion",
+        "bindingRevision",
+        "simulation"
+      ],
+      "title": "payments.request-disbursement/v1 output",
       "type": "object"
     }
   },

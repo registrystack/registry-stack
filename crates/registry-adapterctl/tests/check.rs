@@ -714,10 +714,10 @@ fn check_refuses_a_missing_explicit_fixture_path() {
     );
 }
 
-/// `schemas` writes the closed set of eleven generated files into any
+/// `schemas` writes the closed set of thirteen generated files into any
 /// directory it is given.
 #[test]
-fn schemas_writes_eleven_files_into_the_given_directory() {
+fn schemas_writes_thirteen_files_into_the_given_directory() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("schemas").to_str().unwrap().to_owned();
     let (exit, report, stderr) = run_json(&["schemas", "--output-dir", &output]);
@@ -732,6 +732,8 @@ fn schemas_writes_eleven_files_into_the_given_directory() {
         "effective-contract.v1alpha1.schema.json".to_owned(),
         "fixture.v1alpha1.schema.json".to_owned(),
         "pack.v1alpha1.schema.json".to_owned(),
+        "payment-provider-fixture.v1alpha1.schema.json".to_owned(),
+        "payment-provider-pack.v1alpha1.schema.json".to_owned(),
         "payments.v1alpha1.schema.json".to_owned(),
         "profile.v1alpha1.schema.json".to_owned(),
         "project.v1alpha1.schema.json".to_owned(),

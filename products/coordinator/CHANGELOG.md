@@ -40,6 +40,14 @@
   every read to the accepted bill and binding, and settles the collection
   attempt only on confirmed or failed state. Only Adapter-verified confirmed
   state can produce a registry receipt.
+- Add native G2P disbursement operations: submit one approved immutable
+  instruction, observe its typed provider state, and report a verified
+  provider confirmation under a separate same-command key. An uncertain
+  submission stays held and permits only read-only original-command
+  reconciliation, never a fresh provider send. The host-owned `disbursement`
+  completion keeps accepted, pending, and unknown states waiting, correlates
+  every read to the accepted instruction and binding, and settles only on
+  provider-confirmed or failed state.
 
 ## 0.46.0 - 2026-11-08
 

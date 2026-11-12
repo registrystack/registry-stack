@@ -112,6 +112,17 @@ impl OperationDescriptor {
                 "authenticatedWake":false,
                 "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
             }),
+            id if Operation::parse(id).is_some_and(Operation::follows_disbursement) => json!({
+                "name":"disbursement", "profile":"payment-disbursement",
+                "acceptedBinding":["disbursementId","instructionRecordId","instructionId","instructionVersion","bindingRevision","simulation"],
+                "authority":"current-bound-payment-connection",
+                "terminalEvidence":"validated-authoritative-disbursement-read",
+                "pendingStates":["accepted","pending","unknown"],
+                "settledStates":["provider-confirmed","failed"],
+                "paymentSuccessState":"provider-confirmed",
+                "authenticatedWake":false,
+                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+            }),
             _ => serde_json::Value::Null,
         };
         if let Some(fields) = observation.as_object_mut() {
@@ -236,6 +247,25 @@ const fn mutation(
     }
 }
 
+/// A provider submission that can be reconciled through an authoritative
+/// original-command read, but must never be sent again after uncertainty.
+const fn receipt_reconciled_mutation(
+    id: &'static str,
+    product: &'static str,
+) -> OperationDescriptor {
+    OperationDescriptor {
+        id,
+        version: 1,
+        product,
+        effect: EffectKind::Mutation,
+        key_requirement: KeyRequirement::Required,
+        requires_preparation: false,
+        recovery: RecoverySemantics::HoldAfterDispatch,
+        read_receipt: true,
+        declared_refusal: false,
+    }
+}
+
 const fn declared_read(id: &'static str, product: &'static str) -> OperationDescriptor {
     OperationDescriptor {
         declared_refusal: true,
@@ -325,6 +355,9 @@ macro_rules! operation_catalog {
             RequestCollection => "payments.request-collection/v1", mutation("payments", true, false), request_collection;
             ReadCollection => "payments.read-collection/v1", read("payments"), read_collection;
             RecordReceipt => "payments.record-receipt/v1", mutation("payments", false, false), record_receipt;
+            RequestDisbursement => "payments.request-disbursement/v1", receipt_reconciled_mutation("payments"), request_disbursement;
+            ReadDisbursement => "payments.read-disbursement/v1", read("payments"), read_disbursement;
+            RecordProviderConfirmation => "payments.record-provider-confirmation/v1", mutation("payments", false, false), record_provider_confirmation;
         }
     };
 }
@@ -452,6 +485,15 @@ mod tests {
             ),
             (Operation::ReadCollection, "payments.read-collection/v1"),
             (Operation::RecordReceipt, "payments.record-receipt/v1"),
+            (
+                Operation::RequestDisbursement,
+                "payments.request-disbursement/v1",
+            ),
+            (Operation::ReadDisbursement, "payments.read-disbursement/v1"),
+            (
+                Operation::RecordProviderConfirmation,
+                "payments.record-provider-confirmation/v1",
+            ),
         ];
         assert_eq!(
             descriptors()
@@ -603,6 +645,8 @@ mod tests {
             Operation::ExternalCommand,
             Operation::RequestCollection,
             Operation::RecordReceipt,
+            Operation::RequestDisbursement,
+            Operation::RecordProviderConfirmation,
         ];
         let allowed_mutations = [
             Operation::SubmitMessage,
@@ -686,6 +730,35 @@ mod tests {
             RecoverySemantics::SameCommand
         );
         assert!(!Operation::RecordReceipt.follows_collection());
+        assert_eq!(Operation::RequestDisbursement.product(), "payments");
+        assert!(Operation::RequestDisbursement.requires_key());
+        assert!(Operation::RequestDisbursement.supports_read_receipt());
+        assert_eq!(
+            Operation::RequestDisbursement.recovery(),
+            RecoverySemantics::HoldAfterDispatch
+        );
+        assert!(!Operation::RequestDisbursement.can_retry_after_unknown());
+        assert!(Operation::RequestDisbursement.follows_disbursement());
+        let completion =
+            &Operation::RequestDisbursement.descriptor().host_contract()["completionObservation"];
+        assert_eq!(
+            completion["pendingStates"],
+            serde_json::json!(["accepted", "pending", "unknown"])
+        );
+        assert_eq!(
+            completion["settledStates"],
+            serde_json::json!(["provider-confirmed", "failed"])
+        );
+        assert_eq!(completion["paymentSuccessState"], "provider-confirmed");
+        assert!(Operation::ReadDisbursement.is_read());
+        assert!(Operation::ReadDisbursement.follows_disbursement());
+        assert!(Operation::RecordProviderConfirmation.requires_key());
+        assert_eq!(
+            Operation::RecordProviderConfirmation.recovery(),
+            RecoverySemantics::SameCommand
+        );
+        assert!(Operation::RecordProviderConfirmation.can_retry_after_unknown());
+        assert!(!Operation::RecordProviderConfirmation.follows_disbursement());
     }
 
     #[test]

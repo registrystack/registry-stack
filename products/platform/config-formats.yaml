@@ -4467,6 +4467,86 @@ formats:
         whenOmitted: closed
     restrictingMembers: [/allowedPrivateCidrs, /oidc/audience, /oidc/issuer]
 
+  - id: adapter/payment-provider-fixture
+    product: adapter
+    title: Registry Adapter payment provider fixture
+    files: [payment-provider-fixture.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/payment-provider-fixture/v1alpha1
+      kind: AdapterPaymentProviderFixture
+      checkedBy:
+        file: crates/registry-adapterctl/src/payment_fixtures.rs
+        symbol: VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/payment-provider-fixture/v1alpha1
+      kind: AdapterPaymentProviderFixture
+    schema:
+      path: products/adapter/schemas/payment-provider-fixture.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/payment-provider-fixture/payment-provider-fixture.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/payment_fixtures.rs
+      function: replay_mapped
+      type: FixtureDocument
+    check: adapterctl payments fixtures replay {payments} --provider-pack {pack}/pack.yaml --fixtures {file}
+    example: products/adapter/examples/payment-provider-fixture.yaml
+    conformance:
+      requiredText: /type
+      optionalText: none
+      integer: /acceptance/response/httpStatus
+      boolean: none
+    securityMembers: []
+    restrictingMembers: [/type, /direction]
+
+  - id: adapter/payment-provider-pack
+    product: adapter
+    title: Registry Adapter payment provider pack
+    files: [packs/*/pack.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1
+      kind: AdapterPaymentProviderPack
+      checkedBy:
+        file: crates/registry-adapter/src/payments/pack.rs
+        symbol: API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1
+      kind: AdapterPaymentProviderPack
+    schema:
+      path: products/adapter/schemas/payment-provider-pack.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/payment-provider-pack/payment-provider-pack.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapter
+      file: crates/registry-adapter/src/payments/pack.rs
+      function: from_yaml
+      type: PaymentProviderPack
+    check: adapterctl payments check-pack {file}
+    example: products/adapter/packs/payment-simulator/pack.yaml
+    conformance:
+      requiredText: /id
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - {pointer: /connector, whenOmitted: refused}
+      - {pointer: /capabilities, whenOmitted: refused}
+      # Required for each declared direction of the generic HTTP connector;
+      # compiled connector packs have no mapping member.
+      - {pointer: /mapping/collection/auth, whenOmitted: unclassified}
+      - {pointer: /mapping/disbursement/auth, whenOmitted: unclassified}
+    restrictingMembers: [/connector, /capabilities, /mapping/collection/auth, /mapping/disbursement/auth]
+
   - id: adapter/payments
     product: adapter
     title: Registry Adapter payment connections
@@ -4502,15 +4582,23 @@ formats:
       integer: /connections/0/binding/replayWindowSeconds
       boolean: /connections/0/binding/simulation
     securityMembers:
-      - {pointer: /connections, whenOmitted: refused}
+      - {pointer: /connections, whenOmitted: closed}
       - {pointer: /connections/*/allowedClients, whenOmitted: refused}
       - {pointer: /connections/*/requiredScope, whenOmitted: refused}
       - {pointer: /connections/*/institutionId, whenOmitted: refused}
       - {pointer: /connections/*/serviceId, whenOmitted: refused}
       - {pointer: /connections/*/binding/simulation, whenOmitted: refused}
-      - {pointer: /connections/*/binding/provider/baseUrl, whenOmitted: refused}
-      - {pointer: /connections/*/binding/provider/tenant, whenOmitted: refused}
-      - {pointer: /connections/*/binding/provider/biller, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/type, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/connection/baseUrl, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/connection/channelBaseUrl, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/connection/bulkBaseUrl, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/connection/operationsBaseUrl, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/connection/tenant, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/connection/biller, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/connection/paymentScheme, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/payer/financialAddressKey, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/payer/payerIdKey, whenOmitted: refused}
+      - {pointer: /connections/*/binding/provider/transactionType, whenOmitted: refused}
       - {pointer: /connections/*/binding/providerCredentialRef, whenOmitted: refused}
       - {pointer: /connections/*/binding/providerCredentialIdentity, whenOmitted: refused}
       - {pointer: /connections/*/binding/replayWindowSeconds, whenOmitted: refused}
@@ -4521,7 +4609,7 @@ formats:
       - {pointer: /connections/*/binding/registry/receiptProfile, whenOmitted: refused}
       - {pointer: /connections/*/binding/registry/bindAction, whenOmitted: refused}
       - {pointer: /connections/*/binding/registry/receiptAction, whenOmitted: refused}
-    restrictingMembers: [/connections, /connections/*/allowedClients, /connections/*/requiredScope, /connections/*/institutionId, /connections/*/serviceId, /connections/*/binding/simulation]
+    restrictingMembers: [/connections/*/allowedClients, /connections/*/requiredScope, /connections/*/institutionId, /connections/*/serviceId, /connections/*/binding/simulation]
 
   - id: adapter/job-runtime
     product: adapter

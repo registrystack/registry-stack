@@ -124,7 +124,7 @@ FACADE_DEPENDENCIES = (
 CONNECTOR = "registry-adapter-connectors"
 PAYMENT_HOST = "registry-adapter"
 PAYMENT_PROTOCOL = "registry-payment-protocol"
-PAYMENT_PROVIDER = "registry-payment-simulator-connector"
+PAYMENT_PROVIDERS = frozenset({"registry-payment-simulator-connector", "registry-payment-mifos-connector"})
 
 # The maintained product client the connector may reach.
 CONNECTOR_CLIENTS = frozenset(
@@ -305,19 +305,28 @@ def payment_host_may_reach(name: str) -> bool:
     """The host keeps attempts and calls only the public BReg client surface."""
     return (
         engine_may_reach(PAYMENT_HOST, name)
-        or name in {PAYMENT_PROTOCOL, PAYMENT_PROVIDER}
+        or name == PAYMENT_PROTOCOL or name in PAYMENT_PROVIDERS
         or name in CONNECTOR_CLIENTS
         or name in CLIENT_SUPPORT
     )
 
 
 def authoring_refused(start, names, every, linked) -> set[str]:
-    """Authoring may inherit the host closure, not link product clients itself."""
+    """Authoring may inherit the host closure and replay a payment provider, not link product clients itself."""
     refused = set()
     for dependency in every.get(start, set()):
-        permits = payment_host_may_reach if names[dependency] == PAYMENT_HOST else (
-            lambda name: engine_may_reach("registry-adapterctl", name)
-        )
+        dependency_name = names[dependency]
+        if dependency_name == PAYMENT_HOST:
+            permits = payment_host_may_reach
+        elif dependency_name in PAYMENT_PROVIDERS:
+            permits = lambda name: (
+                not name.startswith("registry-")
+                or name == dependency_name
+                or name == PAYMENT_PROTOCOL
+                or name.startswith("registry-platform-")
+            )
+        else:
+            permits = lambda name: engine_may_reach("registry-adapterctl", name)
         for reached in {dependency, *linked_closure(dependency, linked)}:
             # The host is the declared authoring edge itself.
             if names[reached] != PAYMENT_HOST and not permits(names[reached]):
@@ -468,12 +477,12 @@ def violations(metadata: dict) -> list[str]:
                     f"{name} reaches package(s) outside registry-platform-* and "
                     f"neutral support: {', '.join(refused)}"
                 )
-        elif name in {PAYMENT_PROTOCOL, PAYMENT_PROVIDER}:
+        elif name == PAYMENT_PROTOCOL or name in PAYMENT_PROVIDERS:
             refused = sorted(
                 item for item in reached
                 if item.startswith("registry-")
                 and not (
-                    name == PAYMENT_PROVIDER
+                    name in PAYMENT_PROVIDERS
                     and (item == PAYMENT_PROTOCOL or item.startswith("registry-platform-"))
                 )
             )

@@ -18,6 +18,7 @@ SPEC.loader.exec_module(MODULE)
 NAMES = {
     "payment-protocol": "registry-payment-protocol",
     "payment-provider": "registry-payment-simulator-connector",
+    "payment-mifos": "registry-payment-mifos-connector",
     "engine": "registry-adapter",
     "shared-engine": "registry-adapter-engine",
     "core": "registry-adapter-core",
@@ -55,6 +56,7 @@ NAMES = {
 INTENDED = {
     "payment-protocol": ["serde"],
     "payment-provider": ["payment-protocol", "platform", "serde"],
+    "payment-mifos": ["payment-protocol", "platform", "serde"],
     "engine": ["shared-engine", "core", "platform", "platform-script", "serde", ("platform-testing", "dev")],
     "shared-engine": ["core", "platform", "platform-script", "serde"],
     "core": ["platform", "serde"],
@@ -167,6 +169,14 @@ def failures(**changes: list) -> str:
 
 
 class EngineTests(unittest.TestCase):
+    def test_authoring_replays_a_payment_provider_without_reaching_product_clients(self):
+        graph = metadata(ctl=[*INTENDED["ctl"], "payment-mifos"])
+        self.assertEqual(MODULE.violations(graph), [])
+        self.assertIn(
+            NAMES["breg-client"],
+            failures(ctl=[*INTENDED["ctl"], "breg-client"]),
+        )
+
     def test_only_the_payment_host_reaches_the_payment_contract_and_breg_client(self):
         graph = metadata(engine=[*INTENDED["engine"], "payment-protocol", "payment-provider", "breg-client"])
         self.assertEqual(MODULE.violations(graph), [])

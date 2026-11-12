@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/payment-provider-fixture/payment-provider-fixture.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/payment-provider-fixture/v1alpha1
+kind: AdapterPaymentProviderFixture
+type: compiled
+connectorProfile: mifos-ph-ee-legacy/channel-v1.12.2+bulk-v1.12.1+operations-v1.17.1
+direction: p2g-collection
+command:
+  correlationId: collection-1
+  payer:
+    - {key: MSISDN, value: '254700000001'}
+    - {key: ACCOUNTID, value: bill-1}
+  money: {amount: '25.50', currency: KES}
+  transactionType: {scenario: MPESA, subScenario: BUYGOODS, initiator: PAYEE, initiatorType: BUSINESS}
+expectedRequest:
+  payer:
+    - {key: MSISDN, value: '254700000001'}
+    - {key: ACCOUNTID, value: bill-1}
+  amount: {amount: '25.50', currency: KES}
+  transactionType: {scenario: MPESA, subScenario: BUYGOODS, initiator: PAYEE, initiatorType: BUSINESS}
+  customData: []
+acceptance:
+  response: {httpStatus: 200, body: {transactionId: tx-1}}
+  expected: {transactionId: tx-1, state: accepted}
+status:
+  response:
+    httpStatus: 200
+    body:
+      content:
+        - {transactionId: tx-1, state: SUCCESS, amount: '25.50', currency: KES, clientCorrelationId: collection-1}
+  expected: {transactionId: tx-1, state: providerConfirmed, money: {amount: '25.50', currency: KES}}

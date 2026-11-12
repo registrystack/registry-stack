@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: g2p-disbursements
+  version: '1'
+operations:
+  request-disbursement:
+    uses: payments.request-disbursement/v1
+    connection: g2p-payments
+  record-provider-confirmation:
+    uses: payments.record-provider-confirmation/v1
+    connection: g2p-payments
+workflow:
+  input:
+    operationInput: request-disbursement
+  deadlineSeconds: 7200
+  start: request-disbursement
+  steps:
+    request-disbursement:
+      type: call
+      operation: request-disbursement
+      input: {type: input}
+      next: await-disbursement
+    await-disbursement:
+      type: wait-for
+      completion: {step: request-disbursement, name: disbursement}
+      timeoutSeconds: 3600
+      next: route-disbursement
+      onTimeout: disbursement-unresolved
+    route-disbursement:
+      type: choose
+      choose:
+        type: step
+        step: await-disbursement
+        path: /state
+      cases:
+        accepted: disbursement-unresolved
+        pending: disbursement-unresolved
+        provider-confirmed: record-provider-confirmation
+        failed: disbursement-failed
+        unknown: disbursement-unresolved
+    record-provider-confirmation:
+      type: call
+      operation: record-provider-confirmation
+      input:
+        type: fields
+        fields:
+          disbursementId:
+            type: step
+            step: await-disbursement
+            path: /disbursementId
+      next: confirmation-recorded
+    confirmation-recorded:
+      type: finish
+      outcome: confirmation-recorded
+      output: {type: step, step: record-provider-confirmation}
+    disbursement-failed:
+      type: finish
+      outcome: disbursement-failed
+      output: {type: step, step: await-disbursement}
+    disbursement-unresolved:
+      type: finish
+      outcome: disbursement-unresolved
+  outcomes:
+    confirmation-recorded:
+      operationOutput: record-provider-confirmation
+    disbursement-failed:
+      completionOutput: {operation: request-disbursement, name: disbursement}
+    disbursement-unresolved: {type: 'null'}

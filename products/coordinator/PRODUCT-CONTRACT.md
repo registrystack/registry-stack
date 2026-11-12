@@ -151,6 +151,33 @@ not change provider state, establish failure, or release a service that requires
 Receipt recording remains a separate idempotent call so recovery cannot turn an observation into a
 registry mutation.
 
+## G2P disbursements
+
+Three native Operations use the same typed Adapter payment capability without giving the workflow
+an amount, recipient destination, funding account, provider route, provider evidence, HTTP header,
+or instruction-registry destination. Adapter resolves the immutable instruction, provider binding,
+and reporting authority selected by the operator-owned `payments` connection.
+
+| Operation | Effect | Contract |
+|---|---|---|
+| `payments.request-disbursement/v1` | mutation, `hold-after-dispatch` with receipt reconciliation | Sends only positive `instructionVersion` and non-nil `instructionRecordId` under the durable step key. The accepted output fixes the disbursement, instruction, binding revision, and simulation marker. An uncertain dispatch is never submitted again. |
+| `payments.read-disbursement/v1` | read | Reads one `disbursementId` and returns Adapter's validated authoritative observation. |
+| `payments.record-provider-confirmation/v1` | mutation, `same-command` | Sends only the provider-confirmed `disbursementId` under a separate durable key. Adapter verifies retained evidence and reports the exact confirmation to the instruction registry. |
+
+Request reconciliation calls Adapter's read-only original-request lookup with the saved request and
+key under current connection authorization. Only an acceptance with the exact saved instruction
+record identity and version settles recovery. Missing, expired, held, unknown, malformed, or
+mismatched evidence proves no absence. Because the provider profile does not establish safe submit
+replay, `retry-same` is refused after an uncertain request. The separate confirmation report is an
+idempotently keyed Adapter command and may retry only its frozen body and key.
+
+Request and read operations expose the host-owned completion `disbursement`. It retains the full
+accepted binding and performs bounded authoritative reads through the current payment connection.
+`accepted`, `pending`, and `unknown` remain pending. `provider-confirmed` and `failed` settle the
+provider attempt, but only verified `provider-confirmed` can make
+`payments.record-provider-confirmation/v1` succeed. Provider confirmation does not itself claim
+end-recipient credit or final settlement. A timeout establishes none of those facts.
+
 ## Governed Actions
 
 `breg.invoke-action/v1` imports an exact Base Registry Engine (BReg) Action using `action.contract` and `action.id`.

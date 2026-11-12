@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-use registry_payment_protocol::{CollectionState, CollectionStatus, Money, RequestCollection};
+use registry_payment_protocol::{
+    CollectionState, CollectionStatus, DisbursementState, DisbursementStatus, Money,
+    ProviderConfirmation, RequestCollection, RequestDisbursement,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -32,6 +35,88 @@ fn collection_intent_names_only_the_authoritative_bill() {
     }
     .validate()
     .is_err());
+}
+
+#[test]
+fn disbursement_intent_names_only_the_authoritative_instruction() {
+    let instruction = Uuid::new_v4();
+    let intent: RequestDisbursement = serde_json::from_value(json!({
+        "instructionRecordId": instruction, "instructionVersion": 1
+    }))
+    .unwrap();
+    assert!(intent.validate().is_ok());
+    for extra in [
+        "amount",
+        "recipient",
+        "fundingAccount",
+        "providerUrl",
+        "approved",
+    ] {
+        let mut value = serde_json::to_value(&intent).unwrap();
+        value[extra] = json!("caller-owned");
+        assert!(
+            serde_json::from_value::<RequestDisbursement>(value).is_err(),
+            "{extra}"
+        );
+    }
+    assert!(RequestDisbursement {
+        instruction_record_id: instruction,
+        instruction_version: 0,
+    }
+    .validate()
+    .is_err());
+}
+
+#[test]
+fn only_provider_confirmed_disbursements_carry_provider_evidence() {
+    let mut status = DisbursementStatus {
+        disbursement_id: Uuid::new_v4(),
+        instruction_record_id: Uuid::new_v4(),
+        instruction_id: Uuid::new_v4(),
+        instruction_version: 1,
+        binding_revision: "mifos-legacy-v1".into(),
+        simulation: true,
+        state: DisbursementState::Pending,
+        money: Money {
+            value: "25.00".into(),
+            currency: "USD".into(),
+            scale: 2,
+        },
+        provider_reference: None,
+        failure_reason: None,
+    };
+    assert!(status.validate().is_ok());
+    status.provider_reference = Some("batch-1:transaction-1".into());
+    assert!(status.validate().is_err());
+    status.state = DisbursementState::ProviderConfirmed;
+    assert!(status.validate().is_ok());
+    status.state = DisbursementState::Failed;
+    assert!(status.validate().is_err());
+    status.provider_reference = None;
+    status.failure_reason = Some("provider-refused".into());
+    assert!(status.validate().is_ok());
+}
+
+#[test]
+fn reported_disbursement_completion_requires_exact_evidence_digest() {
+    let mut confirmation = ProviderConfirmation {
+        disbursement_id: Uuid::new_v4(),
+        instruction_record_id: Uuid::new_v4(),
+        instruction_id: Uuid::new_v4(),
+        instruction_version: 1,
+        binding_revision: "sha256:binding".into(),
+        simulation: true,
+        money: Money {
+            value: "25.00".into(),
+            currency: "USD".into(),
+            scale: 2,
+        },
+        provider_reference: "batch-1:transaction-1".into(),
+        provider_result_digest: "a".repeat(64),
+    };
+    assert!(confirmation.validate().is_ok());
+    confirmation.provider_result_digest = "a".repeat(63);
+    assert!(confirmation.validate().is_err());
 }
 
 #[test]

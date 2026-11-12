@@ -24,6 +24,9 @@ Crypto primitives shared by registry services.
   length, and a constant-time byte comparison for shared secrets such as URL
   tokens. `constant_time_eq` is also exported at the crate root and is the
   shared compare for secrets.
+- `sha3_256(bytes)` exposes AWS-LC's SHA3-256 digest for a consumer with a
+  pinned external protocol that requires it. The consumer defines the exact
+  preimage, output representation, and any signature policy.
 - `random_base64url(bytes)` (also `random::random_base64url`): an unpadded
   base64url token of 16 to 64 operating-system random bytes, for nonces,
   `state` values, and session references; other sizes are refused.

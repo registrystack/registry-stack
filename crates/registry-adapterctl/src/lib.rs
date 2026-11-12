@@ -22,6 +22,7 @@ mod fixtures;
 mod job;
 mod job_runtime;
 mod mapping;
+mod payment_fixtures;
 mod payments;
 mod project;
 mod report;

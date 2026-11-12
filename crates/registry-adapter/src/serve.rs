@@ -630,6 +630,7 @@ pub async fn run(
         pack_path,
         runtime_path,
         None,
+        &[],
     )
     .await
 }
@@ -641,13 +642,22 @@ pub async fn run_configured(
     pack_path: Option<&std::path::Path>,
     runtime_path: &std::path::Path,
     payments_path: Option<&std::path::Path>,
+    payment_provider_pack: &[std::path::PathBuf],
 ) -> Result<(), ServeError> {
     match (project_directory, payments_path) {
         (Some(project), payments) => {
-            run_facade(project, profile_path, pack_path, runtime_path, payments).await
+            run_facade(
+                project,
+                profile_path,
+                pack_path,
+                runtime_path,
+                payments,
+                payment_provider_pack,
+            )
+            .await
         }
         (None, Some(payments)) if profile_path.is_none() && pack_path.is_none() => {
-            crate::payments::http::run_only(runtime_path, payments).await
+            crate::payments::http::run_only(runtime_path, payments, payment_provider_pack).await
         }
         _ => Err(ServeError::Configuration(
             "a project or payment configuration is required".to_owned(),
@@ -661,6 +671,7 @@ async fn run_facade(
     pack_path: Option<&std::path::Path>,
     runtime_path: &std::path::Path,
     payments_path: Option<&std::path::Path>,
+    payment_provider_pack: &[std::path::PathBuf],
 ) -> Result<(), ServeError> {
     let loaded = crate::engine::load::load_with_target(
         project_directory,
@@ -834,9 +845,15 @@ async fn run_facade(
     let async_retention = idempotency.as_ref().map(|(_, retention)| *retention);
     let facade_idempotency = idempotency.as_ref().map(|(store, _)| store.clone());
     let payments_router = match payments_path {
-        Some(path) => {
-            Some(crate::payments::http::load_router(&loaded.runtime, path, journal.clone()).await?)
-        }
+        Some(path) => Some(
+            crate::payments::http::load_router(
+                &loaded.runtime,
+                path,
+                payment_provider_pack,
+                journal.clone(),
+            )
+            .await?,
+        ),
         None => None,
     };
     let address: SocketAddr = loaded.runtime.listener.bind.0;

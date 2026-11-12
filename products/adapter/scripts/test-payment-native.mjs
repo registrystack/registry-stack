@@ -202,7 +202,7 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   configuration = { apiVersion: 'id.registrystack.org/formats/adapter/payments/v1alpha1', kind: 'AdapterPayments', connections: [{
     id: 'licence-fees', institutionId: 'institution-a', serviceId: 'licence-issuance', allowedClients: ['coordinator-payments'], requiredScope: 'payments:collect',
     binding: { simulation: true, currency: 'USD', currencyScale: 2, providerCredentialRef: 'secret:file/provider-token', providerCredentialIdentity: 'registry', replayWindowSeconds: 3600,
-      provider: { baseUrl: simulatorProxy.url, tenant: 'pilot', biller: 'ministry', billerName: 'Ministry', callbackUrl: 'https://programme.example.test/callback', payerFiBic: 'SIMBANK' },
+      provider: { type: 'simulator', connection: { baseUrl: simulatorProxy.url, tenant: 'pilot', biller: 'ministry', billerName: 'Ministry', callbackUrl: 'https://programme.example.test/callback', payerFiBic: 'SIMBANK' } },
       registry: { baseUrl: registryProxy.url, recordType: fixture.recordType, recordRoute: fixture.recordRoute, readProfile: fixture.readProfile,
         bindProfile: fixture.bind.profile, receiptProfile: fixture.receipt.profile, bindAction: fixture.bind.action, receiptAction: fixture.receipt.action,
         credentialRef: 'secret:file/registry-token', credentialIdentity: 'payment-adapter' } },
@@ -234,7 +234,7 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   assert.equal(simulatorProxy.records.length, beforeLookup);
   await simulator.stop(); await startSimulator();
   const originalBinding = structuredClone(configuration.connections[0].binding);
-  Object.assign(configuration.connections[0].binding.provider, { baseUrl: 'http://127.0.0.1:9/', tenant: 'changed-tenant', biller: 'changed-biller' });
+  Object.assign(configuration.connections[0].binding.provider.connection, { baseUrl: 'http://127.0.0.1:9/', tenant: 'changed-tenant', biller: 'changed-biller' });
   configuration.connections[0].binding.providerCredentialRef = 'secret:file/changed-provider-token';
   configuration.connections[0].binding.providerCredentialIdentity = 'changed-producer';
   await privateFile(paymentsPath, configuration); await restartAdapter();

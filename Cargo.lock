@@ -5915,6 +5915,7 @@ dependencies = [
  "registry-adapter-core",
  "registry-adapter-engine",
  "registry-breg-client",
+ "registry-payment-mifos-connector",
  "registry-payment-protocol",
  "registry-payment-simulator-connector",
  "registry-platform-authcommon",
@@ -5925,8 +5926,10 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-script",
  "registry-platform-testing",
  "registry-platform-yaml",
+ "rhai",
  "rustls",
  "schemars",
  "serde",
@@ -6086,6 +6089,7 @@ dependencies = [
  "rcgen",
  "registry-adapter",
  "registry-adapter-core",
+ "registry-payment-mifos-connector",
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-httputil",
@@ -7654,6 +7658,23 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "registry-payment-mifos-connector"
+version = "0.46.1"
+dependencies = [
+ "registry-platform-crypto",
+ "registry-platform-httputil",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

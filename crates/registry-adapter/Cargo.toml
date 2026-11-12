@@ -37,8 +37,10 @@ job-file = ["registry-adapter-engine/job-file"]
 job-postgres = ["registry-adapter-engine/job-postgres"]
 schema = [
     "dep:schemars",
+    "registry-adapter-core/schema",
     "registry-payment-protocol/schema",
     "registry-payment-simulator-connector/schema",
+    "registry-payment-mifos-connector/schema",
     "registry-platform-yaml/schema",
 ]
 
@@ -62,6 +64,7 @@ registry-adapter-core.workspace = true
 registry-adapter-engine.workspace = true
 registry-payment-protocol.workspace = true
 registry-payment-simulator-connector.workspace = true
+registry-payment-mifos-connector.workspace = true
 registry-breg-client.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 schemars = { workspace = true, optional = true }
@@ -70,6 +73,7 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-script.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-oidc.workspace = true
 registry-platform-yaml.workspace = true
@@ -78,6 +82,7 @@ clap.workspace = true
 jsonwebtoken.workspace = true
 registry-platform-authcommon.workspace = true
 rustls.workspace = true
+rhai.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio-postgres-rustls.workspace = true

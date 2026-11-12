@@ -663,11 +663,15 @@ unavailable durable audit.
 ### COORDINATOR-INV-15: payment completion requires exact authoritative evidence
 
 **Threat.** A workflow could supply an amount, provider route, header, receipt or BReg destination;
-reuse an acceptance for another bill or collection; treat pending, unknown or a timed-out wait as
-payment; or start a fresh provider effect after an ambiguous response or unresolved receipt.
+reuse an acceptance for another bill, collection, instruction or disbursement; treat pending,
+unknown or a timed-out wait as payment; or start a fresh provider effect after an ambiguous
+response or unresolved receipt.
 
 **Enforcement.** The native payment catalog accepts only `billId` and positive `billVersion` when
 requesting collection, and only `collectionId` when reading a collection or recording its receipt.
+The disbursement catalog accepts only `instructionRecordId` and positive `instructionVersion` when
+requesting a disbursement, and only `disbursementId` when reading it or reporting provider
+confirmation.
 `PaymentConnectionConfig` fixes the Adapter origin, Adapter payment connection and ordinary service
 authorization. The maintained payment client validates strict typed responses and exact bill or
 collection correlation before returning them. A request is durably keyed. Reconciliation uses only
@@ -676,6 +680,13 @@ authorization. Provider-protocol failures, malformed or mismatched success docum
 post-dispatch exchanges, `recovery-held`, and `outcome-unknown` remain uncertain. An unresolved or
 expired receipt proves no absence and grants no fresh effect.
 
+Disbursement request recovery is deliberately narrower than collection recovery. The request
+descriptor exposes Adapter's read-only original-command lookup but declares `hold-after-dispatch`,
+so an uncertain submission cannot use `retry-same` and the worker, recovery store and offline
+scenario runner refuse a later command retry. A later synthetic success is eligible only under
+`reconcile`, where it represents the original-command lookup. Only the separate
+provider-confirmation report is `same-command`, under its own durable key.
+
 The host-owned `collection` completion retains the accepted collection, bill, binding revision and
 simulation marker. Each observation performs a fresh authorized read through the same logical
 payment connection. `accepted`, `pending`, and `unknown` keep the wait pending. `confirmed` and
@@ -683,10 +694,18 @@ payment connection. `accepted`, `pending`, and `unknown` keep the wait pending. 
 separate, idempotently keyed `payments.record-receipt/v1` call. Coordinator carries no BReg
 bill-binding or receipt grant. A timeout changes none of these facts.
 
+The host-owned `disbursement` completion likewise retains the accepted disbursement, instruction,
+binding revision and simulation marker. `accepted`, `pending`, and `unknown` remain pending;
+`provider-confirmed` and `failed` settle only the provider attempt. Only verified
+`provider-confirmed` state can satisfy the separate keyed
+`payments.record-provider-confirmation/v1` call. That confirmation does not claim end-recipient
+credit or final settlement. Coordinator carries no instruction-registry read or reporting grant.
+
 **Refused.** Workflow-selected amount, paid state, provider destination, header, receipt or BReg
-destination; another command's acceptance; another collection's observation; receipt recording for
-anything Adapter has not verified as confirmed; any inference that pending, unknown, timeout or a
-missing receipt authorizes release or replacement.
+destination; another command's acceptance; another collection or disbursement observation; receipt
+or provider-confirmation recording for anything Adapter has not verified in the required terminal
+state; replay of an uncertain disbursement submission; any inference that pending, unknown, timeout
+or a missing receipt authorizes release or replacement.
 
 **Tests.** `crates/registry-payment-client/tests/http_boundary.rs`:
 `collection_request_sends_only_authoritative_bill_identity`,
@@ -700,6 +719,11 @@ missing receipt authorizes release or replacement.
 `ambiguous_mutation_response_holds_until_read_only_recovery_resolves`,
 `payment_authentication_failure_is_a_value_free_refusal`, and
 `payment_completion_settles_only_terminal_exactly_bound_state`.
+For disbursements in the same files:
+`disbursement_request_and_recovery_use_the_exact_original_command`,
+`uncertain_disbursement_submission_never_becomes_a_fresh_send`,
+`provider_confirmation_report_is_one_exact_keyed_command`, and
+`disbursement_completion_settles_only_terminal_exactly_bound_state`.
 
 ## 3. Operator obligations
 

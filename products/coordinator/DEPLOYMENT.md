@@ -386,7 +386,7 @@ For the native payment Operations, use `type: payments`. `baseUrl` names Adapter
 binding identity for an admitted run. The workflow cannot replace either value. Use ordinary
 service authorization without `taskAuthority`; Adapter authorizes the current credential on each
 call. `resultCheckSeconds`, from 60 to 86,400 and 900 by default, spaces authoritative collection
-reads while a run waits and is not part of the binding identity.
+or disbursement reads while a run waits and is not part of the binding identity.
 
 ```yaml
 connections:
@@ -404,8 +404,13 @@ connections:
 ```
 
 Grant Coordinator only the Adapter payment capability. Any BReg grant that binds a bill or records
-a receipt belongs to Adapter's configured reporter identity. An unresolved original-request lookup
-requires inspection or same-command recovery; it does not license a fresh collection attempt.
+a receipt, and any instruction-registry grant that reads an instruction or reports provider
+confirmation, belongs to Adapter's configured reporter identity. An unresolved original-request
+lookup requires inspection; it never licenses a fresh collection or disbursement attempt.
+`payments.request-disbursement/v1` cannot use `retry-same` after uncertainty. Reconcile only through
+its read-only original-command lookup. The separate
+`payments.record-provider-confirmation/v1` report may use `retry-same` because Adapter owns that
+idempotently keyed reporting command.
 
 For `external.get/v1`, use `type: external-http` with `baseUrl`, exact `paths`, optional
 `queryParameters`, optional ordinary service `authorization`, and the required `responseSchema`
