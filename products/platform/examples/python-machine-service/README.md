@@ -48,6 +48,8 @@ An unusable response after Messaging accepted the command remains recoverable be
 The Coordinator `external.command/v1` interpreter should declare only the `200 accepted`, `422 refused`, and `429 not-processed` shapes.
 Every other status or shape remains uncertain.
 
+`MessageEffect` emits one structured application audit event for each returned command result and changed-command conflict. Its fields are the operation, a deployment-keyed HMAC caller reference, the configured workload-authority fingerprint, the recovery reference, and the outcome. Recipients, templates, request bodies, credentials, and exception messages are absent. `create_app` requires an injected audit sink; the environment factory writes each bounded JSON event to stderr, which the deployment must capture. Keep the audit key stable for cross-command correlation; rotating it changes only the audit reference, not command recovery. This example does not provide durable, append-only audit storage. Messaging's own audit remains the product record of native acceptance and delivery.
+
 ## Configure the service
 
 Use Python 3.11 or later and the assembled `registry-stack-client` wheel from the same Registry Stack source or release as the services.
@@ -67,6 +69,7 @@ Set these variables before starting the process:
 - `REGISTRY_STACK_CONNECTION` names the owner-only service connection consumed by `connect()`.
 - `MESSAGE_EFFECT_DATABASE` names an application data file inside an owner-only directory.
 - `MESSAGE_EFFECT_SERVICE_NAMESPACE` is a stable identifier for this admitted service, not a deployment revision.
+- `MESSAGE_EFFECT_AUDIT_KEY_HEX` is a secret, independently generated 32-byte audit key encoded as 64 hexadecimal characters; inject it at process start through the operator's secret manager, without writing it into the connection or fixture.
 - `MESSAGE_EFFECT_TARGETS` is a JSON object mapping checked workload-authority fingerprints to a named Messaging binding, or to `null` for the default.
 
 For example:
@@ -112,7 +115,7 @@ ruff format --check .
 ruff check .
 ```
 
-The tests cover exact protected-request forwarding, bounded duplicate-free JSON input, two configured bindings, caller-separated keys, changed-command conflicts, concurrent duplicates, native declared refusal, unknown outcome, process stop after acceptance, restart recovery, response-encoding failure, authority rename versus replacement, expired receipt behavior, machine admission, and the pre-effect-only `429` rule.
+The tests cover exact protected-request forwarding, bounded duplicate-free JSON input, two configured bindings, caller-separated keys, changed-command conflicts, concurrent duplicates, native declared refusal, unknown outcome, process stop after acceptance, restart recovery, response-encoding failure, authority rename versus replacement, expired receipt behavior, machine admission, the pre-effect-only `429` rule, and minimized application audit correlation.
 
 They use protocol doubles and do not establish a real issuer, Messaging, Coordinator, built-wheel, Linux, or multi-host result.
 Complete acceptance still needs the matching assembled wheel, a real machine token, two real workload bindings, Messaging product denials and receipts, and Coordinator's actual `external.command/v1` interpretation and same-command recovery path.

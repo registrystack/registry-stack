@@ -197,16 +197,22 @@ class _Store(Protocol):
     def status(self, job_id: str) -> str | None: ...
 
 
+class _MachineAdmission(Protocol):
+    def admit(self, request_values: Mapping[str, Any]) -> object: ...
+
+
 class JobApplication:
     """A small WSGI boundary for Coordinator's exact POST and GET contracts."""
 
     def __init__(
         self,
         store: _Store,
+        admission: _MachineAdmission,
         *,
         encode_json: Callable[[object], bytes] | None = None,
     ):
         self._store = store
+        self._machine_admission = admission
         self._encode_json = encode_json or _encode_json
 
     def __call__(
@@ -217,12 +223,44 @@ class JobApplication:
         method = environ.get("REQUEST_METHOD")
         path = environ.get("PATH_INFO")
         if method == "POST" and path == "/jobs":
+            refused = self._admit_machine(environ, start_response)
+            if refused is not None:
+                return refused
             return self._admit(environ, start_response)
         if method == "GET" and path == "/jobs/status":
+            refused = self._admit_machine(environ, start_response)
+            if refused is not None:
+                return refused
             return self._status(environ, start_response)
         return self._response(
             start_response, HTTPStatus.NOT_FOUND, {"reason": "route-not-found"}
         )
+
+    def _admit_machine(
+        self,
+        environ: Mapping[str, Any],
+        start_response: Callable[[str, list[tuple[str, str]]], None],
+    ) -> Iterable[bytes] | None:
+        try:
+            self._machine_admission.admit(
+                {"authorization": environ.get("HTTP_AUTHORIZATION")}
+            )
+        except Exception as error:
+            code = getattr(error, "code", None)
+            if code == "authentication.refused":
+                return self._response(
+                    start_response,
+                    HTTPStatus.UNAUTHORIZED,
+                    {"code": "authentication.refused"},
+                )
+            if code == "authentication.unavailable":
+                return self._response(
+                    start_response,
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"code": "authentication.unavailable"},
+                )
+            raise
+        return None
 
     def _admit(
         self,
@@ -372,6 +410,8 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
 
 
 def main() -> None:
+    from registry_client import connect
+
     database_url = os.environ.get("EXTERNAL_JOB_DATABASE_URL")
     if not database_url:
         raise SystemExit("EXTERNAL_JOB_DATABASE_URL is required")
@@ -383,7 +423,7 @@ def main() -> None:
         raise SystemExit("EXTERNAL_JOB_PORT must be between 1 and 65535")
     store = JobStore(database_url)
     store.migrate()
-    app = JobApplication(store)
+    app = JobApplication(store, connect())
     with make_server(
         "127.0.0.1",
         port,

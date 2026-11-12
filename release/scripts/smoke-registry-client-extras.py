@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
 from pathlib import Path
 
@@ -69,25 +70,35 @@ def flask_request() -> None:
 
 
 def fastapi_request() -> None:
+    import httpx
     from fastapi import FastAPI, Request
-    from fastapi.testclient import TestClient
     from registry_client.fastapi_adapter import install
 
     app = FastAPI()
 
-    @app.get("/work")
     def work(request: Request):
         return {"subject": request.state.registry_context.subject}
 
+    # Request is imported inside this optional-dependency check, so give FastAPI
+    # the concrete annotation before route registration.
+    work.__annotations__["request"] = Request
+    app.get("/work")(work)
     install(app, Stack(), request_seconds=5)
-    with TestClient(app) as client:
-        if client.get("/work").status_code != 401:
-            raise AssertionError("FastAPI allowed a missing bearer")
-        response = client.get(
-            "/work", headers={"Authorization": "Bearer synthetic-machine"}
-        )
-    if response.status_code != 200 or response.json() != {"subject": "caller"}:
-        raise AssertionError("FastAPI did not admit the installed machine client")
+
+    async def check() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://service.example.invalid"
+        ) as client:
+            if (await client.get("/work")).status_code != 401:
+                raise AssertionError("FastAPI allowed a missing bearer")
+            response = await client.get(
+                "/work", headers={"Authorization": "Bearer synthetic-machine"}
+            )
+        if response.status_code != 200 or response.json() != {"subject": "caller"}:
+            raise AssertionError("FastAPI did not admit the installed machine client")
+
+    asyncio.run(check())
 
 
 def human_import(framework: str) -> None:

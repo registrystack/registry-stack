@@ -9,19 +9,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
 import stat
 import threading
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 
 _OPERATION = "registry-messaging.submit/v1"
 _UNKNOWN_CODES = frozenset(
     ("idempotency.expired", "idempotency.key-reused", "receipt.unresolved")
 )
+_AUDIT_LOG = logging.getLogger("registry.message_effect")
 
 
 class CommandConflict(ValueError):
@@ -414,17 +417,23 @@ class MessageEffect:
         targets: MessagingTargets,
         *,
         service_namespace: str,
+        audit_key: bytes,
         maximum_inflight_submissions: int = 32,
+        audit_sink: Callable[[Mapping[str, str]], None] | None = None,
     ) -> None:
         _bounded_text(service_namespace, "service_namespace", maximum_bytes=512)
         if not isinstance(maximum_inflight_submissions, int) or not (
             1 <= maximum_inflight_submissions <= 1024
         ):
             raise ValueError("maximum_inflight_submissions must be from 1 to 1024")
+        if not isinstance(audit_key, bytes) or len(audit_key) != 32:
+            raise ValueError("audit_key must be 32 bytes")
         self._store = store
         self._targets = targets
         self._service_namespace = service_namespace
+        self._audit_key = audit_key
         self._submissions = threading.BoundedSemaphore(maximum_inflight_submissions)
+        self._audit_sink = audit_sink or _log_audit
 
     def execute(
         self,
@@ -439,11 +448,43 @@ class MessageEffect:
             service_namespace=self._service_namespace,
         )
         command_id = _command_id(self._service_namespace, caller, client_key)
-        command = self._store.command(
-            command_id,
-            notice.authority,
-            notice.request,
+        try:
+            command = self._store.command(
+                command_id,
+                notice.authority,
+                notice.request,
+            )
+        except CommandConflict:
+            self._audit(caller, notice.authority, command_id, "conflict")
+            raise
+        result = self._execute_command(command)
+        self._audit(caller, notice.authority, command_id, result.body["state"])
+        return result
+
+    def _audit(
+        self,
+        caller: _MachineContext,
+        authority: str,
+        command_id: str,
+        outcome: str,
+    ) -> None:
+        self._audit_sink(
+            {
+                "operation": _OPERATION,
+                "caller": "hmac-sha256:"
+                + hmac.new(
+                    self._audit_key,
+                    b"registry-python-message-effect:caller-audit:v1\0"
+                    + _canonical_json(_caller_values(self._service_namespace, caller)),
+                    hashlib.sha256,
+                ).hexdigest(),
+                "authority": authority,
+                "recovery": command_id,
+                "outcome": outcome,
+            }
         )
+
+    def _execute_command(self, command: _Command) -> EffectResult:
         if command.state == "accepted":
             return self._accepted(command)
         if command.state == "refused":
@@ -525,6 +566,10 @@ class MessageEffect:
             202,
             {"state": "uncertain", "recovery": command_id},
         )
+
+
+def _log_audit(event: Mapping[str, str]) -> None:
+    _AUDIT_LOG.info("%s", json.dumps(event, sort_keys=True, separators=(",", ":")))
 
 
 def _owner_id(service_namespace: str, caller: _MachineContext) -> str:

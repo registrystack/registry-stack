@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Mapping
+import sys
+from typing import Any, Callable, Mapping
 
 from effect import (
     CommandConflict,
@@ -22,6 +23,8 @@ def create_app(
     *,
     database_path: str | Path,
     service_namespace: str,
+    audit_key: bytes,
+    audit_sink: Callable[[Mapping[str, str]], None],
     targets: Mapping[str, str | None],
     stack: Any | None = None,
     request_seconds: float = 2.0,
@@ -33,12 +36,16 @@ def create_app(
 
     if stack is None:
         stack = connect()
+    if not callable(audit_sink):
+        raise ValueError("audit_sink must be callable")
     store = MessageEffectStore(database_path)
     store.migrate()
     effect = MessageEffect(
         store,
         MessagingTargets(stack, targets),
         service_namespace=service_namespace,
+        audit_key=audit_key,
+        audit_sink=audit_sink,
         maximum_inflight_submissions=maximum_inflight_submissions,
     )
     app = Flask(__name__)
@@ -81,12 +88,25 @@ def create_app_from_environment():
     """Load non-secret example settings; `connect()` owns credential references."""
     database_path = os.environ.get("MESSAGE_EFFECT_DATABASE")
     service_namespace = os.environ.get("MESSAGE_EFFECT_SERVICE_NAMESPACE")
+    raw_audit_key = os.environ.get("MESSAGE_EFFECT_AUDIT_KEY_HEX")
     raw_targets = os.environ.get("MESSAGE_EFFECT_TARGETS")
-    if not database_path or not service_namespace or not raw_targets:
+    if (
+        not database_path
+        or not service_namespace
+        or not raw_audit_key
+        or not raw_targets
+    ):
         raise RuntimeError(
-            "MESSAGE_EFFECT_DATABASE, MESSAGE_EFFECT_SERVICE_NAMESPACE and "
-            "MESSAGE_EFFECT_TARGETS are required"
+            "MESSAGE_EFFECT_DATABASE, MESSAGE_EFFECT_SERVICE_NAMESPACE, "
+            "MESSAGE_EFFECT_AUDIT_KEY_HEX and MESSAGE_EFFECT_TARGETS are required"
         )
+    if len(raw_audit_key) != 64 or any(
+        character not in "0123456789abcdefABCDEF" for character in raw_audit_key
+    ):
+        raise RuntimeError(
+            "MESSAGE_EFFECT_AUDIT_KEY_HEX must contain 64 hexadecimal characters"
+        )
+    audit_key = bytes.fromhex(raw_audit_key)
     try:
         targets = json.loads(raw_targets)
     except json.JSONDecodeError as error:
@@ -101,8 +121,15 @@ def create_app_from_environment():
     return create_app(
         database_path=database_path,
         service_namespace=service_namespace,
+        audit_key=audit_key,
+        audit_sink=_stderr_audit,
         targets=targets,
     )
+
+
+def _stderr_audit(event: Mapping[str, str]) -> None:
+    sys.stderr.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
+    sys.stderr.flush()
 
 
 def _valid_command(body: Any) -> bool:

@@ -271,15 +271,39 @@ class PostgresSessionStore:
             raise SessionStateError("portal session state is unreadable")
         return result
 
+    def consume_pending_for_chain(
+        self, state: str, chain_id: str
+    ) -> PendingGrant | None:
+        state_digest = _lookup_digest("state", state)
+        chain_digest = _lookup_digest("chain", chain_id)
+        row = None
+        with self._transaction() as cursor:
+            self._assert_ready(cursor)
+            cursor.execute(
+                "DELETE FROM registry_client_portal.pending "
+                "WHERE state_digest = %s AND chain_digest = %s "
+                "RETURNING key_id, ciphertext",
+                (state_digest, chain_digest),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        plaintext = self._keys._open(row[0], "pending", state_digest, 0, bytes(row[1]))
+        result = _decode_pending(plaintext)
+        if result.state != state or not secrets.compare_digest(
+            result.chain_id, chain_id
+        ):
+            raise SessionStateError("portal session state is unreadable")
+        return result
+
     def close_chain(self, chain_id: str) -> None:
         chain_digest = _lookup_digest("chain", chain_id)
         with self._transaction() as cursor:
             self._assert_ready(cursor)
             cursor.execute(
-                "INSERT INTO registry_client_portal.chains "
-                "(chain_digest, closed) VALUES (%s, true) "
-                "ON CONFLICT (chain_digest) DO UPDATE "
-                "SET closed = true, updated_at = transaction_timestamp()",
+                "UPDATE registry_client_portal.chains "
+                "SET closed = true, updated_at = transaction_timestamp() "
+                "WHERE chain_digest = %s",
                 (chain_digest,),
             )
             cursor.execute(

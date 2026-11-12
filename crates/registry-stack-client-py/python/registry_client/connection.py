@@ -128,8 +128,9 @@ def _reference(value: Any, path: str, providers: Mapping[str, Any]) -> str:
     if not isinstance(value, str) or not _REFERENCE.fullmatch(value):
         raise ConnectionError(f"{path} must be a secret:file or secret:env reference")
     provider = value[7:].split("/", 1)[0]
-    if provider not in providers:
-        raise ConnectionError(f"{path} needs the declared {provider} secret provider")
+    declared = "environment" if provider == "env" else provider
+    if declared not in providers:
+        raise ConnectionError(f"{path} needs the declared {declared} secret provider")
     return value
 
 

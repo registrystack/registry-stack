@@ -193,6 +193,77 @@ class RefreshLockUnitTests(unittest.TestCase):
         self.assertTrue(all(-(2**31) <= key < 2**31 for key in first_key))
 
 
+class PendingConsumeUnitTests(unittest.TestCase):
+    class Cursor:
+        def __init__(self, matching_chain_digest):
+            self.matching_chain_digest = matching_chain_digest
+            self.statement = ""
+            self.parameters = ()
+            self.executed = []
+
+        def execute(self, statement, parameters):
+            self.statement = statement
+            self.parameters = parameters
+            self.executed.append((statement, parameters))
+
+        def fetchone(self):
+            if self.parameters[1] == self.matching_chain_digest:
+                return ("key-a", b"ciphertext")
+            return None
+
+    class Transaction:
+        def __init__(self, cursor):
+            self.cursor = cursor
+
+        def __enter__(self):
+            return self.cursor
+
+        def __exit__(self, *_):
+            return False
+
+    class Keys:
+        def __init__(self, plaintext):
+            self.plaintext = plaintext
+
+        def _open(self, *_):
+            return self.plaintext
+
+    def test_state_and_chain_digest_gate_one_atomic_delete(self):
+        item = pending()
+        chain_digest = portal_postgres._lookup_digest("chain", item.chain_id)
+        cursor = self.Cursor(chain_digest)
+        store = portal_postgres.PostgresSessionStore.__new__(
+            portal_postgres.PostgresSessionStore
+        )
+        store._transaction = lambda: self.Transaction(cursor)
+        store._assert_ready = lambda _cursor: "key-a"
+        store._keys = self.Keys(portal_postgres._encode_pending(item))
+
+        self.assertIsNone(store.consume_pending_for_chain(item.state, "A" * 43))
+        self.assertIn("state_digest = %s AND chain_digest = %s", cursor.statement)
+        self.assertEqual(
+            store.consume_pending_for_chain(item.state, item.chain_id), item
+        )
+
+    def test_unknown_chain_close_can_only_update_existing_state(self):
+        cursor = self.Cursor(b"not-used")
+        store = portal_postgres.PostgresSessionStore.__new__(
+            portal_postgres.PostgresSessionStore
+        )
+        store._transaction = lambda: self.Transaction(cursor)
+        store._assert_ready = lambda _cursor: "key-a"
+
+        store.close_chain("A" * 43)
+
+        self.assertTrue(cursor.executed[0][0].startswith("UPDATE "))
+        self.assertTrue(
+            all(
+                "INSERT INTO registry_client_portal.chains" not in statement
+                for statement, _ in cursor.executed
+            )
+        )
+
+
 DATABASE_URL = os.environ.get("PORTAL_POSTGRES_TEST_DATABASE_URL")
 HAS_DEPENDENCIES = bool(
     importlib.util.find_spec("cryptography") and importlib.util.find_spec("psycopg")
@@ -259,10 +330,34 @@ class PostgresSessionStoreTests(unittest.TestCase):
             ["pending-state-one"],
         )
 
-        self.store.close_chain("closed-before-write")
-        self.assertFalse(
-            second.put_pending(pending("late-state", "closed-before-write"))
+        registered = pending("registered-before-close", "closed-before-write")
+        self.assertTrue(self.store.put_pending(registered))
+        self.store.close_chain(registered.chain_id)
+        self.assertIsNone(second.consume_pending(registered.state))
+        self.assertFalse(second.put_pending(pending("late-state", registered.chain_id)))
+
+    def test_pending_consume_requires_the_matching_chain(self):
+        item = pending()
+        self.assertTrue(self.store.put_pending(item))
+
+        self.assertIsNone(self.store.consume_pending_for_chain(item.state, "A" * 43))
+        self.assertEqual(
+            self.store.consume_pending_for_chain(item.state, item.chain_id), item
         )
+
+    def test_unknown_well_formed_chain_cancellation_does_not_grow_state(self):
+        with self.connect() as connection:
+            before = connection.execute(
+                "SELECT count(*) FROM registry_client_portal.chains"
+            ).fetchone()[0]
+
+        self.store.close_chain("A" * 43)
+
+        with self.connect() as connection:
+            after = connection.execute(
+                "SELECT count(*) FROM registry_client_portal.chains"
+            ).fetchone()[0]
+        self.assertEqual(after, before)
 
     def test_restart_preserves_complete_session_and_never_stores_token_canaries(self):
         item = pending()

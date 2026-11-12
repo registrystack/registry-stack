@@ -248,6 +248,25 @@ class ConnectionTests(unittest.TestCase):
                 with self.assertRaisesRegex(self.ConnectionError, f"{field}.*required"):
                     self.connect(path=self.connection([binding]))
 
+    def test_environment_secret_reference_uses_declared_environment_provider(self):
+        binding = self.binding()
+        binding["credential"]["clientKeyRef"] = "secret:env/TEST_WORKLOAD_KEY"
+        path = self.connection([binding])
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["secretProviders"] = {"environment": {}}
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+        stack = self.connect(path=path)
+
+        self.assertEqual(stack.authority("breg").subject, "test-workload")
+
+        document["secretProviders"] = {"file": {"root": str(self.root)}}
+        path.write_text(json.dumps(document), encoding="utf-8")
+        with self.assertRaisesRegex(
+            self.ConnectionError, "declared environment secret provider"
+        ):
+            self.connect(path=path)
+
     def test_declared_claims_cannot_replace_protocol_identity(self):
         binding = self.binding()
         binding["credential"]["claims"]["sub"] = "other-workload"

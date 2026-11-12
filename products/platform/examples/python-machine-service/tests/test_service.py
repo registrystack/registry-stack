@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 import importlib
+from io import StringIO
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 
 EXAMPLE = Path(__file__).resolve().parents[1]
@@ -19,7 +23,7 @@ sys.path.insert(0, str(EXAMPLE))
 sys.path.insert(0, str(TESTS))
 
 from effect import MessageEffectStore  # noqa: E402
-from service import create_app  # noqa: E402
+from service import create_app, create_app_from_environment  # noqa: E402
 
 from test_effect import Authority, FakeMessaging, FakeMessagingError, message  # noqa: E402
 
@@ -103,9 +107,12 @@ class MachineServiceTests(unittest.TestCase):
         self.prior_registry_client = sys.modules.get("registry_client")
         sys.modules["registry_client"] = registry_client
 
+        self.audit = []
         self.app = create_app(
             database_path=self.database,
             service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+            audit_sink=self.audit.append,
             targets={
                 "a" * 64: None,
                 "b" * 64: "secondary",
@@ -123,6 +130,85 @@ class MachineServiceTests(unittest.TestCase):
             "https://issuer.example.invalid/",
             "urn:registry:python:test",
         )
+
+    def test_factory_rejects_short_audit_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "audit_key must be 32 bytes"):
+            create_app(
+                database_path=self.database,
+                service_namespace="urn:example:service:renewal-notices",
+                audit_key=b"short",
+                audit_sink=self.audit.append,
+                targets={"a" * 64: None},
+                stack=self.stack,
+            )
+
+    def test_environment_factory_requires_a_bounded_audit_key(self) -> None:
+        settings = {
+            "MESSAGE_EFFECT_DATABASE": str(self.database),
+            "MESSAGE_EFFECT_SERVICE_NAMESPACE": "urn:example:service:renewal-notices",
+            "MESSAGE_EFFECT_TARGETS": json.dumps({"a" * 64: None}),
+        }
+        with patch.dict(os.environ, settings, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "AUDIT_KEY_HEX.*required"):
+                create_app_from_environment()
+            os.environ["MESSAGE_EFFECT_AUDIT_KEY_HEX"] = "invalid-key-canary"
+            with self.assertRaisesRegex(RuntimeError, "64 hexadecimal") as caught:
+                create_app_from_environment()
+            self.assertNotIn("invalid-key-canary", str(caught.exception))
+            os.environ["MESSAGE_EFFECT_AUDIT_KEY_HEX"] = "a" * 64
+            app = create_app_from_environment()
+        self.assertIn("registry_message_effect_store", app.extensions)
+
+    def test_environment_factory_writes_bounded_audit_to_stderr(self) -> None:
+        settings = {
+            "MESSAGE_EFFECT_DATABASE": str(self.database),
+            "MESSAGE_EFFECT_SERVICE_NAMESPACE": "urn:example:service:renewal-notices",
+            "MESSAGE_EFFECT_TARGETS": json.dumps({"a" * 64: None}),
+            "MESSAGE_EFFECT_AUDIT_KEY_HEX": "a" * 64,
+        }
+        self.seed("notice-1", message("recipient-canary@example.invalid"))
+        with patch.dict(os.environ, settings, clear=True):
+            app = create_app_from_environment()
+        app.testing = True
+        with redirect_stderr(StringIO()) as captured:
+            response = app.test_client().post(
+                "/v1/message-effects",
+                json={"key": "command-1", "noticeId": "notice-1"},
+                headers={"Authorization": "Bearer caller-a"},
+            )
+        self.assertEqual(response.status_code, 200)
+        event = json.loads(captured.getvalue())
+        self.assertEqual(event["outcome"], "accepted")
+        self.assertEqual(event["authority"], "a" * 64)
+        self.assertRegex(event["caller"], r"\Ahmac-sha256:[0-9a-f]{64}\Z")
+        self.assertNotIn("recipient-canary", captured.getvalue())
+
+    def test_http_audit_failure_is_visible_and_same_command_recovers(self) -> None:
+        self.seed("notice-1", message("person@example.invalid"))
+
+        def unavailable_audit(_event):
+            raise RuntimeError("audit sink unavailable")
+
+        failing = create_app(
+            database_path=self.database,
+            service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+            audit_sink=unavailable_audit,
+            targets={"a" * 64: None},
+            stack=self.stack,
+        )
+        failing.testing = True
+        with self.assertRaisesRegex(RuntimeError, "audit sink unavailable"):
+            failing.test_client().post(
+                "/v1/message-effects",
+                json={"key": "command-1", "noticeId": "notice-1"},
+                headers={"Authorization": "Bearer caller-a"},
+            )
+
+        recovered = self.post({"key": "command-1", "noticeId": "notice-1"})
+        self.assertEqual(recovered.status_code, 200)
+        self.assertEqual(len(self.stack.primary.submit_calls), 1)
+        self.assertEqual(self.audit[0]["outcome"], "accepted")
 
     def tearDown(self) -> None:
         if self.prior_registry_client is None:

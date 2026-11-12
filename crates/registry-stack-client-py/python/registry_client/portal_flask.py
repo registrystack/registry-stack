@@ -10,6 +10,8 @@ from .portal import (
     PortalContext,
     PortalSessions,
     ReauthenticationRequired,
+    _PendingChainMismatch,
+    _valid_chain_id,
 )
 from .web import form_csrf_token, is_public
 from .workload import request_budget
@@ -31,6 +33,7 @@ def install(
     if persona not in ("holder", "staff") or same_site not in ("Lax", "Strict"):
         raise ValueError("portal persona and SameSite policy are unsupported")
     cookie_name = f"__Host-registry-{persona}"
+    pending_cookie_name = f"__Host-registry-{persona}-pending"
     auth_paths = frozenset(
         ("/auth/login", "/auth/callback", "/auth/logout", "/auth/switch")
     )
@@ -40,6 +43,20 @@ def install(
         response.status_code = status
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    def clear_cookie(response: Any, name: str, *, pending: bool = False) -> None:
+        response.delete_cookie(
+            name,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="Lax" if pending else same_site,
+        )
+
+    def cancel_pending() -> None:
+        chain_id = request.cookies.get(pending_cookie_name)
+        if chain_id and _valid_chain_id(chain_id):
+            sessions.cancel(chain_id)
 
     def authorized_mutation():
         session_id = request.cookies.get(cookie_name)
@@ -97,19 +114,43 @@ def install(
     @app.get("/auth/login")
     def registry_login():
         try:
+            cancel_pending()
             authorization = sessions.start(request.args.get("return_to", "/"))
         except ValueError:
             return error(AdmissionError.code, 400)
         response = redirect(authorization.url)
+        response.set_cookie(
+            pending_cookie_name,
+            authorization.chain_id,
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+            path="/",
+        )
         response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/auth/callback")
     def registry_callback():
-        try:
-            result = sessions.callback(request.url, state=request.args.get("state", ""))
-        except AdmissionError:
+        chain_id = request.cookies.get(pending_cookie_name)
+        if not chain_id:
             return error(AdmissionError.code, 401)
+        if not _valid_chain_id(chain_id):
+            response = error(AdmissionError.code, 401)
+            clear_cookie(response, pending_cookie_name, pending=True)
+            return response
+        try:
+            result = sessions._callback_for_chain(
+                request.url,
+                state=request.args.get("state", ""),
+                chain_id=chain_id,
+            )
+        except _PendingChainMismatch:
+            return error(AdmissionError.code, 401)
+        except AdmissionError:
+            response = error(AdmissionError.code, 401)
+            clear_cookie(response, pending_cookie_name, pending=True)
+            return response
         if result.authorization is not None:
             response = redirect(result.authorization.url)
         else:
@@ -124,6 +165,7 @@ def install(
                 samesite=same_site,
                 path="/",
             )
+            clear_cookie(response, pending_cookie_name, pending=True)
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -135,11 +177,11 @@ def install(
             return error(ReauthenticationRequired.code, 401)
         except CSRFError:
             return error(CSRFError.code, 403)
+        cancel_pending()
         result = sessions.logout(request.cookies[cookie_name])
         response = redirect(result.end_session_url or "/")
-        response.delete_cookie(
-            cookie_name, path="/", secure=True, httponly=True, samesite=same_site
-        )
+        clear_cookie(response, cookie_name)
+        clear_cookie(response, pending_cookie_name, pending=True)
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -151,6 +193,7 @@ def install(
             return error(ReauthenticationRequired.code, 401)
         except CSRFError:
             return error(CSRFError.code, 403)
+        cancel_pending()
         result = sessions.logout(request.cookies[cookie_name], switch=True)
         response = (
             redirect(result.end_session_url)
@@ -159,8 +202,7 @@ def install(
                 jsonify({"code": "authentication.account-switch-unavailable"}), 409
             )
         )
-        response.delete_cookie(
-            cookie_name, path="/", secure=True, httponly=True, samesite=same_site
-        )
+        clear_cookie(response, cookie_name)
+        clear_cookie(response, pending_cookie_name, pending=True)
         response.headers["Cache-Control"] = "no-store"
         return response

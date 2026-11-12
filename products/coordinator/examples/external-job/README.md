@@ -17,7 +17,8 @@ a named `terminal` completion. Its `bounded-poll` declaration names pure Functio
 and a 30-second interval. The workflow reads once, then waits on
 `completion: {step: read, name: terminal}` for up to 600 seconds within a 900-second run deadline.
 
-Before that read, `admit-job` sends a bounded POST to the runtime's exact `jobs` command path.
+Before that read, `admit-job` sends an authenticated, bounded POST to the runtime's exact `jobs`
+command path.
 Coordinator freezes the `{reference}` body and its `Idempotency-Key` before sending. The
 `job-admission` Function accepts only a 200 or 201 response containing a stable `jobId` receipt.
 It declares a 422 `invalid-job` answer refused because the application rejected it before
@@ -56,32 +57,53 @@ returns the original receipt without inserting another job. `JobStore.transition
 application's worker moving a queued job to running and then to succeeded or failed. A terminal
 job cannot be changed to another terminal state.
 
+Both application routes require Registry Stack machine admission before parsing a command or
+reading the job store. `JobApplication` passes only the WSGI `Authorization` value to
+`stack.admit(...)`; browser cookies, Origin and other browser headers confer no authority. A
+missing, malformed, expired or policy-mismatched bearer returns the value-free
+`authentication.refused` response. A verifier outage returns `authentication.unavailable`.
+Neither response reaches application work or observation.
+
 Run the local fixture against a dedicated PostgreSQL database:
 
 ```sh
 uv sync --project products/coordinator/examples/external-job
+sdk='registry-stack-client==<matching-release-version>'
+# Prepared source candidates may use an absolute assembled wheel path instead.
 EXTERNAL_JOB_DATABASE_URL=postgresql://... \
-  uv run --project products/coordinator/examples/external-job \
+REGISTRY_STACK_CONNECTION=/run/secrets/external-job/connection.json \
+  uv run --project products/coordinator/examples/external-job --with "$sdk" \
   python products/coordinator/examples/external-job/service.py
 ```
 
-`service.py` binds only to `127.0.0.1:9010` by default. The checked-in runtime points there. Its
-connection has no credential because it is a local contract fixture. An institutional deployment
-must put the service's machine-admission adapter on these protected routes and configure the
-Coordinator connection's service authorization. This example does not claim to prove L2 machine
-identity admission by itself.
+Use the assembled `registry-stack-client` wheel from the same source or release as the services;
+the source facade directory is not a wheel-equivalent runtime. `REGISTRY_STACK_CONNECTION` names
+an owner-only `audience: service` connection whose admission section fixes the issuer, resource,
+client ID, profile, required scopes and protected actor claims. The issuer registration must mint
+the checked-in Coordinator client an access token with that exact service audience and claims.
+The [Python client guide](../../../../crates/CLIENTS.md) owns connection assembly and deployment
+requirements.
+
+`service.py` binds only to `127.0.0.1:9010` by default. The checked-in runtime points there and
+uses its own client assertion to request the exact `urn:example:external-job` resource with the
+`external-job:admit` and `external-job:observe` scopes. It contains only synthetic loopback
+configuration and a `secret:file/external-job-client-jwk` reference, never key material. Provision
+that client signing key as an owner-only regular file under the declared file-provider root. A
+matched live issuer, client and service connection remain required before claiming effective
+issuer admission.
 
 For deployment, configure `jobs` as `type: external-http`, with the actual base URL, exact command
 path, allowed GET path and query name, authorization, and response schema. The loopback runtime is
-a local fixture, not an institutional deployment. Use HTTPS and separately configured service
-authorization where needed; omitting authorization means public admission and reads. Copy runtime
-configuration outside the package and follow the [deployment runbook](../../DEPLOYMENT.md).
+a local fixture, not an institutional deployment. Use HTTPS and a separately configured service
+admission connection. Copy runtime configuration outside the package and follow the
+[deployment runbook](../../DEPLOYMENT.md).
 
 Offline scenarios prove the accepted, declared-refusal, uncertain, recovery, terminal and timeout
-routes through the pinned Functions. The Python unit test covers the HTTP boundary and a
-post-commit encoding failure. Its PostgreSQL test covers concurrent duplicate admission, crash
-after commit, stable correlation and terminal state. Run it only with an explicitly disposable
-database:
+routes through the pinned Functions. The Python unit test covers machine admission on both HTTP
+routes, no cookie authority, refusal and verifier outage before the store, durable duplicate
+semantics, exact observation, and a post-commit encoding failure. Its PostgreSQL test covers
+concurrent duplicate admission, crash after commit, stable correlation and terminal state. Run it
+only with an explicitly disposable database:
 
 ```sh
 EXTERNAL_JOB_TEST_DATABASE_URL=postgresql://... \

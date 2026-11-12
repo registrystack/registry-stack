@@ -173,10 +173,13 @@ class MessageEffectTests(unittest.TestCase):
         self.context = Context("caller-a")
         self.messaging = FakeMessaging()
         self.targets = MessagingTargets(FakeStack(self.messaging), {"a" * 64: None})
+        self.audit = []
         self.effect = MessageEffect(
             self.store,
             self.targets,
             service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+            audit_sink=self.audit.append,
         )
 
     def tearDown(self) -> None:
@@ -211,6 +214,108 @@ class MessageEffectTests(unittest.TestCase):
         self.assertEqual(len(downstream_key), 64)
         self.assertEqual(sent, payload)
         self.assertNotIn("token", repr(self.messaging.submit_calls))
+
+    def test_audit_correlates_caller_authority_recovery_and_outcome_without_values(
+        self,
+    ) -> None:
+        self.seed("notice-1", message("recipient-canary@example.invalid"))
+
+        accepted = self.effect.execute(self.context, "command-1", "notice-1")
+        repeated = self.effect.execute(self.context, "command-1", "notice-1")
+
+        self.assertEqual(accepted, repeated)
+        self.assertEqual(len(self.audit), 2)
+        self.assertEqual(self.audit[0], self.audit[1])
+        self.assertEqual(
+            set(self.audit[0]),
+            {"operation", "caller", "authority", "recovery", "outcome"},
+        )
+        self.assertEqual(self.audit[0]["operation"], "registry-messaging.submit/v1")
+        self.assertEqual(self.audit[0]["authority"], "a" * 64)
+        self.assertEqual(self.audit[0]["recovery"], accepted.body["recovery"])
+        self.assertEqual(self.audit[0]["outcome"], "accepted")
+        self.assertRegex(self.audit[0]["caller"], r"\Ahmac-sha256:[0-9a-f]{64}\Z")
+        encoded = json.dumps(self.audit)
+        for canary in (
+            "recipient-canary",
+            "Synthetic Person",
+            "caller-a",
+            "command-1",
+            "renewal",
+        ):
+            self.assertNotIn(canary, encoded)
+
+        rotated = []
+        MessageEffect(
+            self.store,
+            self.targets,
+            service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"B" * 32,
+            audit_sink=rotated.append,
+        ).execute(self.context, "command-1", "notice-1")
+        self.assertNotEqual(self.audit[0]["caller"], rotated[0]["caller"])
+        self.assertEqual(self.audit[0]["recovery"], rotated[0]["recovery"])
+
+    def test_audit_covers_conflict_refusal_unknown_recovery_and_busy(self) -> None:
+        self.seed("notice-1", message("one@example.invalid"))
+        self.seed("notice-2", message("two@example.invalid"))
+        self.effect.execute(self.context, "command-1", "notice-1")
+        with self.assertRaises(CommandConflict):
+            self.effect.execute(self.context, "command-1", "notice-2")
+        self.messaging.submit_error = FakeMessagingError(
+            "template.not-found", status=422, outcome_unknown=False
+        )
+        self.effect.execute(self.context, "command-2", "notice-2")
+        self.messaging.submit_error = FakeMessagingError(
+            "exception-message-canary", status=503, outcome_unknown=True
+        )
+        self.effect.execute(self.context, "command-3", "notice-2")
+        self.messaging.submit_error = None
+        self.effect.execute(self.context, "command-3", "notice-2")
+
+        self.assertEqual(
+            [event["outcome"] for event in self.audit],
+            ["accepted", "conflict", "refused", "uncertain", "accepted"],
+        )
+        self.assertNotIn("exception-message-canary", json.dumps(self.audit))
+
+    def test_default_audit_logger_outputs_only_correlation_fields(self) -> None:
+        self.seed("notice-1", message("recipient-canary@example.invalid"))
+        effect = MessageEffect(
+            self.store,
+            self.targets,
+            service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+        )
+
+        with self.assertLogs("registry.message_effect", level="INFO") as captured:
+            effect.execute(self.context, "command-1", "notice-1")
+
+        event = json.loads(captured.records[0].getMessage())
+        self.assertEqual(event["outcome"], "accepted")
+        self.assertEqual(event["authority"], "a" * 64)
+        self.assertNotIn("recipient-canary", captured.output[0])
+
+    def test_audit_sink_failure_is_visible_and_recovery_does_not_resubmit(self) -> None:
+        self.seed("notice-1", message("person@example.invalid"))
+
+        def unavailable_audit(_event):
+            raise RuntimeError("audit sink unavailable")
+
+        failing = MessageEffect(
+            self.store,
+            self.targets,
+            service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+            audit_sink=unavailable_audit,
+        )
+        with self.assertRaisesRegex(RuntimeError, "audit sink unavailable"):
+            failing.execute(self.context, "command-1", "notice-1")
+
+        recovered = self.effect.execute(self.context, "command-1", "notice-1")
+        self.assertEqual(recovered.body["state"], "accepted")
+        self.assertEqual(len(self.messaging.submit_calls), 1)
+        self.assertEqual(self.audit[0]["outcome"], "accepted")
 
     def test_store_is_owner_only_and_protected_notices_are_immutable(self) -> None:
         self.assertEqual(stat.S_IMODE(self.database.stat().st_mode), 0o600)
@@ -281,6 +386,7 @@ class MessageEffectTests(unittest.TestCase):
             MessageEffectStore(self.database),
             MessagingTargets(FakeStack(recovered_client), {"a" * 64: None}),
             service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
         )
         result = restarted.execute(self.context, "command-1", "notice-1")
 
@@ -363,6 +469,7 @@ class MessageEffectTests(unittest.TestCase):
             MessageEffectStore(self.database),
             MessagingTargets(renamed_stack, {"a" * 64: "renamed"}),
             service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
         )
         recovered = renamed.execute(self.context, "command-1", "notice-1")
         self.assertEqual(recovered.status, 200)
@@ -382,6 +489,7 @@ class MessageEffectTests(unittest.TestCase):
                 {"b" * 64: "renamed"},
             ),
             service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
         )
         no_authority = unavailable.execute(self.context, "command-2", "notice-2")
         self.assertEqual(no_authority.status, 202)
@@ -416,6 +524,7 @@ class MessageEffectTests(unittest.TestCase):
                 {original: None},
             ),
             service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
         )
         unknown = original_effect.execute(
             self.context, "command-authority", "notice-authority"
@@ -437,6 +546,7 @@ class MessageEffectTests(unittest.TestCase):
                         {changed: None},
                     ),
                     service_namespace="urn:example:service:renewal-notices",
+                    audit_key=b"A" * 32,
                 )
                 unresolved = changed_effect.execute(
                     self.context, "command-authority", "notice-authority"
@@ -466,11 +576,14 @@ class MessageEffectTests(unittest.TestCase):
     def test_429_is_only_returned_before_a_new_effect_starts(self) -> None:
         second_client = FakeMessaging()
         second_client.block = True
+        audit = []
         effect = MessageEffect(
             self.store,
             MessagingTargets(FakeStack(second_client), {"a" * 64: None}),
             service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
             maximum_inflight_submissions=1,
+            audit_sink=audit.append,
         )
         self.seed("notice-1", message("one@example.invalid"))
         self.seed("notice-2", message("two@example.invalid"))
@@ -486,6 +599,10 @@ class MessageEffectTests(unittest.TestCase):
         self.assertEqual(busy.body, {"state": "not-processed", "code": "busy"})
         self.assertEqual(accepted.status, 200)
         self.assertEqual(len(second_client.submit_calls), 1)
+        self.assertEqual(
+            sorted(event["outcome"] for event in audit),
+            ["accepted", "not-processed"],
+        )
 
 
 if __name__ == "__main__":

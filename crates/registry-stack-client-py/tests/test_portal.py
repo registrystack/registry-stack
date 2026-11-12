@@ -446,6 +446,44 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(len(self.oidc.exchanges), 0)
         self.assertEqual(self.store.session_count(), 0)
 
+    def test_callback_is_bound_to_the_browser_login_chain(self):
+        self.oidc.exchange_results.append(verified(self.breg))
+        request = self.sessions.start("/")
+        other_chain = "A" * 43
+
+        with self.assertRaises(portal.AdmissionError):
+            self.sessions._callback_for_chain(
+                "https://portal.example.test/auth/callback?"
+                f"code=late&state={request.state}",
+                state=request.state,
+                chain_id=other_chain,
+            )
+
+        self.assertEqual(len(self.oidc.exchanges), 0)
+        result = self.sessions._callback_for_chain(
+            "https://portal.example.test/auth/callback?"
+            f"code=accepted&state={request.state}",
+            state=request.state,
+            chain_id=request.chain_id,
+        )
+        self.assertIsNotNone(result.authorization)
+        self.assertEqual(self.store.session_count(), 0)
+
+    def test_untrusted_chain_ids_do_not_grow_store_state(self):
+        closed_before = len(self.store._closed_chains)
+
+        for chain_id in (
+            "",
+            "short",
+            "A" * 42,
+            "A" * 43,
+            "A" * 44,
+            "!" + "A" * 42,
+        ):
+            self.sessions.cancel(chain_id)
+
+        self.assertEqual(len(self.store._closed_chains), closed_before)
+
     def test_second_resource_cannot_change_the_person(self):
         self.oidc.exchange_results.extend(
             [

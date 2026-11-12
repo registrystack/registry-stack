@@ -19,6 +19,7 @@ package.__path__ = [str(SOURCE)]
 sys.modules[PACKAGE] = package
 portal = importlib.import_module(f"{PACKAGE}.portal")
 web = importlib.import_module(f"{PACKAGE}.web")
+CHAIN_ID = "c" * 43
 
 
 class Sessions:
@@ -28,6 +29,7 @@ class Sessions:
         self.persona = persona
         self.return_to = "/"
         self.calls = []
+        self.cancel_calls = []
 
     def _called(self, operation):
         self.calls.append((operation, threading.get_ident()))
@@ -36,7 +38,7 @@ class Sessions:
         self._called("start")
         self.return_to = return_to
         return portal.AuthorizationRequest(
-            "https://issuer.example.test/authorize?state=one", "one", "chain"
+            "https://issuer.example.test/authorize?state=one", "one", CHAIN_ID
         )
 
     def callback(self, callback_url, *, state):
@@ -44,7 +46,7 @@ class Sessions:
         if state == "one":
             return portal.CallbackResult(
                 portal.AuthorizationRequest(
-                    "https://issuer.example.test/authorize?state=two", "two", "chain"
+                    "https://issuer.example.test/authorize?state=two", "two", CHAIN_ID
                 ),
                 None,
                 None,
@@ -52,6 +54,16 @@ class Sessions:
         if state == "two":
             return portal.CallbackResult(None, self.session_id, self.return_to)
         raise portal.AdmissionError()
+
+    def _callback_for_chain(self, callback_url, *, state, chain_id):
+        self._called("callback_for_chain")
+        if chain_id != CHAIN_ID:
+            raise portal.AdmissionError()
+        return self.callback(callback_url, state=state)
+
+    def cancel(self, chain_id):
+        self._called("cancel")
+        self.cancel_calls.append(chain_id)
 
     def context(self, session_id, *, minimum_valid_seconds=30):
         self._called("context")

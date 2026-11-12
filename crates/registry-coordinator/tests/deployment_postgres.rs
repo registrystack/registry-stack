@@ -5096,6 +5096,12 @@ async fn generated_typed_client_journeys(projects: &[&str]) {
                 RuntimeConfig::load(&examples.join("external-job/runtime.yaml")).unwrap();
             f.doc["connections"]["jobs"] =
                 serde_json::to_value(&external.connections["jobs"]).unwrap();
+            // This fixture exercises the workflow's GET observation against a mock
+            // provider; it has no issuer for the example service authorization.
+            f.doc["connections"]["jobs"]
+                .as_object_mut()
+                .unwrap()
+                .remove("authorization");
             f.doc["connections"]["jobs"]["baseUrl"] = json!(jobs.as_ref().unwrap().uri());
         }
         if workflow == "standalone-review" {

@@ -184,6 +184,14 @@ that would claim a provider failure after the request may have left.
 `a_busy_answer_that_may_follow_an_effect_retries_with_the_effect_unknown`,
 `a_busy_answer_that_may_follow_an_effect_retries_only_when_the_retry_fits`.
 
+The `examples/external-job` Python provider protects both admission and status
+routes with a separate service connection's machine verifier before reading its
+application store. Its checked-in Coordinator connection requests an exact
+service resource and scopes; a browser cookie grants neither route authority.
+An operator running this example must supply a matching issuer registration,
+service admission policy and assembled Python client. The loopback fixture and
+synthetic request tests do not prove a live issuer or deployed HTTPS boundary.
+
 ### COORDINATOR-INV-04: `coordinatorctl --token-file` reads only a regular file
 
 **Threat.** An authenticated `coordinatorctl` command reads `--token-file`

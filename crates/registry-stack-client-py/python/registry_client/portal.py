@@ -29,6 +29,10 @@ class AdmissionError(ValueError):
         super().__init__(self.code)
 
 
+class _PendingChainMismatch(AdmissionError):
+    """Callback state does not belong to the browser's current login chain."""
+
+
 class ReauthenticationRequired(ValueError):
     """No complete usable server-side session remains."""
 
@@ -254,6 +258,10 @@ class SessionStore(Protocol):
 
     def consume_pending(self, state: str) -> PendingGrant | None: ...
 
+    def consume_pending_for_chain(
+        self, state: str, chain_id: str
+    ) -> PendingGrant | None: ...
+
     def close_chain(self, chain_id: str) -> None: ...
 
     def create_session(self, chain_id: str, session: PortalSession) -> bool: ...
@@ -275,6 +283,7 @@ class MemorySessionStore:
     def __init__(self):
         self._pending: dict[str, PendingGrant] = {}
         self._sessions: dict[str, PortalSession] = {}
+        self._open_chains: set[str] = set()
         self._closed_chains: set[str] = set()
         self._lock = threading.Lock()
         self._refresh_locks = WeakValueDictionary()
@@ -297,6 +306,7 @@ class MemorySessionStore:
                 or pending.state in self._pending
             ):
                 return False
+            self._open_chains.add(pending.chain_id)
             self._pending[pending.state] = pending
             return True
 
@@ -307,8 +317,25 @@ class MemorySessionStore:
                 return None
             return pending
 
+    def consume_pending_for_chain(
+        self, state: str, chain_id: str
+    ) -> PendingGrant | None:
+        with self._lock:
+            pending = self._pending.get(state)
+            if (
+                pending is None
+                or pending.chain_id in self._closed_chains
+                or not hmac.compare_digest(pending.chain_id, chain_id)
+            ):
+                return None
+            del self._pending[state]
+            return pending
+
     def close_chain(self, chain_id: str) -> None:
         with self._lock:
+            if chain_id not in self._open_chains:
+                return
+            self._open_chains.remove(chain_id)
             self._closed_chains.add(chain_id)
             self._pending = {
                 state: pending
@@ -318,9 +345,14 @@ class MemorySessionStore:
 
     def create_session(self, chain_id: str, session: PortalSession) -> bool:
         with self._lock:
-            if chain_id in self._closed_chains or session.session_id in self._sessions:
+            if (
+                chain_id not in self._open_chains
+                or chain_id in self._closed_chains
+                or session.session_id in self._sessions
+            ):
                 return False
             self._sessions[session.session_id] = session
+            self._open_chains.remove(chain_id)
             self._closed_chains.add(chain_id)
             return True
 
@@ -383,8 +415,26 @@ class PortalSessions:
         return self.start(return_to)
 
     def callback(self, callback_url: str, *, state: str) -> CallbackResult:
-        pending = self._store.consume_pending(state)
+        return self._callback(callback_url, state=state, chain_id=None)
+
+    def _callback_for_chain(
+        self, callback_url: str, *, state: str, chain_id: str
+    ) -> CallbackResult:
+        """Complete only the login chain held by this browser."""
+        return self._callback(callback_url, state=state, chain_id=chain_id)
+
+    def _callback(
+        self, callback_url: str, *, state: str, chain_id: str | None
+    ) -> CallbackResult:
+        if chain_id is None:
+            pending = self._store.consume_pending(state)
+        else:
+            if not _valid_chain_id(chain_id):
+                raise _PendingChainMismatch()
+            pending = self._store.consume_pending_for_chain(state, chain_id)
         if pending is None:
+            if chain_id is not None:
+                raise _PendingChainMismatch()
             raise AdmissionError()
         now = self._clock()
         try:
@@ -439,7 +489,8 @@ class PortalSessions:
             raise AdmissionError() from None
 
     def cancel(self, chain_id: str) -> None:
-        self._store.close_chain(chain_id)
+        if _valid_chain_id(chain_id):
+            self._store.close_chain(chain_id)
 
     def context(
         self, session_id: str, *, minimum_valid_seconds: float = 30
@@ -884,6 +935,17 @@ def _token(value: str) -> bool:
         and 1 <= len(value) <= 256
         and value.strip() == value
         and not any(character.isspace() or ord(character) < 33 for character in value)
+    )
+
+
+def _valid_chain_id(value: str) -> bool:
+    return bool(
+        isinstance(value, str)
+        and len(value) == 43
+        and all(
+            character.isascii() and (character.isalnum() or character in ("-", "_"))
+            for character in value
+        )
     )
 
 
