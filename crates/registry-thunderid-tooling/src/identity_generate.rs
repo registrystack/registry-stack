@@ -880,14 +880,15 @@ fn refused(document: &Document, found: Vec<Diagnostic>) -> ToolingError {
     }
 }
 
-/// Every `{{` the output holds opens a placeholder this run emitted: each
-/// `{{.NAME}}` form for the environment variables the deployment names
-/// appears exactly once, and the output holds no other template opener or
-/// closer. An input string that slipped through would add one, including a
-/// verbatim copy of a placeholder this run emits.
+/// Every `{{` the output holds opens either a secret placeholder this run
+/// emitted or one of the renderer's fixed Gate expressions. Each appears at
+/// its exact expected multiplicity, and the output holds no other template
+/// opener or closer. An input string that slipped through would add one,
+/// including a verbatim copy of an expected expression.
 fn assert_only_known_placeholders(
     files: &BTreeMap<String, Vec<u8>>,
     environment: &[String],
+    browser_applications: usize,
 ) -> Result<(), ToolingError> {
     let count = |needle: &str| -> usize {
         files
@@ -899,7 +900,13 @@ fn assert_only_known_placeholders(
     let each_once = names
         .iter()
         .all(|name| count(&format!("{{{{.{name}}}}}")) == 1);
-    if !each_once || count("{{") != names.len() || count("}}") != names.len() {
+    let gate = crate::render::gate_template_expression_counts(browser_applications);
+    let fixed = gate.iter().map(|(_, expected)| expected).sum::<usize>();
+    let exact_gate = gate
+        .iter()
+        .all(|(expression, expected)| count(expression) == *expected);
+    let expected = names.len() + fixed;
+    if !each_once || !exact_gate || count("{{") != expected || count("}}") != expected {
         return Err(ToolingError::InvalidRender {
             reason: "the output holds template syntax that is not a generated placeholder",
         });
@@ -1483,7 +1490,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             extras
                 .user_types
                 .iter()
-                .map(|user_type| user_type.id.as_str()),
+                .map(|user_type| user_type.id.clone()),
         ),
     ) {
         return Err(ToolingError::InvalidDescription {
@@ -1549,7 +1556,11 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
     receipt_text.push('\n');
     files.insert(RECEIPT_FILE.to_owned(), receipt_text.into_bytes());
 
-    assert_only_known_placeholders(&files, &required_environment)?;
+    assert_only_known_placeholders(
+        &files,
+        &required_environment,
+        description.interactive_applications.len(),
+    )?;
 
     let summary = Summary {
         issuer: facts.issuer.clone(),

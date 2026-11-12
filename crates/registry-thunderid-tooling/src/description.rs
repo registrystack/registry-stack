@@ -922,35 +922,34 @@ impl IssuerDescription {
     }
 
     /// Every identifier the renderer derives for a native entity.
-    pub(crate) fn derived_ids(&self) -> Vec<&str> {
-        std::iter::once(self.organization_unit.id.as_str())
-            .chain(
-                self.resource_servers
-                    .iter()
-                    .map(|server| server.id.as_str()),
-            )
-            .chain(self.roles.iter().map(|role| role.id.as_str()))
+    pub(crate) fn derived_ids(&self) -> Vec<String> {
+        std::iter::once(self.organization_unit.id.clone())
+            .chain(self.resource_servers.iter().map(|server| server.id.clone()))
+            .chain(self.roles.iter().map(|role| role.id.clone()))
             .chain(
                 self.machine_clients
                     .iter()
-                    .map(|client| client.agent_id.as_str()),
+                    .map(|client| client.agent_id.clone()),
             )
             .chain(
                 self.compatibility_clients
                     .iter()
-                    .map(|client| client.agent_id.as_str()),
+                    .map(|client| client.agent_id.clone()),
             )
-            .chain(
-                self.exchange_issuers
-                    .iter()
-                    .map(|issuer| issuer.id.as_str()),
-            )
+            .chain(self.exchange_issuers.iter().map(|issuer| issuer.id.clone()))
             .chain(
                 self.interactive_applications
                     .iter()
-                    .map(|app| app.id.as_str()),
+                    .map(|app| app.id.clone()),
             )
-            .chain(self.synthetic_users.iter().map(|user| user.id.as_str()))
+            .chain(self.interactive_applications.iter().map(|app| {
+                crate::local::application_authentication_flow_id(&self.session.id, &app.id)
+            }))
+            .chain(
+                (!self.interactive_applications.is_empty())
+                    .then(|| crate::local::browser_sign_out_flow_id(&self.session.id)),
+            )
+            .chain(self.synthetic_users.iter().map(|user| user.id.clone()))
             .collect()
     }
 }

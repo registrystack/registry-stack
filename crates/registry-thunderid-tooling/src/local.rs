@@ -58,6 +58,18 @@ pub(crate) fn derived_uuid(seed: &str) -> String {
     result
 }
 
+/// Stable native authentication-flow identity for one browser application.
+pub(crate) fn application_authentication_flow_id(session_id: &str, application_id: &str) -> String {
+    derived_uuid(&format!(
+        "{session_id}:flow:application:{application_id}:authentication"
+    ))
+}
+
+/// Stable native sign-out-flow identity shared by this issuer's browser applications.
+pub(crate) fn browser_sign_out_flow_id(session_id: &str) -> String {
+    derived_uuid(&format!("{session_id}:flow:browser-applications:sign-out"))
+}
+
 /// The display text a declared scope tree carries. Identifiers and handles
 /// are the same in both; only names and descriptions differ.
 #[derive(Clone, Copy)]

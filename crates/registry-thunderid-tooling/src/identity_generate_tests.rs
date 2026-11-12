@@ -1362,15 +1362,27 @@ fn only_the_keys_member_of_a_key_file_is_accepted() {
 fn every_generated_placeholder_must_appear_exactly_once() {
     let one = |text: &str| BTreeMap::from([("a".to_owned(), text.as_bytes().to_vec())]);
     let names = ["SECRET_A".to_owned()];
-    assert!(assert_only_known_placeholders(&one("x: '{{.SECRET_A}}'"), &names).is_ok());
+    assert!(assert_only_known_placeholders(&one("x: '{{.SECRET_A}}'"), &names, 0).is_ok());
     // A verbatim second copy of a placeholder this run emitted.
     assert!(assert_only_known_placeholders(
         &one("x: '{{.SECRET_A}}' y: '{{.SECRET_A}}'"),
-        &names
+        &names,
+        0,
     )
     .is_err());
     // A placeholder that was meant to be emitted but is missing.
-    assert!(assert_only_known_placeholders(&one("x: plain"), &names).is_err());
+    assert!(assert_only_known_placeholders(&one("x: plain"), &names, 0).is_err());
+
+    let mut browser = "x: '{{.SECRET_A}}'\n".to_owned();
+    for (expression, expected) in crate::render::gate_template_expression_counts(1) {
+        for _ in 0..expected {
+            browser.push_str(expression);
+            browser.push('\n');
+        }
+    }
+    assert!(assert_only_known_placeholders(&one(&browser), &names, 1).is_ok());
+    browser.push_str("{{ t(signout:forms.confirm.title) }}\n");
+    assert!(assert_only_known_placeholders(&one(&browser), &names, 1).is_err());
 }
 
 #[test]

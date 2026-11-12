@@ -14,7 +14,7 @@ use crate::description::{
 
 /// sha256 over `relative path NUL bytes NUL` for every file, in path order.
 const DEVELOPMENT_RENDER_DIGEST: &str =
-    "d81752ee306e8659e12d20f668d28083e28728026d58cdd6716ad96a561f97df";
+    "f72ce1a797e11e9db5ecc8d59248041310bc27cc09fc001dd1b71d74d03a847c";
 
 fn walk(root: &Path, directory: &Path, hasher: &mut Sha256) {
     let mut entries: Vec<_> = fs::read_dir(directory)

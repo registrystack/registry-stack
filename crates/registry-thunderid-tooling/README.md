@@ -247,13 +247,23 @@ resolves no secret.
   `registry-schema/agents/`, and `identity-receipt.json` (input digests, client
   id to `sub`, user id to `sub`, the ThunderID pin, required environment variable names).
   Secrets render as `{{.NAME}}` placeholders; nothing secret is written.
+- Each browser application receives its own deterministic native Basic SSO
+  authentication flow with an application-scoped SSO session. The flow checks
+  for a reusable session and prompts for credentials when needed. Both paths
+  pass through the session checkpoint and resource authorization before issuing
+  the authentication assertion.
+- Browser applications share one generated conditional sign-out graph. Each
+  application pins that graph explicitly, while ThunderID resolves and clears
+  the session belonging to that application's authentication flow. A logout
+  without an ID-token hint requires confirmation. The exact application
+  `origin` is the only generated post-logout return URI.
 - Identifiers use the crate's `local::agent_id` and scope-tree formulas seeded
   by the issuer, so output is byte-identical across runs.
 
 Regenerate the golden tree under `fixtures/identity/expected` with
 `REGISTRY_UPDATE_GOLDEN=1 cargo test -p registry-thunderid-tooling` and review
-the diff. Development mode (`render::render`) is unchanged and guarded by a
-byte-level digest test.
+the diff. Development mode (`render::render`) is guarded by a byte-level digest
+test.
 
 The facts and deployment formats have generated JSON Schemas in
 `products/platform/schemas` (`identity-facts.schema.json`,

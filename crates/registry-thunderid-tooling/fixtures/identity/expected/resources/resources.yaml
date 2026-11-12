@@ -753,10 +753,180 @@ ouHandle: registry
 resource_type: user
 type: Farmer
 ---
+flowType: SIGNOUT
+handle: registry-signout-0ba51a29-b279-7702-852b-804373e53924
+id: 0ba51a29-b279-7702-852b-804373e53924
+name: Registry browser sign-out
+nodes:
+- id: start
+  onSuccess: session_signout
+  type: START
+- executor:
+    name: SessionSignOutExecutor
+  id: session_signout
+  onIncomplete: prompt_confirm
+  onSuccess: end
+  properties:
+    promptOnSignOut: true
+  type: TASK_EXECUTION
+- id: prompt_confirm
+  meta:
+    components:
+    - align: center
+      category: DISPLAY
+      id: text_signout_title
+      label: '{{ t(signout:forms.confirm.title) }}'
+      resourceType: ELEMENT
+      type: TEXT
+      variant: HEADING_1
+    - align: center
+      category: DISPLAY
+      id: text_signout_desc
+      label: '{{ t(signout:forms.confirm.description) }}'
+      resourceType: ELEMENT
+      type: TEXT
+      variant: BODY_1
+    - category: BLOCK
+      components:
+      - actionType: CONFIRM
+        category: ACTION
+        eventType: SUBMIT
+        id: action_confirm
+        label: '{{ t(signout:forms.confirm.actions.submit.label) }}'
+        resourceType: ELEMENT
+        type: ACTION
+        variant: PRIMARY
+      id: block_signout
+      resourceType: ELEMENT
+      type: BLOCK
+  prompts:
+  - action:
+      nextNode: session_signout
+      ref: action_confirm
+      type: CONFIRM
+  type: PROMPT
+- id: end
+  type: END
+resource_type: flow
+---
+flowType: AUTHENTICATION
+handle: registry-auth-2abacd42-1674-7da5-8f7c-19c2f8c262f0
+id: 2abacd42-1674-7da5-8f7c-19c2f8c262f0
+name: staff-portal sign-in
+nodes:
+- id: start
+  onSuccess: sso_check
+  type: START
+- executor:
+    name: SSOCheckExecutor
+  id: sso_check
+  onFailure: prompt_credentials
+  onSuccess: session
+  properties:
+    checkpointRef: session
+  type: TASK_EXECUTION
+- id: prompt_credentials
+  meta:
+    components:
+    - alt: '{{ t(signin:images.app_logo.alt) }}'
+      category: DISPLAY
+      height: '60'
+      id: image
+      resourceType: ELEMENT
+      src: '{{ meta(application.logoUrl) }}'
+      type: IMAGE
+      width: ''
+    - align: center
+      category: DISPLAY
+      id: text_001
+      label: '{{ t(signin:forms.credentials.title) }}'
+      resourceType: ELEMENT
+      type: TEXT
+      variant: HEADING_1
+    - category: BLOCK
+      components:
+      - category: FIELD
+        hint: ''
+        id: input_001
+        inputType: text
+        label: '{{ t(signin:forms.credentials.fields.username.label) }}'
+        placeholder: '{{ t(signin:forms.credentials.fields.username.placeholder) }}'
+        ref: username
+        required: true
+        resourceType: ELEMENT
+        type: TEXT_INPUT
+      - category: FIELD
+        hint: ''
+        id: input_002
+        inputType: text
+        label: '{{ t(signin:forms.credentials.fields.password.label) }}'
+        placeholder: '{{ t(signin:forms.credentials.fields.password.placeholder) }}'
+        ref: password
+        required: true
+        resourceType: ELEMENT
+        type: PASSWORD_INPUT
+      - category: ACTION
+        eventType: SUBMIT
+        id: action_001
+        label: '{{ t(signin:forms.credentials.actions.submit.label) }}'
+        resourceType: ELEMENT
+        type: ACTION
+        variant: PRIMARY
+      id: block_001
+      resourceType: ELEMENT
+      type: BLOCK
+  prompts:
+  - action:
+      nextNode: credentials_auth
+      ref: action_001
+    inputs:
+    - identifier: username
+      ref: input_001
+      required: true
+      type: TEXT_INPUT
+    - identifier: password
+      ref: input_002
+      required: true
+      type: PASSWORD_INPUT
+  type: PROMPT
+- executor:
+    inputs:
+    - identifier: username
+      ref: input_001
+      required: true
+      type: TEXT_INPUT
+    - identifier: password
+      ref: input_002
+      required: true
+      type: PASSWORD_INPUT
+    name: CredentialsAuthExecutor
+  id: credentials_auth
+  onIncomplete: prompt_credentials
+  onSuccess: session
+  type: TASK_EXECUTION
+- executor:
+    name: SessionExecutor
+  id: session
+  onSuccess: authorization_check
+  type: TASK_EXECUTION
+- executor:
+    name: AuthorizationExecutor
+  id: authorization_check
+  onSuccess: auth_assert
+  type: TASK_EXECUTION
+- executor:
+    name: AuthAssertExecutor
+  id: auth_assert
+  onSuccess: end
+  type: TASK_EXECUTION
+- id: end
+  type: END
+resource_type: flow
+---
 allowedUserTypes:
 - RegistryPerson
 - Farmer
-authFlowId: 01900000-0000-7000-8000-000000000068
+authFlowId: 2abacd42-1674-7da5-8f7c-19c2f8c262f0
 description: Browser application
 id: fbc5ffd9-a8ee-76c3-8d0f-443fe31ac655
 inboundAuthConfig:
@@ -796,6 +966,7 @@ layoutId: 019a05b7-1000-7000-8000-000000000002
 name: staff-portal
 ouHandle: registry
 resource_type: application
+signOutFlowId: 0ba51a29-b279-7702-852b-804373e53924
 themeId: 019a05b7-1000-7000-8000-000000000001
 type: fullstack
 url: https://staff.registry.example

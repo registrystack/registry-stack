@@ -422,6 +422,202 @@ fn emit(
     Ok(())
 }
 
+/// Native ThunderID 1.0.1 Basic SSO flow, specialized only by stable identity
+/// and display text. The graph follows the Apache-2.0 upstream template at
+/// ThunderID commit `12f517c4384004e360e26eb7eb1ab0501b678bb2`, file
+/// `frontend/apps/console/src/features/flows/data/templates.json` (`BASIC_SSO`):
+/// the SSO checkpoint may skip credential entry, but never the authorization
+/// check or authentication assertion.
+fn browser_authentication_flow(description: &IssuerDescription, app_id: &str, name: &str) -> Value {
+    let id = crate::local::application_authentication_flow_id(&description.session.id, app_id);
+    json!({
+        "resource_type": "flow",
+        "id": id,
+        "name": format!("{name} sign-in"),
+        "handle": format!("registry-auth-{id}"),
+        "flowType": "AUTHENTICATION",
+        "nodes": [
+            {"id": "start", "type": "START", "onSuccess": "sso_check"},
+            {
+                "id": "sso_check", "type": "TASK_EXECUTION",
+                "properties": {"checkpointRef": "session"},
+                "executor": {"name": "SSOCheckExecutor"},
+                "onSuccess": "session", "onFailure": "prompt_credentials",
+            },
+            {
+                "id": "prompt_credentials", "type": "PROMPT",
+                "meta": {"components": [
+                    {
+                        "alt": "{{ t(signin:images.app_logo.alt) }}",
+                        "category": "DISPLAY", "height": "60", "id": "image",
+                        "resourceType": "ELEMENT",
+                        "src": "{{ meta(application.logoUrl) }}", "type": "IMAGE", "width": "",
+                    },
+                    {
+                        "align": "center", "category": "DISPLAY", "id": "text_001",
+                        "label": "{{ t(signin:forms.credentials.title) }}",
+                        "resourceType": "ELEMENT", "type": "TEXT", "variant": "HEADING_1",
+                    },
+                    {
+                        "category": "BLOCK", "id": "block_001", "resourceType": "ELEMENT",
+                        "type": "BLOCK", "components": [
+                            {
+                                "category": "FIELD", "hint": "", "id": "input_001",
+                                "inputType": "text",
+                                "label": "{{ t(signin:forms.credentials.fields.username.label) }}",
+                                "placeholder": "{{ t(signin:forms.credentials.fields.username.placeholder) }}",
+                                "ref": "username", "required": true,
+                                "resourceType": "ELEMENT", "type": "TEXT_INPUT",
+                            },
+                            {
+                                "category": "FIELD", "hint": "", "id": "input_002",
+                                "inputType": "text",
+                                "label": "{{ t(signin:forms.credentials.fields.password.label) }}",
+                                "placeholder": "{{ t(signin:forms.credentials.fields.password.placeholder) }}",
+                                "ref": "password", "required": true,
+                                "resourceType": "ELEMENT", "type": "PASSWORD_INPUT",
+                            },
+                            {
+                                "category": "ACTION", "eventType": "SUBMIT", "id": "action_001",
+                                "label": "{{ t(signin:forms.credentials.actions.submit.label) }}",
+                                "resourceType": "ELEMENT", "type": "ACTION", "variant": "PRIMARY",
+                            },
+                        ],
+                    },
+                ]},
+                "prompts": [{
+                    "inputs": [
+                        {"ref": "input_001", "type": "TEXT_INPUT", "identifier": "username", "required": true},
+                        {"ref": "input_002", "type": "PASSWORD_INPUT", "identifier": "password", "required": true},
+                    ],
+                    "action": {"ref": "action_001", "nextNode": "credentials_auth"},
+                }],
+            },
+            {
+                "id": "credentials_auth", "type": "TASK_EXECUTION",
+                "executor": {
+                    "name": "CredentialsAuthExecutor",
+                    "inputs": [
+                        {"ref": "input_001", "type": "TEXT_INPUT", "identifier": "username", "required": true},
+                        {"ref": "input_002", "type": "PASSWORD_INPUT", "identifier": "password", "required": true},
+                    ],
+                },
+                "onSuccess": "session", "onIncomplete": "prompt_credentials",
+            },
+            {
+                "id": "session", "type": "TASK_EXECUTION",
+                "executor": {"name": "SessionExecutor"},
+                "onSuccess": "authorization_check",
+            },
+            {
+                "id": "authorization_check", "type": "TASK_EXECUTION",
+                "executor": {"name": "AuthorizationExecutor"},
+                "onSuccess": "auth_assert",
+            },
+            {
+                "id": "auth_assert", "type": "TASK_EXECUTION",
+                "executor": {"name": "AuthAssertExecutor"}, "onSuccess": "end",
+            },
+            {"id": "end", "type": "END"},
+        ],
+    })
+}
+
+/// Native ThunderID 1.0.1 Conditional Confirmation sign-out flow from the same
+/// pinned Apache-2.0 upstream template file. App Kit sends a client id without
+/// an ID-token hint, so `promptOnSignOut` must stay true: the issuer asks the
+/// person before ending that app's SSO session.
+fn browser_sign_out_flow(description: &IssuerDescription) -> Value {
+    let id = crate::local::browser_sign_out_flow_id(&description.session.id);
+    json!({
+        "resource_type": "flow",
+        "id": id,
+        "name": "Registry browser sign-out",
+        "handle": format!("registry-signout-{id}"),
+        "flowType": "SIGNOUT",
+        "nodes": [
+            {"id": "start", "type": "START", "onSuccess": "session_signout"},
+            {
+                "id": "session_signout", "type": "TASK_EXECUTION",
+                "properties": {"promptOnSignOut": true},
+                "executor": {"name": "SessionSignOutExecutor"},
+                "onSuccess": "end", "onIncomplete": "prompt_confirm",
+            },
+            {
+                "id": "prompt_confirm", "type": "PROMPT",
+                "meta": {"components": [
+                    {
+                        "align": "center", "category": "DISPLAY", "id": "text_signout_title",
+                        "label": "{{ t(signout:forms.confirm.title) }}", "resourceType": "ELEMENT",
+                        "type": "TEXT", "variant": "HEADING_1",
+                    },
+                    {
+                        "align": "center", "category": "DISPLAY", "id": "text_signout_desc",
+                        "label": "{{ t(signout:forms.confirm.description) }}", "resourceType": "ELEMENT",
+                        "type": "TEXT", "variant": "BODY_1",
+                    },
+                    {
+                        "category": "BLOCK", "id": "block_signout", "resourceType": "ELEMENT",
+                        "type": "BLOCK", "components": [{
+                            "actionType": "CONFIRM", "category": "ACTION", "eventType": "SUBMIT",
+                            "id": "action_confirm",
+                            "label": "{{ t(signout:forms.confirm.actions.submit.label) }}",
+                            "resourceType": "ELEMENT", "type": "ACTION", "variant": "PRIMARY",
+                        }],
+                    },
+                ]},
+                "prompts": [{"action": {
+                    "ref": "action_confirm", "type": "CONFIRM", "nextNode": "session_signout",
+                }}],
+            },
+            {"id": "end", "type": "END"},
+        ],
+    })
+}
+
+/// Fixed Gate expressions emitted by the two pinned native flow graphs. The
+/// hosted generator checks these exact multiplicities beside its secret
+/// placeholders, so an authored string still cannot introduce template syntax.
+pub(crate) fn gate_template_expression_counts(
+    browser_applications: usize,
+) -> [(&'static str, usize); 11] {
+    let sign_out = usize::from(browser_applications > 0);
+    [
+        ("{{ t(signin:images.app_logo.alt) }}", browser_applications),
+        ("{{ meta(application.logoUrl) }}", browser_applications),
+        (
+            "{{ t(signin:forms.credentials.title) }}",
+            browser_applications,
+        ),
+        (
+            "{{ t(signin:forms.credentials.fields.username.label) }}",
+            browser_applications,
+        ),
+        (
+            "{{ t(signin:forms.credentials.fields.username.placeholder) }}",
+            browser_applications,
+        ),
+        (
+            "{{ t(signin:forms.credentials.fields.password.label) }}",
+            browser_applications,
+        ),
+        (
+            "{{ t(signin:forms.credentials.fields.password.placeholder) }}",
+            browser_applications,
+        ),
+        (
+            "{{ t(signin:forms.credentials.actions.submit.label) }}",
+            browser_applications,
+        ),
+        ("{{ t(signout:forms.confirm.title) }}", sign_out),
+        ("{{ t(signout:forms.confirm.description) }}", sign_out),
+        (
+            "{{ t(signout:forms.confirm.actions.submit.label) }}",
+            sign_out,
+        ),
+    ]
+}
+
 /// Render every native resource document for one validated description.
 ///
 /// The caller validates first; this function refuses an unvalidated shape
@@ -736,6 +932,16 @@ pub(crate) fn build(
             &document,
         )?;
     }
+    let sign_out_flow_id = (!description.interactive_applications.is_empty())
+        .then(|| crate::local::browser_sign_out_flow_id(&description.session.id));
+    if let Some(id) = &sign_out_flow_id {
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("flows/{id}.yaml"),
+            &browser_sign_out_flow(description),
+        )?;
+    }
     for app in &description.interactive_applications {
         let branding = branding
             .as_ref()
@@ -760,6 +966,14 @@ pub(crate) fn build(
                 .flatten()
                 .map(|name| json!(name)),
         );
+        let auth_flow_id =
+            crate::local::application_authentication_flow_id(&description.session.id, &app.id);
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("flows/{auth_flow_id}.yaml"),
+            &browser_authentication_flow(description, &app.id, &app.client_id),
+        )?;
         let mut document = json!({
             "resource_type": "application", "id": app.id,
             "name": app.client_id,
@@ -770,7 +984,8 @@ pub(crate) fn build(
             },
             "type": "fullstack", "ouHandle": ou_handle,
             "url": app.origin,
-            "authFlowId": "01900000-0000-7000-8000-000000000068",
+            "authFlowId": auth_flow_id,
+            "signOutFlowId": sign_out_flow_id.as_deref().expect("browser apps render sign-out"),
             "themeId": branding.theme_id,
             "layoutId": branding.layout_id,
             "isRegistrationFlowEnabled": false, "isRecoveryFlowEnabled": false,
@@ -1369,6 +1584,17 @@ mod tests {
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
             });
+        description
+            .interactive_applications
+            .push(InteractiveApplication {
+                id: "0197aaaa-0000-7000-8000-0000000000e3".into(),
+                client_id: "synthetic-citizen".into(),
+                client_secret_file: "secrets/app".into(),
+                origin: "http://127.0.0.1:3001".into(),
+                redirect_uris: vec!["http://127.0.0.1:3001/auth/callback".into()],
+                audience: description.resource_servers[0].identifier.clone(),
+                token_attributes: vec!["registry_role".into()],
+            });
         description.synthetic_users.push(SyntheticUser {
             id: "0197aaaa-0000-7000-8000-0000000000e2".into(),
             username: "staff-one".into(),
@@ -1414,7 +1640,63 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(app["authFlowId"], "01900000-0000-7000-8000-000000000068");
+        let other_app: Value = serde_yaml_parse(
+            &fs::read_to_string(
+                rendered
+                    .resources_dir
+                    .join("applications/0197aaaa-0000-7000-8000-0000000000e3.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_ne!(app["authFlowId"], "01900000-0000-7000-8000-000000000068");
+        assert_ne!(app["authFlowId"], other_app["authFlowId"]);
+        assert!(app["authFlowId"].is_string());
+        assert_eq!(app["signOutFlowId"], other_app["signOutFlowId"]);
+        assert!(app["signOutFlowId"].is_string());
+
+        let flows: Vec<Value> = fs::read_dir(rendered.resources_dir.join("flows"))
+            .unwrap()
+            .map(|entry| {
+                serde_yaml_parse(&fs::read_to_string(entry.unwrap().path()).unwrap()).unwrap()
+            })
+            .collect();
+        assert_eq!(
+            flows.len(),
+            3,
+            "two authentication flows and one sign-out flow"
+        );
+        let auth_flow = flows
+            .iter()
+            .find(|flow| flow["id"] == app["authFlowId"])
+            .unwrap();
+        let executors: Vec<_> = auth_flow["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| node["executor"]["name"].as_str())
+            .collect();
+        assert_eq!(
+            executors,
+            [
+                "SSOCheckExecutor",
+                "CredentialsAuthExecutor",
+                "SessionExecutor",
+                "AuthorizationExecutor",
+                "AuthAssertExecutor",
+            ]
+        );
+        let sign_out_flow = flows
+            .iter()
+            .find(|flow| flow["id"] == app["signOutFlowId"])
+            .unwrap();
+        let sign_out = sign_out_flow["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["executor"]["name"] == "SessionSignOutExecutor")
+            .unwrap();
+        assert_eq!(sign_out["properties"]["promptOnSignOut"], true);
         assert_eq!(app["themeId"], "019a05b7-1000-7000-8000-000000000001");
         assert_eq!(app["layoutId"], "019a05b7-1000-7000-8000-000000000002");
         assert_eq!(
@@ -1430,6 +1712,10 @@ mod tests {
         assert_eq!(
             oauth["redirectUris"],
             json!(["http://127.0.0.1:3000/auth/callback"])
+        );
+        assert_eq!(
+            oauth["postLogoutRedirectUris"],
+            json!(["http://127.0.0.1:3000"])
         );
         assert_eq!(oauth["grantTypes"], json!(["authorization_code"]));
         assert_eq!(oauth["responseTypes"], json!(["code"]));
@@ -1498,6 +1784,29 @@ mod tests {
             .resources_dir
             .join("users/0197aaaa-0000-7000-8000-0000000000e2.yaml")
             .exists());
+        fs::remove_dir_all(&description.state_root).unwrap();
+    }
+
+    #[test]
+    fn a_machine_only_render_has_no_browser_flow() {
+        let mut description = crate::testing::synthetic_description();
+        description.state_root = std::env::temp_dir().join(format!(
+            "registry-machine-render-{}",
+            crate::container::random_urlsafe(16).unwrap()
+        ));
+        fs::create_dir(&description.state_root).unwrap();
+        fs::set_permissions(&description.state_root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(description.state_root.join("secrets")).unwrap();
+        fs::write(
+            description
+                .state_root
+                .join("secrets/compatibility-client-secret"),
+            "fixture-compat-secret",
+        )
+        .unwrap();
+
+        let rendered = render(&description).unwrap();
+        assert!(!rendered.resources_dir.join("flows").exists());
         fs::remove_dir_all(&description.state_root).unwrap();
     }
 
