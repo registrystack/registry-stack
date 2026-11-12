@@ -2588,6 +2588,11 @@ restricted BReg binding Action and records the first dispatch before sending.
 An uncertain submission stays held. Coordinator can reconcile the original
 acceptance through a read-only lookup for the saved key and instruction.
 
+The `mifos-legacy-signature` host profile signs the exact Bulk request and
+verifies the raw acknowledgement and expected tenant before interpreting it.
+Request signing and response verification use separate pinned Transit keys.
+Operations status uses a separate bearer credential.
+
 The separate confirmation operation accepts only a disbursement ID. Adapter
 reports verified provider completion through its restricted BReg Action,
 using the original instruction facts and a separately keyed exact command.
