@@ -7,6 +7,7 @@ mod refs;
 mod safety;
 mod server;
 mod workspace;
+mod workspace_analysis;
 mod yaml;
 
 pub use products::ProductKind;
@@ -15,6 +16,9 @@ pub use refs::{
     IndexedSymbol, ProjectIndex, SymbolKind,
 };
 pub use server::Backend;
+pub use workspace_analysis::{
+    execute_workspace_analysis, run_workspace_analysis_stdio, WorkspaceAnalysisError,
+};
 
 /// Serve the Registry Stack language protocol over standard input and output.
 pub async fn run_stdio() {

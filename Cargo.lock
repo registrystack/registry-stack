@@ -7340,12 +7340,15 @@ name = "registry-language-server"
 version = "0.46.1"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "futures",
  "registry-evidence-authoring",
  "registry-platform-yaml",
  "rustix 1.1.6",
+ "serde",
  "serde_json",
  "serde_norway",
+ "sha2 0.11.1",
  "tempfile",
  "tokio",
  "tower",
