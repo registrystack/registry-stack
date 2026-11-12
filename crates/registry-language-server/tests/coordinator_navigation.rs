@@ -190,7 +190,7 @@ fn every_maintained_coordinator_workflow_has_no_invented_missing_local_reference
         count += 1;
     }
     assert_eq!(
-        count, 12,
+        count, 13,
         "cover every maintained Coordinator workflow, including payments"
     );
 }
