@@ -54,6 +54,10 @@ installer, on every supported platform, from v0.46.0. The facade has no image
 yet. The ``adapter-job`` host stays source-build only until its release build
 enables a destination.
 
+``LANGUAGE_SERVER_FIRST_RELEASE`` decides when the standalone Registry Stack
+language server joins the Stack train for the editor hosts that consume it:
+Linux amd64 and macOS arm64.
+
 ``DOCUMENTS_FIRST_RELEASE`` is the single place that decides which release
 first ships the Registry Document Store binaries, ``documents`` and
 ``documentsctl``, and any image or security evidence of theirs. No release
@@ -100,6 +104,8 @@ DOCUMENTS_FIRST_RELEASE: tuple[int, int, int] | None = None
 COORDINATOR_BINARY_FIRST_RELEASE: tuple[int, int, int] = (0, 44, 0)
 
 ADAPTER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 46, 0)
+
+LANGUAGE_SERVER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 46, 1)
 
 ALL_PLATFORMS_FIRST_RELEASE = (0, 44, 0)
 
@@ -279,6 +285,13 @@ def adapter_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def language_server_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release ships the standalone language server."""
+
+    first_release = LANGUAGE_SERVER_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
 def python_wheel_abi_tag(version: tuple[int, int, int]) -> str:
     """Return the interpreter and ABI tag of the release's Python client wheels.
 
@@ -332,6 +345,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     adapter.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     adapter.set_defaults(in_release=adapter_in_release)
+    language_server = commands.add_parser(
+        "language-server-in-release",
+        help="print true when the release ships the standalone language server",
+    )
+    language_server.add_argument(
+        "version", type=version_argument, help="release version as X.Y.Z"
+    )
+    language_server.set_defaults(in_release=language_server_in_release)
     breg_services = commands.add_parser(
         "breg-services-in-release",
         help="print true when the release version ships breg-mcp and breg-review, else false",

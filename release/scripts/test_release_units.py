@@ -36,6 +36,7 @@ class ReleaseUnitsTest(TestCase):
                 "coordinator",
                 "discovery",
                 "evidence-oid4vci",
+                "language-server",
                 "manifest",
                 "messaging",
                 "render",
@@ -50,6 +51,23 @@ class ReleaseUnitsTest(TestCase):
                     self.module.UnitRegistryError, "not enabled for the release pilot"
                 ):
                     registry.require_pilot(held)
+
+    def test_language_server_owns_only_its_standalone_artifacts(self) -> None:
+        registry = self.module.load_registry()
+        unit = registry.get("language-server")
+        self.assertEqual(("registry-language-server",), unit.members)
+        self.assertEqual(
+            "language-server",
+            registry.artifact_owner(
+                "registry-language-server-v0.46.1-linux-amd64"
+            ),
+        )
+        self.assertEqual(
+            "language-server",
+            registry.artifact_owner(
+                "registry-language-server-v0.46.1-macos-arm64.tar.gz"
+            ),
+        )
 
     def test_discovery_identity_and_candidate_roster_are_unit_scoped(self) -> None:
         self.assertEqual("v1.2.3", self.module.asset_tag("1.2.3"))

@@ -80,6 +80,10 @@ PRODUCTS = {
     },
 }
 
+# These release binaries are consumed directly and are deliberately not
+# installed as product components by rstack.
+DISTRIBUTION_ONLY_BINARIES = {"registry-language-server"}
+
 
 def _binary_name(asset_name: str, tag: str) -> tuple[str, str]:
     for platform in PLATFORMS:
@@ -134,7 +138,7 @@ def build_component_manifest(version: str, payloads: list[dict[str, Any]]) -> di
             raise ValueError(f"incomplete launcher on {platform}: rstack is missing")
         launcher[platform] = binaries[platform]["rstack"]
 
-    classified = {"rstack"}
+    classified = {"rstack", *DISTRIBUTION_ONLY_BINARIES}
     components: dict[str, dict[str, Any]] = {}
     for name, spec in PRODUCTS.items():
         baseline = spec["baseline"]

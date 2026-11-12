@@ -48,6 +48,9 @@ PRODUCT_VERSION_MANIFESTS = {
     "discovery": "crates/registry-discovery/Cargo.toml",
     "discoveryctl": "crates/registry-discoveryctl/Cargo.toml",
 }
+# This binary intentionally exposes the Cargo package version. Nightly source
+# identity remains authenticated by nightly.json, its asset name, and checksum.
+BASE_VERSION_BINARIES = frozenset({"registry-language-server"})
 HISTORICAL_INSTALLERS = INSTALLERS | {
     "relay": ("registry-relay-v2", "RELAY", ("relay", "relayctl")),
 }
@@ -157,6 +160,17 @@ V2_4_PAYLOAD_TEMPLATES = tuple(sorted((
     "adapterctl-{tag}-linux-amd64", "adapterctl-{tag}-linux-arm64", "adapterctl-{tag}-macos-arm64.tar.gz",
 )))
 V2_5_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.5"
+V2_6_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.6"
+V2_6_PAYLOAD_TEMPLATES = tuple(
+    sorted(
+        (
+            *V2_4_PAYLOAD_TEMPLATES,
+            "registry-language-server-{tag}-linux-amd64",
+            "registry-language-server-{tag}-macos-arm64.tar.gz",
+        )
+    )
+)
+V2_7_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.7"
 V2_ROSTER_PROFILES = {
     V2_ROSTER_PROFILE: (V2_IMAGES, V2_INSTALLERS, V2_PAYLOAD_TEMPLATES),
     V2_1_ROSTER_PROFILE: (V2_1_IMAGES, V2_INSTALLERS, V2_1_PAYLOAD_TEMPLATES),
@@ -164,6 +178,8 @@ V2_ROSTER_PROFILES = {
     V2_3_ROSTER_PROFILE: (V2_1_IMAGES, V2_2_INSTALLERS, V2_2_PAYLOAD_TEMPLATES),
     V2_4_ROSTER_PROFILE: (V2_IMAGES, V2_4_INSTALLERS, V2_4_PAYLOAD_TEMPLATES),
     V2_5_ROSTER_PROFILE: (V2_1_IMAGES, V2_4_INSTALLERS, V2_4_PAYLOAD_TEMPLATES),
+    V2_6_ROSTER_PROFILE: (V2_IMAGES, V2_4_INSTALLERS, V2_6_PAYLOAD_TEMPLATES),
+    V2_7_ROSTER_PROFILE: (V2_1_IMAGES, V2_4_INSTALLERS, V2_6_PAYLOAD_TEMPLATES),
 }
 INSTALLERS.update(release_roster.ADDITIONAL_INSTALLERS)
 
@@ -222,6 +238,8 @@ def expected_binary_version(
     """Render one binary's version from the selected nightly source tree."""
 
     base_version, _ = identity(f"v{nightly_version}")
+    if binary in BASE_VERSION_BINARIES:
+        return base_version
     manifest_name = PRODUCT_VERSION_MANIFESTS.get(binary)
     if manifest_name is None:
         return nightly_version
@@ -348,6 +366,11 @@ def current_roster(version: str, tag: str) -> dict:
     parsed = tuple(int(part) for part in version.split("."))
     if parsed >= release_roster.ALL_PLATFORMS_FIRST_RELEASE:
         coordinator_image = release_roster.coordinator_in_release(parsed)
+        if release_roster.language_server_in_release(parsed):
+            return frozen_roster(
+                V2_7_ROSTER_PROFILE if coordinator_image else V2_6_ROSTER_PROFILE,
+                tag,
+            )
         if release_roster.adapter_in_release(parsed):
             profile = V2_5_ROSTER_PROFILE if coordinator_image else V2_4_ROSTER_PROFILE
         else:

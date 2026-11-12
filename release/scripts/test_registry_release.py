@@ -3953,6 +3953,8 @@ class RegistryReleaseTest(TestCase):
                 inventory.update({"adapter": version, "adapterctl": version})
             if module.release_roster.rstack_in_release(version_tuple):
                 inventory.update({"rstack": version, "rstack-installer": version})
+            if module.release_roster.language_server_in_release(version_tuple):
+                inventory["registry-language-server"] = version
             if module.release_roster.scheduling_installer_in_release(version_tuple):
                 inventory["scheduling-installer"] = version
             if version_tuple >= (0, 39, 0):
@@ -4075,6 +4077,8 @@ class RegistryReleaseTest(TestCase):
                 inventory.update({"adapter": version, "adapterctl": version})
             if roster.rstack_in_release(version_tuple):
                 inventory.update({"rstack": version, "rstack-installer": version})
+            if roster.language_server_in_release(version_tuple):
+                inventory["registry-language-server"] = version
             if roster.scheduling_installer_in_release(version_tuple):
                 inventory["scheduling-installer"] = version
             inventory.update({f"{name}-installer": version for name in module.release_roster.additional_installers(version_tuple)})
@@ -4231,6 +4235,8 @@ class RegistryReleaseTest(TestCase):
                         current.update({"adapter": version, "adapterctl": version})
                     if module.release_roster.rstack_in_release(version_tuple):
                         current.update({"rstack": version, "rstack-installer": version})
+                    if module.release_roster.language_server_in_release(version_tuple):
+                        current["registry-language-server"] = version
                     if module.release_roster.scheduling_installer_in_release(version_tuple):
                         current["scheduling-installer"] = version
                     current.update({f"{name}-installer": version for name in module.release_roster.additional_installers(version_tuple)})
@@ -6186,6 +6192,8 @@ def write_manifest(
     if load_release_roster().rstack_in_release(version_tuple):
         artifacts["rstack"] = version
         artifacts["rstack-installer"] = version
+    if load_release_roster().language_server_in_release(version_tuple):
+        artifacts["registry-language-server"] = version
     if load_release_roster().scheduling_installer_in_release(version_tuple):
         artifacts["scheduling-installer"] = version
     if version_tuple >= (0, 39, 0):

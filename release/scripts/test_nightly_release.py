@@ -79,6 +79,34 @@ class NightlyTest(unittest.TestCase):
         before = nightly.current_roster("0.45.0", tag.replace("0.46.0", "0.45.0"))
         self.assertEqual(nightly.V2_2_ROSTER_PROFILE, before["profile"])
 
+    def test_language_server_joins_a_new_frozen_nightly_profile(self):
+        tag = f"v0.46.1-nightly.20261112.{SHA}"
+        roster = nightly.current_roster("0.46.1", tag)
+        self.assertEqual(nightly.V2_6_ROSTER_PROFILE, roster["profile"])
+        self.assertEqual(
+            {
+                f"registry-language-server-{tag}-linux-amd64",
+                f"registry-language-server-{tag}-macos-arm64.tar.gz",
+            },
+            {
+                name
+                for name in roster["payloads"]
+                if name.startswith("registry-language-server-")
+            },
+        )
+        self.assertNotIn("registry-language-server", roster["installers"])
+        self.assertNotIn("registry-language-server", roster["images"])
+        self.assertEqual(roster, nightly.validate_v2_roster(roster, tag))
+
+        previous = nightly.frozen_roster(nightly.V2_4_ROSTER_PROFILE, tag)
+        self.assertFalse(
+            any(
+                name.startswith("registry-language-server-")
+                for name in previous["payloads"]
+            )
+        )
+        self.assertEqual(previous, nightly.validate_v2_roster(previous, tag))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -342,6 +370,15 @@ class NightlyTest(unittest.TestCase):
         ):
             self.assertEqual(0, nightly.main())
         self.assertEqual(f"1.7.2-nightly.20261002.{SHA}", output.getvalue().strip())
+
+    def test_language_server_reports_the_base_version_in_a_nightly(self):
+        nightly_version = f"0.46.1-nightly.20261112.{SHA}"
+        self.assertEqual(
+            "0.46.1",
+            nightly.expected_binary_version(
+                "registry-language-server", nightly_version
+            ),
+        )
 
     def test_old_v1_0_39_manifest_with_relay_remains_readable(self):
         path = self.root / "old-nightly.json"

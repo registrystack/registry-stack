@@ -526,6 +526,9 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"rstack-{tag}-{platform}"] = "binary"
         inventory[f"rstack-{tag}-install.sh"] = "installer"
         inventory["rstack-install.sh"] = "installer"
+    if release_roster.language_server_in_release(version_tuple):
+        inventory[f"registry-language-server-{tag}-linux-amd64"] = "binary"
+        inventory[f"registry-language-server-{tag}-macos-arm64"] = "binary"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
     for _, binary in release_roster.additional_platform_builds(version_tuple):

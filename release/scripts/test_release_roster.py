@@ -143,6 +143,27 @@ class ReleaseRosterTest(TestCase):
             release_roster.additional_installers((0, 46, 0))["adapter"],
         )
 
+    def test_language_server_joins_the_stack_train_from_v0_46_1(self) -> None:
+        self.assertEqual(
+            (0, 46, 1), release_roster.LANGUAGE_SERVER_FIRST_RELEASE
+        )
+        self.assertFalse(
+            release_roster.language_server_in_release((0, 46, 0))
+        )
+        self.assertTrue(
+            release_roster.language_server_in_release((0, 46, 1))
+        )
+        with mock.patch.object(
+            release_roster, "LANGUAGE_SERVER_FIRST_RELEASE", None
+        ):
+            self.assertFalse(
+                release_roster.language_server_in_release((1, 0, 0))
+            )
+        self.assertNotIn(
+            ("registry-language-server", "registry-language-server"),
+            release_roster.additional_platform_builds((0, 46, 1)),
+        )
+
     def test_relay_is_retired_from_v0_39(self) -> None:
         self.assertEqual((0, 39, 0), release_roster.RELAY_RETIREMENT_RELEASE)
         self.assertTrue(release_roster.relay_in_release((0, 38, 0)))

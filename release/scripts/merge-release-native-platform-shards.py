@@ -93,9 +93,14 @@ def rosters(
         if release_roster.rstack_in_release(parsed)
         else []
     )
+    language_server = (
+        [f"registry-language-server-{tag}-{ASSET}"]
+        if release_roster.language_server_in_release(parsed)
+        else []
+    )
     # Keep this in the builder's checksum order: additional platform binaries,
-    # rstack, then the historical Evidence binaries.
-    core = [*additional_core, *rstack, *core]
+    # rstack, the language server, then the historical Evidence binaries.
+    core = [*additional_core, *rstack, *language_server, *core]
     breg = []
     bregctl = []
     if parsed >= (0, 26, 0):

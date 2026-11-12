@@ -118,6 +118,11 @@ def rosters(
     ]
     if release_roster.rstack_in_release(parsed):
         common.insert(0, f"rstack-{tag}-linux-amd64")
+    if release_roster.language_server_in_release(parsed):
+        common.insert(
+            1 if release_roster.rstack_in_release(parsed) else 0,
+            f"registry-language-server-{tag}-linux-amd64",
+        )
     if release_roster.relay_in_release(parsed):
         common.extend(
             [

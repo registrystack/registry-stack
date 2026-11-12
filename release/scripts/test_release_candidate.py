@@ -173,6 +173,26 @@ class ReleaseCandidateTest(TestCase):
         historical = self.module._release_payload_inventory("0.45.0")
         self.assertFalse(any(name.startswith("adapter") for name in historical))
 
+    def test_v0_46_1_publishes_language_server_for_supported_editor_hosts(self):
+        historical = self.module._release_payload_inventory("0.46.0")
+        self.assertFalse(
+            any(name.startswith("registry-language-server-") for name in historical)
+        )
+        current = self.module._release_payload_inventory("0.46.1")
+        self.assertEqual(
+            "binary",
+            current.get("registry-language-server-v0.46.1-linux-amd64"),
+        )
+        self.assertEqual(
+            "binary",
+            current.get(
+                "registry-language-server-v0.46.1-macos-arm64.tar.gz"
+            ),
+        )
+        self.assertNotIn(
+            "registry-language-server-v0.46.1-linux-arm64", current
+        )
+
     def setUp(self) -> None:
         self.module = load_module()
         enabled = mock.patch.object(

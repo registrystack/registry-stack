@@ -79,6 +79,16 @@ class ComponentManifestTests(unittest.TestCase):
                     supported["capabilities"],
                 )
 
+    def test_language_server_remains_a_distribution_only_binary(self) -> None:
+        document = rstack_components.build_component_manifest(
+            "0.46.1", payloads("0.46.1")
+        )
+        self.assertNotIn("language-server", document["components"])
+        self.assertIn(
+            "registry-language-server",
+            rstack_components.DISTRIBUTION_ONLY_BINARIES,
+        )
+
     def test_candidate_schemas_admit_every_component_name(self) -> None:
         schemas = Path(__file__).resolve().parent.parent / "schemas"
         for schema_name in ("release-candidate-v2.schema.json", "release-candidate-v3.schema.json"):

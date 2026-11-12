@@ -298,6 +298,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.update({"adapter", "adapterctl"})
         if release_roster.rstack_in_release(parsed_version):
             expected_inventory.update({"rstack", "rstack-installer"})
+        if release_roster.language_server_in_release(parsed_version):
+            expected_inventory.add("registry-language-server")
         expected_inventory.update(
             f"{name}-installer"
             for name in release_roster.additional_installers(parsed_version)

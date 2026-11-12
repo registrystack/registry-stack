@@ -195,14 +195,16 @@ binaries = {
     "registry-casework": "casework",
     "registry-caseworkctl": "caseworkctl",
     "registry-schedulingctl": "schedulingctl",
+    "registry-language-server": "registry-language-server",
 }
 for package in packages:
     name = args[args.index("--bin") + 1] if "--bin" in args else binaries[package]
+    reported_version = version if name == "registry-language-server" else binary_version
     suffix = " (typst " + os.environ["FAKE_TYPST_PIN"] + ")" if name == "registry-render" else ""
     body = f'''#!/usr/bin/env bash
 if [[ "${{1:-}}" == --version ]]; then
   printf '%s\\n' "{name}" >>"$FAKE_BINARY_SMOKE_LOG"
-  printf '%s\\n' "{name} {binary_version}{suffix}"
+  printf '%s\\n' "{name} {reported_version}{suffix}"
 fi
 '''
     path = output / name
@@ -446,6 +448,81 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         self.assertEqual(
             MODULE.rosters("0.46.0")["core"],
             [line.split("  ", 1)[1] for line in (output / "SHA256SUMS").read_text().splitlines()],
+        )
+
+    def test_v0_46_1_core_bundles_and_launches_the_language_server(self):
+        result, output, calls = self.build("core", version="0.46.1")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-language-server",
+                "--bin",
+                "registry-language-server",
+                "--target",
+                TARGET,
+            ],
+            calls,
+        )
+        archive = (
+            output
+            / "platform/registry-language-server-v0.46.1-macos-arm64.tar.gz"
+        )
+        self.assertTrue(archive.is_file())
+        with tarfile.open(archive, "r:gz") as package:
+            self.assertEqual(
+                [
+                    "registry-language-server-v0.46.1-macos-arm64",
+                    "THIRD_PARTY_NOTICES",
+                ],
+                package.getnames(),
+            )
+        self.assertIn(
+            "registry-language-server-v0.46.1-macos-arm64.tar.gz",
+            MODULE.rosters("0.46.1")["core"],
+        )
+
+    def test_language_server_group_builds_only_the_standalone_artifact(self):
+        result, output, calls = self.build("language-server", version="0.46.1")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            [
+                [
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "registry-language-server",
+                    "--bin",
+                    "registry-language-server",
+                    "--target",
+                    TARGET,
+                ]
+            ],
+            calls,
+        )
+        self.assertEqual(
+            ["registry-language-server-v0.46.1-macos-arm64.tar.gz"],
+            [
+                line.split("  ", 1)[1]
+                for line in (output / "SHA256SUMS").read_text().splitlines()
+            ],
+        )
+
+    def test_nightly_language_server_keeps_its_cargo_version(self):
+        nightly_tag = f"v0.46.1-nightly.20261112.{SOURCE_SHA}"
+        result, output, _ = self.build(
+            "core", version="0.46.1", nightly_tag=nightly_tag
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(
+            (
+                output
+                / f"platform/registry-language-server-{nightly_tag}-macos-arm64.tar.gz"
+            ).is_file()
         )
 
     def test_v0_44_core_bundles_and_launches_every_additional_native_binary(self):

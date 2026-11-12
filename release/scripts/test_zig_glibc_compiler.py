@@ -298,10 +298,14 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "for binary in ('registry-manifest', 'rstack', 'relay', 'relayctl', 'evidence', "
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'discoveryctl', 'breg', 'bregctl', "
             "'casework', 'caseworkctl', 'scheduling', 'schedulingctl', 'messaging', "
-            "'messagingctl', 'registry-render', 'coordinator', 'coordinatorctl'):\n"
+            "'messagingctl', 'registry-render', 'coordinator', 'coordinatorctl', "
+            "'adapter', 'adapterctl', "
+            "'registry-language-server'):\n"
             "    path = target / binary\n"
-            "    if binary in ('registry-manifest', 'rstack'):\n"
+            "    if binary in ('registry-manifest', 'rstack', 'registry-language-server'):\n"
             "        version = (os.environ.get('FAKE_MANIFEST_VERSION') if binary == 'registry-manifest' else None) or os.environ.get('REGISTRY_NIGHTLY_TAG') or os.environ['REGISTRY_RELEASE_TAG']\n"
+            "        if binary == 'registry-language-server':\n"
+            "            version = version.removeprefix('v').split('-nightly.', 1)[0]\n"
             "        path.write_text('#!/bin/sh\\nprintf \\\'%s\\\\n\\\' \\\'' + binary + ' ' + version.removeprefix('v') + '\\\'\\n')\n"
             "        path.chmod(0o755)\n"
             "    else:\n"
@@ -341,6 +345,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "    core += ['coordinator', 'coordinatorctl']\n"
             "if release_roster.rstack_in_release(parsed):\n"
             "    core.append('rstack')\n"
+            "if release_roster.language_server_in_release(parsed):\n"
+            "    core.append('registry-language-server')\n"
             "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
             "if release_roster.breg_services_in_release(parsed):\n"
             "    breg += ['breg-mcp', 'breg-review']\n"
@@ -569,6 +575,53 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertIn("discoveryctl-v0.38.0-linux-amd64", current_bin)
         self.assertIn("registry-render", current_images)
         self.assertIn("evidence-oid4vci", current_images)
+
+    def test_core_stages_and_launches_language_server_from_v0_46_1(self) -> None:
+        result, historical_calls = self.run_payload(
+            version="0.46.0", group="core"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            any(
+                "registry-language-server" in call["args"]
+                for call in historical_calls
+            )
+        )
+
+        result, current_calls = self.run_payload(
+            version="0.46.1", group="core"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-language-server",
+                "--bin",
+                "registry-language-server",
+            ],
+            [call["args"] for call in current_calls],
+        )
+        current_bin, current_images = self.staged()
+        self.assertIn(
+            "registry-language-server-v0.46.1-linux-amd64", current_bin
+        )
+        self.assertNotIn("registry-language-server", current_images)
+
+    def test_nightly_core_stages_language_server_with_its_cargo_version(self) -> None:
+        nightly_tag = f"v0.46.1-nightly.20261112.{'1' * 40}"
+        result, _ = self.run_payload(
+            version="0.46.1", group="core", nightly_tag=nightly_tag
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(
+            (
+                self.root
+                / f"dist/bin/registry-language-server-{nightly_tag}-linux-amd64"
+            ).is_file()
+        )
 
     def test_core_stages_coordinator_only_from_its_first_release(self) -> None:
         # Enable only the copied test recipe's roster, including its child processes.
