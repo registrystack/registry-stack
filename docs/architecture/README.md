@@ -1,6 +1,6 @@
 # Registry Stack architecture
 
-Use these diagrams to understand BReg, Casework and Evidence responsibilities,
+Use these diagrams to understand Base Registry Engine (BReg), Casework and Evidence responsibilities,
 follow requests and events, and inspect the contracts between independently deployed products.
 The BReg and Evidence models retain source revision `c02e470085f48eae0204ba8400f9f919c5d05500`, reviewed on
 13 September 2026, which includes the contextual authorization changes first released in v0.31.0.
