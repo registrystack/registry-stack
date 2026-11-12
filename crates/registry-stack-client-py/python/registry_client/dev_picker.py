@@ -31,9 +31,9 @@ from .connection import ConnectionError, _claims
 from .portal import CSRFError, PortalContext, ReauthenticationRequired
 
 
-DESCRIPTOR_VERSION = "id.registrystack.org/formats/platform/dev-person-picker/v1alpha1"
-TOKEN_VERSION = "id.registrystack.org/formats/platform/dev-person-token/v1alpha1"
-GENERATION_VERSION = "id.registrystack.org/formats/platform/dev-person-generation/v1alpha1"
+DESCRIPTOR_VERSION = "id.registrystack.org/formats/platform/dev-picker-descriptor/v1alpha1"
+TOKEN_VERSION = "id.registrystack.org/formats/platform/dev-picker-token/v1alpha1"
+GENERATION_VERSION = "id.registrystack.org/formats/platform/dev-picker-generation/v1alpha1"
 CONNECTION_VERSION = "id.registrystack.org/formats/platform/python-connection/v1alpha1"
 _RUN_ID = re.compile(r"[0-9a-f]{32}\Z")
 _LOCAL_NAME = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
@@ -397,7 +397,7 @@ class DevelopmentPicker:
         document = _object(document, fields=fields, name="picker descriptor")
         if (
             document["apiVersion"] != DESCRIPTOR_VERSION
-            or document["kind"] != "PlatformDevPersonPicker"
+            or document["kind"] != "PlatformDevPickerDescriptor"
         ):
             raise PickerUnavailable("descriptor has an unsupported format")
         run_id = _text(document["runId"], name="runId", maximum=32)
@@ -758,7 +758,7 @@ class DevelopmentPicker:
         )
         if (
             state["apiVersion"] != GENERATION_VERSION
-            or state["kind"] != "PlatformDevPersonGeneration"
+            or state["kind"] != "PlatformDevPickerGeneration"
             or state["status"] not in ("ready", "stopped")
             or state["runId"] != self._run_id
             or state["picker"] != self._persona
@@ -814,7 +814,7 @@ class DevelopmentPicker:
         state = _object(state, fields=fields, name="person token")
         expected = {
             "apiVersion": TOKEN_VERSION,
-            "kind": "PlatformDevPersonToken",
+            "kind": "PlatformDevPickerToken",
             "runId": self._run_id,
             "picker": self._persona,
             "persona": self._persona,

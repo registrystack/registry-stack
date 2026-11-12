@@ -21,10 +21,10 @@ schema = ["dep:schemars", "platform_config/schema", "yaml_core/schema"]
 
 [dependencies]
 pyo3.workspace = true
-platform_config = { package = "registry-platform-config", path = "../registry-platform-config" }
+platform_config = { package = "registry-platform-config", path = "../registry-platform-config", version = "0.46.1" }
 schemars = { workspace = true, optional = true }
 serde.workspace = true
-yaml_core = { package = "registry-platform-yaml", path = "../registry-platform-yaml" }
+yaml_core = { package = "registry-platform-yaml", path = "../registry-platform-yaml", version = "0.46.1" }
 serde_json.workspace = true
 
 [build-dependencies]

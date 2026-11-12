@@ -20,14 +20,14 @@ use super::{
 };
 
 pub(super) const DESCRIPTOR_FORMAT: &str =
-    "id.registrystack.org/formats/platform/dev-person-picker/v1alpha1";
-pub(super) const DESCRIPTOR_KIND: &str = "PlatformDevPersonPicker";
+    "id.registrystack.org/formats/platform/dev-picker-descriptor/v1alpha1";
+pub(super) const DESCRIPTOR_KIND: &str = "PlatformDevPickerDescriptor";
 pub(super) const TOKEN_FORMAT: &str =
-    "id.registrystack.org/formats/platform/dev-person-token/v1alpha1";
-pub(super) const TOKEN_KIND: &str = "PlatformDevPersonToken";
+    "id.registrystack.org/formats/platform/dev-picker-token/v1alpha1";
+pub(super) const TOKEN_KIND: &str = "PlatformDevPickerToken";
 pub(super) const GENERATION_FORMAT: &str =
-    "id.registrystack.org/formats/platform/dev-person-generation/v1alpha1";
-pub(super) const GENERATION_KIND: &str = "PlatformDevPersonGeneration";
+    "id.registrystack.org/formats/platform/dev-picker-generation/v1alpha1";
+pub(super) const GENERATION_KIND: &str = "PlatformDevPickerGeneration";
 const DIRECTORY: &str = "python-picker";
 const DESCRIPTOR_FILE: &str = "picker.json";
 const GENERATION_FILE: &str = "generation.json";
@@ -97,7 +97,10 @@ impl PickerCredentials {
                         .person_products
                         .iter()
                         .map(|product| {
-                            (*product, format!("person-{index}-{}.json", product.name()))
+                            (
+                                *product,
+                                format!("credential-{index}-{}.json", product.name()),
+                            )
                         })
                         .collect(),
                 })
@@ -527,7 +530,7 @@ mod tests {
         assert_ne!(descriptor["people"][0]["selector"], "applicant");
         assert_eq!(
             descriptor["people"][0]["credentials"]["breg"]["tokenRef"],
-            "person-0-breg.json"
+            "credential-0-breg.json"
         );
         assert_eq!(descriptor["workloads"][0]["name"], "notices");
         assert_eq!(
@@ -547,7 +550,7 @@ mod tests {
         );
 
         let picker_root = descriptor_path.parent().unwrap();
-        let breg_path = picker_root.join("person-0-breg.json");
+        let breg_path = picker_root.join("credential-0-breg.json");
         let first: Value = serde_json::from_slice(&std::fs::read(&breg_path).unwrap()).unwrap();
         assert_eq!(first["generation"], 1);
         assert_eq!(first["persona"], "holder");

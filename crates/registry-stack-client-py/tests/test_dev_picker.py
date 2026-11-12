@@ -180,8 +180,8 @@ class LivePicker:
 
     def write_descriptor(self, **changes):
         descriptor = {
-            "apiVersion": "id.registrystack.org/formats/platform/dev-person-picker/v1alpha1",
-            "kind": "PlatformDevPersonPicker",
+            "apiVersion": "id.registrystack.org/formats/platform/dev-picker-descriptor/v1alpha1",
+            "kind": "PlatformDevPickerDescriptor",
             "runId": RUN_ID,
             "persona": self.persona,
             "origin": self.origin,
@@ -234,8 +234,8 @@ class LivePicker:
         self._write_json(
             self.picker_root / "generation.json",
             {
-                "apiVersion": "id.registrystack.org/formats/platform/dev-person-generation/v1alpha1",
-                "kind": "PlatformDevPersonGeneration",
+                "apiVersion": "id.registrystack.org/formats/platform/dev-picker-generation/v1alpha1",
+                "kind": "PlatformDevPickerGeneration",
                 "status": status,
                 "runId": run_id,
                 "picker": self.persona,
@@ -246,8 +246,8 @@ class LivePicker:
 
     def write_token(self, product, generation, **changes):
         state = {
-            "apiVersion": "id.registrystack.org/formats/platform/dev-person-token/v1alpha1",
-            "kind": "PlatformDevPersonToken",
+            "apiVersion": "id.registrystack.org/formats/platform/dev-picker-token/v1alpha1",
+            "kind": "PlatformDevPickerToken",
             "runId": RUN_ID,
             "picker": self.persona,
             "persona": self.persona,
