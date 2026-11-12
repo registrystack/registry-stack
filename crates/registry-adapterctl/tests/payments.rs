@@ -449,3 +449,86 @@ fn payment_check_refuses_ambiguous_multi_pack_fixture_replay() {
         "adapter.payment.fixture-pack-ambiguous"
     );
 }
+
+fn collection_example() -> String {
+    std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/adapter/examples/payment-collections/payments.example.yaml"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn payment_check_counts_collection_and_disbursement_connections() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/payment-collections/payments.mifos.example.yaml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = registry_adapterctl::main_entry_from(
+        [
+            "adapterctl",
+            "--format",
+            "json",
+            "payments",
+            "check",
+            path.to_str().unwrap(),
+        ],
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_eq!(code, ExitCode::from(1));
+    let report: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(report["connectionCount"], 2);
+    assert!(report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "adapter.payment.provider-pack-required"));
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn payment_check_skips_an_unpinned_synthetic_connection_when_a_pack_is_supplied() {
+    let directory = tempfile::tempdir().unwrap();
+    let pack_file = directory.path().join("pack.yaml");
+    let pack = "apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1\nkind: AdapterPaymentProviderPack\nid: simulator\nversion: '1'\nconnector: simulator-p2g/v1\ncapabilities: [collection]\n";
+    std::fs::write(&pack_file, pack).unwrap();
+    let pinned = collection_example().replacen(
+        "    binding:\n",
+        &format!(
+            "    binding:\n      providerPack: {{id: simulator, version: '1', digest: {}}}\n",
+            registry_platform_config::sha256_uri(pack.as_bytes())
+        ),
+        1,
+    );
+    let synthetic = collection_example()
+        .split_once("connections:\n")
+        .unwrap()
+        .1
+        .replace("licence-fees", "other-fees")
+        .replace("licence-issuance", "other-service")
+        .replace("coordinator-payments", "other-coordinator");
+    let file = directory.path().join("payments.yaml");
+    std::fs::write(&file, format!("{pinned}\n{synthetic}")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = registry_adapterctl::main_entry_from(
+        [
+            "adapterctl",
+            "--format",
+            "json",
+            "payments",
+            "check",
+            file.to_str().unwrap(),
+            "--provider-pack",
+            pack_file.to_str().unwrap(),
+        ],
+        &mut stdout,
+        &mut stderr,
+    );
+    let report: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(code, ExitCode::SUCCESS, "{report}");
+    assert_eq!(report["connectionCount"], 2);
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert!(stderr.is_empty());
+}

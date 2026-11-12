@@ -2,7 +2,8 @@
 
 use registry_adapter::payments::g2p_model::{
     DisbursementInstruction, G2pAttempt, G2pConnectionSnapshot, G2pError, G2pHttpAuth,
-    G2pProviderBinding, G2pRegistryBinding, PreparedG2pRegistryAction,
+    G2pProviderBinding, G2pRegistryBinding, G2pTransitRsaNoOidKeyBinding,
+    PreparedG2pRegistryAction,
 };
 use registry_adapter::payments::pack::{PaymentProviderAuth, ProviderPackPin};
 use registry_adapter::payments::provider_mapping::{
@@ -336,10 +337,14 @@ fn provider_binding_exposes_the_exact_pack_auth_profile() {
     assert_eq!(provider.auth_profile(), PaymentProviderAuth::Bearer);
     let G2pProviderBinding::Http { auth, .. } = &mut provider;
     *auth = G2pHttpAuth::MifosLegacySignature {
+        tenant: "default".to_owned(),
         signing_key_identity: "mifos-signing-key".to_owned(),
-        signing_key_ref: SecretReference::new("secret:env/MIFOS_SIGNING_KEY").unwrap(),
+        signing_key: transit_key("mifos-request", 7, 'a'),
         response_key_identity: "mifos-response-key".to_owned(),
-        response_key_ref: SecretReference::new("secret:env/MIFOS_RESPONSE_KEY").unwrap(),
+        response_key: transit_key("mifos-response", 4, 'b'),
+        operations_credential_identity: "mifos-operations-client".to_owned(),
+        operations_credential_ref: SecretReference::new("secret:env/MIFOS_OPERATIONS_TOKEN")
+            .unwrap(),
     };
     assert_eq!(
         provider.auth_profile(),
@@ -348,27 +353,180 @@ fn provider_binding_exposes_the_exact_pack_auth_profile() {
 }
 
 #[test]
+fn provider_identity_freezes_transit_versions_and_logical_operations_identity() {
+    let mut first = binding();
+    let G2pProviderBinding::Http { auth, .. } = &mut first.provider;
+    *auth = G2pHttpAuth::MifosLegacySignature {
+        tenant: "default".to_owned(),
+        signing_key_identity: "mifos-signing-key".to_owned(),
+        signing_key: transit_key("mifos-request", 7, 'a'),
+        response_key_identity: "mifos-response-key".to_owned(),
+        response_key: transit_key("mifos-response", 4, 'b'),
+        operations_credential_identity: "mifos-operations-client".to_owned(),
+        operations_credential_ref: SecretReference::new("secret:env/MIFOS_OPERATIONS_TOKEN")
+            .unwrap(),
+    };
+    let instruction = instruction();
+    let first_correlation = first.provider_intent(&instruction).unwrap().correlation_id;
+
+    let mut rotated_secret = first.clone();
+    let G2pProviderBinding::Http {
+        auth:
+            G2pHttpAuth::MifosLegacySignature {
+                operations_credential_ref,
+                ..
+            },
+        ..
+    } = &mut rotated_secret.provider
+    else {
+        unreachable!()
+    };
+    *operations_credential_ref =
+        SecretReference::new("secret:env/MIFOS_OPERATIONS_TOKEN_NEXT").unwrap();
+    assert_eq!(
+        rotated_secret
+            .provider_intent(&instruction)
+            .unwrap()
+            .correlation_id,
+        first_correlation
+    );
+
+    let mut new_signing_version = first.clone();
+    let G2pProviderBinding::Http {
+        auth: G2pHttpAuth::MifosLegacySignature { signing_key, .. },
+        ..
+    } = &mut new_signing_version.provider
+    else {
+        unreachable!()
+    };
+    *signing_key = transit_key("mifos-request", 8, 'a');
+    assert_ne!(
+        new_signing_version
+            .provider_intent(&instruction)
+            .unwrap()
+            .correlation_id,
+        first_correlation
+    );
+
+    let mut other_operations_identity = first.clone();
+    let G2pProviderBinding::Http {
+        auth:
+            G2pHttpAuth::MifosLegacySignature {
+                operations_credential_identity,
+                ..
+            },
+        ..
+    } = &mut other_operations_identity.provider
+    else {
+        unreachable!()
+    };
+    *operations_credential_identity = "other-operations-client".to_owned();
+    assert_ne!(
+        other_operations_identity
+            .provider_intent(&instruction)
+            .unwrap()
+            .correlation_id,
+        first_correlation
+    );
+}
+
+#[test]
 fn provider_auth_and_binding_use_strict_camel_case_authored_fields() {
     let signature = json!({
         "type": "mifos-legacy-signature",
+        "tenant": "default",
         "signingKeyIdentity": "mifos-signing-key",
-        "signingKeyRef": "secret:env/MIFOS_SIGNING_KEY",
+        "signingKey": {
+            "socketPath": "/run/registry/transit.sock",
+            "mount": "transit",
+            "key": "mifos-request",
+            "version": 7,
+            "publicKeyDigest": format!("sha256:{}", "a".repeat(64)),
+            "attemptTimeoutMilliseconds": 2000
+        },
         "responseKeyIdentity": "mifos-response-key",
-        "responseKeyRef": "secret:env/MIFOS_RESPONSE_KEY"
+        "responseKey": {
+            "socketPath": "/run/registry/transit.sock",
+            "mount": "transit",
+            "key": "mifos-response",
+            "version": 4,
+            "publicKeyDigest": format!("sha256:{}", "b".repeat(64)),
+            "attemptTimeoutMilliseconds": 2000
+        },
+        "operationsCredentialIdentity": "mifos-operations-client",
+        "operationsCredentialRef": "secret:env/MIFOS_OPERATIONS_TOKEN"
     });
     let auth: G2pHttpAuth = serde_json::from_value(signature.clone()).unwrap();
     assert_eq!(serde_json::to_value(&auth).unwrap(), signature);
+    let mut invalid_tenant = signature.clone();
+    invalid_tenant["tenant"] = json!("pilot-🙂");
+    let invalid_tenant: G2pHttpAuth = serde_json::from_value(invalid_tenant).unwrap();
+    assert_eq!(invalid_tenant.validate(), Err(G2pError::Unavailable));
     assert!(serde_json::from_value::<G2pHttpAuth>(json!({
         "type": "mifos-legacy-signature",
         "signing_key_identity": "mifos-signing-key",
-        "signingKeyRef": "secret:env/MIFOS_SIGNING_KEY",
+        "tenant": "default",
+        "signingKey": signature["signingKey"].clone(),
         "responseKeyIdentity": "mifos-response-key",
-        "responseKeyRef": "secret:env/MIFOS_RESPONSE_KEY"
+        "responseKey": signature["responseKey"].clone(),
+        "operationsCredentialIdentity": "mifos-operations-client",
+        "operationsCredentialRef": "secret:env/MIFOS_OPERATIONS_TOKEN"
     }))
     .is_err());
+
+    for invalid in [
+        json!({
+            "type": "mifos-legacy-signature",
+            "tenant": "default",
+            "signingKeyIdentity": "same-key",
+            "signingKey": signature["signingKey"].clone(),
+            "responseKeyIdentity": "same-key",
+            "responseKey": signature["responseKey"].clone(),
+            "operationsCredentialIdentity": "mifos-operations-client",
+            "operationsCredentialRef": "secret:env/MIFOS_OPERATIONS_TOKEN"
+        }),
+        json!({
+            "type": "mifos-legacy-signature",
+            "tenant": "default",
+            "signingKeyIdentity": "mifos-signing-key",
+            "signingKey": {
+                "socketPath": "run/registry/transit.sock",
+                "mount": "transit",
+                "key": "mifos-request",
+                "version": 7,
+                "publicKeyDigest": format!("sha256:{}", "a".repeat(64)),
+                "attemptTimeoutMilliseconds": 2000
+            },
+            "responseKeyIdentity": "mifos-response-key",
+            "responseKey": signature["responseKey"].clone(),
+            "operationsCredentialIdentity": "mifos-operations-client",
+            "operationsCredentialRef": "secret:env/MIFOS_OPERATIONS_TOKEN"
+        }),
+        json!({
+            "type": "mifos-legacy-signature",
+            "tenant": "default",
+            "signingKeyIdentity": "mifos-signing-key",
+            "signingKey": signature["signingKey"].clone(),
+            "responseKeyIdentity": "mifos-response-key",
+            "responseKey": {
+                "socketPath": "/run/registry/transit.sock",
+                "mount": "transit",
+                "key": "mifos-response",
+                "version": 4,
+                "publicKeyDigest": format!("sha256:{}", "B".repeat(64)),
+                "attemptTimeoutMilliseconds": 2000
+            },
+            "operationsCredentialIdentity": "mifos-operations-client",
+            "operationsCredentialRef": "secret:env/MIFOS_OPERATIONS_TOKEN"
+        }),
+    ] {
+        if let Ok(auth) = serde_json::from_value::<G2pHttpAuth>(invalid) {
+            assert_eq!(auth.validate(), Err(G2pError::Unavailable));
+        }
+    }
     assert!(serde_json::from_value::<G2pHttpAuth>(json!({
         "type": "bearer",
-        "credentialRef": "secret:env/NOT_ALLOWED"
+        "credentialIdentity": "mifos-test-client"
     }))
     .is_err());
 
@@ -376,11 +534,25 @@ fn provider_auth_and_binding_use_strict_camel_case_authored_fields() {
     let encoded = serde_json::to_value(&provider).unwrap();
     assert!(encoded.get("submitBaseUrl").is_some());
     assert!(encoded.get("statusBaseUrl").is_some());
-    assert!(encoded.get("credentialIdentity").is_some());
-    assert!(encoded.get("credentialRef").is_some());
+    assert!(encoded.get("credentialIdentity").is_none());
+    assert!(encoded.get("credentialRef").is_none());
+    assert!(encoded["auth"].get("credentialIdentity").is_some());
+    assert!(encoded["auth"].get("credentialRef").is_some());
     assert!(encoded.get("submit_base_url").is_none());
     let decoded: G2pProviderBinding = serde_json::from_value(encoded).unwrap();
     assert_eq!(decoded.auth_profile(), PaymentProviderAuth::Bearer);
+}
+
+fn transit_key(key: &str, version: u32, digest_digit: char) -> G2pTransitRsaNoOidKeyBinding {
+    serde_json::from_value(json!({
+        "socketPath": "/run/registry/transit.sock",
+        "mount": "transit",
+        "key": key,
+        "version": version,
+        "publicKeyDigest": format!("sha256:{}", digest_digit.to_string().repeat(64)),
+        "attemptTimeoutMilliseconds": 2000
+    }))
+    .unwrap()
 }
 
 fn instruction() -> DisbursementInstruction {
@@ -421,9 +593,10 @@ fn binding() -> G2pConnectionSnapshot {
             revision: "mifos-test-v1".to_owned(),
             submit_base_url: "http://127.0.0.1:31002/".to_owned(),
             status_base_url: "http://127.0.0.1:31003/".to_owned(),
-            credential_identity: "mifos-test-client".to_owned(),
-            credential_ref: SecretReference::new("secret:env/MIFOS_TEST_TOKEN").unwrap(),
-            auth: G2pHttpAuth::Bearer,
+            auth: G2pHttpAuth::Bearer {
+                credential_identity: "mifos-test-client".to_owned(),
+                credential_ref: SecretReference::new("secret:env/MIFOS_TEST_TOKEN").unwrap(),
+            },
             settings: json!({"tenant": "default", "purpose": "GOVERNMENT_TRANSFER"}),
         },
         registry: G2pRegistryBinding {

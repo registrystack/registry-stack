@@ -18,6 +18,7 @@ use registry_platform_yaml::SecretReference;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 const MAX_TEXT: usize = 128;
@@ -40,7 +41,7 @@ pub enum G2pError {
     RecoveryHeld,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DisbursementInstruction {
     pub record_id: Uuid,
@@ -107,13 +108,56 @@ impl DisbursementInstruction {
 /// these credentials or choose an authentication mechanism.
 #[derive(Clone)]
 pub enum G2pHttpAuth {
-    Bearer,
-    MifosLegacySignature {
-        signing_key_identity: String,
-        signing_key_ref: SecretReference,
-        response_key_identity: String,
-        response_key_ref: SecretReference,
+    Bearer {
+        credential_identity: String,
+        credential_ref: SecretReference,
     },
+    MifosLegacySignature {
+        tenant: String,
+        signing_key_identity: String,
+        signing_key: G2pTransitRsaNoOidKeyBinding,
+        response_key_identity: String,
+        response_key: G2pTransitRsaNoOidKeyBinding,
+        operations_credential_identity: String,
+        operations_credential_ref: SecretReference,
+    },
+}
+
+/// Exact Transit RSA key version and SPKI identity retained with an attempt.
+/// Private key bytes never enter Adapter configuration or durable custody.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct G2pTransitRsaNoOidKeyBinding {
+    pub socket_path: PathBuf,
+    pub mount: String,
+    pub key: String,
+    pub version: registry_platform_yaml::BoundedU32<1, 2_147_483_647>,
+    pub public_key_digest: registry_platform_yaml::Digest,
+    pub attempt_timeout_milliseconds: registry_platform_yaml::BoundedU32<1, 30_000>,
+}
+
+impl G2pTransitRsaNoOidKeyBinding {
+    pub fn public_key_sha256(&self) -> Result<[u8; 32], G2pError> {
+        let mut output = [0_u8; 32];
+        for (index, pair) in self
+            .public_key_digest
+            .hex()
+            .as_bytes()
+            .chunks_exact(2)
+            .enumerate()
+        {
+            output[index] = (hex_digit(pair[0])? << 4) | hex_digit(pair[1])?;
+        }
+        Ok(output)
+    }
+
+    fn validate(&self) -> Result<(), G2pError> {
+        if !self.socket_path.is_absolute() || !text(&self.mount, 256) || !text(&self.key, 256) {
+            return Err(G2pError::Unavailable);
+        }
+        self.public_key_sha256().map(|_| ())
+    }
 }
 
 #[derive(Deserialize)]
@@ -126,12 +170,18 @@ pub enum G2pHttpAuth {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum G2pHttpAuthReader {
-    Bearer {},
+    Bearer {
+        credential_identity: String,
+        credential_ref: SecretReference,
+    },
     MifosLegacySignature {
+        tenant: String,
         signing_key_identity: String,
-        signing_key_ref: SecretReference,
+        signing_key: G2pTransitRsaNoOidKeyBinding,
         response_key_identity: String,
-        response_key_ref: SecretReference,
+        response_key: G2pTransitRsaNoOidKeyBinding,
+        operations_credential_identity: String,
+        operations_credential_ref: SecretReference,
     },
 }
 registry_platform_yaml::tagged_union!(G2pHttpAuthReader);
@@ -139,17 +189,29 @@ registry_platform_yaml::tagged_union!(G2pHttpAuthReader);
 impl<'de> Deserialize<'de> for G2pHttpAuth {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         <G2pHttpAuthReader as Deserialize>::deserialize(deserializer).map(|reader| match reader {
-            G2pHttpAuthReader::Bearer {} => Self::Bearer,
+            G2pHttpAuthReader::Bearer {
+                credential_identity,
+                credential_ref,
+            } => Self::Bearer {
+                credential_identity,
+                credential_ref,
+            },
             G2pHttpAuthReader::MifosLegacySignature {
+                tenant,
                 signing_key_identity,
-                signing_key_ref,
+                signing_key,
                 response_key_identity,
-                response_key_ref,
+                response_key,
+                operations_credential_identity,
+                operations_credential_ref,
             } => Self::MifosLegacySignature {
+                tenant,
                 signing_key_identity,
-                signing_key_ref,
+                signing_key,
                 response_key_identity,
-                response_key_ref,
+                response_key,
+                operations_credential_identity,
+                operations_credential_ref,
             },
         })
     }
@@ -162,29 +224,47 @@ impl<'de> Deserialize<'de> for G2pHttpAuth {
     rename_all_fields = "camelCase"
 )]
 enum G2pHttpAuthWire<'a> {
-    Bearer {},
+    Bearer {
+        credential_identity: &'a str,
+        credential_ref: &'a SecretReference,
+    },
     MifosLegacySignature {
+        tenant: &'a str,
         signing_key_identity: &'a str,
-        signing_key_ref: &'a SecretReference,
+        signing_key: &'a G2pTransitRsaNoOidKeyBinding,
         response_key_identity: &'a str,
-        response_key_ref: &'a SecretReference,
+        response_key: &'a G2pTransitRsaNoOidKeyBinding,
+        operations_credential_identity: &'a str,
+        operations_credential_ref: &'a SecretReference,
     },
 }
 
 impl Serialize for G2pHttpAuth {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Self::Bearer => G2pHttpAuthWire::Bearer {},
+            Self::Bearer {
+                credential_identity,
+                credential_ref,
+            } => G2pHttpAuthWire::Bearer {
+                credential_identity,
+                credential_ref,
+            },
             Self::MifosLegacySignature {
+                tenant,
                 signing_key_identity,
-                signing_key_ref,
+                signing_key,
                 response_key_identity,
-                response_key_ref,
+                response_key,
+                operations_credential_identity,
+                operations_credential_ref,
             } => G2pHttpAuthWire::MifosLegacySignature {
+                tenant,
                 signing_key_identity,
-                signing_key_ref,
+                signing_key,
                 response_key_identity,
-                response_key_ref,
+                response_key,
+                operations_credential_identity,
+                operations_credential_ref,
             },
         }
         .serialize(serializer)
@@ -205,34 +285,67 @@ impl schemars::JsonSchema for G2pHttpAuth {
 impl G2pHttpAuth {
     pub const fn profile(&self) -> PaymentProviderAuth {
         match self {
-            Self::Bearer => PaymentProviderAuth::Bearer,
+            Self::Bearer { .. } => PaymentProviderAuth::Bearer,
             Self::MifosLegacySignature { .. } => PaymentProviderAuth::MifosLegacySignature,
         }
     }
 
-    fn validate(&self) -> Result<(), G2pError> {
+    pub fn validate(&self) -> Result<(), G2pError> {
         match self {
-            Self::Bearer => Ok(()),
-            Self::MifosLegacySignature {
-                signing_key_identity,
-                response_key_identity,
+            Self::Bearer {
+                credential_identity,
                 ..
-            } if text(signing_key_identity, 256) && text(response_key_identity, 256) => Ok(()),
+            } if text(credential_identity, 256) => Ok(()),
+            Self::Bearer { .. } => Err(G2pError::Unavailable),
+            Self::MifosLegacySignature {
+                tenant,
+                signing_key_identity,
+                signing_key,
+                response_key_identity,
+                response_key,
+                operations_credential_identity,
+                ..
+            } if text(tenant, 128)
+                && http::HeaderValue::try_from(tenant)
+                    .is_ok_and(|value| value.to_str().is_ok())
+                && text(signing_key_identity, 256)
+                && text(response_key_identity, 256)
+                && text(operations_credential_identity, 256)
+                && signing_key_identity != response_key_identity
+                && signing_key != response_key =>
+            {
+                signing_key.validate()?;
+                response_key.validate()
+            }
             Self::MifosLegacySignature { .. } => Err(G2pError::Unavailable),
         }
     }
 
     fn identity(&self) -> Value {
         match self {
-            Self::Bearer => serde_json::json!({"type": "bearer"}),
+            Self::Bearer {
+                credential_identity,
+                ..
+            } => serde_json::json!({
+                "type": "bearer",
+                "credentialIdentity": credential_identity,
+            }),
             Self::MifosLegacySignature {
+                tenant,
                 signing_key_identity,
+                signing_key,
                 response_key_identity,
+                response_key,
+                operations_credential_identity,
                 ..
             } => serde_json::json!({
                 "type": "mifos-legacy-signature",
+                "tenant": tenant,
                 "signingKeyIdentity": signing_key_identity,
+                "signingKey": signing_key,
                 "responseKeyIdentity": response_key_identity,
+                "responseKey": response_key,
+                "operationsCredentialIdentity": operations_credential_identity,
             }),
         }
     }
@@ -255,8 +368,6 @@ pub enum G2pProviderBinding {
         submit_base_url: String,
         #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
         status_base_url: String,
-        credential_identity: String,
-        credential_ref: SecretReference,
         auth: G2pHttpAuth,
         settings: Value,
     },
@@ -274,8 +385,6 @@ enum G2pProviderBindingWire<'a> {
         revision: &'a str,
         submit_base_url: &'a str,
         status_base_url: &'a str,
-        credential_identity: &'a str,
-        credential_ref: &'a SecretReference,
         auth: &'a G2pHttpAuth,
         settings: &'a Value,
     },
@@ -288,16 +397,12 @@ impl Serialize for G2pProviderBinding {
                 revision,
                 submit_base_url,
                 status_base_url,
-                credential_identity,
-                credential_ref,
                 auth,
                 settings,
             } => G2pProviderBindingWire::Http {
                 revision,
                 submit_base_url,
                 status_base_url,
-                credential_identity,
-                credential_ref,
                 auth,
                 settings,
             },
@@ -313,13 +418,11 @@ impl G2pProviderBinding {
                 revision,
                 submit_base_url,
                 status_base_url,
-                credential_identity,
                 auth,
                 settings,
                 ..
             } => {
                 if !text(revision, 256)
-                    || !text(credential_identity, 256)
                     || !provider_base_url(submit_base_url)
                     || !provider_base_url(status_base_url)
                     || !non_secret_settings(settings)
@@ -339,7 +442,13 @@ impl G2pProviderBinding {
 
     pub fn credential_ref(&self) -> &SecretReference {
         match self {
-            Self::Http { credential_ref, .. } => credential_ref,
+            Self::Http { auth, .. } => match auth {
+                G2pHttpAuth::Bearer { credential_ref, .. } => credential_ref,
+                G2pHttpAuth::MifosLegacySignature {
+                    operations_credential_ref,
+                    ..
+                } => operations_credential_ref,
+            },
         }
     }
 
@@ -380,7 +489,6 @@ impl G2pProviderBinding {
                 revision,
                 submit_base_url,
                 status_base_url,
-                credential_identity,
                 auth,
                 settings,
                 ..
@@ -389,7 +497,6 @@ impl G2pProviderBinding {
                 "revision": revision,
                 "submitOrigin": canonical_origin(submit_base_url)?,
                 "statusOrigin": canonical_origin(status_base_url)?,
-                "credentialIdentity": credential_identity,
                 "auth": auth.identity(),
                 "settings": settings,
             })),
@@ -1015,6 +1122,14 @@ fn hex_lower(bytes: &[u8]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+fn hex_digit(byte: u8) -> Result<u8, G2pError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(G2pError::Unavailable),
+    }
 }
 
 fn digest_text(value: &str) -> bool {
