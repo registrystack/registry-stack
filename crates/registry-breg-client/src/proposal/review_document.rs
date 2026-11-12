@@ -37,7 +37,7 @@ impl BaseRegistryClient {
         if binding.source != self.source_binding()
             || binding.operation != "get-review-context"
             || binding.action != context.action_id
-            || !valid_review_document(context, true)
+            || !valid_review_document(context, true, false)
             || field.is_empty()
             || field.len() > 64
             || !field.as_bytes()[0].is_ascii_lowercase()

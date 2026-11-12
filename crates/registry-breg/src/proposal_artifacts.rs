@@ -185,6 +185,13 @@ pub(crate) fn append_proposal_openapi(
             operation,
             ProposalOperation::GetReviewStatus | ProposalOperation::GetReviewContext
         ) {
+            if operation == ProposalOperation::GetReviewStatus {
+                document["parameters"].as_array_mut().unwrap().push(json!({
+                    "name":"include","in":"query","required":false,
+                    "schema":{"const":"progress"},
+                    "description":"Request the institution's optional applicant-visible progress code. The code is returned only when the selected caller-owned grant enables readableReviewProgress."
+                }));
+            }
             document["responses"]["200"]["content"]["application/json"]["schema"] =
                 review_document_schema(operation == ProposalOperation::GetReviewContext);
         } else if operation == ProposalOperation::GetTaskGrantContext {
@@ -408,6 +415,10 @@ fn review_document_schema(context: bool) -> Value {
         properties["context"]["required"] = json!(["reference", "contract", "fields"]);
     } else {
         properties["requestId"] = json!({"type":"string","format":"uuid"});
+        properties["progressCode"] = json!({
+            "type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","maxLength":64,
+            "description":"Institution-defined applicant-visible progress. Absent when the institution conceals the current stage, progress was not requested or granted, the provider is unavailable, or the accepted review round is no longer live."
+        });
         properties["handoff"] = json!({
             "type":"object","additionalProperties":false,"required":["state"],
             "properties":{

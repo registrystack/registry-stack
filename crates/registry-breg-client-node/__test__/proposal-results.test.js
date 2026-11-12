@@ -268,6 +268,35 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       value.result = {state: 'pending'};
       await assert.rejects(client.readProposalReviewContext(prior), error => error.kind === 'invalid-request' && !error.message.includes('private-canary'));
     });
+    await t.test('Review progress is an explicit Status projection', async () => {
+      value = document(); value.state = 'submitted'; delete value.application;
+      for (const [name, suffix, operation] of [['reviewStatus', 'review-status', 'get-review-status'], ['reviewContext', 'review-context', 'get-review-context']]) {
+        value.links[name] = {method: 'GET', path: `/v1/proposals/${id}/${suffix}`, accessProfile: 'reader', operation};
+      }
+      const prior = await client.getProposal(binding, id);
+      const progress = {id, actionId: 'correct', actionRevision: digest, submissionVersion: 2, revision: 8, effectDigest: digest,
+        subject: {source: 'directory', subjectType: 'proposal', id, version: '2', digest},
+        context: {reference: `breg:directory:correct:${id}:2`}, reviewable: true,
+        authority: 'review-provider', policy: {id: 'review', version: '1', digest}, requestId: id,
+        handoff: {state: 'accepted'}, result: {state: 'pending'}, progressCode: 'awaiting-assignment'};
+      value = structuredClone(progress);
+      await assert.rejects(client.readProposalReviewStatus(prior), error => error.kind === 'invalid-request');
+      const observed = (await client.readProposalReviewStatusWithProgress(prior)).value;
+      assert.equal(observed.progressCode, 'awaiting-assignment');
+      assert.equal(requests.at(-1), `/v1/proposals/${id}/review-status?accessProfile=reader&include=progress`);
+      await assert.rejects(client.readProposalReviewContext(prior), error => error.kind === 'invalid-request');
+
+      value = structuredClone(progress); delete value.progressCode;
+      assert.ok(!Object.hasOwn((await client.readProposalReviewStatusWithProgress(prior)).value, 'progressCode'));
+      const invalid = [['reviewable', false], ['handoff', {state: 'failed', reason: 'remote-refused'}],
+        ['result', {state: 'approved', resultId: targetId, completedAt: '2026-10-01T00:00:00.000000Z', availableUntil: '2026-10-02T00:00:00.000000Z'}],
+        ['progressCode', 'Invalid Progress']].map(([field, fieldValue]) => ({...structuredClone(progress), [field]: fieldValue}));
+      const missingRequest = structuredClone(progress); delete missingRequest.requestId; invalid.push(missingRequest);
+      for (const candidate of invalid) {
+        value = candidate;
+        await assert.rejects(client.readProposalReviewStatusWithProgress(prior), error => error.kind === 'invalid-request');
+      }
+    });
     await t.test('non-Rebase transitions and attachment writes preserve the bound Action revision', async () => {
       const successor = `sha256:${'b'.repeat(64)}`;
       value = document(); value.state = 'draft'; delete value.application; delete value.effectDigest;

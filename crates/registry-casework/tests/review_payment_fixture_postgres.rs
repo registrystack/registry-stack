@@ -356,6 +356,7 @@ fn project(issuer: &str) -> CaseworkProject {
             stages: vec![ReviewStagePolicy {
                 id: "verification".to_owned(),
                 label: None,
+                public_progress_code: None,
                 queue: "payment-review".to_owned(),
                 deciding_profiles: vec!["reviewer".to_owned()],
                 required_approvals: 1,

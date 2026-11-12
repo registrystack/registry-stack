@@ -35,6 +35,12 @@ values are bounded by canonical byte size,
 nesting depth, and node count so the same contract applies to parsed and
 programmatically constructed values.
 
+`ReviewRequestView.progressCode` is an optional, provider-authored projection
+with the bounded local-identifier grammar `^[a-z][a-z0-9_-]{0,63}$`. Providers
+omit it unless a producer explicitly requests progress. It is not a shared
+stage model: absent mappings and terminal requests have no code, and raw
+provider stage, task or reviewer details remain provider-owned.
+
 The crate contains no HTTP client, credentials, persistence, source adapter,
 policy evaluator, reviewer task, or source execution code. In particular, a
 completion envelope is only a synchronization hint. It cannot carry approval

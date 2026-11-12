@@ -1064,6 +1064,7 @@ mod shape_authority {
                     ReviewRequestLifecycle::Reviewing
                 },
                 active_stage: (!approved).then(|| "review".into()),
+                progress_code: None,
                 created_at: completed,
                 updated_at: completed
             }),

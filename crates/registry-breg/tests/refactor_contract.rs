@@ -1435,6 +1435,7 @@ fn named_review_authority_status_is_a_service_only_target_free_interface() {
         ("reviewAuthority", json!("other")),
         ("operations", json!(["get-review-context"])),
         ("writableInputs", json!(["city"])),
+        ("readableReviewProgress", json!(true)),
     ] {
         let mut value_source: serde_json::Value = project_source();
         let profile = value_source["accessProfiles"]
@@ -1449,10 +1450,83 @@ fn named_review_authority_status_is_a_service_only_target_free_interface() {
         )
         .unwrap();
         let error = compile(&project).unwrap_err();
-        if field == "writableInputs" {
+        if matches!(field, "writableInputs" | "readableReviewProgress") {
             assert!(format!("{error:?}").contains("breg.proposal.review-status-authority-invalid"));
         }
     }
+}
+
+#[test]
+fn applicant_review_progress_is_explicit_caller_owned_status_authority() {
+    use registry_breg::contract::parse_project_json;
+    use serde_json::{json, Value};
+
+    let before = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
+    let mut source = project_source();
+    let author = source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "facility-correction-author")
+        .unwrap();
+    author["permissions"]["proposals"][0]["readableReviewProgress"] = json!(true);
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let compiled = compile(&project).unwrap();
+    let action = compiled
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-address")
+        .unwrap();
+    let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+        panic!("proposal")
+    };
+    let permission = proposal
+        .permissions
+        .iter()
+        .find(|permission| permission.profile_id == "facility-correction-author")
+        .unwrap();
+    assert!(permission.readable_review_progress);
+    assert_eq!(
+        serde_json::to_value(permission).unwrap()["readableReviewProgress"],
+        true
+    );
+    let original = before
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "correct-address")
+        .unwrap();
+    assert_eq!(original.definition_revision, action.definition_revision);
+
+    for (field, value) in [("ownership", Value::Null), ("operations", json!(["get"]))] {
+        let mut invalid = source.clone();
+        let grant = &mut invalid["accessProfiles"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|profile| profile["id"] == "facility-correction-author")
+            .unwrap()["permissions"]["proposals"][0];
+        if value.is_null() {
+            grant.as_object_mut().unwrap().remove(field);
+        } else {
+            grant[field] = value;
+        }
+        let invalid = parse_project_json(&serde_json::to_vec(&invalid).unwrap()).unwrap();
+        let failure = compile(&invalid).expect_err("meaningless progress grant must fail");
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.proposal.review-progress-grant-invalid"
+        }));
+    }
+
+    let mut no_review = source;
+    no_review["actions"][1]["execution"]["proposal"]["review"] = json!({"type":"none"});
+    let no_review = parse_project_json(&serde_json::to_vec(&no_review).unwrap()).unwrap();
+    let failure = compile(&no_review).expect_err("progress requires external review");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.proposal.review-progress-grant-invalid"));
 }
 
 #[test]

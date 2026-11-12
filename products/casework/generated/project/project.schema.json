@@ -347,6 +347,12 @@
       ],
       "type": "string"
     },
+    "ReviewProgressCode": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "ReviewPublicReasonRule": {
       "description": "Whether a decision gives a public reason with an outcome.",
       "enum": [
@@ -422,6 +428,10 @@
           "minItems": 1,
           "type": "array",
           "uniqueItems": true
+        },
+        "publicProgressCode": {
+          "$ref": "#/$defs/ReviewProgressCode",
+          "description": "Optional producer-visible progress code for this stage. Omission keeps\nthe stage private and preserves the previous policy wire shape."
         },
         "queue": {
           "type": "string"

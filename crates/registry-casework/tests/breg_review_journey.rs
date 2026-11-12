@@ -10,7 +10,7 @@ mod postgres_harness;
 #[path = "support/provider_add_sealed_package.rs"]
 mod provider_add_sealed_package;
 
-use axum::Router;
+use axum::{response::IntoResponse, Router};
 use registry_breg::{
     api::{authenticated_router, VerifiedClaimValue, VerifiedRequestClaims},
     auth::{AuthorityClaimConfig, RegistryAuthenticator},
@@ -21,7 +21,8 @@ use registry_breg::{
 };
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
-    BRegProposalState, BRegRecordFormat, BaseRegistryClient, BaseRegistryClientConfig, BearerToken,
+    BRegProposal, BRegProposalState, BRegRecordFormat, BaseRegistryClient,
+    BaseRegistryClientConfig, BearerToken,
 };
 use registry_casework::{
     router as casework_router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState,
@@ -46,7 +47,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, OnceLock,
     },
 };
@@ -169,12 +170,13 @@ fn project(root: &std::path::Path, idp: &MockIdp, context: &BregContextExport) -
         "reviewPolicies":{"facility-address-review":{"version":"1","purpose":"approval",
             "context":{"mode":"current-source","provider":"facility","contract":context.contract},
             "stages":[
-                {"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true},
-                {"id":"approval","queue":"review","decidingProfiles":["supervisor"],"requiredApprovals":1,"excludePreviousStageReviewers":true}
+                {"id":"review","publicProgressCode":"initial-verification","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true},
+                {"id":"approval","publicProgressCode":"final-validation","queue":"review","decidingProfiles":["supervisor"],"requiredApprovals":1,"excludePreviousStageReviewers":true}
             ],
             "retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
             "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},
-                "rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}}}},
+                "rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"},
+                "changes-requested":{"label":"Request changes","settlement":"changes-requested","reasonRequired":true,"publicReason":"optional"}}}},
         "trustedProducers":{"facility-registry":{"profile":"requester","issuer":idp.issuer(),
             "subject":"facility-review-producer","trustedInitiatorIssuer":idp.issuer(),
             "sourceNamespaces":[SOURCE],"reviewPolicies":["facility-address-review"],"retention":{"receiptRetentionDays":7}}}
@@ -362,10 +364,6 @@ impl ReviewResultSource for LiveApproval {
         .map_err(|_| MutationError::PreconditionFailed)
     }
 }
-fn review_binding(producer_id: &str) -> Arc<ReviewAuthorityRegistry> {
-    review_binding_for_policy(producer_id, "facility-address-review")
-}
-
 fn review_binding_for_policy(producer_id: &str, policy_id: &str) -> Arc<ReviewAuthorityRegistry> {
     let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
         "http://127.0.0.1:9/".parse().unwrap(),
@@ -503,20 +501,7 @@ async fn start_proposal(
     let facility = registered.results()["facility"]
         .record_identifier()
         .to_string();
-    let author = BaseRegistryClient::new(BaseRegistryClientConfig::new(breg_url.clone()))
-        .unwrap()
-        .with_bearer_token(
-            BearerToken::new(minted(
-                idp,
-                json!(BREG_AUDIENCE),
-                "facility-author",
-                "author-client",
-                "registry:facility:correction:submit",
-                "human",
-                Some("facility-administration"),
-            ))
-            .unwrap(),
-        );
+    let author = author_client(breg_url, idp);
     let action = author
         .registry_contract(Some("facility-correction-author"))
         .await
@@ -546,6 +531,33 @@ async fn start_proposal(
         .unwrap();
     let submitted = author.execute_proposal(&submit).await.unwrap().value;
     (facility, submitted)
+}
+
+fn author_token(idp: &MockIdp, subject: &str) -> String {
+    minted(
+        idp,
+        json!(BREG_AUDIENCE),
+        subject,
+        "author-client",
+        "registry:facility:correction:submit",
+        "human",
+        Some("facility-administration"),
+    )
+}
+
+fn author_client(url: &Url, idp: &MockIdp) -> BaseRegistryClient {
+    BaseRegistryClient::new(BaseRegistryClientConfig::new(url.clone()))
+        .unwrap()
+        .with_bearer_token(BearerToken::new(author_token(idp, "facility-author")).unwrap())
+}
+
+async fn progress_status(author: &BaseRegistryClient, proposal: &BRegProposal) -> Value {
+    let observed = author
+        .read_proposal_review_status_with_progress(proposal)
+        .await
+        .unwrap()
+        .value;
+    serde_json::to_value(observed).unwrap()
 }
 fn minted(
     idp: &MockIdp,
@@ -1116,6 +1128,19 @@ async fn native_proposal_journey(producer_id: &'static str) {
         .unwrap();
     correction["execution"]["proposal"]["review"]["policy"] =
         serde_json::to_value(&binding).unwrap();
+    let author_profile = source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "facility-correction-author")
+        .unwrap();
+    let status_grant = author_profile["permissions"]["proposals"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|grant| grant["action"] == "correct-address")
+        .unwrap();
+    status_grant["readableReviewProgress"] = json!(true);
     let registry = compile(&source);
     let native = export(&registry);
     assert_eq!(
@@ -1124,12 +1149,46 @@ async fn native_proposal_journey(producer_id: &'static str) {
     );
     let live_approval = Arc::new(LiveApproval::default());
     let approval_for_fixture = Arc::clone(&live_approval);
+    let casework_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let casework_url = Url::parse(&format!(
+        "http://{}/",
+        casework_listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let producer = minted(
+        &idp,
+        json!(CASEWORK_AUDIENCE),
+        "facility-review-producer",
+        "facility-registry",
+        "casework:reviews:request",
+        "service",
+        None,
+    );
+    let authority = ReviewAuthorityClient::new(
+        "casework".into(),
+        ReviewClient::new(registry_review_client::ReviewClientConfig::new(
+            casework_url.clone(),
+        ))
+        .unwrap(),
+        Arc::new(StaticToken::new(producer.clone()).unwrap()),
+        "requester".into(),
+        producer_id.into(),
+        7,
+        None,
+        None,
+    )
+    .unwrap();
+    let authorities = Arc::new(
+        ReviewAuthorityRegistry::new(BTreeMap::from([("casework".into(), Arc::new(authority))]))
+            .unwrap(),
+    );
+    let authorities_for_fixture = Arc::clone(&authorities);
     let fixture = client_http::ClientFixture::start_with_mutations(
         registry,
         claims("fixture:seed", "facility-administration"),
         move |service| {
             service.with_proposal_review_substitute_for_test(
-                review_binding(producer_id),
+                authorities_for_fixture,
                 approval_for_fixture,
             )
         },
@@ -1178,6 +1237,10 @@ async fn native_proposal_journey(producer_id: &'static str) {
     )
     .await;
     let (facility, proposal) = start_proposal(&fixture, &breg_url, &idp, 1).await;
+    let author = author_client(&breg_url, &idp);
+    let pending = progress_status(&author, &proposal).await;
+    assert_eq!(pending["handoff"]["state"], "pending");
+    assert!(pending.get("progressCode").is_none());
     let status_token = minted(
         &idp,
         json!(BREG_AUDIENCE),
@@ -1232,12 +1295,32 @@ async fn native_proposal_journey(producer_id: &'static str) {
         )),
         HumanIdentityConfig::default(),
     );
-    let (casework_url, casework_server) = serve(casework_router(HttpState {
+    let progress_reads = Arc::new(AtomicUsize::new(0));
+    let progress_unavailable = Arc::new(AtomicBool::new(false));
+    let progress_counter = Arc::clone(&progress_reads);
+    let unavailable = Arc::clone(&progress_unavailable);
+    let casework = casework_router(HttpState {
         service,
         authenticator: Arc::new(casework_auth),
         project: Arc::new(project.clone()),
-    }))
-    .await;
+    })
+    .layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let count = Arc::clone(&progress_counter);
+            let unavailable = Arc::clone(&unavailable);
+            async move {
+                if request.uri().query() == Some("include=progress") {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    if unavailable.load(Ordering::SeqCst) {
+                        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                }
+                next.run(request).await
+            }
+        },
+    ));
+    let casework_server =
+        tokio::spawn(async move { axum::serve(casework_listener, casework).await.unwrap() });
     let proposal_id = Uuid::parse_str(proposal.id()).unwrap();
     let row = fixture.database.admin.query_one("SELECT create_request FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&proposal_id]).await.unwrap();
     let create: Value = row.get(0);
@@ -1246,15 +1329,6 @@ async fn native_proposal_journey(producer_id: &'static str) {
     assert_eq!(
         create["subject"]["digest"],
         proposal.effect_digest().unwrap()
-    );
-    let producer = minted(
-        &idp,
-        json!(CASEWORK_AUDIENCE),
-        "facility-review-producer",
-        "facility-registry",
-        "casework:reviews:request",
-        "service",
-        None,
     );
     assert!(live_approval
         .casework
@@ -1266,24 +1340,6 @@ async fn native_proposal_journey(producer_id: &'static str) {
             HttpBearerToken::new(producer.clone()).unwrap(),
         ))
         .is_ok());
-    let authority = Arc::new(
-        ReviewAuthorityClient::new(
-            "casework".into(),
-            ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-                casework_url.clone(),
-            ))
-            .unwrap(),
-            Arc::new(StaticToken::new(producer.clone()).unwrap()),
-            "requester".into(),
-            producer_id.into(),
-            7,
-            None,
-            None,
-        )
-        .unwrap(),
-    );
-    let authorities =
-        ReviewAuthorityRegistry::new(BTreeMap::from([("casework".into(), authority)])).unwrap();
     let logs = ReviewLogs::default();
     let subscriber = tracing_subscriber::fmt()
         .json()
@@ -1365,6 +1421,41 @@ async fn native_proposal_journey(producer_id: &'static str) {
     let accepted: registry_review_client::ReviewRequestAccepted =
         serde_json::from_value(row.get(1)).unwrap();
     assert_eq!(accepted.subject.id, proposal.id());
+    let plain = serde_json::to_value(
+        author
+            .read_proposal_review_status(&proposal)
+            .await
+            .unwrap()
+            .value,
+    )
+    .unwrap();
+    let other_status = reqwest::Client::new()
+        .get(
+            breg_url
+                .join(&format!(
+                    "v1/proposals/{}/review-status?accessProfile=facility-correction-author&include=progress",
+                    proposal.id()
+                ))
+                .unwrap(),
+        )
+        .bearer_auth(author_token(&idp, "another-facility-applicant"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other_status.status(), StatusCode::NOT_FOUND);
+    assert_eq!(progress_reads.load(Ordering::SeqCst), 0);
+
+    let mut initial = progress_status(&author, &proposal).await;
+    assert_eq!(
+        initial.as_object_mut().unwrap().remove("progressCode"),
+        Some(json!("initial-verification"))
+    );
+    assert_eq!(
+        initial, plain,
+        "the projection only adds the configured code"
+    );
+    assert_eq!(progress_reads.load(Ordering::SeqCst), 1);
+    let initial_proposal = author.read_proposal(&proposal).await.unwrap().value;
     let other = minted(
         &idp,
         json!(CASEWORK_AUDIENCE),
@@ -1427,19 +1518,124 @@ async fn native_proposal_journey(producer_id: &'static str) {
         0,
         "the inbox sends no scalar context exchange"
     );
+    let supervisor = minted(
+        &idp,
+        json!([CASEWORK_AUDIENCE, BREG_AUDIENCE]),
+        "supervisor-one",
+        "casework-human",
+        "casework:supervisor registry:proposal:review",
+        "human",
+        Some("facility-review"),
+    );
+    let batch_task = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["requestId"] == extra_accepted.request_id.to_string())
+        .unwrap();
+    pattern_decide(
+        &casework_url,
+        &human,
+        "staff",
+        batch_task,
+        "native-progress-return-review",
+        json!({"type":"approve","outcome":"approved"}),
+    )
+    .await;
+    assert_eq!(
+        progress_status(&author, &batch_proposal).await["progressCode"],
+        "final-validation"
+    );
+    let supervisor_tasks = pattern_tasks(&casework_url, &supervisor, "supervisor", "review").await;
+    let batch_validation = supervisor_tasks
+        .iter()
+        .find(|task| task["requestId"] == extra_accepted.request_id.to_string())
+        .unwrap();
+    pattern_decide(
+        &casework_url,
+        &supervisor,
+        "supervisor",
+        batch_validation,
+        "native-progress-return-validation",
+        json!({"type":"changes-requested","outcome":"changes-requested","reason":"Verify the corrected address"}),
+    )
+    .await;
+    assert!(progress_status(&author, &batch_proposal)
+        .await
+        .get("progressCode")
+        .is_none());
+    for _ in 0..8 {
+        registry_breg::review_store::run_review_authority_once_for_test(
+            &fixture.pool,
+            &authorities,
+            &fixture.mutations,
+        )
+        .await
+        .unwrap();
+        if progress_status(&author, &batch_proposal).await["result"]["state"] == "changes-requested"
+        {
+            break;
+        }
+    }
+    let returned = author.read_proposal(&batch_proposal).await.unwrap().value;
+    let revise = author
+        .prepare_proposal(
+            &returned,
+            "revise",
+            json!({}),
+            &key("native-progress-revise"),
+        )
+        .unwrap();
+    let revised = author.execute_proposal(&revise).await.unwrap().value;
+    let submit = author
+        .prepare_proposal(
+            &revised,
+            "submit",
+            json!({}),
+            &key("native-progress-resubmit"),
+        )
+        .unwrap();
+    let resubmitted = author.execute_proposal(&submit).await.unwrap().value;
+    let pending_round = progress_status(&author, &resubmitted).await;
+    assert_eq!(pending_round["submissionVersion"], 2);
+    assert_eq!(pending_round["handoff"]["state"], "pending");
+    assert!(pending_round.get("progressCode").is_none());
+    for _ in 0..8 {
+        registry_breg::review_store::run_review_authority_once_for_test(
+            &fixture.pool,
+            &authorities,
+            &fixture.mutations,
+        )
+        .await
+        .unwrap();
+        if progress_status(&author, &resubmitted).await["handoff"]["state"] == "accepted" {
+            break;
+        }
+    }
+    let new_round = progress_status(&author, &resubmitted).await;
+    assert_eq!(new_round["submissionVersion"], 2);
+    assert_eq!(new_round["progressCode"], "initial-verification");
+    assert_ne!(
+        new_round["requestId"],
+        extra_accepted.request_id.to_string()
+    );
+    let new_request_id = new_round["requestId"].as_str().unwrap();
     let cancellation = reqwest::Client::new()
         .post(
             casework_url
-                .join(&format!(
-                    "v1/review-requests/{}/cancel",
-                    extra_accepted.request_id
-                ))
+                .join(&format!("v1/review-requests/{new_request_id}/cancel"))
                 .unwrap(),
         )
         .bearer_auth(&producer)
         .header("registry-review-profile", "requester")
         .header("idempotency-key", "batch-canary-cancel")
-        .json(&json!({"subject":extra_accepted.subject,"reason":"batch proof complete"}))
+        .json(&json!({"subject":{
+            "source":new_round["subject"]["source"],
+            "type":new_round["subject"]["subjectType"],
+            "id":new_round["subject"]["id"],
+            "version":new_round["subject"]["version"],
+            "digest":new_round["subject"]["digest"],
+        },"reason":"batch proof complete"}))
         .send()
         .await
         .unwrap();
@@ -1526,15 +1722,18 @@ async fn native_proposal_journey(producer_id: &'static str) {
     assert_eq!(receipt["policy"], serde_json::to_value(&binding).unwrap());
     assert!(receipt.get("reason").is_none());
     assert!(receipt.get("result").is_none());
-    let supervisor = minted(
-        &idp,
-        json!([CASEWORK_AUDIENCE, BREG_AUDIENCE]),
-        "supervisor-one",
-        "casework-human",
-        "casework:supervisor registry:proposal:review",
-        "human",
-        Some("facility-review"),
-    );
+    let final_stage = progress_status(&author, &proposal).await;
+    assert_eq!(final_stage["progressCode"], "final-validation");
+    assert_eq!(final_stage["requestId"], accepted.request_id.to_string());
+    let after_stage_change = author.read_proposal(&proposal).await.unwrap().value;
+    assert_eq!(after_stage_change.state(), BRegProposalState::Submitted);
+    assert_eq!(after_stage_change.revision(), initial_proposal.revision());
+    progress_unavailable.store(true, Ordering::SeqCst);
+    let unavailable = progress_status(&author, &proposal).await;
+    assert_eq!(unavailable["handoff"]["state"], "accepted");
+    assert_eq!(unavailable["result"]["state"], "pending");
+    assert!(unavailable.get("progressCode").is_none());
+    progress_unavailable.store(false, Ordering::SeqCst);
     let supervisor_page = reqwest::Client::new()
         .get(
             casework_url
@@ -1636,22 +1835,13 @@ async fn native_proposal_journey(producer_id: &'static str) {
         state.get::<_, bool>(2),
         results.get::<_, i64>(0)
     );
-    let author = BaseRegistryClient::new(BaseRegistryClientConfig::new(breg_url.clone()))
-        .unwrap()
-        .with_bearer_token(
-            BearerToken::new(minted(
-                &idp,
-                json!(BREG_AUDIENCE),
-                "facility-author",
-                "author-client",
-                "registry:facility:correction:submit",
-                "human",
-                Some("facility-administration"),
-            ))
-            .unwrap(),
-        );
     let applied = author.read_proposal(&proposal).await.unwrap().value;
     assert_eq!(applied.state(), BRegProposalState::Applied);
+    let count = progress_reads.load(Ordering::SeqCst);
+    let terminal = progress_status(&author, &applied).await;
+    assert_eq!(terminal["result"]["state"], "approved");
+    assert!(terminal.get("progressCode").is_none());
+    assert_eq!(progress_reads.load(Ordering::SeqCst), count);
     let decided_task = reqwest::Client::new()
         .get(casework_url.join(&format!("v1/review-tasks/{id}")).unwrap())
         .bearer_auth(&human)

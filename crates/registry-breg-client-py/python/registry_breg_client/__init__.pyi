@@ -314,6 +314,30 @@ class BRegProposalActionDescriptor(TypedDict):
     readable_inputs: Sequence[str]
     readable_context_fields: Sequence[str]
 
+class BRegProposalReviewDocument(TypedDict):
+    id: str
+    actionId: str
+    actionRevision: str
+    submissionVersion: int
+    revision: int
+    effectDigest: str
+    subject: dict[str, JsonValue]
+    context: dict[str, JsonValue]
+    reviewable: bool
+    requestId: NotRequired[str]
+    progressCode: NotRequired[str]
+    handoff: NotRequired[dict[str, JsonValue]]
+    authority: NotRequired[str]
+    policy: NotRequired[dict[str, JsonValue]]
+    result: NotRequired[dict[str, JsonValue]]
+
+class BRegProposalReviewCompleteOutcome(TypedDict):
+    kind: Literal["complete"]
+    value: BRegProposalReviewDocument
+    trace_id: str
+    etag: str | None
+    location: str | None
+
 class BRegMetadata:
     def event_record_descriptor(self, record_type: str) -> dict[str, JsonValue]:
         """The event record descriptor declared for a record type."""
@@ -638,6 +662,7 @@ class BaseRegistryClient:
     def execute_recovered_proposal_start(self, binding: BRegActionBinding, recovered: BRegRecoveredAction) -> BRegProposal: ...
     def download_proposal_attachment(self, proposal: BRegProposal, slot: str) -> dict[str, Any]: ...
     def read_proposal_review_status(self, proposal: BRegProposal) -> dict[str, Any]: ...
+    def read_proposal_review_status_with_progress(self, proposal: BRegProposal) -> BRegProposalReviewCompleteOutcome: ...
     def read_proposal_review_context(self, proposal: BRegProposal) -> dict[str, Any]: ...
     def read_proposal_review_context_batch(self, binding: BRegProposalReviewBinding, ids: list[str]) -> dict[str, Any]: ...
     def read_proposal_review_by_id(self, binding: BRegProposalReviewBinding, identifier: str) -> dict[str, Any]: ...

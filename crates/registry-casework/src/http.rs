@@ -740,16 +740,20 @@ async fn get_review_request(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
+    Query(query): Query<ReviewRequestQuery>,
 ) -> Result<Json<ReviewRequestView>, HttpError> {
     reject_source_profile(&headers)?;
     let (actor, _) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .review_request(&actor, request_id)
-            .await
-            .map_err(HttpError::from)?,
-    ))
+    let view = match query.include {
+        Some(ReviewRequestInclude::Progress) => {
+            state
+                .service
+                .review_request_progress(&actor, request_id)
+                .await
+        }
+        None => state.service.review_request(&actor, request_id).await,
+    }?;
+    Ok(Json(view))
 }
 
 async fn get_review_result(

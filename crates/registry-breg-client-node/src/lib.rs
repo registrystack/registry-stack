@@ -3295,6 +3295,18 @@ impl BaseRegistryClient {
         complete_value(response.value, response.metadata)
     }
     #[napi]
+    pub async fn read_proposal_review_status_with_progress(
+        &self,
+        proposal: &Proposal,
+    ) -> Result<CompleteOutcome> {
+        let response = self
+            .inner
+            .read_proposal_review_status_with_progress(&proposal.inner)
+            .await
+            .map_err(client_error)?;
+        complete_value(response.value, response.metadata)
+    }
+    #[napi]
     pub async fn read_proposal_review_context(
         &self,
         proposal: &Proposal,

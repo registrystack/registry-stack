@@ -236,7 +236,10 @@ binds `submissionVersion` and `effectDigest`; optional `reason` text is limited
 to 4096 Unicode characters with NUL refused. Proposal conditions are distinct
 from record ETags. Use `readProposal` or `getProposal` for a current observation.
 Read review status or context explicitly through `readProposalReviewStatus`
-or `readProposalReviewContext` when their links are promoted. A Proposal
+or `readProposalReviewContext` when their links are promoted. Use
+`readProposalReviewStatusWithProgress` to opt into the provider's optional
+coarse `progressCode` while an accepted review request remains pending. The
+plain Status and Context methods reject unsolicited progress. A Proposal
 document carries a derived `turn` (`party`, `official` or `nobody`) and, once a
 review has decided, a `decision` with its status, `decidedAt` and optional
 `publicReason`. `readProposalSubmission(proposal, version)` reads one retained

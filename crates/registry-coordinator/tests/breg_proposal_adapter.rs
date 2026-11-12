@@ -30,6 +30,8 @@ const TRACE: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const KEY: &str = "durable-proposal-key";
 const START: &str = "/tenant/base/v1/actions/update-item";
 const GET: &str = "/tenant/base/v1/proposals/00000000-0000-4000-8000-000000000001";
+const REVIEW_STATUS: &str =
+    "/tenant/base/v1/proposals/00000000-0000-4000-8000-000000000001/review-status";
 
 fn metadata() -> Value {
     json!({
@@ -109,6 +111,14 @@ fn proposal(state: &str, version: u32, revision: u64) -> Value {
 fn decided(mut value: Value, status: &str) -> Value {
     value["decision"] = json!({"status":status, "decidedAt":"2026-09-19T00:01:00.000001Z",
         "publicReason":"Synthetic public reason."});
+    value
+}
+
+fn with_review_status(mut value: Value) -> Value {
+    value["links"]["reviewStatus"] = json!({
+        "method":"GET", "path":format!("/v1/proposals/{ID}/review-status"),
+        "accessProfile":"writer", "operation":"get-review-status"
+    });
     value
 }
 
@@ -564,6 +574,73 @@ async fn each_follow_turns_the_current_proposal_into_the_contract_observation() 
         .unwrap()
         .iter()
         .all(|request| request.method == "GET"));
+    fixture.issuer.stop().await;
+}
+
+#[tokio::test]
+async fn follow_uses_only_proposal_get_when_review_progress_is_advertised() {
+    let fixture = Fixture::start().await;
+    let request = command(Operation::ReadProposal, json!({}), None);
+    let accepted = receipt("submitted", 1);
+
+    // A Casework stage transition leaves the ordinary BReg revision unchanged.
+    for _ in 0..2 {
+        fixture.answer(Current::Proposal(with_review_status(proposal(
+            "submitted",
+            1,
+            2,
+        ))));
+        assert_eq!(
+            describe(
+                &fixture
+                    .adapters
+                    .observe_completion(&request, &accepted, &completion())
+                    .await
+            ),
+            "pending"
+        );
+    }
+
+    fixture.answer(Current::Proposal(with_review_status(decided(
+        proposal("submitted", 1, 4),
+        "approved",
+    ))));
+    assert_eq!(
+        describe(
+            &fixture
+                .adapters
+                .observe_completion(&request, &accepted, &completion())
+                .await
+        ),
+        "pending"
+    );
+
+    fixture.answer(Current::Proposal(with_review_status(decided(
+        proposal("applied", 1, 5),
+        "approved",
+    ))));
+    assert_eq!(
+        describe(
+            &fixture
+                .adapters
+                .observe_completion(&request, &accepted, &completion())
+                .await
+        ),
+        "settled \"applied\""
+    );
+
+    let requests = fixture.server.received_requests().await.unwrap();
+    assert!(requests.iter().all(|request| request.method == "GET"));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == GET)
+            .count(),
+        4
+    );
+    assert!(requests
+        .iter()
+        .all(|request| request.url.path() != REVIEW_STATUS));
     fixture.issuer.stop().await;
 }
 

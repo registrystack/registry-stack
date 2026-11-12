@@ -43,7 +43,7 @@ ENDPOINTS = [
     Endpoint("GET","/v1/review-policies","listReviewPolicies","ReviewPolicyClosureList"),
     Endpoint("GET","/v1/review-policies/{policy_id}","getReviewPolicy","ReviewPolicyClosure"),
     Endpoint("POST","/v1/review-requests","createOrRecoverReviewRequest","ReviewRequestAccepted","ReviewCreateRequest",idempotency=True,review=True),
-    Endpoint("GET","/v1/review-requests/{request_id}","getReviewRequest","ReviewRequestView",review=True),
+    Endpoint("GET","/v1/review-requests/{request_id}","getReviewRequest","ReviewRequestView",query="ReviewRequestQuery",review=True),
     Endpoint("GET","/v1/review-requests/{request_id}/result","getReviewResult","ReviewResult",review=True),
     Endpoint("POST","/v1/review-requests/{request_id}/cancel","cancelReviewRequest","ReviewCancelResponse","ReviewCancelRequest",idempotency=True,review=True),
     Endpoint("GET","/v1/review-requests/{request_id}/history","getReviewHistory","ReviewHistoryPage",query="page",source=True),

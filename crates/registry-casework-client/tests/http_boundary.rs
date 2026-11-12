@@ -192,6 +192,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
         stages: vec![ReviewStagePolicy {
             id: "review".to_owned(),
             label: None,
+            public_progress_code: None,
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
@@ -257,6 +258,7 @@ async fn review_policy_refuses_unverified_governed_response_members() {
         stages: vec![ReviewStagePolicy {
             id: "review".to_owned(),
             label: None,
+            public_progress_code: None,
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
@@ -325,6 +327,7 @@ async fn review_policy_refuses_duplicate_additive_response_members() {
         stages: vec![ReviewStagePolicy {
             id: "review".to_owned(),
             label: None,
+            public_progress_code: None,
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
@@ -2268,6 +2271,7 @@ fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: V
         stages: vec![ReviewStagePolicy {
             id: "answer".to_owned(),
             label: None,
+            public_progress_code: None,
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
@@ -3448,6 +3452,7 @@ async fn task_context_response() -> impl IntoResponse {
         stages: vec![ReviewStagePolicy {
             id: "answer".to_owned(),
             label: None,
+            public_progress_code: None,
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,

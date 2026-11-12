@@ -29,6 +29,7 @@ use crate::postgres::SqlIdentifier;
 use crate::proposal_workflow::ProposalSnapshot;
 
 const APPLICATION_LEASE_MINIMUM_SECONDS: i64 = 30;
+const MAXIMUM_PROGRESS_LOOKUPS_PER_AUTHORITY: usize = 8;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 
@@ -280,6 +281,7 @@ pub struct ReviewAuthorityClient {
     completion_token: Option<Zeroizing<String>>,
     completion_recipient: Option<String>,
     lease_seconds: i64,
+    progress_lookups: tokio::sync::Semaphore,
 }
 
 impl ReviewAuthorityClient {
@@ -329,6 +331,7 @@ impl ReviewAuthorityClient {
             completion_token,
             completion_recipient,
             lease_seconds,
+            progress_lookups: tokio::sync::Semaphore::new(MAXIMUM_PROGRESS_LOOKUPS_PER_AUTHORITY),
         })
     }
 }
@@ -369,6 +372,36 @@ fn feed_backoff_delay(failures: u32) -> Duration {
 }
 
 impl ReviewAuthorityRegistry {
+    pub(crate) async fn request_progress(
+        &self,
+        binding: &ReviewProgressBinding,
+    ) -> Result<Option<String>, MutationError> {
+        let configured = self
+            .authorities
+            .get(&binding.authority)
+            .ok_or(MutationError::Unavailable)?;
+        if configured.producer_id != binding.producer_id {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let Ok(_permit) = configured.progress_lookups.try_acquire() else {
+            return Ok(None);
+        };
+        let token = configured
+            .token_provider
+            .bearer_token()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        configured
+            .client
+            .request_progress(
+                ReviewAuth::new(&token, &configured.profile),
+                &binding.accepted,
+            )
+            .await
+            .map(|progress| progress.map(|progress| progress.as_str().to_owned()))
+            .map_err(|_| MutationError::Unavailable)
+    }
+
     /// Read the original accepted closure through its configured authority.
     /// The exchange sends only the retained request UUID, with no Proposal
     /// input, context payload, or creation/recovery key.
@@ -1466,6 +1499,68 @@ pub(crate) async fn load_task_context_binding(
         return Err(MutationError::PreconditionFailed);
     }
     Ok(accepted)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewProgressBinding {
+    authority: String,
+    producer_id: String,
+    accepted: ReviewRequestAccepted,
+}
+
+pub(crate) async fn load_progress_binding(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    action_id: &str,
+    proposal_id: Uuid,
+    frozen: &ProposalSnapshot,
+) -> Result<Option<ReviewProgressBinding>, MutationError> {
+    let CompiledProposalReview::Required {
+        authority: expected_authority,
+        ..
+    } = frozen.review_requirement()
+    else {
+        return Ok(None);
+    };
+    let Some(accepted) =
+        load_status_binding(client, registry, action_id, proposal_id, frozen).await?
+    else {
+        return Ok(None);
+    };
+    let row = client
+        .query_opt(
+            "SELECT s.authority,s.producer_id,s.state,s.withdrawn,s.accepted_binding,
+                    NOT EXISTS (SELECT 1
+                        FROM registry_internal.registry_proposal_review_results r
+                        WHERE r.action_id=s.action_id
+                          AND r.proposal_id=s.proposal_id
+                          AND r.submission_version=s.submission_version)
+               FROM registry_internal.registry_proposal_review_submissions s
+              WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3
+              FOR SHARE",
+            &[&action_id, &proposal_id, &i64::from(frozen.version().get())],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let retained: ReviewRequestAccepted = serde_json::from_value(
+        row.get::<_, Option<Value>>(4)
+            .ok_or(MutationError::PreconditionFailed)?,
+    )
+    .map_err(|_| MutationError::PreconditionFailed)?;
+    if row.get::<_, String>(0) != *expected_authority
+        || row.get::<_, String>(2) != "accepted"
+        || row.get::<_, bool>(3)
+        || retained != accepted
+        || !row.get::<_, bool>(5)
+    {
+        return Ok(None);
+    }
+    Ok(Some(ReviewProgressBinding {
+        authority: expected_authority.clone(),
+        producer_id: row.get(1),
+        accepted,
+    }))
 }
 
 pub(crate) async fn load_accepted_binding(

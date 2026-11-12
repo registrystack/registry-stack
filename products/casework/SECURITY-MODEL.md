@@ -23,6 +23,13 @@ Deployment behavior is in the [README](README.md),
   results; it cannot record human decisions. A reviewer decides under a human
   assertion and a single selected profile; profile scopes are never unioned
   (CASEWORK-SEC-01, CASEWORK-SEC-02).
+- **Applicant progress projection.** The ordinary producer request read omits
+  progress. An explicit `include=progress` read may return only the current
+  stage's optional `publicProgressCode` from the accepted, digest-pinned policy
+  closure, and only while the request is reviewing. It never returns a raw
+  stage, queue, task, reviewer or decision detail as the applicant progress
+  code. The client accepts the code only when the complete accepted request,
+  subject, policy and submission digest still match (CASEWORK-SEC-35).
 - **Private reason versus public reason.** Every decision names an outcome
   declared by the pinned policy and offered at the current stage. The reviewer's
   private reason stays in the accountability record. Only the outcome and an optional `publicReason`

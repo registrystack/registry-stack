@@ -11,8 +11,9 @@ use axum::Router;
 use registry_review_client::{
     BearerToken, ContentDigest, ReviewAuth, ReviewCancelRequest, ReviewClient, ReviewClientConfig,
     ReviewClientError, ReviewContext, ReviewCreateRequest, ReviewMutationErrorClass,
-    ReviewProtocolFailure, ReviewRequestAccepted, ReviewResultLookup, ReviewResultResponse,
-    ReviewResultsQuery, ReviewValidationReason, SourceContextBinding, SubjectBinding, Uuid,
+    ReviewProgressCode, ReviewProtocolFailure, ReviewRequestAccepted, ReviewResultLookup,
+    ReviewResultResponse, ReviewResultsQuery, ReviewValidationReason, SourceContextBinding,
+    SubjectBinding, Uuid,
 };
 use serde_json::json;
 use url::Url;
@@ -431,6 +432,148 @@ async fn request_feed_and_cancel_use_the_product_neutral_routes() {
 }
 
 #[tokio::test]
+async fn request_progress_gets_once_with_the_explicit_option_and_exact_binding() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .route("/v1/review-requests/{id}", get(capture_progress_request))
+        .with_state(observations.clone());
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let request_id = Uuid::from_u128(7);
+
+    let progress = client
+        .request_progress(
+            ReviewAuth::new(&token, "producer"),
+            &expected_binding(request_id),
+        )
+        .await
+        .expect("progress projection");
+
+    assert_eq!(
+        progress,
+        Some(ReviewProgressCode::parse("identity-check").unwrap())
+    );
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].0, Method::GET);
+    assert_eq!(
+        observations[0].1,
+        format!("/v1/review-requests/{request_id}?include=progress")
+    );
+    assert_eq!(observations[0].2["registry-review-profile"], "producer");
+    server.abort();
+}
+
+#[tokio::test]
+async fn plain_request_refuses_an_unsolicited_progress_projection() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .route("/v1/review-requests/{id}", get(capture_progress_request))
+        .with_state(observations.clone());
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+
+    let error = client
+        .request(ReviewAuth::new(&token, "producer"), Uuid::from_u128(7))
+        .await
+        .expect_err("plain request must refuse an unsolicited progress code");
+
+    assert!(matches!(
+        error,
+        ReviewClientError::Protocol {
+            failure: ReviewProtocolFailure::Body,
+            ..
+        }
+    ));
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 1);
+    assert_eq!(
+        observations[0].1,
+        "/v1/review-requests/00000000-0000-0000-0000-000000000007"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn request_progress_rejects_each_substituted_binding_member() {
+    for substituted in ["requestId", "subject", "policy", "submissionDigest"] {
+        let app = Router::new().route(
+            "/v1/review-requests/{id}",
+            get(move |Path(request_id): Path<Uuid>| async move {
+                let mut view = request_view_json(request_id);
+                view["progressCode"] = json!("identity-check");
+                match substituted {
+                    "requestId" => view["requestId"] = json!(Uuid::from_u128(8)),
+                    "subject" => view["subject"]["version"] = json!("4"),
+                    "policy" => view["policy"]["version"] = json!("2"),
+                    "submissionDigest" => view["submissionDigest"] = json!(OTHER_DIGEST),
+                    _ => unreachable!(),
+                }
+                json_response(StatusCode::OK, view)
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("one-call-secret").expect("fixture token");
+        let error = client
+            .request_progress(
+                ReviewAuth::new(&token, "producer"),
+                &expected_binding(Uuid::from_u128(7)),
+            )
+            .await
+            .expect_err("substituted accepted binding must be refused");
+        assert!(matches!(
+            error,
+            ReviewClientError::Protocol {
+                failure: ReviewProtocolFailure::Body,
+                ..
+            }
+        ));
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn request_progress_rejects_terminal_or_invalid_codes() {
+    for (lifecycle, active_stage, progress_code) in [
+        ("approved", None, Some("identity-check")),
+        ("reviewing", Some("legal"), Some("First")),
+    ] {
+        let app = Router::new().route(
+            "/v1/review-requests/{id}",
+            get(move |Path(request_id): Path<Uuid>| async move {
+                let mut view = request_view_json(request_id);
+                view["lifecycle"] = json!(lifecycle);
+                match active_stage {
+                    Some(stage) => view["activeStage"] = json!(stage),
+                    None => {
+                        view.as_object_mut().unwrap().remove("activeStage");
+                    }
+                }
+                view["progressCode"] = json!(progress_code);
+                json_response(StatusCode::OK, view)
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("one-call-secret").expect("fixture token");
+        let error = client
+            .request_progress(
+                ReviewAuth::new(&token, "producer"),
+                &expected_binding(Uuid::from_u128(7)),
+            )
+            .await
+            .expect_err("invalid progress projection must be refused");
+        assert!(matches!(
+            error,
+            ReviewClientError::Protocol {
+                failure: ReviewProtocolFailure::Body,
+                ..
+            }
+        ));
+        server.abort();
+    }
+}
+
+#[tokio::test]
 async fn result_feed_rejects_an_invalid_page_size_before_http() {
     let observations = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()
@@ -595,7 +738,26 @@ async fn capture_request(
     request: Request<Body>,
 ) -> Response<Body> {
     capture(&observations, &request);
-    let mut view = json!({
+    let mut view = request_view_json(request_id);
+    view["futureRequestMember"] = json!({"safeToIgnore": true});
+    view["subject"]["futureSubjectMember"] = json!(true);
+    view["policy"]["futurePolicyMember"] = json!(true);
+    json_response(StatusCode::OK, view)
+}
+
+async fn capture_progress_request(
+    State(observations): State<Observations>,
+    Path(request_id): Path<Uuid>,
+    request: Request<Body>,
+) -> Response<Body> {
+    capture(&observations, &request);
+    let mut view = request_view_json(request_id);
+    view["progressCode"] = json!("identity-check");
+    json_response(StatusCode::OK, view)
+}
+
+fn request_view_json(request_id: Uuid) -> serde_json::Value {
+    json!({
         "requestId": request_id,
         "subject": {
             "source": "registry",
@@ -611,11 +773,7 @@ async fn capture_request(
         "activeStage": "legal",
         "createdAt": "2026-09-19T00:00:00Z",
         "updatedAt": "2026-09-19T00:00:01Z"
-    });
-    view["futureRequestMember"] = json!({"safeToIgnore": true});
-    view["subject"]["futureSubjectMember"] = json!(true);
-    view["policy"]["futurePolicyMember"] = json!(true);
-    json_response(StatusCode::OK, view)
+    })
 }
 
 async fn capture_feed(

@@ -170,7 +170,24 @@ by revising and resubmitting in BReg, and the refusal clears for that later subm
 input to map from the output of an earlier `breg.start-proposal/v1` or `breg.submit-proposal/v1`
 step on every route, and refuses any other source with `definition.proposal-not-run-owned`. BReg
 separately checks the connection profile's Cancel grant and caller ownership. Cancellation of a
-Proposal a person started or submitted belongs to that person or an officer in BReg.
+Proposal a person started belongs to that person or an officer in BReg. BReg records the
+authenticated draft creator as its owner throughout later submissions.
+
+### Applicant review progress
+
+BReg authorizes applicant-visible progress through the Proposal owner's status grant. A draft
+created by `breg.start-proposal/v1` is owned by the Coordinator BReg connection principal.
+Have the applicant create and submit their draft in BReg when they need caller-owned progress
+access. Use `breg.read-proposal/v1` to follow it from Coordinator.
+
+Give standalone Coordinator reviews a separate Casework producer ID and client credential from
+BReg. Casework can supersede an open review when the producer identity, subject source, type and ID,
+and policy ID match. If both connections use BReg's producer identity, a Coordinator submission
+in that scope can supersede BReg's open review before Coordinator detects the mismatched acceptance.
+
+When a BReg Action uses a strict Casework policy pin, adding or changing stage codes requires
+updating that pin for future submissions. If the Action revision changes, refresh the imported
+contract for Coordinator workflows that start or submit against it.
 
 ### The `breg-proposal` completion
 
@@ -189,8 +206,10 @@ automatically, so the next read is scheduled at the read floor instead of after
 `resultCheckSeconds`; a review-free Proposal then settles within about the floor. That read is an
 ordinary read: it keeps the floor and counts against the budget. The step settles
 only from the current Proposal Get, never from a Casework result for the Proposal subject and
-never from a lifecycle event. A later `wait-for` may name the same `proposal` completion after an
-earlier wait on it timed out, and observes the same Proposal afresh.
+never from a lifecycle event. Applicant progress is a separate BReg read. Review-stage changes
+leave the Coordinator wait pending until the Proposal reaches a state that settles the wait.
+A later `wait-for` may name the same `proposal` completion after an earlier wait on it timed out,
+and observes the same Proposal afresh.
 
 The settled output has `outcome`, `proposalId`, `submissionVersion`, `actionRevision`, the
 retained `decision` (`status`, `decidedAt` and any `publicReason`), and the frozen `input` the

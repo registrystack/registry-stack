@@ -229,6 +229,7 @@ async fn request(
             requester_reference: "synthetic-producer-reference".into(),
             lifecycle: ReviewRequestLifecycle::Approved,
             active_stage: None,
+            progress_code: None,
             created_at: completed,
             updated_at: completed
         }),

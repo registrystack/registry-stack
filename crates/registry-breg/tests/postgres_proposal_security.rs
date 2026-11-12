@@ -27,7 +27,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -1557,6 +1557,252 @@ fn review_binding() -> Arc<registry_breg::review_store::ReviewAuthorityRegistry>
     Arc::new(
         ReviewAuthorityRegistry::new(BTreeMap::from([("casework".into(), authority)])).unwrap(),
     )
+}
+
+struct ProgressToken;
+
+#[async_trait::async_trait]
+impl registry_platform_httputil::TokenProvider for ProgressToken {
+    async fn bearer_token(
+        &self,
+    ) -> Result<registry_platform_httputil::BearerToken, registry_platform_httputil::TokenError>
+    {
+        registry_platform_httputil::BearerToken::new("progress-test-token")
+    }
+}
+
+struct ProgressAuthorityState {
+    accepted: Mutex<Option<registry_review_client::ReviewRequestAccepted>>,
+    calls: AtomicUsize,
+    entered: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
+}
+
+async fn progress_authority(
+    axum::extract::State(state): axum::extract::State<Arc<ProgressAuthorityState>>,
+    axum::extract::Path(request_id): axum::extract::Path<uuid::Uuid>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    assert_eq!(query.as_deref(), Some("include=progress"));
+    let call = state.calls.fetch_add(1, Ordering::SeqCst);
+    if call == 0 {
+        state.entered.notify_one();
+        state.resume.notified().await;
+    }
+    let accepted = state.accepted.lock().unwrap().clone().unwrap();
+    assert_eq!(request_id, accepted.request_id);
+    let mut response = axum::Json(registry_review_client::ReviewRequestView {
+        request_id,
+        subject: accepted.subject,
+        policy: accepted.policy,
+        submission_digest: accepted.submission_digest,
+        requester_reference: "progress-test".into(),
+        lifecycle: registry_review_client::ReviewRequestLifecycle::Reviewing,
+        active_stage: Some("internal-stage".into()),
+        progress_code: Some(
+            registry_review_client::ReviewProgressCode::parse("institution-check").unwrap(),
+        ),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    })
+    .into_response();
+    response.headers_mut().insert(
+        "traceparent",
+        axum::http::HeaderValue::from_static(
+            "00-11111111111111111111111111111111-2222222222222222-01",
+        ),
+    );
+    response
+}
+
+async fn progress_review_binding() -> (
+    Arc<registry_breg::review_store::ReviewAuthorityRegistry>,
+    Arc<ProgressAuthorityState>,
+    tokio::task::JoinHandle<()>,
+) {
+    use registry_breg::review_store::{ReviewAuthorityClient, ReviewAuthorityRegistry};
+    let state = Arc::new(ProgressAuthorityState {
+        accepted: Mutex::new(None),
+        calls: AtomicUsize::new(0),
+        entered: tokio::sync::Notify::new(),
+        resume: tokio::sync::Notify::new(),
+    });
+    let router = axum::Router::new()
+        .route(
+            "/v1/review-requests/{id}",
+            axum::routing::get(progress_authority),
+        )
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let client =
+        registry_review_client::ReviewClient::new(registry_review_client::ReviewClientConfig::new(
+            format!("http://{address}/").parse().unwrap(),
+        ))
+        .unwrap();
+    let authority = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework".into(),
+            client,
+            Arc::new(ProgressToken),
+            "producer".into(),
+            "proposal-producer".into(),
+            7,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    (
+        Arc::new(
+            ReviewAuthorityRegistry::new(BTreeMap::from([("casework".into(), authority)])).unwrap(),
+        ),
+        state,
+        task,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn applicant_progress_rechecks_withdrawal_and_audit_before_release() {
+    let mut project = source(false);
+    project["reviewAuthorities"] =
+        json!([{"id":"casework","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    project["actions"][0]["execution"]["proposal"]["review"] = json!({
+        "type":"required","authority":"casework","source":"proposal-security",
+        "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}
+    });
+    let grant = &mut project["accessProfiles"][0]["permissions"]["proposals"][0];
+    grant["operations"] = json!(["get", "edit", "submit", "cancel", "get-review-status"]);
+    grant["readableReviewProgress"] = json!(true);
+    let (binding, authority, authority_task) = progress_review_binding().await;
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(project),
+        clerk(),
+        move |service| service.with_review_result_source(binding),
+    )
+    .await;
+    let (_, target) = seed(&fixture).await;
+    let (code, draft, etag) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/correct-name/proposals?accessProfile=clerk",
+        json!({"input":{"target":target,"value":"Proposed"}}),
+        Some("progress-start"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+    let (code, submitted, _) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/submit?accessProfile=clerk"),
+        json!({}),
+        Some("progress-submit"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{submitted}");
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT create_request,expected_policy,expected_submission_digest
+               FROM registry_internal.registry_proposal_review_submissions",
+            &[],
+        )
+        .await
+        .unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(row.get(1)).unwrap(),
+        submission_digest: registry_review_client::SubmissionDigest::parse(
+            &row.get::<_, String>(2),
+        )
+        .unwrap(),
+    };
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions
+                SET state='accepted',accepted_binding=$1",
+            &[&serde_json::to_value(&accepted).unwrap()],
+        )
+        .await
+        .unwrap();
+    *authority.accepted.lock().unwrap() = Some(accepted);
+    let path = format!("/v1/proposals/{id}/review-status?include=progress&accessProfile=clerk");
+
+    let (read, withdrawal) = tokio::join!(
+        send(&fixture.http, Method::GET, &path, Value::Null, None, None),
+        async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                authority.entered.notified(),
+            )
+            .await
+            .expect("progress provider was called after the first local authorization");
+            let changed = fixture
+                .database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_proposal_review_submissions
+                    SET state='cancelling',withdrawn=true",
+                    &[],
+                )
+                .await;
+            authority.resume.notify_one();
+            changed
+        }
+    );
+    assert_eq!(withdrawal.unwrap(), 1);
+    assert_eq!(read.0, StatusCode::OK, "{}", read.1);
+    assert!(read.1.get("progressCode").is_none());
+    assert_eq!(read.1["handoff"]["state"], "accepted");
+    assert!(
+        read.2.is_none(),
+        "opt-in progress representation has no Proposal ETag"
+    );
+
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions
+            SET state='accepted',withdrawn=false",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (code, progress, etag) =
+        send(&fixture.http, Method::GET, &path, Value::Null, None, None).await;
+    assert_eq!(code, StatusCode::OK, "{progress}");
+    assert_eq!(progress["progressCode"], "institution-check");
+    assert!(progress.get("activeStage").is_none());
+    assert!(etag.is_none());
+    let terminal = fixture.audit_capture.entries().pop().unwrap();
+    assert_eq!(
+        terminal["record"]["fieldSetReference"],
+        "proposal-review-progress"
+    );
+
+    fixture.audit_capture.fail_after(1);
+    let failed = reqwest::Client::new()
+        .get(format!("{}{}", fixture.http.base_url, path))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(failed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!failed.text().await.unwrap().contains("institution-check"));
+    assert_eq!(authority.calls.load(Ordering::SeqCst), 3);
+    authority_task.abort();
+    fixture.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

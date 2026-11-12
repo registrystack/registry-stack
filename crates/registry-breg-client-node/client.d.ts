@@ -964,6 +964,7 @@ export declare class BaseRegistryClient {
   executeRecoveredProposalStart(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<BRegProposal>
   downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
   readProposalReviewStatus(proposal: BRegProposal): Promise<CompleteOutcome<BRegProposalReviewDocument>>
+  readProposalReviewStatusWithProgress(proposal: BRegProposal): Promise<CompleteOutcome<BRegProposalReviewDocument>>
   readProposalReviewContext(proposal: BRegProposal): Promise<CompleteOutcome<BRegProposalReviewDocument>>
   readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids: string[]): Promise<CompleteOutcome<Array<BRegProposalReviewDocument | null>>>
   readProposalReviewById(binding: BRegProposalReviewBinding, id: string): Promise<CompleteOutcome<BRegProposalReviewDocument>>
@@ -1038,6 +1039,8 @@ export interface BRegProposalReviewDocument {
   readonly subject: {readonly source: string; readonly subjectType: 'proposal'; readonly id: string; readonly version: string; readonly digest: string}
   readonly context: {readonly reference: string; readonly contract?: {readonly id: string; readonly revision: string; readonly schemaDigest: string}; readonly fields?: Readonly<Record<string, JsonValue>>}
   readonly requestId?: string
+  /** Present only on an explicit progress status read while the accepted request remains pending. */
+  readonly progressCode?: string
   /** Status reads only: where the submission stands with the Review provider. `reason` is present exactly when `state` is `failed`. */
   readonly handoff?: {readonly state: 'pending' | 'accepted' | 'failed' | 'withdrawn'; readonly reason?: 'remote-refused' | 'producer-identity-mismatch' | 'review-acceptance-changed' | 'review-policy-changed' | 'submission-recovery-expired' | 'operator-closed' | 'unspecified'}
   readonly authority?: string; readonly policy?: {readonly id: string; readonly version: string; readonly digest: string}

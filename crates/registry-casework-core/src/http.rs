@@ -57,6 +57,21 @@ pub const DIRECTORY_PATH: &str = "/v1/directory";
 pub const DIRECTORY_TARGETS_PATH: &str = "/v1/directory/targets";
 pub const DESCRIPTION_PATH: &str = "/v1/casework";
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewRequestInclude {
+    Progress,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewRequestQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<ReviewRequestInclude>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
