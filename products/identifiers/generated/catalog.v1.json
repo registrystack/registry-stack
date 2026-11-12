@@ -4996,7 +4996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/project-dev.v1alpha1.schema.json",
-        "sha256": "30a0fcc71d24875309ae9cd96f41305add32ad69e89dcc9b4cbd1622478eeb43",
+        "sha256": "bcc5ba9b634220dbadfca00a5f630d1d645b2b1e16299dad461365da142b154c",
         "mediaType": "application/schema+json"
       }
     },
@@ -5919,6 +5919,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/platform/dev-workload-token/dev-workload-token.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "DevWorkloadToken",
+      "description": "Registry Stack local development workload token JSON Schema.",
+      "source": {
+        "path": "crates/registry-platform-yaml-py/src/formats.rs",
+        "sha256": "ffb0a64c7a943bdf86357f81dbb5dabb324d42b2856a237ab27be90f3e5def59"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/dev-workload-token.v1alpha1.schema.json",
+        "sha256": "59f0ab8c122e4ae29e271a68491af02e6a9f90613973c9965a0b09ec9614c689",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/platform/identity-deployment/identity-deployment.v1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -5928,11 +5946,11 @@
       "description": "Registry Stack identity deployment JSON Schema.",
       "source": {
         "path": "crates/registry-thunderid-tooling/src/schema.rs",
-        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+        "sha256": "b1f58c03602381aa5fbbce5ef22e61b8862c38980248452d9d0700709db5bf5f"
       },
       "artifact": {
         "path": "products/platform/schemas/identity-deployment.schema.json",
-        "sha256": "20b5224ee58a88324552ba4eef77132273ac2b6609e178db001dc57dd1d63077",
+        "sha256": "e6be2d4b0c115e7f846cbfbc52ce7052f19206a2cf0d0830288f2a961e15ca16",
         "mediaType": "application/schema+json"
       }
     },
@@ -5946,7 +5964,7 @@
       "description": "Registry Stack product identity facts JSON Schema.",
       "source": {
         "path": "crates/registry-thunderid-tooling/src/schema.rs",
-        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+        "sha256": "b1f58c03602381aa5fbbce5ef22e61b8862c38980248452d9d0700709db5bf5f"
       },
       "artifact": {
         "path": "products/platform/schemas/identity-facts.schema.json",
@@ -5973,6 +5991,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/platform/python-connection/python-connection.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "PythonConnection",
+      "description": "Registry Stack Python service connection JSON Schema.",
+      "source": {
+        "path": "crates/registry-platform-yaml-py/src/formats.rs",
+        "sha256": "ffb0a64c7a943bdf86357f81dbb5dabb324d42b2856a237ab27be90f3e5def59"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/python-connection.v1alpha1.schema.json",
+        "sha256": "d6f9a47b8a65928d2a8c2fc717d53ef02c17e8572a8528c02db26a195ca6cf66",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -5982,7 +6018,7 @@
       "description": "Registry Stack task connection JSON Schema.",
       "source": {
         "path": "crates/registry-thunderid-tooling/src/schema.rs",
-        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+        "sha256": "b1f58c03602381aa5fbbce5ef22e61b8862c38980248452d9d0700709db5bf5f"
       },
       "artifact": {
         "path": "products/platform/schemas/task-connection.schema.json",

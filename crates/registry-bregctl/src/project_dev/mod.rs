@@ -1209,7 +1209,7 @@ fn recover_run(run_id: &str) -> Result<Value> {
                 database.adopt(label, spatial)?;
             }
             dropped = database.pending_names();
-            database.cleanup()?;
+            cleanup_recovered_database(|| database.cleanup(), thread::sleep)?;
         }
         remove_run_dir(&root)?;
         Ok((stopped_groups, dropped))
@@ -1221,6 +1221,20 @@ fn recover_run(run_id: &str) -> Result<Value> {
         "databases_and_roles": dropped,
     });
     Ok(report)
+}
+
+fn cleanup_recovered_database(
+    mut cleanup: impl FnMut() -> Result<()>,
+    wait: impl FnOnce(Duration),
+) -> Result<()> {
+    let Err(first) = cleanup() else {
+        return Ok(());
+    };
+    // Process guards have reaped their children, but PostgreSQL may still be
+    // releasing a backend. Cleanup retains failed acquisitions for this retry.
+    wait(Duration::from_secs(2));
+    cleanup()
+        .with_context(|| format!("PostgreSQL cleanup remained incomplete after retry ({first:#})"))
 }
 
 fn simple_report(run_id: &str, status: &str) -> Value {
@@ -1510,6 +1524,45 @@ mod tests {
     use super::*;
 
     const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn recovered_database_cleanup_retries_after_backend_drain() {
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        cleanup_recovered_database(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(anyhow::anyhow!("backend is closing"))
+                } else {
+                    Ok(())
+                }
+            },
+            |delay| waits.push(delay),
+        )
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(waits, [Duration::from_secs(2)]);
+    }
+
+    #[test]
+    fn recovered_database_cleanup_preserves_both_failures_after_one_retry() {
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        let error = cleanup_recovered_database(
+            || {
+                attempts += 1;
+                Err(anyhow::anyhow!("attempt {attempts} refused"))
+            },
+            |delay| waits.push(delay),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 2);
+        assert_eq!(waits, [Duration::from_secs(2)]);
+        let message = format!("{error:#}");
+        assert!(message.contains("attempt 1 refused"), "{message}");
+        assert!(message.contains("attempt 2 refused"), "{message}");
+    }
 
     fn fake_run(root: &Path, products: Value, postgis: bool) {
         let input = json!({

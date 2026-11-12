@@ -605,6 +605,22 @@
       "description": "Registry Stack project check acceptances JSON Schema."
     },
     {
+      "glob": "products/platform/schemas/python-connection.v1alpha1.schema.json",
+      "sourcePath": "crates/registry-platform-yaml-py/src/formats.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack Python service connection JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/dev-workload-token.v1alpha1.schema.json",
+      "sourcePath": "crates/registry-platform-yaml-py/src/formats.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack local development workload token JSON Schema."
+    },
+    {
       "glob": "products/evidence/generated/oid4vci-runtime/*.schema.json",
       "sourcePath": "crates/registry-evidence-oid4vci/src/schema.rs",
       "owner": "evidence",
