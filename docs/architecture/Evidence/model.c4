@@ -7,7 +7,7 @@ model {
   }
   evidenceAuthoringProject = artifact 'Evidence authoring project' {
     technology 'YAML / OpenAPI / JSON Schema / Rhai / fixtures'
-    description 'Declares fixed questions, source contracts, selectors, access policy, derivations and governed tests. It contains deployment meaning but no production secret material.'
+    description 'Declares fixed questions, Sources bound to pinned Adapter pack routes, selectors, access policy, derivation Functions and governed tests. It contains deployment meaning but no production secret material.'
     link https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md 'Authoring and promotion contract'
   }
   evidenceTooling = tool 'evidencectl' {
@@ -17,7 +17,7 @@ model {
   }
   evidenceBundle = artifact 'Governed Evidence bundle' {
     technology 'Immutable startup bundle'
-    description 'One atomic disclosure surface containing governed configuration, fixed source requests, schemas, codelists, Rhai scripts and fixture references. The process validates and captures it at startup; there is no upload, hot reload or override layer.'
+    description 'One atomic disclosure surface containing compiled definitions, digest-pinned Adapter packs, thin Source bindings, reviewed derivation Functions, schemas, codelists, signing identity, target bindings and fixture references. The process validates and captures it at startup; there is no upload, hot reload or override layer.'
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/bundle.rs 'Bundle loading and validation'
   }
   evidenceRuntimeConfig = artifact 'Evidence runtime configuration' {
@@ -47,15 +47,32 @@ model {
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/runtime.rs 'Signer initialization'
   }
   evidenceHttpSource = external 'Authoritative HTTP source' {
-    technology 'Fixed HTTPS JSON operation'
-    description 'An independently authorized source such as an existing registry or integration layer. Evidence fixes origin, method, path authority, credentials, trust, projection and bounds; source access control remains independent.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/source.rs 'HTTP source executor'
+    technology 'HTTPS JSON operations of a pinned Adapter pack route'
+    description 'An independently authorized source such as an existing registry or integration layer. A reviewed, digest-pinned Adapter pack route owns the provider interaction; Evidence fixes the pack version, route, target connection, credentials, trust and bounds. Source access control remains independent.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/pack_source.rs 'Evidence pack host'
   }
   evidenceSqliteExtract = artifact 'Published SQLite extract' {
     #optional
     technology 'Read-only immutable SQLite file'
-    description 'An optional source snapshot published and mounted by the source owner. Evidence executes one reviewed bundle-fixed statement after checking publication metadata and freshness; the file is source data, not Evidence storage.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/source_sqlite.rs 'SQLite source boundary'
+    description 'An optional source snapshot published and mounted by the source owner. A pack route executes one reviewed statement through the shared read-only extract boundary after publication metadata and freshness checks; the file is source data, not Evidence storage.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/source_sqlite.rs 'Read-only extract execution for pack routes'
+  }
+  evidenceAdapterEngine = library 'Adapter engine' {
+    technology 'registry-adapter-core / registry-adapter-engine, linked in-process'
+    description 'The listener-free bounded integration engine shared with the Adapter facade and ingestion jobs. Evidence compiles and runs reviewed pack routes in it under its read-only execution profile: bounded HTTP, SQLite extract and admitted host-protocol steps, then projection to a schema-validated private FactSet. It has no listener, PostgreSQL client or product runtime, and grants Evidence no source authority or policy model.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-adapter-engine/src/lib.rs 'Shared engine boundary'
+  }
+  evidenceUpstreamProvider = external 'Another Evidence provider' {
+    #optional
+    technology 'signed-evidence-v1 host protocol'
+    description 'A separately operated Evidence runtime used as a source. The governed definition owns the request and verification expectations; nonce generation, signing-key trust and protocol validation stay in Rust, and scripts receive only verified values.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/source_evidence.rs 'Signed Evidence source protocol'
+  }
+  evidenceOid4vp = service 'Evidence OID4VP front end' {
+    #optional
+    technology 'registry-evidence-oid4vp / OpenID4VP 1.0'
+    description 'A supporting service that runs the wallet-facing presentation exchange and holds a received presentation in memory until Evidence reads it once. Evidence relies on it only for the session context it created, never for a credential\'s authenticity.'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence-oid4vp/README.md 'Wallet presentation front end'
   }
 
   evidence = service 'Evidence runtime' {
@@ -72,12 +89,19 @@ model {
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/auth.rs 'Authentication context'
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/selector.rs 'Authority matching and selector resolution'
     }
-    acquisition = component 'Fixed source acquisition' {
-      description 'Executes bundle-declared single, search-then-fetch or search-then-fetch-set plans through bounded HTTP requests or reviewed SQLite statements. Rust owns source choice, networking, credentials, file access, projections and limits.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/source.rs 'Source boundary'
+    acquisition = component 'Adapter pack acquisition' {
+      description 'Each definition names one Source that binds a pinned Adapter pack version and route to one target connection. Maps only authorized selector fields into the route\'s closed inputs and runs the route in the linked Adapter engine, which owns the complete bounded provider sequence and its projection to a schema-validated private FactSet. Rust owns source choice, credentials, input minimization, authorization and limits. Request batches run the same Source independently per item.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/pack_source.rs 'Authorization and input minimization around Adapter programs'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/source.rs 'Source access attribution'
     }
-    scripts = component 'Bounded Rhai adapters' {
-      description 'Runs deterministic prepare, extraction and requirement-specific derivation functions with fresh state and closed inputs. Rhai has no network, filesystem, credential, clock, signing or audit capability.'
+    protocols = component 'Host protocol verification' {
+      description 'Evidence-owned protocols over the engine\'s sealed data channel. signed-evidence-v1 verifies another Evidence provider\'s signed response through the portable verifier. wallet-presentation-v1, in the default wallet-presentation build, verifies a credential a holder presented from a wallet with the pure registry-evidence-presentation crate; issuer trust, element integrity and holder binding are decided here. Routes receive only a closed projection of verified values; trusted presented facts go to assertion construction alone.'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/host_protocol.rs 'Host protocols'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/wallet_presentation.rs 'Wallet presentation protocol'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/presented.rs 'Trusted presented facts'
+    }
+    scripts = component 'Derivation Functions' {
+      description 'Runs the reviewed assertion-derive/v1 Function a definition declares, deriving only declared outputs from the route\'s private facts and explicitly declared selector inputs, with fresh state and closed inputs. Rhai has no network, filesystem, credential, clock, signing or audit capability.'
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence/src/rhai_runtime.rs 'Rhai capability boundary'
     }
     assertions = component 'Assertion kernel' {
@@ -159,11 +183,17 @@ model {
   evidence.api .call evidence.authority 'Authenticates and resolves complete authority'
   evidence.authority .call issuer 'Fetches caller token keys from the configured JWKS URI'
   evidence.authority .call evidence.audit 'Records contextual authorization refusal before response'
-  evidence.authority .call evidence.acquisition 'Dispatches only a completely authorized fixed plan'
+  evidence.authority .call evidence.acquisition 'Dispatches only a completely authorized Source'
   evidence.acquisition .call evidence.audit 'Records durable access gate before each physical read'
-  evidence.acquisition .call evidenceHttpSource 'Executes a fixed authorized request'
-  evidence.acquisition .call evidenceSqliteExtract 'Reads through one reviewed statement'
-  evidence.acquisition .call evidence.scripts 'Prepares requests, extracts facts and runs declared derivation'
+  evidence.acquisition .call evidenceAdapterEngine 'Runs the pinned pack route with closed inputs'
+  evidenceAdapterEngine .call evidenceHttpSource 'Performs the route\'s bounded HTTP operations'
+  evidenceAdapterEngine .call evidenceSqliteExtract 'Runs the route\'s reviewed read-only statement'
+  evidenceAdapterEngine .call evidenceUpstreamProvider 'Requests a signed assertion with a fresh nonce'
+  evidenceAdapterEngine .call evidenceOid4vp 'Reads one held presentation by session reference'
+  evidenceAdapterEngine .call evidence.protocols 'Hands sealed host-protocol responses to the trusted host'
+  evidence.protocols .call evidenceVerifier 'Verifies an upstream Evidence response'
+  evidence.protocols .call evidence.assertions 'Supplies trusted presented facts'
+  evidence.acquisition .call evidence.scripts 'Passes the validated private facts to declared derivation'
   evidence.scripts .call evidence.assertions 'Returns only declared typed values'
   evidence.assertions .call evidenceVerifier 'Uses the shared payload and format contract'
   evidence.assertions .call evidence.signing 'Requests the selected protected serialization'
@@ -187,4 +217,5 @@ model {
   evidenceNonVerifyingClient .call evidence.api 'Requests a holder-bound signed batch'
   evidenceWallet .call evidenceOid4vci 'Redeems an offer and submits proof of holder key possession'
   evidenceOid4vci .artifactFlow evidenceWallet 'Returns Evidence-signed credential bytes unchanged'
+  evidenceWallet .call evidenceOid4vp 'Presents a credential in a verifier session'
 }
