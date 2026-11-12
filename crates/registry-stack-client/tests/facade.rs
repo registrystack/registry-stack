@@ -21,3 +21,10 @@ fn facade_keeps_every_product_under_its_own_module() {
     assert!(names::<record::RegistryRecord>().contains("registry_record"));
     assert!(names::<auth::BearerToken>().contains("registry_platform_httputil"));
 }
+
+#[test]
+fn facade_names_the_shared_review_progress_code() {
+    let code = breg::ReviewProgressCode::parse("initial-verification").unwrap();
+    let code: casework::ReviewProgressCode = code;
+    assert_eq!(code.as_str(), "initial-verification");
+}

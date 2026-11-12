@@ -65,6 +65,16 @@ test('breg-api.json is the generated output of breg-api.yaml', () => {
   assert.deepEqual(JSON.parse(read('../src/data/generated/breg-api.json')), tables);
 });
 
+test('the review-status route documents the applicant progress opt-in', () => {
+  const row = table('routes').rows.find(
+    ([route]) => route === '`GET /v1/proposals/{proposal_id}/review-status`',
+  );
+  assert.ok(row);
+  assert.match(row[2], /`readableReviewProgress: true`/);
+  assert.match(row[3], /`include=progress`/);
+  assert.match(row[3], /`progressCode`/);
+});
+
 test('native Action and Proposal route families agree with the canonical generated OpenAPI', () => {
   const openapi = JSON.parse(read('../../../products/breg/generated/facility/generated/openapi.json'));
   const documented = new Set(table('routes').rows.map((row) => row[0]));

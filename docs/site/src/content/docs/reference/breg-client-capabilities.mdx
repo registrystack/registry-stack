@@ -204,6 +204,24 @@ whose mode is Proposal Start. Then:
   one declared slot. Submitting freezes the attachment digests, so changed bytes cannot inherit an
   earlier approval.
 
+To show the applicant's current review stage, call
+`readProposalReviewStatusWithProgress(proposal)` in Node or
+`read_proposal_review_status_with_progress` in Rust and Python. The response can include
+`progressCode` when the applicant's caller-owned status grant has
+`readableReviewProgress: true` and the provider publishes a code for the active stage.
+Map the code to a label in your interface. If the code is absent, use the handoff and result
+from the same response.
+
+Before activating a Casework policy that sets `publicProgressCode`, upgrade clients that
+decode complete Casework policies or task contexts. Update any strict policy pin for new
+submissions.
+
+{/* Evidence: crates/registry-breg-client/src/proposal.rs, read_proposal_review_status_with_progress,
+    crates/registry-breg-client-node/client.d.ts, readProposalReviewStatusWithProgress,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi,
+    products/breg/proposals.md, readableReviewProgress, progressCode,
+    products/casework/README.md, publicProgressCode */}
+
 Each transition has its own grant, and each link carries the Proposal's `ifMatch` condition, never
 a Record ETag. Read the Proposal again after every transition. A later read does not settle an
 uncertain Start or Submit; recover the original attempt instead.

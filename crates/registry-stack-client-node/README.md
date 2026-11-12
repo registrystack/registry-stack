@@ -109,6 +109,10 @@ trace, ETag, location, and opaque continuation. See
 [Exact JSON in Node](https://docs.registrystack.org/reference/client-api/#exact-json-in-node)
 for the full rules.
 
+Use `readProposalReviewStatusWithProgress(proposal)` with the applicant's BReg
+credential to request the configured `progressCode`.
+[Proposal client reference](https://docs.registrystack.org/reference/breg-client-capabilities/#proposals)
+
 A keyed BReg, Casework, Messaging, or Scheduling mutation whose outcome is
 unknown is resent identically under the same idempotency key up to
 `maximumMutationRetries` times, a client option: 0 to 2, default 2, and 0 sends it
