@@ -438,7 +438,7 @@ fn definition(bound: &BoundSnapshot, params: Value) -> Result<Value> {
     }
     let mut locations = Vec::with_capacity(definitions.len());
     for definition in definitions {
-        let location = location_of(bound, &definition["location"])?;
+        let location = definition_location_of(bound, definition)?;
         locations.push(location);
     }
     serde_json::to_value(locations).map_err(|_| Error::internal_error())
@@ -465,7 +465,7 @@ fn references(bound: &BoundSnapshot, params: Value) -> Result<Value> {
         .as_array()
         .ok_or_else(Error::internal_error)?
     {
-        locations.push(location_of(bound, &reference["location"])?);
+        locations.push(reference_location_of(bound, reference)?);
     }
     if params.context.include_declaration {
         let definitions = query_analysis(&bound.request, "definition", identity)?;
@@ -479,7 +479,7 @@ fn references(bound: &BoundSnapshot, params: Value) -> Result<Value> {
             .as_array()
             .ok_or_else(Error::internal_error)?
         {
-            locations.push(location_of(bound, &definition["location"])?);
+            locations.push(definition_location_of(bound, definition)?);
         }
     }
     locations.sort_by(|left, right| {
@@ -584,7 +584,20 @@ fn add_candidate(
     }
 }
 
-fn location_of(bound: &BoundSnapshot, location: &Value) -> Result<Value> {
+fn definition_location_of(bound: &BoundSnapshot, definition: &Value) -> Result<Value> {
+    let document_destination = definition["location"]["pointer"].as_str() == Some("");
+    location_of(bound, &definition["location"], document_destination)
+}
+
+fn reference_location_of(bound: &BoundSnapshot, reference: &Value) -> Result<Value> {
+    location_of(bound, &reference["location"], false)
+}
+
+fn location_of(
+    bound: &BoundSnapshot,
+    location: &Value,
+    allow_document_range: bool,
+) -> Result<Value> {
     let path = location["file"]
         .as_str()
         .ok_or_else(Error::internal_error)?;
@@ -597,12 +610,16 @@ fn location_of(bound: &BoundSnapshot, location: &Value) -> Result<Value> {
             "A navigation result is not in the authorized URI binding.",
         )
     })?;
-    let range = document.yaml.range_at_pointer(pointer).ok_or_else(|| {
-        unavailable(
-            "location-unavailable",
-            "A navigation pointer has no precise YAML range.",
-        )
-    })?;
+    let range = if pointer.is_empty() && allow_document_range {
+        document.yaml.document_range()
+    } else {
+        document.yaml.range_at_pointer(pointer).ok_or_else(|| {
+            unavailable(
+                "location-unavailable",
+                "A navigation pointer has no precise YAML range.",
+            )
+        })?
+    };
     Ok(json!({"uri":document.uri,"range":range}))
 }
 
@@ -953,8 +970,8 @@ mod tests {
 
     #[test]
     fn identity_lookup_uses_pointer_range_at_utf16_position() {
-        let action = "kind: PlatformAction\nname: apply\n";
-        let service = "kind: PlatformService\nname: nursing\nmap:\n  steps:\n    - { label: \"🩺\", action: apply }\n";
+        let action = "kind: PlatformAction\ntitle: \"Apply 🩺\"\nname: apply\n";
+        let service = "kind: PlatformService\nname: nursing\nmap:\n  steps:\n    - { label: \"🩺\", action: apply }\nlogic: actions/apply.yaml\n";
         let native =
             "kind: BRegProject\nproject: {id: nursing}\nrecordTypes:\n  - id: practitioner\n";
         let file = |path: &str, text: &str| {
@@ -971,9 +988,13 @@ mod tests {
             "facts":{
                 "definitions":[
                     {"scope":"actions","name":"apply","file":"actions/apply.yaml","pointer":"/name"},
+                    {"scope":"labels","name":"Apply 🩺","file":"actions/apply.yaml","pointer":"/title"},
                     {"scope":"services","name":"nursing","file":"services/nursing.yaml","pointer":"/name"}
                 ],
-                "mentions":[{"source":{"scope":"services","name":"nursing"},"target":{"scope":"actions","name":"apply"},"kind":"service-action","file":"services/nursing.yaml","pointer":"/map/steps/0/action"}],
+                "mentions":[
+                    {"source":{"scope":"services","name":"nursing"},"target":{"scope":"actions","name":"apply"},"kind":"service-action","file":"services/nursing.yaml","pointer":"/map/steps/0/action"},
+                    {"source":{"scope":"services","name":"nursing"},"target":{"kind":"authored-file","path":"actions/apply.yaml"},"kind":"service-file","file":"services/nursing.yaml","pointer":"/logic"}
+                ],
                 "mappings":[],"nativeParts":["native/breg/nursing.yaml"],"coverageGaps":[],"checkGroups":[]
             }
         });
@@ -1017,11 +1038,45 @@ mod tests {
             "registry-studio://authorized/services/nursing.yaml",
             Position::new(4, 34),
         )
-        .expect("range-end position is valid")
-        .expect("the containing document remains selectable");
+        .expect("range-end position is valid");
+        assert_eq!(at_end, None, "an LSP range end is outside the token");
+        let whitespace = identity_at(
+            &bound,
+            "registry-studio://authorized/services/nursing.yaml",
+            Position::new(3, 0),
+        )
+        .expect("whitespace position is valid");
+        assert_eq!(whitespace, None, "file-level identity is not positional");
+        let opening_quote = identity_at(
+            &bound,
+            "registry-studio://authorized/actions/apply.yaml",
+            Position::new(1, 7),
+        )
+        .expect("quoted scalar position is valid");
         assert_eq!(
-            at_end,
-            json!({"kind":"authored-file","path":"services/nursing.yaml"})
+            opening_quote, None,
+            "quote punctuation is not scalar content"
+        );
+        let quoted = identity_at(
+            &bound,
+            "registry-studio://authorized/actions/apply.yaml",
+            Position::new(1, 8),
+        )
+        .expect("quoted content position is valid");
+        assert_eq!(
+            quoted,
+            Some(json!({"kind":"object","scope":"labels","name":"Apply 🩺"})),
+            "quoted scalar content remains positional"
+        );
+        let closing_quote = identity_at(
+            &bound,
+            "registry-studio://authorized/actions/apply.yaml",
+            Position::new(1, 16),
+        )
+        .expect("closing quote position is valid");
+        assert_eq!(
+            closing_quote, None,
+            "closing quote is outside scalar content"
         );
         let answer = definition(
             &bound,
@@ -1035,6 +1090,109 @@ mod tests {
             answer[0]["uri"],
             "registry-studio://authorized/actions/apply.yaml"
         );
+        let file_destination = definition(
+            &bound,
+            json!({
+                "textDocument":{"uri":"registry-studio://authorized/services/nursing.yaml"},
+                "position":{"line":5,"character":8}
+            }),
+        )
+        .expect("precise file reference keeps its file destination");
+        assert_eq!(
+            file_destination[0]["uri"],
+            "registry-studio://authorized/actions/apply.yaml"
+        );
+        assert_eq!(
+            file_destination[0]["range"]["start"],
+            json!({"line":0,"character":0})
+        );
+        assert_eq!(
+            file_destination[0]["range"]["end"],
+            json!({"line":3,"character":0})
+        );
+    }
+
+    #[test]
+    fn precise_reference_keeps_coarse_document_definition_as_a_destination() {
+        let action = "kind: PlatformAction\nname: apply\n";
+        let service = "kind: PlatformService\nname: nursing\naction: apply\n";
+        let file = |path: &str, text: &str| {
+            let sha256 = Sha256::digest(text.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            json!({
+                "path":path,"state":"document","sha256":sha256,
+                "bytesBase64":BASE64.encode(text)
+            })
+        };
+        let request = json!({
+            "apiVersion":"id.registrystack.org/formats/platform/workspace-analysis/v1alpha1",
+            "operation":"analyze","workspaceBinding":"workspace:test","revision":"r1",
+            "files":[file("actions/apply.yaml", action), file("services/nursing.yaml", service)],
+            "facts":{
+                "definitions":[
+                    {"scope":"actions","name":"apply","file":"actions/apply.yaml","pointer":""},
+                    {"scope":"services","name":"nursing","file":"services/nursing.yaml","pointer":"/name"}
+                ],
+                "mentions":[
+                    {"source":{"scope":"services","name":"nursing"},"target":{"scope":"actions","name":"apply"},"kind":"service-action","file":"services/nursing.yaml","pointer":"/action"}
+                ],
+                "mappings":[],"nativeParts":[],"coverageGaps":[],"checkGroups":[]
+            }
+        });
+        let bound = bind_snapshot(
+            request,
+            vec![
+                UriBinding {
+                    path: "actions/apply.yaml".to_owned(),
+                    uri: "registry-studio://authorized/actions/apply.yaml".to_owned(),
+                },
+                UriBinding {
+                    path: "services/nursing.yaml".to_owned(),
+                    uri: "registry-studio://authorized/services/nursing.yaml".to_owned(),
+                },
+            ],
+        )
+        .expect("production-shaped snapshot binds");
+        let position = json!({
+            "textDocument":{"uri":"registry-studio://authorized/services/nursing.yaml"},
+            "position":{"line":2,"character":9}
+        });
+
+        let destination = definition(&bound, position.clone())
+            .expect("precise reference keeps the coarse definition destination");
+        assert_eq!(
+            destination[0]["uri"],
+            "registry-studio://authorized/actions/apply.yaml"
+        );
+        assert_eq!(
+            destination[0]["range"]["start"],
+            json!({"line":0,"character":0})
+        );
+        assert_eq!(
+            destination[0]["range"]["end"],
+            json!({"line":2,"character":0})
+        );
+
+        let declarations = references(
+            &bound,
+            json!({
+                "textDocument":position["textDocument"],
+                "position":position["position"],
+                "context":{"includeDeclaration":true}
+            }),
+        )
+        .expect("references keeps the coarse declaration destination");
+        assert!(declarations
+            .as_array()
+            .expect("reference locations")
+            .iter()
+            .any(|location| {
+                location["uri"] == "registry-studio://authorized/actions/apply.yaml"
+                    && location["range"]["start"] == json!({"line":0,"character":0})
+                    && location["range"]["end"] == json!({"line":2,"character":0})
+            }));
     }
 
     #[test]
@@ -1081,5 +1239,56 @@ mod tests {
         .expect_err("truncated declarations fail closed");
         assert_eq!(error.code, ErrorCode::ServerError(-32001));
         assert_eq!(error.data, Some(json!({"code":"result-limit"})));
+    }
+
+    #[test]
+    fn coarse_native_breg_locations_are_not_positional_targets() {
+        let source = "kind: BRegModule\nid: extra\nextendRecordTypes:\n  - recordType: person\n";
+        let sha256 = Sha256::digest(source.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let request = json!({
+            "apiVersion":"id.registrystack.org/formats/platform/workspace-analysis/v1alpha1",
+            "operation":"analyze","workspaceBinding":"workspace:test","revision":"r1",
+            "files":[{"path":"native/module.yaml","state":"native","sha256":sha256,"bytesBase64":BASE64.encode(source)}],
+            "facts":{
+                "definitions":[{"scope":"records","name":"person","file":"native/module.yaml","pointer":""}],
+                "mentions":[],
+                "mappings":[{
+                    "owner":{"kind":"object","scope":"records","name":"person"},
+                    "authored":{"kind":"authored-file","path":"native/module.yaml"},
+                    "generated":{"kind":"generated-file","path":"registry/modules/extra/module.yaml"},
+                    "product":"breg","file":"native/module.yaml","pointer":""
+                }],
+                "nativeParts":["native/module.yaml"],"coverageGaps":[],"checkGroups":[]
+            }
+        });
+        let bound = bind_snapshot(
+            request,
+            vec![UriBinding {
+                path: "native/module.yaml".to_owned(),
+                uri: "registry-studio://authorized/native/module.yaml".to_owned(),
+            }],
+        )
+        .expect("mapped native snapshot binds");
+        assert!(bound.analysis["coverage"]["gaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .iter()
+            .any(|gap| gap["code"] == "reference-family-unavailable"
+                && gap["file"] == "native/module.yaml"));
+        for position in [Position::new(0, 0), Position::new(3, 18)] {
+            assert_eq!(
+                identity_at(
+                    &bound,
+                    "registry-studio://authorized/native/module.yaml",
+                    position,
+                )
+                .expect("position is valid"),
+                None,
+                "whole-file native provider locations are not precise cursor targets"
+            );
+        }
     }
 }

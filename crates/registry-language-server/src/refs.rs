@@ -638,7 +638,7 @@ impl ProjectIndex {
     /// reference nor a recorded set of choices is offered nothing, which includes every position in
     /// a document the loader kept out of the project.
     pub fn completions_at(&self, path: &Path, position: Position) -> Vec<CompletionCandidate> {
-        if let Some(reference) = self.reference_at(path, position) {
+        if let Some(reference) = self.completion_reference_at(path, position) {
             let mut candidates = reference
                 .offers
                 .as_ref()
@@ -685,7 +685,7 @@ impl ProjectIndex {
             return candidates;
         }
 
-        self.choices_at(path, position)
+        self.completion_choices_at(path, position)
             .map(|choices| {
                 choices
                     .values
@@ -762,6 +762,17 @@ impl ProjectIndex {
         })
     }
 
+    fn completion_reference_at(
+        &self,
+        path: &Path,
+        position: Position,
+    ) -> Option<&IndexedReference> {
+        self.references.iter().find(|reference| {
+            reference.location.path == path
+                && completion_range_contains(reference.location.range, position)
+        })
+    }
+
     fn definitions_for(&self, query: &SymbolQuery) -> Vec<&IndexedSymbol> {
         self.symbols
             .iter()
@@ -769,9 +780,10 @@ impl ProjectIndex {
             .collect()
     }
 
-    fn choices_at(&self, path: &Path, position: Position) -> Option<&IndexedChoices> {
+    fn completion_choices_at(&self, path: &Path, position: Position) -> Option<&IndexedChoices> {
         self.choices.iter().find(|choices| {
-            choices.location.path == path && range_contains(choices.location.range, position)
+            choices.location.path == path
+                && completion_range_contains(choices.location.range, position)
         })
     }
 
@@ -1121,7 +1133,11 @@ fn is_display_directive(character: char) -> bool {
 }
 
 fn range_contains(range: Range, position: Position) -> bool {
-    position_cmp(position, range.start).is_ge() && position_cmp(position, range.end).is_le()
+    position_cmp(position, range.start).is_ge() && position_cmp(position, range.end).is_lt()
+}
+
+fn completion_range_contains(range: Range, position: Position) -> bool {
+    range_contains(range, position) || position == range.end
 }
 
 fn position_cmp(left: Position, right: Position) -> std::cmp::Ordering {
@@ -1143,6 +1159,67 @@ fn location_cmp(left: &IndexedLocation, right: &IndexedLocation) -> std::cmp::Or
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_ranges_include_the_start_and_exclude_the_end() {
+        let range = Range::new(Position::new(2, 3), Position::new(2, 8));
+        assert!(range_contains(range, Position::new(2, 3)));
+        assert!(range_contains(range, Position::new(2, 7)));
+        assert!(!range_contains(range, Position::new(2, 8)));
+    }
+
+    #[test]
+    fn completion_accepts_the_caret_at_reference_and_choice_range_ends() {
+        let reference_path = PathBuf::from("reference.yaml");
+        let reference_range = Range::new(Position::new(0, 7), Position::new(0, 10));
+        let choice_path = PathBuf::from("choice.yaml");
+        let choice_range = Range::new(Position::new(1, 8), Position::new(1, 12));
+        let index = ProjectIndex {
+            references: vec![IndexedReference {
+                target: SymbolQuery::global(EvidenceKind::Source, "par"),
+                location: IndexedLocation {
+                    path: reference_path.clone(),
+                    range: reference_range,
+                },
+                reports_unresolved: true,
+                style: ScalarStyle::Plain,
+                offers: Some(Arc::new(BTreeSet::from(["partner".to_owned()]))),
+            }],
+            choices: vec![IndexedChoices {
+                location: IndexedLocation {
+                    path: choice_path.clone(),
+                    range: choice_range,
+                },
+                style: ScalarStyle::DoubleQuoted,
+                kind: CompletionItemKind::VALUE,
+                detail: "fixed choice",
+                values: Arc::new(BTreeSet::from(["ready".to_owned()])),
+            }],
+            ..ProjectIndex::default()
+        };
+
+        assert_eq!(
+            index
+                .completions_at(&reference_path, reference_range.end)
+                .iter()
+                .map(|candidate| candidate.filter_text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["partner"]
+        );
+        assert_eq!(
+            index
+                .completions_at(&choice_path, choice_range.end)
+                .iter()
+                .map(|candidate| candidate.filter_text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ready"]
+        );
+        assert_eq!(
+            index.reference_at(&reference_path, reference_range.end),
+            None
+        );
+        assert!(!range_contains(choice_range, choice_range.end));
+    }
 
     /// An Evidence concept is answered by the question that owns it.
     #[test]
