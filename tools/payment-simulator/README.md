@@ -21,8 +21,10 @@ destination snapshots, replay responses and simulated credits across restarts.
 Amounts use exact minor units. Everything stays in this directory, with no
 Registry Stack runtime imports or Rust build.
 
-The Coordinator can bind these seven APIs through its generic HTTP operations;
-payment meanings stay in the workflow definition. A compatible service can replace this simulator for new work after existing commands have settled.
+The maintained P2G integration uses the [Adapter payment host](../../products/adapter/examples/payment-collections/README.md)
+and native Coordinator payment operations. The host owns provider correlation,
+durable attempts, recovery and restricted registry receipt reporting. The
+simulator's HTTP profile also remains independently usable for connector tests.
 
 ## Start locally
 

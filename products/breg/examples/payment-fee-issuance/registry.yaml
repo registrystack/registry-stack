@@ -1,0 +1,347 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: payment-fee-issuance
+  canonicalBaseIri: https://payment-fee-issuance.example.test
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: Payment-gated service issuance
+    description: A synthetic fee-before-issuance registry with one authoritative bill and one bound collection attempt.
+
+package:
+  sourceRevision: payment-fee-issuance-0.1.0
+
+datasets:
+  - id: service-billing
+    display:
+      label: Service billing
+      description: Authoritative service fee, collection binding, receipt, and single-use issuance facts.
+
+vocabularies:
+  - id: payment-state
+    values: [due-unbound, attempt-bound, paid, issued]
+
+recordTypes:
+  - id: service-fee-bill
+    route: service-fee-bills
+    primaryDataset: service-billing
+    mutationMode: mutable
+    constraints:
+      - id: one-bill-per-service-request
+        type: unique
+        fields: [institution-id, service-id, request-id]
+      - id: payment-attempt-id-unique
+        type: unique
+        fields: [payment-attempt-id]
+      - id: payment-receipt-id-unique
+        type: unique
+        fields: [payment-receipt-id]
+      - id: issuance-id-unique
+        type: unique
+        fields: [issuance-id]
+      - id: portable-positive-bill-version
+        type: int-range
+        field: bill-version
+        minimum: 1
+        maximum: 9007199254740991
+      - id: portable-positive-amount-minor
+        type: int-range
+        field: amount-minor
+        minimum: 1
+        maximum: 9007199254740991
+      - id: portable-currency-scale
+        type: int-range
+        field: currency-scale
+        minimum: 0
+        maximum: 6
+    display:
+      label: Service fee bill
+      description: One service-owned bill whose collection binding, exact receipt, and issuance are immutable state transitions.
+    fields:
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: request-id, apiName: requestId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: payer-id, apiName: payerId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: payer-financial-address, apiName: payerFinancialAddress, type: string, required: true, minimumLength: 1, maximumLength: 30, pattern: '^[ -~]{1,30}$', classification: restricted}
+      - {id: tariff-id, apiName: tariffId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: tariff-version, apiName: tariffVersion, type: int64, required: true, classification: internal}
+      - {id: tariff-digest, apiName: tariffDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: bill-version, apiName: billVersion, type: int64, required: true, classification: internal}
+      - {id: bill-digest, apiName: billDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: amount-minor, apiName: amountMinor, type: int64, required: true, classification: internal}
+      - {id: currency, type: string, required: true, minimumLength: 3, maximumLength: 3, classification: internal}
+      - {id: currency-scale, apiName: currencyScale, type: int64, required: true, classification: internal}
+      - {id: simulation, type: boolean, required: true, classification: internal}
+      - {id: payment-state, apiName: paymentState, type: vocabulary-code, vocabulary: payment-state, required: true, classification: internal}
+      - {id: payment-attempt-id, apiName: paymentAttemptId, type: uuid, required: false, classification: internal}
+      - {id: provider-binding-revision, apiName: providerBindingRevision, type: string, required: false, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: payment-receipt-id, apiName: paymentReceiptId, type: string, required: false, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: provider-reference, apiName: providerReference, type: string, required: false, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: receipt-digest, apiName: receiptDigest, type: string, required: false, minimumLength: 64, maximumLength: 64, pattern: '^[0-9a-f]{64}$', classification: internal}
+      - {id: issuance-id, apiName: issuanceId, type: uuid, required: false, classification: internal}
+
+actions:
+  - id: create-fee-bill
+    display:
+      label: Create service fee bill
+      description: Create the one authoritative bill for a service request from the service-owned synthetic tariff.
+    execution: {mode: immediate}
+    inputs:
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: request-id, apiName: requestId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: payer-id, apiName: payerId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: payer-financial-address, apiName: payerFinancialAddress, type: string, required: true, minimumLength: 1, maximumLength: 30, pattern: '^[ -~]{1,30}$', classification: restricted}
+      - {id: bill-digest, apiName: billDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: simulation, type: boolean, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: bill
+          target: {recordType: service-fee-bill}
+          operation: create
+          set:
+            institution-id: {fromInput: institution-id}
+            service-id: {fromInput: service-id}
+            request-id: {fromInput: request-id}
+            payer-id: {fromInput: payer-id}
+            payer-financial-address: {fromInput: payer-financial-address}
+            tariff-id: {value: synthetic-licence-fee}
+            tariff-version: {value: 1}
+            tariff-digest: {value: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+            bill-version: {value: 1}
+            bill-digest: {fromInput: bill-digest}
+            amount-minor: {value: 2500}
+            currency: {value: USD}
+            currency-scale: {value: 2}
+            simulation: {fromInput: simulation}
+            payment-state: {value: due-unbound}
+
+  - id: bind-payment-attempt
+    display:
+      label: Bind payment collection attempt
+      description: Freeze one Adapter collection and provider binding before provider dispatch.
+    execution: {mode: immediate}
+    inputs:
+      - {id: bill, apiName: billId, type: reference, target: service-fee-bill, required: true, classification: internal}
+      - {id: bill-version, apiName: billVersion, type: int64, required: true, classification: internal}
+      - {id: bill-digest, apiName: billDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: request-id, apiName: requestId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: tariff-id, apiName: tariffId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: tariff-version, apiName: tariffVersion, type: int64, required: true, classification: internal}
+      - {id: tariff-digest, apiName: tariffDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: payer-id, apiName: payerId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: payer-financial-address, apiName: payerFinancialAddress, type: string, required: true, minimumLength: 1, maximumLength: 30, pattern: '^[ -~]{1,30}$', classification: restricted}
+      - {id: amount-minor, apiName: amountMinor, type: int64, required: true, classification: internal}
+      - {id: currency, type: string, required: true, minimumLength: 3, maximumLength: 3, classification: internal}
+      - {id: currency-scale, apiName: currencyScale, type: int64, required: true, classification: internal}
+      - {id: simulation, type: boolean, required: true, classification: internal}
+      - {id: payment-attempt-id, apiName: paymentAttemptId, type: uuid, required: true, classification: internal}
+      - {id: provider-binding-revision, apiName: providerBindingRevision, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+    commitGuards:
+      targets:
+        - {input: bill, field: payment-state, equals: due-unbound, reason: bill-not-due-unbound}
+        - {input: bill, field: bill-version, equalsFromInput: bill-version}
+        - {input: bill, field: bill-digest, equalsFromInput: bill-digest}
+        - {input: bill, field: institution-id, equalsFromInput: institution-id}
+        - {input: bill, field: service-id, equalsFromInput: service-id}
+        - {input: bill, field: request-id, equalsFromInput: request-id}
+        - {input: bill, field: tariff-id, equalsFromInput: tariff-id}
+        - {input: bill, field: tariff-version, equalsFromInput: tariff-version}
+        - {input: bill, field: tariff-digest, equalsFromInput: tariff-digest}
+        - {input: bill, field: payer-id, equalsFromInput: payer-id}
+        - {input: bill, field: payer-financial-address, equalsFromInput: payer-financial-address}
+        - {input: bill, field: amount-minor, equalsFromInput: amount-minor}
+        - {input: bill, field: currency, equalsFromInput: currency}
+        - {input: bill, field: currency-scale, equalsFromInput: currency-scale}
+        - {input: bill, field: simulation, equalsFromInput: simulation}
+    plan:
+      type: fixed
+      effects:
+        - id: bill
+          target: {fromInput: bill}
+          operation: patch
+          set:
+            payment-attempt-id: {fromInput: payment-attempt-id}
+            provider-binding-revision: {fromInput: provider-binding-revision}
+            payment-state: {value: attempt-bound}
+
+  - id: record-payment-receipt
+    display:
+      label: Record exact payment receipt
+      description: Record one receipt only when every bill, collection, provider, and money fact matches the frozen binding.
+    execution: {mode: immediate}
+    inputs:
+      - {id: bill, apiName: billId, type: reference, target: service-fee-bill, required: true, classification: internal}
+      - {id: bill-version, apiName: billVersion, type: int64, required: true, classification: internal}
+      - {id: bill-digest, apiName: billDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: institution-id, apiName: institutionId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: service-id, apiName: serviceId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: request-id, apiName: requestId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: tariff-id, apiName: tariffId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: tariff-version, apiName: tariffVersion, type: int64, required: true, classification: internal}
+      - {id: tariff-digest, apiName: tariffDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, classification: internal}
+      - {id: payer-id, apiName: payerId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: restricted}
+      - {id: payer-financial-address, apiName: payerFinancialAddress, type: string, required: true, minimumLength: 1, maximumLength: 30, pattern: '^[ -~]{1,30}$', classification: restricted}
+      - {id: amount-minor, apiName: amountMinor, type: int64, required: true, classification: internal}
+      - {id: currency, type: string, required: true, minimumLength: 3, maximumLength: 3, classification: internal}
+      - {id: currency-scale, apiName: currencyScale, type: int64, required: true, classification: internal}
+      - {id: simulation, type: boolean, required: true, classification: internal}
+      - {id: payment-attempt-id, apiName: paymentAttemptId, type: uuid, required: true, classification: internal}
+      - {id: provider-binding-revision, apiName: providerBindingRevision, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: payment-receipt-id, apiName: paymentReceiptId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: provider-reference, apiName: providerReference, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: receipt-digest, apiName: receiptDigest, type: string, required: true, minimumLength: 64, maximumLength: 64, pattern: '^[0-9a-f]{64}$', classification: internal}
+    commitGuards:
+      targets:
+        - {input: bill, field: payment-state, equals: attempt-bound, reason: bill-not-attempt-bound}
+        - {input: bill, field: bill-version, equalsFromInput: bill-version}
+        - {input: bill, field: bill-digest, equalsFromInput: bill-digest}
+        - {input: bill, field: institution-id, equalsFromInput: institution-id}
+        - {input: bill, field: service-id, equalsFromInput: service-id}
+        - {input: bill, field: request-id, equalsFromInput: request-id}
+        - {input: bill, field: tariff-id, equalsFromInput: tariff-id}
+        - {input: bill, field: tariff-version, equalsFromInput: tariff-version}
+        - {input: bill, field: tariff-digest, equalsFromInput: tariff-digest}
+        - {input: bill, field: payer-id, equalsFromInput: payer-id}
+        - {input: bill, field: payer-financial-address, equalsFromInput: payer-financial-address}
+        - {input: bill, field: amount-minor, equalsFromInput: amount-minor}
+        - {input: bill, field: currency, equalsFromInput: currency}
+        - {input: bill, field: currency-scale, equalsFromInput: currency-scale}
+        - {input: bill, field: simulation, equalsFromInput: simulation}
+        - {input: bill, field: payment-attempt-id, equalsFromInput: payment-attempt-id}
+        - {input: bill, field: provider-binding-revision, equalsFromInput: provider-binding-revision}
+    plan:
+      type: fixed
+      effects:
+        - id: bill
+          target: {fromInput: bill}
+          operation: patch
+          set:
+            payment-receipt-id: {fromInput: payment-receipt-id}
+            provider-reference: {fromInput: provider-reference}
+            receipt-digest: {fromInput: receipt-digest}
+            payment-state: {value: paid}
+
+  - id: issue-paid-service
+    display:
+      label: Issue paid service
+      description: Mark the service request issued once, only for its exact paid bill and receipt.
+    execution: {mode: immediate}
+    inputs:
+      - {id: bill, apiName: billId, type: reference, target: service-fee-bill, required: true, classification: internal}
+      - {id: bill-version, apiName: billVersion, type: int64, required: true, classification: internal}
+      - {id: request-id, apiName: requestId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: payment-receipt-id, apiName: paymentReceiptId, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: issuance-id, apiName: issuanceId, type: uuid, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: bill, field: payment-state, equals: paid, reason: exact-receipt-required}
+        - {input: bill, field: bill-version, equalsFromInput: bill-version}
+        - {input: bill, field: request-id, equalsFromInput: request-id}
+        - {input: bill, field: payment-receipt-id, equalsFromInput: payment-receipt-id}
+        - {input: bill, field: tariff-id, equals: synthetic-licence-fee}
+        - {input: bill, field: tariff-version, equals: 1}
+        - {input: bill, field: tariff-digest, equals: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+        - {input: bill, field: amount-minor, equals: 2500}
+        - {input: bill, field: currency, equals: USD}
+        - {input: bill, field: currency-scale, equals: 2}
+        - {input: bill, field: simulation, equals: true}
+    plan:
+      type: fixed
+      effects:
+        - id: bill
+          target: {fromInput: bill}
+          operation: patch
+          set:
+            issuance-id: {fromInput: issuance-id}
+            payment-state: {value: issued}
+
+accessProfiles:
+  - id: service-biller
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [issuance-service]
+    requiredScopes: [registry:fee-bill:create]
+    requiredPurposes: [service-issuance]
+    permissions:
+      actions:
+        - action: create-fee-bill
+          operations: [invoke]
+          targets:
+            - {recordType: service-fee-bill, rowBoundaries: unrestricted}
+          results: [bill]
+
+  - id: service-issuer
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [issuance-service]
+    requiredScopes: [registry:paid-service:issue]
+    requiredPurposes: [service-issuance]
+    permissions:
+      records:
+        - recordType: service-fee-bill
+          operations: [get]
+          readableFields: [institution-id, service-id, request-id, payer-id, payer-financial-address, tariff-id, tariff-version, tariff-digest, bill-version, bill-digest, amount-minor, currency, currency-scale, simulation, payment-state, payment-attempt-id, provider-binding-revision, payment-receipt-id, provider-reference, receipt-digest, issuance-id]
+          rowBoundaries: unrestricted
+      actions:
+        - action: issue-paid-service
+          operations: [invoke]
+          targets:
+            - {recordType: service-fee-bill, rowBoundaries: unrestricted}
+          results: [bill]
+
+  - id: payment-adapter-binder
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [payment-adapter]
+    requiredScopes: [registry:payment-attempt:bind]
+    requiredPurposes: [payment-processing]
+    permissions:
+      records:
+        - recordType: service-fee-bill
+          operations: [get]
+          readableFields: [institution-id, service-id, request-id, payer-id, payer-financial-address, tariff-id, tariff-version, tariff-digest, bill-version, bill-digest, amount-minor, currency, currency-scale, simulation, payment-state, payment-attempt-id, provider-binding-revision]
+          rowBoundaries: unrestricted
+      actions:
+        - action: bind-payment-attempt
+          operations: [invoke]
+          targets:
+            - {recordType: service-fee-bill, rowBoundaries: unrestricted}
+          results: [bill]
+
+  - id: payment-adapter-reporter
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [payment-adapter]
+    requiredScopes: [registry:payment-receipt:report]
+    requiredPurposes: [payment-processing]
+    permissions:
+      records:
+        - recordType: service-fee-bill
+          operations: [get]
+          readableFields: [institution-id, service-id, request-id, payer-id, payer-financial-address, tariff-id, tariff-version, tariff-digest, bill-version, bill-digest, amount-minor, currency, currency-scale, simulation, payment-state, payment-attempt-id, provider-binding-revision, payment-receipt-id, provider-reference, receipt-digest]
+          rowBoundaries: unrestricted
+      actions:
+        - action: record-payment-receipt
+          operations: [invoke]
+          targets:
+            - {recordType: service-fee-bill, rowBoundaries: unrestricted}
+          results: [bill]
+
+  - id: coordinator-bill-reader
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [service-coordinator]
+    requiredScopes: [registry:fee-bill:read]
+    requiredPurposes: [service-orchestration]
+    permissions:
+      records:
+        - recordType: service-fee-bill
+          operations: [get]
+          readableFields: [bill-version, payment-state]
+          rowBoundaries: unrestricted

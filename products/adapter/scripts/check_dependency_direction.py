@@ -2,16 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Check Adapter dependency direction from Cargo's resolved graph.
 
-The Adapter's engine and facade stay source-neutral: `registry-adapter-engine`,
-`registry-adapter`, `registry-adapter-core`, `registry-adapter-job`, and
-`registry-adapterctl` reach shared platform primitives and nothing else
-of the workspace, and no Adapter crate links a Coordinator crate. The
-one product-surface exception is the direct BReg connector crate
+The Adapter's core and shared engine stay source-neutral, and no Adapter
+crate links a Coordinator crate. The direct BReg ingestion connector
+exception is
 (`products/adapter/CONCEPT.md` section 17.5):
 `registry-adapter-connectors` reaches exactly `registry-breg-client`
 behind the job host's exact off-by-default `direct-breg` feature, is linked
 by no facade or engine crate, and never reaches a product runtime, adopter tooling,
 supporting service, binding, or database crate.
+
+The payment host exception (CONCEPT section 19) permits `registry-adapter`
+to link its payment protocol, standalone synthetic provider connector, and
+the public BReg client for exact restricted Actions. Authoring inherits that
+closure only through its host edge. No product runtime enters it, and no
+payment or product-client dependency enters the shared engine. The provider
+connector itself reaches only the runtime-free payment protocol and platform
+transport primitives.
 
 `registry-adapter-engine` is the listener-free engine used by ingestion,
 the facade, Evidence and BReg external projections. Its resolved closure may reach only
@@ -39,8 +45,8 @@ from pathlib import Path
 
 ADAPTER_PREFIX = "registry-adapter"
 
-# The engine crates the product contract keeps source-neutral. None may
-# reach a product crate of any kind.
+# Hosts and engine crates checked here. The facade host has the explicit
+# payment exception; authoring may inherit it through that host edge only.
 ADAPTER_ENGINE = (
     "registry-adapter-engine",
     "registry-adapter",
@@ -94,6 +100,7 @@ FACADE_MODULES = (
     "idempotent",
     "journal",
     "notifier",
+    "payments",
     "serve",
     "replay_serve",
 )
@@ -115,6 +122,9 @@ FACADE_DEPENDENCIES = (
 # feature path, and never reaches a product runtime, adopter tooling,
 # supporting service, binding, database crate, or any Coordinator crate.
 CONNECTOR = "registry-adapter-connectors"
+PAYMENT_HOST = "registry-adapter"
+PAYMENT_PROTOCOL = "registry-payment-protocol"
+PAYMENT_PROVIDER = "registry-payment-simulator-connector"
 
 # The maintained product client the connector may reach.
 CONNECTOR_CLIENTS = frozenset(
@@ -291,6 +301,30 @@ def connector_may_reach(name: str) -> bool:
     return name in CONNECTOR_CLIENTS or name in CLIENT_SUPPORT
 
 
+def payment_host_may_reach(name: str) -> bool:
+    """The host keeps attempts and calls only the public BReg client surface."""
+    return (
+        engine_may_reach(PAYMENT_HOST, name)
+        or name in {PAYMENT_PROTOCOL, PAYMENT_PROVIDER}
+        or name in CONNECTOR_CLIENTS
+        or name in CLIENT_SUPPORT
+    )
+
+
+def authoring_refused(start, names, every, linked) -> set[str]:
+    """Authoring may inherit the host closure, not link product clients itself."""
+    refused = set()
+    for dependency in every.get(start, set()):
+        permits = payment_host_may_reach if names[dependency] == PAYMENT_HOST else (
+            lambda name: engine_may_reach("registry-adapterctl", name)
+        )
+        for reached in {dependency, *linked_closure(dependency, linked)}:
+            # The host is the declared authoring edge itself.
+            if names[reached] != PAYMENT_HOST and not permits(names[reached]):
+                refused.add(names[reached])
+    return refused
+
+
 def job_refused(
     start: str,
     names: dict[str, str],
@@ -421,6 +455,10 @@ def violations(metadata: dict) -> list[str]:
         if name in ADAPTER_ENGINE:
             if name == JOB_HOST:
                 refused = sorted(job_refused(package_id, names, every, linked))
+            elif name == PAYMENT_HOST:
+                refused = sorted(item for item in reached if not payment_host_may_reach(item))
+            elif name == "registry-adapterctl":
+                refused = sorted(authoring_refused(package_id, names, every, linked))
             else:
                 refused = sorted(
                     item for item in reached if not engine_may_reach(name, item)
@@ -430,6 +468,17 @@ def violations(metadata: dict) -> list[str]:
                     f"{name} reaches package(s) outside registry-platform-* and "
                     f"neutral support: {', '.join(refused)}"
                 )
+        elif name in {PAYMENT_PROTOCOL, PAYMENT_PROVIDER}:
+            refused = sorted(
+                item for item in reached
+                if item.startswith("registry-")
+                and not (
+                    name == PAYMENT_PROVIDER
+                    and (item == PAYMENT_PROTOCOL or item.startswith("registry-platform-"))
+                )
+            )
+            if refused:
+                failures.append(f"{name} reaches package(s) outside its payment boundary: {', '.join(refused)}")
         elif name == CONNECTOR:
             refused = sorted(item for item in reached if not connector_may_reach(item))
             if refused:
@@ -649,7 +698,8 @@ def main() -> int:
     print("fixed GovStack wire behavior stays in the facade host;")
     print("the job's off-by-default direct-BReg path reaches the connector,")
     print("the signed-event path reaches platform primitives only, the connector")
-    print("reaches registry-breg-client alone, and no Adapter crate links a")
+    print("reaches registry-breg-client alone; the scoped payment host reaches its")
+    print("protocol, standalone provider and public BReg client. No Adapter crate links a")
     print("Coordinator crate.")
     return 0
 

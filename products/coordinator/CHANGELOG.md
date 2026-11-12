@@ -32,6 +32,14 @@
   preparation failures, invalid protocol answers and uncertain outcomes
   remain operational failures. In a scenario, one `retryable` reply with such
   a category takes the edge, as the runtime does once retries are exhausted.
+- Add native Adapter payment collection operations: request a collection from
+  an authoritative bill id and version, read its typed state, and record a
+  verified receipt under a separate idempotent command. Collection requests
+  support read-only original-key reconciliation. The host-owned `collection`
+  completion keeps accepted, pending, and unknown states waiting, correlates
+  every read to the accepted bill and binding, and settles the collection
+  attempt only on confirmed or failed state. Only Adapter-verified confirmed
+  state can produce a registry receipt.
 
 ## 0.46.0 - 2026-11-08
 

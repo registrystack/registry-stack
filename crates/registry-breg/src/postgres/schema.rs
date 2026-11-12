@@ -31,7 +31,7 @@ use super::{
         managed_schema_fingerprint, verify_catalog_identity_for_catalog, ExpectedManagedCatalog,
         ExpectedRegistryIdentity,
     },
-    verify_migration_role, ConnectionConfig, RegistryLockKey, RuntimePool,
+    verify_migration_role, ConnectionConfig, DatabaseConnectionCause, RegistryLockKey, RuntimePool,
 };
 #[cfg(any(feature = "tooling", feature = "postgres-test"))]
 use crate::history_store::retain_descriptor;
@@ -944,8 +944,10 @@ pub(crate) async fn rehearse_schema_fingerprint_with_connection(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
     registry: &CompiledRegistry,
-) -> Result<String> {
-    let (mut migration, migration_task) = connect_schema_test(migration_connection).await?;
+) -> std::result::Result<String, SchemaRehearsalError> {
+    let (mut migration, migration_task) = connect_schema_test_with_cause(migration_connection)
+        .await
+        .map_err(SchemaRehearsalError::Connection)?;
     let migration_result: Result<String> = async {
         verify_migration_role(&migration, migration_role).await?;
         let transaction = migration.transaction().await?;
@@ -962,16 +964,37 @@ pub(crate) async fn rehearse_schema_fingerprint_with_connection(
     }
     .await;
     migration_task.abort();
-    migration_result
+    migration_result.map_err(SchemaRehearsalError::Kernel)
+}
+
+/// One schema rehearsal refusal, retaining a closed connection class only for
+/// the initial connect and the existing value-free kernel error thereafter.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub(crate) enum SchemaRehearsalError {
+    Connection(DatabaseConnectionCause),
+    Kernel(PostgresKernelError),
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(super) async fn connect_schema_test(
     config: &ConnectionConfig,
 ) -> Result<(Client, tokio::task::JoinHandle<()>)> {
+    connect_schema_test_with_cause(config)
+        .await
+        .map_err(|_| PostgresKernelError::Connection)
+}
+
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+async fn connect_schema_test_with_cause(
+    config: &ConnectionConfig,
+) -> std::result::Result<(Client, tokio::task::JoinHandle<()>), DatabaseConnectionCause> {
     match config.tls_connector() {
         ConnectionTls::Rustls(connector) => {
-            let (client, connection) = config.postgres().connect(connector).await?;
+            let (client, connection) = config
+                .postgres()
+                .connect(connector)
+                .await
+                .map_err(|error| config.connection_cause(&error))?;
             let task = tokio::spawn(async move {
                 let _ = connection.await;
             });
@@ -979,7 +1002,11 @@ pub(super) async fn connect_schema_test(
         }
         #[cfg(feature = "postgres-test")]
         ConnectionTls::TestOnlyPlaintext => {
-            let (client, connection) = config.postgres().connect(NoTls).await?;
+            let (client, connection) = config
+                .postgres()
+                .connect(NoTls)
+                .await
+                .map_err(|error| config.connection_cause(&error))?;
             let task = tokio::spawn(async move {
                 let _ = connection.await;
             });

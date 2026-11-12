@@ -184,6 +184,8 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
 - [External directory](examples/external-directory/README.md) performs a configured HTTP GET.
 - [External job](examples/external-job/README.md) uses a bounded completion poll and pure
   interpreter for one previously selected external job.
+- [Payment collection](examples/payment-collections/README.md) requests one Adapter-owned
+  collection, waits for its named completion, and records only a confirmed receipt.
 
 ## Calendar starts
 
@@ -252,6 +254,10 @@ await-review:
 
 Casework submission exposes `result`. The BReg Proposal operations expose `proposal`; see
 [Follow a BReg Proposal](#follow-a-breg-proposal).
+`payments.request-collection/v1` and `payments.read-collection/v1` expose `collection`.
+The completion reads the exact accepted collection through the bound Adapter connection.
+`accepted`, `pending`, and `unknown` remain pending; `confirmed` and `failed` settle the
+collection attempt. Only `confirmed` can support the separate receipt-recording operation.
 An external GET operation can declare a named `bounded-poll` completion with a typed pure
 `interpret` Function and `intervalSeconds`. The Function interprets the saved command and latest
 validated response as pending, complete, or a declared business refusal. The host owns transport,
@@ -479,7 +485,7 @@ functions:
 operations:
   create-bill:
     uses: external.command/v1
-    connection: payments
+    connection: external-billing
     responseSchema: {typeRef: bill-response}
     interpret: bill-outcome
 ```
@@ -524,7 +530,8 @@ maintained public generic clients. They pin the workflow revision and validate r
 identity and declared outcome names. Runtime schema validation remains with Coordinator.
 
 The operator binds every alias's connection in one `connections` map. Each entry declares `type`:
-`breg`, `casework-review-producer`, `messaging`, `scheduling`, `external-http`, or `evaluation`.
+`breg`, `casework-review-producer`, `messaging`, `payments`, `scheduling`, `external-http`, or
+`evaluation`.
 Caller policies are keyed by exact verified client identity and list allowed `workflows` and
 actions. One deployment serves up to sixteen workflows in one trust domain, one package each.
 Separate deployments where workflows must not share connection custody.
@@ -550,7 +557,10 @@ workflows. Deployment-wide actions need explicit operator authority.
 
 Same-command recovery preserves the saved body, key, conditions, binding, and original approval
 deadline while obtaining fresh credentials. Messaging submission and Scheduling appointment
-creation or hold confirmation offer original-key receipt reads. Scheduling hold creation,
+creation or hold confirmation offer original-key receipt reads. Payment collection requests use
+the Adapter's read-only original-request lookup with the saved bill identity, version, key, and
+current connection authorization. An unresolved, expired, held, or unknown payment receipt never
+proves that a new collection may be requested. Scheduling hold creation,
 rescheduling, and cancellation have no original-result receipt; a later appointment read cannot
 prove which command produced current state. Scheduling hold release is unkeyed, so an ambiguous
 release stays held and is never replayed. BReg Action and Casework mutations cannot be settled by

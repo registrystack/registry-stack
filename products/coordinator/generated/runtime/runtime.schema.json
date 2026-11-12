@@ -322,6 +322,40 @@
         },
         {
           "additionalProperties": false,
+          "properties": {
+            "authorization": {
+              "$ref": "#/$defs/AuthorizationConfig"
+            },
+            "baseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "paymentConnection": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The Adapter payment connection selected by this Coordinator binding."
+            },
+            "resultCheckSeconds": {
+              "default": 900,
+              "description": "Spacing between authoritative payment status observations.",
+              "format": "uint32",
+              "maximum": 86400,
+              "minimum": 60,
+              "type": "integer"
+            },
+            "type": {
+              "const": "payments",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "baseUrl",
+            "paymentConnection",
+            "authorization"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "allOf": [
             {
               "else": {

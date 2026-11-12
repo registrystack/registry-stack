@@ -101,6 +101,17 @@ impl OperationDescriptor {
                 "authenticatedWake":false,
                 "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
             }),
+            id if Operation::parse(id).is_some_and(Operation::follows_collection) => json!({
+                "name":"collection", "profile":"payment-collection",
+                "acceptedBinding":["collectionId","billId","billVersion","bindingRevision","simulation"],
+                "authority":"current-bound-payment-connection",
+                "terminalEvidence":"validated-authoritative-collection-read",
+                "pendingStates":["accepted","pending","unknown"],
+                "settledStates":["confirmed","failed"],
+                "paymentSuccessState":"confirmed",
+                "authenticatedWake":false,
+                "defaultIntervalSeconds":crate::runtime::DEFAULT_RESULT_CHECK_SECONDS
+            }),
             _ => serde_json::Value::Null,
         };
         if let Some(fields) = observation.as_object_mut() {
@@ -311,6 +322,9 @@ macro_rules! operation_catalog {
             CancelProposal => "breg.cancel-proposal/v1", mutation("breg", false, true), cancel_proposal;
             LookupRecord => "breg.lookup-record/v1", declared_read("breg"), lookup_record;
             ReadRecordV2 => "breg.read-record/v2", read_v2("breg"), read_record_v2;
+            RequestCollection => "payments.request-collection/v1", mutation("payments", true, false), request_collection;
+            ReadCollection => "payments.read-collection/v1", read("payments"), read_collection;
+            RecordReceipt => "payments.record-receipt/v1", mutation("payments", false, false), record_receipt;
         }
     };
 }
@@ -370,6 +384,9 @@ pub fn failure_code(code: &str) -> Option<&'static str> {
         "in-force-ambiguous" => Some("in-force-ambiguous"),
         "proposal-unreadable" => Some("proposal-unreadable"),
         "proposal-handoff-refused" => Some("proposal-handoff-refused"),
+        "payment-invalid-response" => Some("payment-invalid-response"),
+        "payment-correlation-mismatch" => Some("payment-correlation-mismatch"),
+        "payment-unknown" => Some("payment-unknown"),
         _ => None,
     }
 }
@@ -429,6 +446,12 @@ mod tests {
             (Operation::CancelProposal, "breg.cancel-proposal/v1"),
             (Operation::LookupRecord, "breg.lookup-record/v1"),
             (Operation::ReadRecordV2, "breg.read-record/v2"),
+            (
+                Operation::RequestCollection,
+                "payments.request-collection/v1",
+            ),
+            (Operation::ReadCollection, "payments.read-collection/v1"),
+            (Operation::RecordReceipt, "payments.record-receipt/v1"),
         ];
         assert_eq!(
             descriptors()
@@ -578,6 +601,8 @@ mod tests {
             Operation::StartProposal,
             Operation::SubmitProposal,
             Operation::ExternalCommand,
+            Operation::RequestCollection,
+            Operation::RecordReceipt,
         ];
         let allowed_mutations = [
             Operation::SubmitMessage,
@@ -634,6 +659,33 @@ mod tests {
             assert!(!review.supports_read_receipt());
             assert_eq!(review.recovery(), RecoverySemantics::SameCommand);
         }
+        assert_eq!(Operation::RequestCollection.product(), "payments");
+        assert!(Operation::RequestCollection.requires_key());
+        assert!(Operation::RequestCollection.supports_read_receipt());
+        assert_eq!(
+            Operation::RequestCollection.recovery(),
+            RecoverySemantics::SameCommandAndReceipt
+        );
+        assert!(Operation::RequestCollection.follows_collection());
+        let completion =
+            &Operation::RequestCollection.descriptor().host_contract()["completionObservation"];
+        assert_eq!(
+            completion["pendingStates"],
+            serde_json::json!(["accepted", "pending", "unknown"])
+        );
+        assert_eq!(
+            completion["settledStates"],
+            serde_json::json!(["confirmed", "failed"])
+        );
+        assert_eq!(completion["paymentSuccessState"], "confirmed");
+        assert!(Operation::ReadCollection.is_read());
+        assert!(Operation::ReadCollection.follows_collection());
+        assert!(Operation::RecordReceipt.requires_key());
+        assert_eq!(
+            Operation::RecordReceipt.recovery(),
+            RecoverySemantics::SameCommand
+        );
+        assert!(!Operation::RecordReceipt.follows_collection());
     }
 
     #[test]

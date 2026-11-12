@@ -1,0 +1,25 @@
+[package]
+name = "registry-payment-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Typed collection and receipt contract for the Adapter payment capability."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+schema = ["dep:schemars"]
+
+[dependencies]
+schemars = { workspace = true, optional = true, features = ["uuid1"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+jsonschema.workspace = true

@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: payment-collections
+  version: '1'
+operations:
+  request-collection:
+    uses: payments.request-collection/v1
+    connection: licence-fees
+  record-receipt:
+    uses: payments.record-receipt/v1
+    connection: licence-fees
+workflow:
+  input:
+    operationInput: request-collection
+  deadlineSeconds: 7200
+  start: request-collection
+  steps:
+    request-collection:
+      type: call
+      operation: request-collection
+      input: {type: input}
+      next: await-collection
+    await-collection:
+      type: wait-for
+      completion: {step: request-collection, name: collection}
+      timeoutSeconds: 3600
+      next: route-collection
+      onTimeout: collection-unresolved
+    route-collection:
+      type: choose
+      choose:
+        type: step
+        step: await-collection
+        path: /state
+      cases:
+        accepted: collection-unresolved
+        pending: collection-unresolved
+        confirmed: record-receipt
+        failed: collection-failed
+        unknown: collection-unresolved
+    record-receipt:
+      type: call
+      operation: record-receipt
+      input:
+        type: fields
+        fields:
+          collectionId:
+            type: step
+            step: await-collection
+            path: /collectionId
+      next: receipt-recorded
+    receipt-recorded:
+      type: finish
+      outcome: receipt-recorded
+      output: {type: step, step: record-receipt}
+    collection-failed:
+      type: finish
+      outcome: collection-failed
+      output: {type: step, step: await-collection}
+    collection-unresolved:
+      type: finish
+      outcome: collection-unresolved
+  outcomes:
+    receipt-recorded:
+      operationOutput: record-receipt
+    collection-failed:
+      completionOutput: {operation: request-collection, name: collection}
+    collection-unresolved: {type: 'null'}

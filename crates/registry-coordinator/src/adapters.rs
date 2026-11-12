@@ -12,6 +12,11 @@ use registry_casework_client::{CaseworkClient, CaseworkClientConfig, CaseworkTas
 use registry_messaging_client::{
     MessagingClient, MessagingClientConfig, MessagingClientError, ProblemCode, SubmitMessageRequest,
 };
+use registry_payment_client::{
+    CollectionAccepted, CollectionState, CollectionStatus, PaymentClient, PaymentClientConfig,
+    PaymentClientError, PaymentProblemCode, PaymentProtocolFailure, ReadCollection, RecordReceipt,
+    RequestCollection,
+};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{
     client::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenError, TokenProvider},
@@ -55,6 +60,7 @@ enum Connection {
         client: MessagingClient,
         tokens: Arc<PrivateKeyJwt>,
     },
+    Payments(Box<PaymentConnection>),
     Casework(Box<crate::review::CaseworkConnection>),
     External(Box<crate::external_http::ExternalHttpConnection>),
     Decision(Box<crate::decision::DecisionConnection>),
@@ -66,6 +72,12 @@ struct SchedulingConnection {
     key: PrivateJwk,
     standing: Option<Arc<PrivateKeyJwt>>,
     observation: Option<Arc<PrivateKeyJwt>>,
+}
+
+struct PaymentConnection {
+    client: PaymentClient,
+    tokens: Arc<PrivateKeyJwt>,
+    result_check_seconds: u32,
 }
 
 struct TaskConnection {
@@ -291,6 +303,34 @@ impl HttpAdapters {
                     .map_err(|_| config_error())?;
                     Connection::Messaging { client, tokens }
                 }
+                Product::Payments => {
+                    let tokens = Arc::new(
+                        tokens(&auth, key, &auth.resource, &auth.scopes)
+                            .map_err(|_| config_error())?,
+                    );
+                    let payment_connection = binding
+                        .payment_connection
+                        .cloned()
+                        .ok_or_else(config_error)?;
+                    let client = PaymentClient::new(
+                        PaymentClientConfig::new(binding.base_url.clone(), payment_connection)
+                            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+                            .with_attempt_timeout(REQUEST_TIMEOUT)
+                            .with_connect_timeout(Duration::from_millis(
+                                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+                            ))
+                            .with_maximum_response_bytes(FILE_BOUND),
+                    )
+                    .map_err(|_| config_error())?;
+                    Connection::Payments(Box::new(PaymentConnection {
+                        client,
+                        tokens,
+                        result_check_seconds: binding.result_check_seconds.map_or(
+                            crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
+                            registry_platform_yaml::BoundedU32::get,
+                        ),
+                    }))
+                }
                 Product::Casework => {
                     let result_check_seconds = binding.result_check_seconds.map_or(
                         crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
@@ -383,6 +423,237 @@ pub(crate) fn token_failure(error: &TokenError) -> CallOutcome {
             status: 408 | 429 | 500..=599,
         } => retryable("credential-unavailable"),
         _ => refused("credential-refused"),
+    }
+}
+
+async fn payment_token(
+    connection: &PaymentConnection,
+) -> std::result::Result<registry_platform_httputil::client::BearerToken, CallOutcome> {
+    connection
+        .tokens
+        .bearer_token()
+        .await
+        .map_err(|error| token_failure(&error))
+}
+
+fn payment_failure(error: PaymentClientError, operation: Operation) -> CallOutcome {
+    if matches!(
+        &error,
+        PaymentClientError::Problem {
+            code: PaymentProblemCode::ReceiptExpired,
+            ..
+        }
+    ) && operation == Operation::RequestCollection
+    {
+        return CallOutcome::ReceiptExpired;
+    }
+    if operation.has_dispatch_risk() && error.is_outcome_unknown() {
+        return CallOutcome::Uncertain {
+            code: match error {
+                PaymentClientError::Protocol {
+                    failure: PaymentProtocolFailure::Correlation,
+                    ..
+                } => "payment-correlation-mismatch",
+                PaymentClientError::Problem {
+                    code:
+                        PaymentProblemCode::ReceiptUnresolved
+                        | PaymentProblemCode::RecoveryHeld
+                        | PaymentProblemCode::OutcomeUnknown,
+                    ..
+                } => "payment-unknown",
+                PaymentClientError::Problem {
+                    code: PaymentProblemCode::ProviderProtocol,
+                    ..
+                } => "payment-invalid-response",
+                PaymentClientError::Protocol { .. } => "payment-invalid-response",
+                _ => "transport-uncertain",
+            }
+            .into(),
+        };
+    }
+    match error {
+        PaymentClientError::Transport { .. }
+        | PaymentClientError::Problem {
+            code: PaymentProblemCode::Unavailable,
+            ..
+        } => retryable("transport-unavailable"),
+        PaymentClientError::Problem {
+            code: PaymentProblemCode::Unauthenticated | PaymentProblemCode::Forbidden,
+            ..
+        } => refused("product-forbidden"),
+        PaymentClientError::Problem {
+            code: PaymentProblemCode::NotFound,
+            ..
+        } => refused("product-not-found"),
+        PaymentClientError::Problem {
+            code:
+                PaymentProblemCode::ReceiptUnresolved
+                | PaymentProblemCode::RecoveryHeld
+                | PaymentProblemCode::OutcomeUnknown,
+            ..
+        } => refused("payment-unknown"),
+        PaymentClientError::Protocol {
+            failure: PaymentProtocolFailure::Correlation,
+            ..
+        } => refused("payment-correlation-mismatch"),
+        PaymentClientError::InvalidRequest { .. } => refused("invalid-command"),
+        PaymentClientError::Protocol { .. }
+        | PaymentClientError::Problem {
+            code: PaymentProblemCode::ProviderProtocol,
+            ..
+        } => refused("payment-invalid-response"),
+        PaymentClientError::Configuration { .. }
+        | PaymentClientError::Problem {
+            code:
+                PaymentProblemCode::InvalidRequest
+                | PaymentProblemCode::Conflict
+                | PaymentProblemCode::ReceiptExpired,
+            ..
+        } => refused("product-refused"),
+        _ if operation.has_dispatch_risk() => CallOutcome::Uncertain {
+            code: "payment-unknown".into(),
+        },
+        _ => refused("payment-unknown"),
+    }
+}
+
+fn payment_success<T: serde::Serialize>(value: T, operation: Operation) -> CallOutcome {
+    match serde_json::to_value(value) {
+        Ok(value) => CallOutcome::Success(value),
+        Err(_) if operation.has_dispatch_risk() => CallOutcome::Uncertain {
+            code: "payment-invalid-response".into(),
+        },
+        Err(_) => refused("payment-invalid-response"),
+    }
+}
+
+async fn payment_call(connection: &PaymentConnection, request: &CallRequest) -> CallOutcome {
+    let token = match payment_token(connection).await {
+        Ok(token) => token,
+        Err(outcome) => return outcome,
+    };
+    match request.operation {
+        Operation::RequestCollection => {
+            let input: RequestCollection = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let Some(key) = request.idempotency_key.as_deref() else {
+                return refused("invalid-command");
+            };
+            match connection
+                .client
+                .request_collection(&token, key, &input)
+                .await
+            {
+                Ok(answer) => payment_success(answer.value, request.operation),
+                Err(error) => payment_failure(error, request.operation),
+            }
+        }
+        Operation::ReadCollection => {
+            let input: ReadCollection = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            if request.idempotency_key.is_some() {
+                return refused("invalid-command");
+            }
+            match connection.client.read_collection(&token, &input).await {
+                Ok(answer) => payment_success(answer.value, request.operation),
+                Err(error) => payment_failure(error, request.operation),
+            }
+        }
+        Operation::RecordReceipt => {
+            let input: RecordReceipt = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let Some(key) = request.idempotency_key.as_deref() else {
+                return refused("invalid-command");
+            };
+            match connection.client.record_receipt(&token, key, &input).await {
+                Ok(answer) => payment_success(answer.value, request.operation),
+                Err(error) => payment_failure(error, request.operation),
+            }
+        }
+        _ => refused("operation-unbound"),
+    }
+}
+
+fn payment_accepted(operation: Operation, value: &serde_json::Value) -> Option<CollectionAccepted> {
+    match operation {
+        Operation::RequestCollection => serde_json::from_value(value.clone()).ok(),
+        Operation::ReadCollection => serde_json::from_value::<CollectionStatus>(value.clone())
+            .ok()
+            .map(|status| status.acceptance()),
+        _ => None,
+    }
+}
+
+async fn payment_observe(
+    connection: &PaymentConnection,
+    request: &CallRequest,
+    accepted: &serde_json::Value,
+) -> CompletionObservation {
+    let Some(expected) = payment_accepted(request.operation, accepted)
+        .filter(|accepted| accepted.validate().is_ok())
+    else {
+        return CompletionObservation::Hold {
+            code: "payment-invalid-response".into(),
+        };
+    };
+    let token = match connection.tokens.bearer_token().await {
+        Ok(token) => token,
+        Err(_) => {
+            return CompletionObservation::Retryable {
+                code: "completion-unavailable".into(),
+                retry_after: None,
+            }
+        }
+    };
+    match connection
+        .client
+        .read_collection(
+            &token,
+            &ReadCollection {
+                collection_id: expected.collection_id,
+            },
+        )
+        .await
+    {
+        Ok(answer) if answer.value.acceptance() != expected => CompletionObservation::Hold {
+            code: "payment-correlation-mismatch".into(),
+        },
+        Ok(answer) => match answer.value.state {
+            CollectionState::Accepted | CollectionState::Pending | CollectionState::Unknown => {
+                CompletionObservation::Pending { retry_after: None }
+            }
+            CollectionState::Confirmed | CollectionState::Failed => {
+                match serde_json::to_value(answer.value) {
+                    Ok(value) => CompletionObservation::Settled(value),
+                    Err(_) => CompletionObservation::Hold {
+                        code: "payment-invalid-response".into(),
+                    },
+                }
+            }
+        },
+        Err(PaymentClientError::Transport { .. })
+        | Err(PaymentClientError::Problem {
+            code: PaymentProblemCode::Unavailable,
+            ..
+        }) => CompletionObservation::Retryable {
+            code: "completion-unavailable".into(),
+            retry_after: None,
+        },
+        Err(PaymentClientError::Protocol {
+            failure: PaymentProtocolFailure::Correlation,
+            ..
+        }) => CompletionObservation::Hold {
+            code: "payment-correlation-mismatch".into(),
+        },
+        Err(_) => CompletionObservation::Hold {
+            code: "payment-unknown".into(),
+        },
     }
 }
 
@@ -803,6 +1074,11 @@ impl AdapterSet for HttpAdapters {
                     Err(_) => refused("product-refused"),
                 }
             }
+            (Some(Connection::Payments(connection)), operation)
+                if operation.product() == "payments" =>
+            {
+                payment_call(connection, request).await
+            }
             _ => refused("operation-unbound"),
         }
     }
@@ -828,6 +1104,11 @@ impl AdapterSet for HttpAdapters {
             ) if request.operation.follows_proposal() => {
                 crate::breg_proposal::observe(client, profile, request, accepted).await
             }
+            (CompletionKind::PaymentCollection {}, Some(Connection::Payments(connection)))
+                if request.operation.follows_collection() =>
+            {
+                payment_observe(connection, request, accepted).await
+            }
             _ => CompletionObservation::Hold {
                 code: "operation-unbound".into(),
             },
@@ -849,6 +1130,7 @@ impl AdapterSet for HttpAdapters {
                     crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
                     crate::runtime::ConnectionConfig::result_check_seconds,
                 ),
+                Some(Connection::Payments(connection)) => connection.result_check_seconds,
                 _ => crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
             },
         };
@@ -864,6 +1146,7 @@ impl AdapterSet for HttpAdapters {
             completion.kind,
             crate::definition::CompletionKind::CaseworkResult {}
                 | crate::definition::CompletionKind::BregProposal {}
+                | crate::definition::CompletionKind::PaymentCollection {}
         ) {
             self.config.minimum_observation_interval_seconds.get()
         } else {
@@ -924,6 +1207,35 @@ impl AdapterSet for HttpAdapters {
                     },
                     Err(MessagingClientError::Problem {
                         code: ProblemCode::IdempotencyExpired | ProblemCode::ReceiptUnresolved,
+                        ..
+                    }) => unresolved("receipt-unresolved"),
+                    Err(_) => unresolved("observation-unavailable"),
+                }
+            }
+            (Some(Connection::Payments(connection)), Operation::RequestCollection) => {
+                let input: RequestCollection = match serde_json::from_value(request.input.clone()) {
+                    Ok(input) => input,
+                    Err(_) => return unresolved("invalid-command"),
+                };
+                let token = match connection.tokens.bearer_token().await {
+                    Ok(token) => token,
+                    Err(_) => return unresolved("observation-unavailable"),
+                };
+                match connection
+                    .client
+                    .collection_receipt(&token, idempotency_key, &input)
+                    .await
+                {
+                    Ok(answer) => match serde_json::to_value(answer.value) {
+                        Ok(value) => ReconciliationOutcome::Confirmed(value),
+                        Err(_) => unresolved("invalid-observation"),
+                    },
+                    Err(PaymentClientError::Problem {
+                        code:
+                            PaymentProblemCode::ReceiptUnresolved
+                            | PaymentProblemCode::ReceiptExpired
+                            | PaymentProblemCode::RecoveryHeld
+                            | PaymentProblemCode::OutcomeUnknown,
                         ..
                     }) => unresolved("receipt-unresolved"),
                     Err(_) => unresolved("observation-unavailable"),

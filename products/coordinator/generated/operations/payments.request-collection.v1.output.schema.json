@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Returned only after the provider's durable acceptance is established.",
+  "properties": {
+    "billId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "billVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "bindingRevision": {
+      "type": "string"
+    },
+    "collectionId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "simulation": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "collectionId",
+    "billId",
+    "billVersion",
+    "bindingRevision",
+    "simulation"
+  ],
+  "title": "payments.request-collection/v1 output",
+  "type": "object"
+}

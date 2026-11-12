@@ -201,7 +201,7 @@ impl Authenticator {
     }
 }
 
-async fn authenticator(
+pub(crate) async fn authenticator(
     runtime: &AdapterRuntimeConfig,
     resolver: &SecretResolver,
 ) -> Result<Authenticator, ServeError> {
@@ -299,7 +299,7 @@ fn codec(
     Ok(Some(ContinuationCodec::new(key(current)?, previous, ttl)))
 }
 
-fn pool(
+pub(crate) fn pool(
     config: &DatabaseConfig,
     resolver: &SecretResolver,
     migration: bool,
@@ -404,7 +404,8 @@ fn accepted_algorithms() -> Vec<jsonwebtoken::Algorithm> {
 /// before anything is served, so a failure to install one refuses startup
 /// rather than leaving a runtime that SIGTERM would stop with sends in
 /// flight.
-fn shutdown_signal() -> Result<impl std::future::Future<Output = ()> + Send, ServeError> {
+pub(crate) fn shutdown_signal() -> Result<impl std::future::Future<Output = ()> + Send, ServeError>
+{
     shutdown_after(registry_platform_httpsec::shutdown_signal)
 }
 
@@ -623,6 +624,44 @@ pub async fn run(
     pack_path: Option<&std::path::Path>,
     runtime_path: &std::path::Path,
 ) -> Result<(), ServeError> {
+    run_facade(
+        project_directory,
+        profile_path,
+        pack_path,
+        runtime_path,
+        None,
+    )
+    .await
+}
+
+/// Host a record facade, typed payment routes, or both on one listener.
+pub async fn run_configured(
+    project_directory: Option<&std::path::Path>,
+    profile_path: Option<&std::path::Path>,
+    pack_path: Option<&std::path::Path>,
+    runtime_path: &std::path::Path,
+    payments_path: Option<&std::path::Path>,
+) -> Result<(), ServeError> {
+    match (project_directory, payments_path) {
+        (Some(project), payments) => {
+            run_facade(project, profile_path, pack_path, runtime_path, payments).await
+        }
+        (None, Some(payments)) if profile_path.is_none() && pack_path.is_none() => {
+            crate::payments::http::run_only(runtime_path, payments).await
+        }
+        _ => Err(ServeError::Configuration(
+            "a project or payment configuration is required".to_owned(),
+        )),
+    }
+}
+
+async fn run_facade(
+    project_directory: &std::path::Path,
+    profile_path: Option<&std::path::Path>,
+    pack_path: Option<&std::path::Path>,
+    runtime_path: &std::path::Path,
+    payments_path: Option<&std::path::Path>,
+) -> Result<(), ServeError> {
     let loaded = crate::engine::load::load_with_target(
         project_directory,
         profile_path,
@@ -794,6 +833,12 @@ pub async fn run(
     let async_recovery = async_recovery_admission(&loaded)?;
     let async_retention = idempotency.as_ref().map(|(_, retention)| *retention);
     let facade_idempotency = idempotency.as_ref().map(|(store, _)| store.clone());
+    let payments_router = match payments_path {
+        Some(path) => {
+            Some(crate::payments::http::load_router(&loaded.runtime, path, journal.clone()).await?)
+        }
+        None => None,
+    };
     let address: SocketAddr = loaded.runtime.listener.bind.0;
     let listener = TcpListener::bind(address)
         .await
@@ -818,7 +863,11 @@ pub async fn run(
     });
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
     let mut server_shutdown = shutdown_receiver.clone();
-    let serving = axum::serve(listener, router(state)).with_graceful_shutdown(async move {
+    let routes = match payments_router {
+        Some(payments) => router(state).merge(payments),
+        None => router(state),
+    };
+    let serving = axum::serve(listener, routes).with_graceful_shutdown(async move {
         let _closed = server_shutdown.changed().await;
     });
     let server = async move { serving.await };

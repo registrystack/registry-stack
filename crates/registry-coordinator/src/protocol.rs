@@ -71,6 +71,8 @@ impl Operation {
                 | Self::StartProposal
                 | Self::SubmitProposal
                 | Self::ExternalCommand
+                | Self::RequestCollection
+                | Self::RecordReceipt
         )
     }
 
@@ -130,6 +132,12 @@ impl Operation {
             self,
             Self::ReadProposal | Self::StartProposal | Self::SubmitProposal
         )
+    }
+
+    /// Payment operations whose accepted output fixes the authoritative
+    /// collection read a named completion observes.
+    pub fn follows_collection(self) -> bool {
+        matches!(self, Self::RequestCollection | Self::ReadCollection)
     }
 }
 
@@ -434,6 +442,7 @@ pub trait AdapterSet: Send + Sync {
             completion.kind,
             crate::definition::CompletionKind::CaseworkResult {}
                 | crate::definition::CompletionKind::BregProposal {}
+                | crate::definition::CompletionKind::PaymentCollection {}
         ) {
             crate::store::WAIT_READ_SPACING_SECONDS
         } else {

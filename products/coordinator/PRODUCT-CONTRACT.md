@@ -102,7 +102,8 @@ and their governed identity. The schema execution profile is pinned in every
 snapshot; unknown formats and remote schema references remain refused.
 
 Runtime connections form one tagged `connections` map. Supported types are `breg`,
-`casework-review-producer`, `messaging`, `scheduling`, `external-http`, and `evaluation`.
+`casework-review-producer`, `messaging`, `payments`, `scheduling`, `external-http`, and
+`evaluation`.
 Each variant owns its complete authority contract. A caller allowed to start a Workflow receives
 no credential. Coordinator acquires each connection's credential for each attempt, and each
 receiver checks its own current policy against that connection's identity. The caller does choose
@@ -119,6 +120,36 @@ it does not change the pinned Action revision, profile, prepared command or key.
 An oversized read or preparation response is a terminal `invalid-response`
 refusal. An oversized answer after dispatching a mutation remains uncertain,
 because the effect may already have committed.
+
+## Payment collections
+
+Three native Operations use the typed Adapter payment capability. The workflow never supplies an
+amount, provider reference, provider destination, HTTP header, receipt value, or BReg destination.
+The operator-selected `payments` connection fixes the Adapter origin, Adapter payment connection,
+credential, resource, and scopes. Adapter resolves the authoritative bill amount and provider
+binding. Its reporter identity, not Coordinator, holds any BReg bill-binding and receipt grants.
+
+| Operation | Effect | Contract |
+|---|---|---|
+| `payments.request-collection/v1` | mutation, `same-command-and-receipt` | Sends only positive `billVersion` and non-nil `billId` under the durable step key. The accepted output fixes `collectionId`, the exact bill identity, `bindingRevision`, and `simulation`. |
+| `payments.read-collection/v1` | read | Reads one `collectionId` and returns the Adapter's validated authoritative state. |
+| `payments.record-receipt/v1` | mutation, `same-command` | Sends only the confirmed `collectionId` under a separate durable key. Adapter verifies confirmation and returns the exact registry receipt. |
+
+Request recovery calls the Adapter's read-only original-request lookup with the saved request and
+key under current connection authorization. A retained acceptance settles recovery only when its
+bill identity and version match the saved command. `receipt-unresolved`, `receipt-expired`,
+`recovery-held`, `outcome-unknown`, an invalid response, or a correlation mismatch never proves
+absence and never authorizes a new effect. A malformed success, provider-protocol failure, lost
+exchange, or other ambiguous post-dispatch response remains uncertain.
+
+Request and read operations expose the host-owned completion `collection`. It retains the accepted
+`collectionId`, bill identity, binding revision, and simulation marker, then performs bounded
+authoritative reads through the current payment connection. `accepted`, `pending`, and `unknown`
+keep the wait pending. `confirmed` and `failed` are terminal collection-attempt observations, but
+only verified `confirmed` state can make `payments.record-receipt/v1` succeed. A wait timeout does
+not change provider state, establish failure, or release a service that requires confirmed payment.
+Receipt recording remains a separate idempotent call so recovery cannot turn an observation into a
+registry mutation.
 
 ## Governed Actions
 

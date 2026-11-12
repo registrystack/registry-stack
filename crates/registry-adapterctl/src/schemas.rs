@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The generated JSON Schemas of the ten Adapter formats, derived from the
+//! The generated JSON Schemas of the Adapter formats, derived from the
 //! source-neutral model in `registry-adapter-core` with `schemars` or from
-//! the runtime's pure effective-contract projection, and
+//! the runtime's pure effective-contract projection and payment connection model, and
 //! written to `products/adapter/schemas/` (`products/adapter/CONCEPT.md`
 //! sections 6 and 12). The committed files are generated outputs: never
 //! hand-edited, held to their sources by `adapterctl schemas --check`.
@@ -77,6 +77,16 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
         AdapterProject, AdapterRuntimeConfig,
     };
     Ok(vec![
+        Entry {
+            file: "payments.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(
+                registry_adapter::payments::config::PaymentsConfig
+            ))?,
+            title: "Registry Adapter payment connections",
+            schema_id: registry_adapter::payments::config::SCHEMA_ID,
+            api_version: registry_adapter::payments::config::API_VERSION,
+            kind: registry_adapter::payments::config::KIND,
+        },
         Entry {
             file: "job.v1alpha1.schema.json",
             derived: serde_json::to_value(schemars::schema_for!(AdapterJob))?,
@@ -154,7 +164,7 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     ])
 }
 
-/// The ten generated schema documents, keyed by file name. Deterministic:
+/// The generated schema documents, keyed by file name. Deterministic:
 /// the same workspace state renders the same bytes.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let shared: Value =
@@ -583,7 +593,7 @@ mod tests {
     fn documents_are_deterministic_and_versioned() {
         let first = documents().unwrap();
         assert_eq!(documents().unwrap(), first);
-        assert_eq!(first.len(), 10);
+        assert_eq!(first.len(), 11);
         let effective: Value =
             serde_json::from_str(&first["effective-contract.v1alpha1.schema.json"])
                 .expect("the effective contract schema is JSON");

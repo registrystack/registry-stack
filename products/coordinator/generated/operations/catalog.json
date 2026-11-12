@@ -2643,6 +2643,474 @@
       "type": "object"
     }
   },
+  "payments.read-collection/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": {
+        "acceptedBinding": [
+          "collectionId",
+          "billId",
+          "billVersion",
+          "bindingRevision",
+          "simulation"
+        ],
+        "authenticatedWake": false,
+        "authority": "current-bound-payment-connection",
+        "deadline": "original-wait-timeout-within-original-run-deadline",
+        "defaultIntervalSeconds": 900,
+        "maximumRetryAfterSeconds": 86400,
+        "minimumIntervalSeconds": 30,
+        "name": "collection",
+        "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+        "paymentSuccessState": "confirmed",
+        "pendingStates": [
+          "accepted",
+          "pending",
+          "unknown"
+        ],
+        "profile": "payment-collection",
+        "settledStates": [
+          "confirmed",
+          "failed"
+        ],
+        "signalCarriesResult": false,
+        "terminalEvidence": "validated-authoritative-collection-read"
+      },
+      "connectionInterface": "payments",
+      "identity": {
+        "effect": "read",
+        "id": "payments.read-collection/v1",
+        "keyRequirement": "none",
+        "product": "payments",
+        "readReceipt": false,
+        "recovery": "read-again",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "attemptTimeoutMilliseconds": 2000,
+          "connectTimeoutMilliseconds": 1000,
+          "maximumMutationRetries": 0,
+          "maximumResponseBytes": 65536
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Input for an authoritative provider observation through the bound module.",
+      "properties": {
+        "collectionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "collectionId"
+      ],
+      "title": "payments.read-collection/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "CollectionState": {
+          "description": "Provider state. Unknown is unresolved and never authorizes a replacement.",
+          "enum": [
+            "accepted",
+            "pending",
+            "confirmed",
+            "failed",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "Money": {
+          "additionalProperties": false,
+          "description": "An exact positive decimal amount. Scale belongs to the configured currency\npolicy; wire amounts are strings so no binary floating-point rounding occurs.",
+          "properties": {
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            "scale": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "value": {
+              "maxLength": 24,
+              "minLength": 1,
+              "not": {
+                "pattern": "^0(\\.0{1,6})?$"
+              },
+              "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,6})?$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "currency",
+            "scale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Verified observation, retaining the attempt's original binding and provenance.",
+      "properties": {
+        "billId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "billVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "bindingRevision": {
+          "type": "string"
+        },
+        "collectionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "failureReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "money": {
+          "$ref": "#/$defs/Money"
+        },
+        "providerReference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "simulation": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/CollectionState"
+        }
+      },
+      "required": [
+        "collectionId",
+        "billId",
+        "billVersion",
+        "bindingRevision",
+        "simulation",
+        "state",
+        "money"
+      ],
+      "title": "payments.read-collection/v1 output",
+      "type": "object"
+    }
+  },
+  "payments.record-receipt/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "payments",
+      "identity": {
+        "effect": "mutation",
+        "id": "payments.record-receipt/v1",
+        "keyRequirement": "required",
+        "product": "payments",
+        "readReceipt": false,
+        "recovery": "same-command",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "attemptTimeoutMilliseconds": 2000,
+          "connectTimeoutMilliseconds": 1000,
+          "maximumMutationRetries": 0,
+          "maximumResponseBytes": 65536
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Input for the restricted receipt operation. An identifier is a lookup key,\nnot receipt evidence and not authorization.",
+      "properties": {
+        "collectionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        }
+      },
+      "required": [
+        "collectionId"
+      ],
+      "title": "payments.record-receipt/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$defs": {
+        "Money": {
+          "additionalProperties": false,
+          "description": "An exact positive decimal amount. Scale belongs to the configured currency\npolicy; wire amounts are strings so no binary floating-point rounding occurs.",
+          "properties": {
+            "currency": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            },
+            "scale": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "value": {
+              "maxLength": 24,
+              "minLength": 1,
+              "not": {
+                "pattern": "^0(\\.0{1,6})?$"
+              },
+              "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,6})?$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "currency",
+            "scale"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Exact receipt recorded by the service-owned registry Action.",
+      "properties": {
+        "billId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "billVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "bindingRevision": {
+          "type": "string"
+        },
+        "collectionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "money": {
+          "$ref": "#/$defs/Money"
+        },
+        "providerReference": {
+          "type": "string"
+        },
+        "receiptId": {
+          "type": "string"
+        },
+        "simulation": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "collectionId",
+        "billId",
+        "billVersion",
+        "bindingRevision",
+        "simulation",
+        "money",
+        "providerReference",
+        "receiptId"
+      ],
+      "title": "payments.record-receipt/v1 output",
+      "type": "object"
+    }
+  },
+  "payments.request-collection/v1": {
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": {
+        "acceptedBinding": [
+          "collectionId",
+          "billId",
+          "billVersion",
+          "bindingRevision",
+          "simulation"
+        ],
+        "authenticatedWake": false,
+        "authority": "current-bound-payment-connection",
+        "deadline": "original-wait-timeout-within-original-run-deadline",
+        "defaultIntervalSeconds": 900,
+        "maximumRetryAfterSeconds": 86400,
+        "minimumIntervalSeconds": 30,
+        "name": "collection",
+        "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+        "paymentSuccessState": "confirmed",
+        "pendingStates": [
+          "accepted",
+          "pending",
+          "unknown"
+        ],
+        "profile": "payment-collection",
+        "settledStates": [
+          "confirmed",
+          "failed"
+        ],
+        "signalCarriesResult": false,
+        "terminalEvidence": "validated-authoritative-collection-read"
+      },
+      "connectionInterface": "payments",
+      "identity": {
+        "effect": "mutation",
+        "id": "payments.request-collection/v1",
+        "keyRequirement": "required",
+        "product": "payments",
+        "readReceipt": true,
+        "recovery": "same-command-and-receipt",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "attemptTimeoutMilliseconds": 2000,
+          "connectTimeoutMilliseconds": 1000,
+          "maximumMutationRetries": 0,
+          "maximumResponseBytes": 65536
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Caller intent names a bill, never financial facts or provider routing.",
+      "properties": {
+        "billId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "billVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "billId",
+        "billVersion"
+      ],
+      "title": "payments.request-collection/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "Returned only after the provider's durable acceptance is established.",
+      "properties": {
+        "billId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "billVersion": {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "bindingRevision": {
+          "type": "string"
+        },
+        "collectionId": {
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          },
+          "type": "string"
+        },
+        "simulation": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "collectionId",
+        "billId",
+        "billVersion",
+        "bindingRevision",
+        "simulation"
+      ],
+      "title": "payments.request-collection/v1 output",
+      "type": "object"
+    }
+  },
   "scheduling.cancel-appointment/v1": {
     "host": {
       "authority": "current-bound-connection-authority",

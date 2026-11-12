@@ -5899,6 +5899,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "registry-adapter"
 version = "0.46.1"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.23.1",
  "chacha20poly1305",
@@ -5913,6 +5914,9 @@ dependencies = [
  "rcgen",
  "registry-adapter-core",
  "registry-adapter-engine",
+ "registry-breg-client",
+ "registry-payment-protocol",
+ "registry-payment-simulator-connector",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
  "registry-platform-canonical-json",
@@ -5924,6 +5928,7 @@ dependencies = [
  "registry-platform-testing",
  "registry-platform-yaml",
  "rustls",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",
@@ -5938,6 +5943,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "zeroize",
 ]
 
@@ -6664,6 +6670,7 @@ dependencies = [
  "registry-cli-api",
  "registry-messaging-client",
  "registry-messaging-core",
+ "registry-payment-client",
  "registry-platform-activation",
  "registry-platform-audit",
  "registry-platform-authcommon",
@@ -7629,6 +7636,52 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "registry-payment-client"
+version = "0.46.1"
+dependencies = [
+ "axum",
+ "registry-payment-protocol",
+ "registry-platform-canonical-json",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "registry-payment-protocol"
+version = "0.46.1"
+dependencies = [
+ "jsonschema",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "registry-payment-simulator-connector"
+version = "0.46.1"
+dependencies = [
+ "registry-payment-protocol",
+ "registry-platform-httputil",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]

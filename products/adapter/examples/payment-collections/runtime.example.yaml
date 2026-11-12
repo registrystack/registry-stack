@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: synthetic-licence-payments
+endpoints: []
+listener:
+  bind: 127.0.0.1:8098
+database:
+  runtimeUrlRef: secret:env/PAYMENT_ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/PAYMENT_ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: urn:registry:payment-adapter
+allowedClients: [coordinator-payments]
+allowedPrivateCidrs: [127.0.0.0/8]
+audit:
+  retentionDays: 90
