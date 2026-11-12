@@ -964,7 +964,10 @@
         "breg.read-record/v2",
         "payments.request-collection/v1",
         "payments.read-collection/v1",
-        "payments.record-receipt/v1"
+        "payments.record-receipt/v1",
+        "payments.request-disbursement/v1",
+        "payments.read-disbursement/v1",
+        "payments.record-provider-confirmation/v1"
       ],
       "type": "string"
     },

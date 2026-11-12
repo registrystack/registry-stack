@@ -12,8 +12,21 @@ source payloads. The institution's registry remains the system of record.
 The optional [typed payment host](examples/payment-collections/README.md)
 shares the listener and PostgreSQL infrastructure while keeping payment
 attempts outside generic record routes. Coordinator uses dedicated payment
-steps; operator configuration binds provider tenant, biller and restricted
-registry Actions. The initial connector is synthetic and local-only.
+steps. A collection reads an authoritative BReg fee bill; a disbursement
+reads an authoritative [BReg instruction](../breg/examples/g2p-disbursement/README.md).
+Operator configuration binds restricted registry Actions and an exact provider
+pack. The host fixes credentials, origins and mutation methods while the pack
+maps the provider's wire shape. The simulator remains synthetic. The Mifos
+Payment Hub EE pack is a candidate: its released bulk signature is not yet
+implemented by the host, so a direct Mifos G2P connection is refused at
+startup before any instruction is bound. Mifos Operations completion is a
+provider report and does not authorize a paid
+fee-bill receipt.
+
+For a provider pack upgrade, repeat `--payment-provider-pack` with the current
+pack and every retained pack still needed by an unfinished attempt. The host
+selects each attempt's exact saved pin for sends and status reads; a missing
+retained pack holds that attempt before provider I/O.
 
 Source-system knowledge and deployment mappings live in reviewed configuration. A reviewed, versioned pack
 declares a source's endpoints and route templates, with field mapping in

@@ -33,6 +33,7 @@ graphql-parser.workspace = true
 # lane that tests the gates off must build registry-adapter alone.
 registry-adapter = { workspace = true, features = ["job-file", "job-postgres", "schema"] }
 registry-adapter-core = { workspace = true, features = ["schema"] }
+registry-payment-mifos-connector.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config = { workspace = true, features = ["schema"] }
 registry-platform-httputil.workspace = true

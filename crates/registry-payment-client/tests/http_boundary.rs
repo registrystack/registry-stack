@@ -10,7 +10,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use registry_payment_client::{
     BearerToken, CollectionState, PaymentClient, PaymentClientConfig, PaymentClientError,
-    PaymentProblemCode, PaymentProtocolFailure, ReadCollection, RecordReceipt, RequestCollection,
+    PaymentProblemCode, PaymentProtocolFailure, ReadCollection, RecordProviderConfirmation,
+    RecordReceipt, RequestCollection, RequestDisbursement,
 };
 use serde_json::json;
 use url::Url;
@@ -108,6 +109,14 @@ async fn serve_fixture(
             "/adapter/v1/payments/bill-payments/collections/{collection_id}/record-receipt",
             post(answer),
         )
+        .route(
+            "/adapter/v1/payments/bill-payments/disbursements",
+            post(answer),
+        )
+        .route(
+            "/adapter/v1/payments/bill-payments/disbursements/{disbursement_id}/record-provider-confirmation",
+            post(answer),
+        )
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -134,6 +143,80 @@ fn code_problem(code: PaymentProblemCode) -> serde_json::Value {
 
 fn token() -> BearerToken {
     BearerToken::new("synthetic-payment-token").expect("fixture token")
+}
+
+#[tokio::test]
+async fn g2p_submission_sends_once_when_the_provider_outcome_is_unknown() {
+    let (client, fixture) = serve_problem(
+        StatusCode::SERVICE_UNAVAILABLE,
+        PaymentProblemCode::OutcomeUnknown,
+    )
+    .await;
+    let request = RequestDisbursement {
+        instruction_record_id: Uuid::new_v4(),
+        instruction_version: 1,
+    };
+    let error = client
+        .request_disbursement(&token(), KEY, &request)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        PaymentClientError::Problem {
+            code: PaymentProblemCode::OutcomeUnknown,
+            ..
+        }
+    ));
+    let captured = fixture.observations.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].uri.path(),
+        "/adapter/v1/payments/bill-payments/disbursements"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+    assert_eq!(
+        body["instructionRecordId"],
+        json!(request.instruction_record_id)
+    );
+    assert_eq!(body["instructionVersion"], 1);
+    assert!(body.get("amount").is_none());
+}
+
+#[tokio::test]
+async fn g2p_confirmation_uses_the_adapter_provider_confirmation_route() {
+    let (client, fixture) = serve_problem(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        PaymentProblemCode::InvalidRequest,
+    )
+    .await;
+    let request = RecordProviderConfirmation {
+        disbursement_id: Uuid::new_v4(),
+    };
+    let error = client
+        .record_provider_confirmation(&token(), KEY, &request)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        PaymentClientError::Problem {
+            code: PaymentProblemCode::InvalidRequest,
+            ..
+        }
+    ));
+    let captured = fixture.observations.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].uri.path(),
+        format!(
+            "/adapter/v1/payments/bill-payments/disbursements/{}/record-provider-confirmation",
+            request.disbursement_id
+        )
+    );
+    assert_eq!(captured[0].method, Method::POST);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&captured[0].body).unwrap(),
+        json!({"disbursementId": request.disbursement_id})
+    );
 }
 
 fn acceptance(collection_id: Uuid, bill_id: Uuid) -> serde_json::Value {

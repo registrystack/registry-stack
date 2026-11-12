@@ -51,6 +51,30 @@ fn status(collection_id: Uuid, bill_id: Uuid, state: &str) -> Value {
     value
 }
 
+fn disbursement_accepted(disbursement_id: Uuid, instruction_record_id: Uuid) -> Value {
+    json!({
+        "disbursementId": disbursement_id,
+        "instructionRecordId": instruction_record_id,
+        "instructionId": "00000000-0000-4000-8000-000000000301",
+        "instructionVersion": 7,
+        "bindingRevision": "sha256:synthetic-g2p-binding",
+        "simulation": true
+    })
+}
+
+fn disbursement_status(disbursement_id: Uuid, instruction_record_id: Uuid, state: &str) -> Value {
+    let mut value = disbursement_accepted(disbursement_id, instruction_record_id);
+    value["state"] = json!(state);
+    value["money"] = json!({"value": "125.00", "currency": "USD", "scale": 2});
+    if state == "provider-confirmed" {
+        value["providerReference"] = json!("MIFOS-G2P-001");
+    }
+    if state == "failed" {
+        value["failureReason"] = json!("provider-rejected");
+    }
+    value
+}
+
 fn json_answer(status: u16, body: Value) -> ResponseTemplate {
     ResponseTemplate::new(status)
         .insert_header("traceparent", support::TRACE)
@@ -86,6 +110,27 @@ fn completion() -> CompletionDefinition {
     CompletionDefinition {
         kind: CompletionKind::PaymentCollection {},
         output: registry_coordinator::contracts::payment_completion_schema().clone(),
+        revision: String::new(),
+    }
+}
+
+fn disbursement_request(instruction_record_id: Uuid) -> CallRequest {
+    CallRequest {
+        connection: "payments".into(),
+        operation: Operation::RequestDisbursement,
+        input: json!({
+            "instructionRecordId": instruction_record_id,
+            "instructionVersion": 7
+        }),
+        idempotency_key: Some(KEY.into()),
+        operation_contract: None,
+    }
+}
+
+fn disbursement_completion() -> CompletionDefinition {
+    CompletionDefinition {
+        kind: CompletionKind::PaymentDisbursement {},
+        output: registry_coordinator::contracts::payment_disbursement_completion_schema().clone(),
         revision: String::new(),
     }
 }
@@ -276,6 +321,188 @@ async fn payment_completion_settles_only_terminal_exactly_bound_state() {
             &request(bill_id),
             &accepted(collection_id, bill_id),
             &completion(),
+        )
+        .await;
+    assert!(matches!(
+        observed,
+        CompletionObservation::Hold { code } if code == "payment-correlation-mismatch"
+    ));
+}
+
+#[tokio::test]
+async fn disbursement_request_and_recovery_use_the_exact_original_command() {
+    let fixture = fixture().await;
+    let disbursement_id = Uuid::new_v4();
+    let instruction_record_id = Uuid::new_v4();
+    let command = disbursement_request(instruction_record_id);
+    let acceptance = disbursement_accepted(disbursement_id, instruction_record_id);
+    let body = json!({
+        "instructionRecordId": instruction_record_id,
+        "instructionVersion": 7
+    });
+    Mock::given(method("POST"))
+        .and(path("/v1/payments/service-fees/disbursements"))
+        .and(header("authorization", "Bearer fixture-token"))
+        .and(header("idempotency-key", KEY))
+        .and(body_json(body.clone()))
+        .respond_with(json_answer(202, acceptance.clone()))
+        .expect(1)
+        .mount(&fixture.payment)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/payments/service-fees/disbursements/receipt"))
+        .and(header("authorization", "Bearer fixture-token"))
+        .and(header("idempotency-key", KEY))
+        .and(body_json(body))
+        .respond_with(json_answer(200, acceptance.clone()))
+        .expect(1)
+        .mount(&fixture.payment)
+        .await;
+
+    assert!(matches!(
+        fixture.adapters.call(&command).await,
+        CallOutcome::Success(value) if value == acceptance
+    ));
+    assert!(matches!(
+        fixture.adapters.reconcile(&command, None).await,
+        ReconciliationOutcome::Confirmed(value) if value == acceptance
+    ));
+}
+
+#[tokio::test]
+async fn uncertain_disbursement_submission_never_becomes_a_fresh_send() {
+    let fixture = fixture().await;
+    let command = disbursement_request(Uuid::new_v4());
+    Mock::given(method("POST"))
+        .and(path("/v1/payments/service-fees/disbursements"))
+        .respond_with(problem(PaymentProblemCode::ProviderProtocol))
+        .expect(1)
+        .mount(&fixture.payment)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/payments/service-fees/disbursements/receipt"))
+        .respond_with(problem(PaymentProblemCode::ReceiptUnresolved))
+        .expect(1)
+        .mount(&fixture.payment)
+        .await;
+
+    assert!(matches!(
+        fixture.adapters.call(&command).await,
+        CallOutcome::Uncertain { code } if code == "payment-invalid-response"
+    ));
+    assert!(matches!(
+        fixture.adapters.reconcile(&command, None).await,
+        ReconciliationOutcome::Unresolved { code } if code == "receipt-unresolved"
+    ));
+    assert!(!Operation::RequestDisbursement.can_retry_after_unknown());
+}
+
+#[tokio::test]
+async fn provider_confirmation_report_is_one_exact_keyed_command() {
+    let fixture = fixture().await;
+    let disbursement_id = Uuid::new_v4();
+    let instruction_record_id = Uuid::new_v4();
+    let confirmation = json!({
+        "disbursementId": disbursement_id,
+        "instructionRecordId": instruction_record_id,
+        "instructionId": "00000000-0000-4000-8000-000000000301",
+        "instructionVersion": 7,
+        "bindingRevision": "sha256:synthetic-g2p-binding",
+        "simulation": true,
+        "money": {"value": "125.00", "currency": "USD", "scale": 2},
+        "providerReference": "MIFOS-G2P-001",
+        "providerResultDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    });
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/v1/payments/service-fees/disbursements/{disbursement_id}/record-provider-confirmation"
+        )))
+        .and(header("authorization", "Bearer fixture-token"))
+        .and(header("idempotency-key", KEY))
+        .and(body_json(json!({"disbursementId": disbursement_id})))
+        .respond_with(json_answer(200, confirmation.clone()))
+        .expect(1)
+        .mount(&fixture.payment)
+        .await;
+    let command = CallRequest {
+        connection: "payments".into(),
+        operation: Operation::RecordProviderConfirmation,
+        input: json!({"disbursementId": disbursement_id}),
+        idempotency_key: Some(KEY.into()),
+        operation_contract: None,
+    };
+
+    assert!(matches!(
+        fixture.adapters.call(&command).await,
+        CallOutcome::Success(value) if value == confirmation
+    ));
+    assert!(Operation::RecordProviderConfirmation.can_retry_after_unknown());
+}
+
+#[tokio::test]
+async fn disbursement_completion_settles_only_terminal_exactly_bound_state() {
+    for (state, settles) in [
+        ("accepted", false),
+        ("pending", false),
+        ("unknown", false),
+        ("provider-confirmed", true),
+        ("failed", true),
+    ] {
+        let fixture = fixture().await;
+        let disbursement_id = Uuid::new_v4();
+        let instruction_record_id = Uuid::new_v4();
+        let command = disbursement_request(instruction_record_id);
+        let acceptance = disbursement_accepted(disbursement_id, instruction_record_id);
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/v1/payments/service-fees/disbursements/{disbursement_id}"
+            )))
+            .respond_with(json_answer(
+                200,
+                disbursement_status(disbursement_id, instruction_record_id, state),
+            ))
+            .expect(1)
+            .mount(&fixture.payment)
+            .await;
+
+        let observed = fixture
+            .adapters
+            .observe_completion(&command, &acceptance, &disbursement_completion())
+            .await;
+        assert_eq!(
+            matches!(&observed, CompletionObservation::Settled(_)),
+            settles
+        );
+        if !settles {
+            assert!(matches!(&observed, CompletionObservation::Pending { .. }));
+        }
+    }
+
+    let fixture = fixture().await;
+    let disbursement_id = Uuid::new_v4();
+    let instruction_record_id = Uuid::new_v4();
+    let other_instruction_record_id = Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/payments/service-fees/disbursements/{disbursement_id}"
+        )))
+        .respond_with(json_answer(
+            200,
+            disbursement_status(
+                disbursement_id,
+                other_instruction_record_id,
+                "provider-confirmed",
+            ),
+        ))
+        .expect(1)
+        .mount(&fixture.payment)
+        .await;
+    let observed = fixture
+        .adapters
+        .observe_completion(
+            &disbursement_request(instruction_record_id),
+            &disbursement_accepted(disbursement_id, instruction_record_id),
+            &disbursement_completion(),
         )
         .await;
     assert!(matches!(

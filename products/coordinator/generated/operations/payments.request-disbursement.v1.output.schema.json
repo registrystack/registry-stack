@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A provider accepted the exact instruction command for asynchronous work.\nThis is not confirmation that the recipient was paid.",
+  "properties": {
+    "bindingRevision": {
+      "type": "string"
+    },
+    "disbursementId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "instructionId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "instructionRecordId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "instructionVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "simulation": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "disbursementId",
+    "instructionRecordId",
+    "instructionId",
+    "instructionVersion",
+    "bindingRevision",
+    "simulation"
+  ],
+  "title": "payments.request-disbursement/v1 output",
+  "type": "object"
+}
