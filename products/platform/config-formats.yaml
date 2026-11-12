@@ -3937,13 +3937,17 @@ formats:
     current:
       apiVersion: id.registrystack.org/formats/platform/dev-picker-check-report/v1alpha1
       kind: PlatformDevPickerCheckReport
-      checkedBy: none
+      checkedBy:
+        file: crates/registry-stack-client-py/python/registry_client/check_dev_picker.py
+        symbol: REPORT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/platform/dev-picker-check-report/v1alpha1
       kind: PlatformDevPickerCheckReport
     schema: none
     reader: none
-    emittedBy: none
+    emittedBy:
+      file: crates/registry-stack-client-py/python/registry_client/check_dev_picker.py
+      symbol: _report
     check: none
     example: products/platform/examples/dev-picker/check-report.json
     conformance: none

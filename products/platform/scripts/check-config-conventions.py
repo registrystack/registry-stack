@@ -1242,8 +1242,26 @@ class Lint:
         if text is None:
             self.error(f"{fid}: {label} file {reference['file']} does not exist")
             return None
-        code = conformance.code_only(text)
-        if not re.search(rf"\b(?:const|static|fn)\s+{re.escape(str(reference['symbol']))}\b", code):
+        symbol = str(reference["symbol"])
+        if str(reference["file"]).endswith(".py"):
+            try:
+                nodes = ast.parse(text).body
+            except SyntaxError:
+                self.error(f"{fid}: {label} {reference['file']} does not parse as Python")
+                return None
+            names = set()
+            for node in nodes:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names.add(node.name)
+                elif isinstance(node, ast.Assign):
+                    names.update(target.id for target in node.targets if isinstance(target, ast.Name))
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+            defined = symbol in names
+        else:
+            code = conformance.code_only(text)
+            defined = re.search(rf"\b(?:const|static|fn)\s+{re.escape(symbol)}\b", code) is not None
+        if not defined:
             self.error(f"{fid}: {label} {reference['file']} does not define {reference['symbol']}")
             return None
         return text
@@ -1274,6 +1292,16 @@ class Lint:
         literal = re.search(rf"\b(?:const|static)\s+{symbol}\s*:[^=]*=\s*\"([^\"]*)\"\s*;", text)
         if literal and literal.group(1) not in values:
             self.error(f"{fid}: checkedBy {current['checkedBy']['symbol']} is {literal.group(1)!r}, not a current header value")
+        if str(current["checkedBy"]["file"]).endswith(".py"):
+            for node in ast.parse(text).body:
+                if (
+                    isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == current["checkedBy"]["symbol"] for target in node.targets)
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                    and node.value.value not in values
+                ):
+                    self.error(f"{fid}: checkedBy {current['checkedBy']['symbol']} is not a current header value")
 
     def check_target(self, fid: str, entry: dict, kinds: dict[str, list[str]]) -> None:
         target = entry["target"]

@@ -574,6 +574,29 @@ class RegistryAccuracyTests(ConventionsTestCase):
         self.repo.fmt()["current"]["checkedBy"]["symbol"] = "MISSING_VERSION"
         self.assertError(self.repo.run(), "does not define MISSING_VERSION")
 
+    def test_cfg_schema_1_binds_python_checker_and_emitter_symbols(self) -> None:
+        source = "tools/check_report.py"
+        self.repo.write(
+            source,
+            'REPORT_API_VERSION = "id.registrystack.org/formats/casework/check-report/v1alpha1"\n'
+            'REPORT_KIND = "CaseworkCheckReport"\n'
+            "def report():\n    return REPORT_API_VERSION\n",
+        )
+        report_format = self.repo.fmt(R)
+        report_format["current"]["checkedBy"] = {"file": source, "symbol": "REPORT_API_VERSION"}
+        report_format["emittedBy"] = {"file": source, "symbol": "report"}
+        self.assertEqual(self.repo.run().errors, [])
+        report_format["current"]["checkedBy"]["symbol"] = "MISSING_VERSION"
+        self.assertError(self.repo.run(), "does not define MISSING_VERSION")
+        report_format["current"]["checkedBy"]["symbol"] = "REPORT_API_VERSION"
+        self.repo.write(
+            source,
+            'REPORT_API_VERSION = "id.registrystack.org/formats/casework/other/v1alpha1"\n'
+            'REPORT_KIND = "CaseworkCheckReport"\n'
+            "def report():\n    return REPORT_API_VERSION\n",
+        )
+        self.assertError(self.repo.run(), "is not a current header value")
+
     def test_cfg_schema_1_refuses_checked_by_file_without_the_header_value(self) -> None:
         self.repo.fmt()["current"]["apiVersion"] = "registry.registrystack.org/casework/v1alpha1"
         self.assertError(self.repo.run(), "does not contain the current header")
