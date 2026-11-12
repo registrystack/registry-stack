@@ -305,6 +305,17 @@ impl ConnectionConfig {
         }
     }
 
+    /// Classify one refused direct connection without retaining its error or
+    /// any connection value. Schema-test tooling connects without a pool, but
+    /// must expose the same closed operational causes as runtime startup.
+    #[cfg(all(feature = "runtime", feature = "tooling"))]
+    pub(crate) fn connection_cause(
+        &self,
+        error: &tokio_postgres::Error,
+    ) -> DatabaseConnectionCause {
+        postgres_connection_cause(error, &self.transport)
+    }
+
     pub fn build_pool(&self) -> Result<RuntimePool> {
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
@@ -500,43 +511,47 @@ fn connection_cause(
 
     match error {
         PoolError::Timeout(_) => DatabaseConnectionCause::Timeout,
-        PoolError::Backend(error) => {
-            if let Some(database) = error.as_db_error() {
-                return database_error_cause(database.code());
-            }
-            let mut source = error.source();
-            let mut io_kinds = Vec::new();
-            while let Some(cause) = source {
-                if cause.downcast_ref::<rustls::Error>().is_some() {
-                    return DatabaseConnectionCause::Tls;
-                }
-                if let Some(error) = cause.downcast_ref::<std::io::Error>() {
-                    io_kinds.push(error.kind());
-                }
-                source = cause.source();
-            }
-            if matches!(transport, Transport::Tls { .. })
-                && io_kinds.contains(&std::io::ErrorKind::InvalidData)
-            {
-                // rustls certificate and server-name refusals are surfaced by
-                // tokio-rustls as InvalidData I/O errors.
-                DatabaseConnectionCause::Tls
-            } else if !io_kinds.is_empty() {
-                DatabaseConnectionCause::Unreachable
-            } else if matches!(transport, Transport::Tls { .. }) {
-                // tokio-postgres represents protocol-level TLS refusals, such
-                // as a plaintext server rejecting the TLS request, with a
-                // private TLS error kind and an opaque source. Once database
-                // and I/O failures are excluded, the required transport is the
-                // remaining value-free classification boundary.
-                DatabaseConnectionCause::Tls
-            } else {
-                DatabaseConnectionCause::Unreachable
-            }
-        }
+        PoolError::Backend(error) => postgres_connection_cause(error, transport),
         PoolError::Closed | PoolError::NoRuntimeSpecified | PoolError::PostCreateHook(_) => {
             DatabaseConnectionCause::Configuration
         }
+    }
+}
+
+fn postgres_connection_cause(
+    error: &tokio_postgres::Error,
+    transport: &Transport,
+) -> DatabaseConnectionCause {
+    if let Some(database) = error.as_db_error() {
+        return database_error_cause(database.code());
+    }
+    let mut source = error.source();
+    let mut io_kinds = Vec::new();
+    while let Some(cause) = source {
+        if cause.downcast_ref::<rustls::Error>().is_some() {
+            return DatabaseConnectionCause::Tls;
+        }
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            io_kinds.push(error.kind());
+        }
+        source = cause.source();
+    }
+    if matches!(transport, Transport::Tls { .. })
+        && io_kinds.contains(&std::io::ErrorKind::InvalidData)
+    {
+        // rustls certificate and server-name refusals are surfaced by
+        // tokio-rustls as InvalidData I/O errors.
+        DatabaseConnectionCause::Tls
+    } else if !io_kinds.is_empty() {
+        DatabaseConnectionCause::Unreachable
+    } else if matches!(transport, Transport::Tls { .. }) {
+        // tokio-postgres represents protocol-level TLS refusals, such as a
+        // plaintext server rejecting the TLS request, with a private TLS error
+        // kind and an opaque source. Once database and I/O failures are
+        // excluded, the required transport is the remaining value-free class.
+        DatabaseConnectionCause::Tls
+    } else {
+        DatabaseConnectionCause::Unreachable
     }
 }
 

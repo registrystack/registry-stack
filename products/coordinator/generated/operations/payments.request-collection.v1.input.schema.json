@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Caller intent names a bill, never financial facts or provider routing.",
+  "properties": {
+    "billId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "billVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "billId",
+    "billVersion"
+  ],
+  "title": "payments.request-collection/v1 input",
+  "type": "object"
+}

@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PaymentBinding": {
+      "additionalProperties": false,
+      "description": "Persisted in full before a provider send. It holds credential references\nand identities, never credential values. Rotation at the same reference is\nsupported; changing a reference does not reroute a retained attempt.",
+      "properties": {
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "currencyScale": {
+          "format": "uint8",
+          "maximum": 6,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider": {
+          "$ref": "#/$defs/SimulatorConnection"
+        },
+        "providerCredentialIdentity": {
+          "type": "string"
+        },
+        "providerCredentialRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "registry": {
+          "$ref": "#/$defs/RegistryBinding"
+        },
+        "replayWindowSeconds": {
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "simulation": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "simulation",
+        "currency",
+        "currencyScale",
+        "provider",
+        "providerCredentialRef",
+        "providerCredentialIdentity",
+        "replayWindowSeconds",
+        "registry"
+      ],
+      "type": "object"
+    },
+    "PaymentConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedClients": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "binding": {
+          "$ref": "#/$defs/PaymentBinding"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "institutionId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "requiredScope": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "serviceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "institutionId",
+        "serviceId",
+        "allowedClients",
+        "requiredScope",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "RegistryBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "bindAction": {
+          "type": "string"
+        },
+        "bindProfile": {
+          "type": "string"
+        },
+        "credentialIdentity": {
+          "type": "string"
+        },
+        "credentialRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "readProfile": {
+          "type": "string"
+        },
+        "receiptAction": {
+          "type": "string"
+        },
+        "receiptProfile": {
+          "type": "string"
+        },
+        "recordRoute": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "recordType",
+        "recordRoute",
+        "readProfile",
+        "bindProfile",
+        "receiptProfile",
+        "bindAction",
+        "receiptAction",
+        "credentialRef",
+        "credentialIdentity"
+      ],
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "SimulatorConnection": {
+      "additionalProperties": false,
+      "description": "Operator-owned synthetic provider routing. Credentials are supplied only at\nthe send boundary and never belong to a persisted command or connection.",
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "biller": {
+          "maxLength": 20,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "billerName": {
+          "maxLength": 10,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "callbackUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "payerFiBic": {
+          "maxLength": 10,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "tenant": {
+          "maxLength": 20,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "tenant",
+        "biller",
+        "billerName",
+        "callbackUrl",
+        "payerFiBic"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/payments/payments.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/payments/v1alpha1",
+      "type": "string"
+    },
+    "connections": {
+      "items": {
+        "$ref": "#/$defs/PaymentConnection"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "kind": {
+      "const": "AdapterPayments",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "connections",
+    "kind"
+  ],
+  "title": "Registry Adapter payment connections",
+  "type": "object"
+}

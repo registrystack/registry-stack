@@ -16,6 +16,8 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 NAMES = {
+    "payment-protocol": "registry-payment-protocol",
+    "payment-provider": "registry-payment-simulator-connector",
     "engine": "registry-adapter",
     "shared-engine": "registry-adapter-engine",
     "core": "registry-adapter-core",
@@ -51,6 +53,8 @@ NAMES = {
 }
 
 INTENDED = {
+    "payment-protocol": ["serde"],
+    "payment-provider": ["payment-protocol", "platform", "serde"],
     "engine": ["shared-engine", "core", "platform", "platform-script", "serde", ("platform-testing", "dev")],
     "shared-engine": ["core", "platform", "platform-script", "serde"],
     "core": ["platform", "serde"],
@@ -163,6 +167,19 @@ def failures(**changes: list) -> str:
 
 
 class EngineTests(unittest.TestCase):
+    def test_only_the_payment_host_reaches_the_payment_contract_and_breg_client(self):
+        graph = metadata(engine=[*INTENDED["engine"], "payment-protocol", "payment-provider", "breg-client"])
+        self.assertEqual(MODULE.violations(graph), [])
+        for owner in ("shared-engine", "core", "job"):
+            for payment in ("payment-protocol", "payment-provider", "breg-client"):
+                with self.subTest(owner=owner, payment=payment):
+                    self.assertIn(NAMES[payment], failures(**{owner: [*INTENDED[owner], payment]}))
+
+    def test_payment_provider_remains_independent_of_product_clients_and_runtimes(self):
+        for dependency in ("breg-client", "breg", "coordinator", "engine"):
+            with self.subTest(dependency=dependency):
+                self.assertIn(NAMES[dependency], failures(payment_provider=[*INTENDED["payment-provider"], dependency]))
+
     def test_the_extracted_engine_crate_is_an_accepted_engine_boundary(self):
         self.assertEqual(MODULE.violations(metadata()), [])
 
@@ -201,7 +218,7 @@ class EngineTests(unittest.TestCase):
             with self.subTest(client=client):
                 self.assertIn(
                     NAMES[client],
-                    failures(engine=[*INTENDED["engine"], client]),
+                    failures(shared_engine=[*INTENDED["shared-engine"], client]),
                 )
 
     def test_an_engine_crate_reaching_the_connector_crate_is_refused(self):
@@ -221,7 +238,7 @@ class EngineTests(unittest.TestCase):
     def test_a_dev_dependency_of_an_engine_crate_counts(self):
         self.assertIn(
             "registry-breg-client",
-            failures(engine=[*INTENDED["engine"], ("breg-client", "dev")]),
+            failures(shared_engine=[*INTENDED["shared-engine"], ("breg-client", "dev")]),
         )
 
     def test_a_dev_dependency_of_a_reached_platform_crate_is_not_followed(self):
@@ -438,7 +455,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
 
     def test_a_violation_exits_one_and_names_it(self):
-        completed = self.run_gate(metadata(engine=[*INTENDED["engine"], "breg-client"]))
+        completed = self.run_gate(metadata(engine=[*INTENDED["engine"], "coordinator"]))
         self.assertEqual(completed.returncode, 1)
         self.assertIn("dependency-direction violation: registry-adapter", completed.stderr)
 

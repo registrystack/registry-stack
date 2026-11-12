@@ -47,6 +47,14 @@
   and `coordinator --recovery-only` inspects it with admissions and dispatch
   disabled. Migration: set the audience member to the authorization server's
   issuer identifier, exactly as its metadata publishes it.
+- Add native Adapter payment collection operations: request a collection from
+  an authoritative bill id and version, read its typed state, and record a
+  verified receipt under a separate idempotent command. Collection requests
+  support read-only original-key reconciliation. The host-owned `collection`
+  completion keeps accepted, pending, and unknown states waiting, correlates
+  every read to the accepted bill and binding, and settles the collection
+  attempt only on confirmed or failed state. Only Adapter-verified confirmed
+  state can produce a registry receipt.
 
 ## 0.46.0 - 2026-11-08
 
