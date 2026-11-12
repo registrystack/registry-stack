@@ -1261,6 +1261,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-adapter/src/lib.rs",
             "crates/registry-adapter-job/src/pass.rs",
             "crates/registry-adapterctl/src/main.rs",
+            "crates/registry-payment-mifos-connector/src/lib.rs",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
@@ -3923,6 +3924,7 @@ class LockfileSelectionTest(unittest.TestCase):
             change.members,
             frozenset(
                 {
+                    "registry-adapter",
                     "registry-adapter-engine",
                     "registry-breg",
                     "registry-coordinator",
@@ -3936,6 +3938,7 @@ class LockfileSelectionTest(unittest.TestCase):
             ),
         )
         outputs = classify(self.workspace, ("Cargo.lock",), lock_change=change)
+        self.assertTrue(outputs["adapter_contracts"])
         self.assertTrue(outputs["platform"])
         self.assertTrue(outputs["breg_contracts"])
         self.assertTrue(outputs["evidence_contracts"])
