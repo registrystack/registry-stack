@@ -14,7 +14,8 @@ use registry_breg::fixtures::{
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE};
 use registry_breg::package::PackageError;
 use registry_breg::postgres::{
-    BaselineFingerprintDrift, MigrationRehearsalError, SuccessorMigrationRehearsal,
+    BaselineFingerprintDrift, DatabaseConnectionCause, MigrationRehearsalError,
+    SuccessorMigrationRehearsal,
 };
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::startup;
@@ -111,6 +112,9 @@ pub(crate) enum TestLifecycleError {
     },
     CredentialsDocument(Report),
     Database,
+    /// The fixed, value-free reason the schema-test database connection was
+    /// refused. The originating error and connection values are discarded.
+    DatabaseConnection(DatabaseConnectionCause),
     /// The fixed, value-free role or catalog invariant that schema-test
     /// preparation refused.
     DatabaseSetupRefused(&'static str),
@@ -589,6 +593,9 @@ fn schema_preparation_error(error: startup::StartupError) -> TestLifecycleError 
         },
         startup::StartupError::SchemaTestSetupRefused(invariant) => {
             TestLifecycleError::DatabaseSetupRefused(invariant)
+        }
+        startup::StartupError::DatabaseConnection(cause) => {
+            TestLifecycleError::DatabaseConnection(cause)
         }
         _ => TestLifecycleError::Database,
     }
@@ -1251,6 +1258,70 @@ bindings:
             diagnostic["suggestedAction"],
             "recreate-disposable-database"
         );
+    }
+
+    #[test]
+    fn classified_database_connection_refusals_keep_only_their_closed_cause() {
+        for (cause, code, action) in [
+            (
+                DatabaseConnectionCause::Unreachable,
+                "test.database.unreachable",
+                "prepare-schema-test-database",
+            ),
+            (
+                DatabaseConnectionCause::Capacity,
+                "test.database.capacity-exhausted",
+                "prepare-schema-test-database",
+            ),
+            (
+                DatabaseConnectionCause::Tls,
+                "test.database.tls-refused",
+                "prepare-schema-test-database",
+            ),
+            (
+                DatabaseConnectionCause::Authentication,
+                "test.database.authentication-refused",
+                "prepare-schema-test-database",
+            ),
+            (
+                DatabaseConnectionCause::DatabaseMissing,
+                "test.database.missing",
+                "prepare-schema-test-database",
+            ),
+            (
+                DatabaseConnectionCause::Timeout,
+                "test.database.timeout",
+                "prepare-schema-test-database",
+            ),
+            (
+                DatabaseConnectionCause::Configuration,
+                "test.database.configuration-refused",
+                "correct-runtime-configuration",
+            ),
+            (
+                DatabaseConnectionCause::Secret,
+                "test.database.secret-refused",
+                "correct-runtime-configuration",
+            ),
+        ] {
+            let error = schema_preparation_error(startup::StartupError::DatabaseConnection(cause));
+            let report = serde_json::to_value(crate::test_lifecycle_failure(error))
+                .expect("connection refusal report serializes");
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(diagnostic["code"], code);
+            assert_eq!(diagnostic["path"], "database");
+            assert_eq!(diagnostic["artifact"], "schema-test-database");
+            assert_eq!(diagnostic["suggestedAction"], action);
+            let serialized = report.to_string();
+            for canary in [
+                "postgresql://connection-canary",
+                "role-canary",
+                "secret-canary",
+                "certificate-canary",
+            ] {
+                assert!(!serialized.contains(canary), "{code} disclosed {canary}");
+            }
+        }
     }
 
     #[test]

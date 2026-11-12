@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Input for the restricted receipt operation. An identifier is a lookup key,\nnot receipt evidence and not authorization.",
+  "properties": {
+    "collectionId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    }
+  },
+  "required": [
+    "collectionId"
+  ],
+  "title": "payments.record-receipt/v1 input",
+  "type": "object"
+}

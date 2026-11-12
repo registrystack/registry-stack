@@ -1,0 +1,237 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Synthetic replies exercise the compiled model. HTTP authority and durability are tested separately.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: confirmed-collection-records-receipt
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    billId: 00000000-0000-4000-8000-000000000101
+    billVersion: 1
+  replies:
+    request-collection:
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+    record-receipt:
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        money: {value: '25.00', currency: USD, scale: 2}
+        providerReference: SIM-PAID-001
+        receiptId: payment-00000000-0000-4000-8000-000000000201
+  waits:
+    await-collection:
+      type: event
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: confirmed
+        money: {value: '25.00', currency: USD, scale: 2}
+        providerReference: SIM-PAID-001
+  expect:
+    path: [request-collection, await-collection, route-collection, record-receipt, receipt-recorded]
+    state: completed
+    outcome: {type: named, value: receipt-recorded}
+    output:
+      collectionId: 00000000-0000-4000-8000-000000000201
+      billId: 00000000-0000-4000-8000-000000000101
+      billVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      money: {value: '25.00', currency: USD, scale: 2}
+      providerReference: SIM-PAID-001
+      receiptId: payment-00000000-0000-4000-8000-000000000201
+- id: failed-collection-does-not-record-receipt
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    billId: 00000000-0000-4000-8000-000000000101
+    billVersion: 1
+  replies:
+    request-collection:
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+  waits:
+    await-collection:
+      type: event
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: failed
+        money: {value: '25.00', currency: USD, scale: 2}
+        failureReason: provider-declined
+  expect:
+    path: [request-collection, await-collection, route-collection, collection-failed]
+    state: completed
+    outcome: {type: named, value: collection-failed}
+    output:
+      collectionId: 00000000-0000-4000-8000-000000000201
+      billId: 00000000-0000-4000-8000-000000000101
+      billVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      state: failed
+      money: {value: '25.00', currency: USD, scale: 2}
+      failureReason: provider-declined
+- id: pending-until-timeout-remains-unresolved
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    billId: 00000000-0000-4000-8000-000000000101
+    billVersion: 1
+  replies:
+    request-collection:
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+  waits:
+    await-collection: {type: timeout}
+  expect:
+    path: [request-collection, await-collection, collection-unresolved]
+    state: completed
+    outcome: {type: named, value: collection-unresolved}
+    output: null
+    workflowElapsedSeconds: 3600
+- id: unknown-request-response-stays-uncertain
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    billId: 00000000-0000-4000-8000-000000000101
+    billVersion: 1
+  replies:
+    request-collection:
+    - type: uncertain
+      code: payment-outcome-unknown
+  expect:
+    path: [request-collection]
+    state: uncertain
+    outcome: {type: none}
+- id: request-reconciliation-recovers-original-acceptance
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    billId: 00000000-0000-4000-8000-000000000101
+    billVersion: 1
+  replies:
+    request-collection:
+    - type: uncertain
+      code: payment-provider-protocol
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+    record-receipt:
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        money: {value: '25.00', currency: USD, scale: 2}
+        providerReference: SIM-PAID-001
+        receiptId: payment-00000000-0000-4000-8000-000000000201
+  waits:
+    await-collection:
+      type: event
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: confirmed
+        money: {value: '25.00', currency: USD, scale: 2}
+        providerReference: SIM-PAID-001
+  recovery:
+    request-collection: reconcile
+  expect:
+    path: [request-collection, await-collection, route-collection, record-receipt, receipt-recorded]
+    state: completed
+    outcome: {type: named, value: receipt-recorded}
+    output:
+      collectionId: 00000000-0000-4000-8000-000000000201
+      billId: 00000000-0000-4000-8000-000000000101
+      billVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      money: {value: '25.00', currency: USD, scale: 2}
+      providerReference: SIM-PAID-001
+      receiptId: payment-00000000-0000-4000-8000-000000000201
+- id: receipt-exact-retry-recovers-original-result
+  admittedAt: '2026-11-12T00:00:00Z'
+  input:
+    billId: 00000000-0000-4000-8000-000000000101
+    billVersion: 1
+  replies:
+    request-collection:
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+    record-receipt:
+    - type: uncertain
+      code: payment-outcome-unknown
+    - type: success
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        money: {value: '25.00', currency: USD, scale: 2}
+        providerReference: SIM-PAID-001
+        receiptId: payment-00000000-0000-4000-8000-000000000201
+  waits:
+    await-collection:
+      type: event
+      value:
+        collectionId: 00000000-0000-4000-8000-000000000201
+        billId: 00000000-0000-4000-8000-000000000101
+        billVersion: 1
+        bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        simulation: true
+        state: confirmed
+        money: {value: '25.00', currency: USD, scale: 2}
+        providerReference: SIM-PAID-001
+  recovery:
+    record-receipt: retry-same
+  expect:
+    path: [request-collection, await-collection, route-collection, record-receipt, receipt-recorded]
+    state: completed
+    outcome: {type: named, value: receipt-recorded}
+    output:
+      collectionId: 00000000-0000-4000-8000-000000000201
+      billId: 00000000-0000-4000-8000-000000000101
+      billVersion: 1
+      bindingRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      simulation: true
+      money: {value: '25.00', currency: USD, scale: 2}
+      providerReference: SIM-PAID-001
+      receiptId: payment-00000000-0000-4000-8000-000000000201

@@ -1325,6 +1325,16 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 },
             );
         }
+        if uses.follows_collection() {
+            completions.insert(
+                "collection".into(),
+                CompletionDefinition {
+                    kind: CompletionKind::PaymentCollection {},
+                    output: crate::contracts::payment_completion_schema().clone(),
+                    revision: String::new(),
+                },
+            );
+        }
         authored_completions.insert(id.clone(), operation.completions);
         operations.insert(
             id,

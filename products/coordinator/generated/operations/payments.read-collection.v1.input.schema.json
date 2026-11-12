@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Input for an authoritative provider observation through the bound module.",
+  "properties": {
+    "collectionId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    }
+  },
+  "required": [
+    "collectionId"
+  ],
+  "title": "payments.read-collection/v1 input",
+  "type": "object"
+}

@@ -44,5 +44,6 @@ pub mod idempotent;
 pub mod journal;
 pub mod metrics;
 pub mod notifier;
+pub mod payments;
 pub mod replay_serve;
 pub mod serve;
