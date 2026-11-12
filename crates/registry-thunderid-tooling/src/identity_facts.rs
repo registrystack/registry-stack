@@ -398,10 +398,10 @@ pub(crate) fn template_findings(document: &Document) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// Claim names that JWT, token exchange, JWT access tokens and OpenID Connect
-/// (RFC 7519, RFC 8693, RFC 9068, OIDC Core) give a meaning of their own. A
-/// deployment's claim never reuses one: a verifier would read it as protocol.
-const RESERVED_CLAIM_NAMES: [&str; 34] = [
+/// Names owned by JWT, token exchange, JWT access tokens and OpenID Connect
+/// (RFC 7519, RFC 8693, RFC 9068, OIDC Core), or by the native ThunderID user
+/// schema. A custom claim must not shadow a protocol claim or a native field.
+const RESERVED_CLAIM_NAMES: [&str; 36] = [
     "iss",
     "sub",
     "aud",
@@ -436,6 +436,8 @@ const RESERVED_CLAIM_NAMES: [&str; 34] = [
     "family_name",
     "phone_number",
     "address",
+    "username",
+    "password",
 ];
 
 pub(crate) fn valid_claim_name(name: &str) -> bool {

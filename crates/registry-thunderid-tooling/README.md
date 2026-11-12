@@ -245,8 +245,10 @@ resolves no secret.
   a type declaring it. These attributes grant no product permissions. Machine
   and exchange clients still use product-declared claims only. If a product
   declares the same claim name, its type, selectors and profile checks remain
-  authoritative. A grant to a client a product does not admit, any other unknown
-  claim, or a JWK carrying `d`, `p`, `q`, `dp`, `dq` or `qi` is refused.
+  authoritative. The native `username`, `email` and `password` names are
+  reserved; set them through the user's `username`, `email` and `passwordRef`
+  fields. A grant to a client a product does not admit, any other unknown claim,
+  or a JWK carrying `d`, `p`, `q`, `dp`, `dq` or `qi` is refused.
 - Generated users are declarative users. Authority-bearing extension attributes
   must remain on those users in this deployment path. ThunderID database-backed
   users of the same type can edit ordinary custom attributes through their

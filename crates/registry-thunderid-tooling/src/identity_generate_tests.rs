@@ -339,6 +339,85 @@ fn a_bound_extension_type_declares_issuer_owned_user_claims_without_changing_gra
     );
 }
 
+fn assert_native_user_attribute_is_refused(name: &str) {
+    let mut case = typed_extension_claims_case();
+    case.deployment = case.deployment.replace("portal_role", name);
+    let error = match case.run() {
+        Err(error) => error,
+        Ok(generated) => {
+            let documents = resources(&generated);
+            let user = of_type(&documents, "user")
+                .into_iter()
+                .find(|user| user["type"] == "Farmer")
+                .expect("extension user");
+            assert_eq!(user["attributes"][name], "nurse");
+            let app = of_type(&documents, "application")[0];
+            assert!(app["inboundAuthConfig"][0]["config"]["token"]["accessToken"]["userConfig"]
+                ["attributes"]
+                .as_array()
+                .expect("access token attributes")
+                .iter()
+                .any(|attribute| attribute == name));
+            panic!("the generator emitted native {name} as a custom attribute and token projection");
+        }
+    };
+    let diagnostics = error
+        .report()
+        .unwrap_or_else(|| panic!("expected a refusal at the authored fields, got {error}"))
+        .diagnostics();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|finding| (finding.path.as_str(), finding.code.as_str()))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ("/browserApps/0/tokenAttributes", "identity.deployment.invalid-claim"),
+            ("/users/1/claims", "identity.deployment.invalid-claim"),
+            ("/userTypes/0", "identity.deployment.invalid-user-type"),
+        ])
+    );
+}
+
+#[test]
+fn native_user_username_cannot_be_a_custom_claim() {
+    assert_native_user_attribute_is_refused("username");
+}
+
+#[test]
+fn native_user_password_cannot_be_a_custom_claim() {
+    assert_native_user_attribute_is_refused("password");
+}
+
+#[test]
+fn native_user_names_cannot_be_declared_without_a_claim_assignment() {
+    for name in ["username", "password"] {
+        let mut case = case();
+        case.deployment = case.deployment.replace(
+            "attributes: [national_id]",
+            &format!("attributes: [national_id, {name}]"),
+        );
+        assert_eq!(case.refusal(), ["identity.deployment.invalid-user-type"]);
+    }
+}
+
+#[test]
+fn native_user_names_cannot_be_projected_without_a_claim_assignment() {
+    for name in ["username", "password"] {
+        let mut case = typed_extension_claims_case();
+        case.deployment = case
+            .deployment
+            .replace("portal_role", name)
+            .replace(&format!("      {name}: nurse\n"), "");
+        assert_eq!(
+            case.refusal(),
+            [
+                "identity.deployment.invalid-claim",
+                "identity.deployment.invalid-user-type"
+            ]
+        );
+    }
+}
+
 #[test]
 fn an_issuer_owned_claim_requires_the_exact_user_and_application_type_bindings() {
     let mut untyped_user = typed_extension_claims_case();
@@ -918,6 +997,7 @@ fn browser_apps_users_and_extension_types_render_without_secrets_or_a_logo_by_de
         .unwrap();
     assert_eq!(farmer["type"], "Farmer");
     assert_eq!(farmer["credentials"]["password"], "{{.FARMER_ONE_PASSWORD}}");
+    assert!(farmer["attributes"].get("password").is_none());
     let organization = of_type(&documents, "organization_unit");
     assert_eq!(organization[0]["handle"], "registry");
 }

@@ -425,7 +425,7 @@ fn template_syntax_is_refused_wherever_a_string_is_copied() {
 }
 
 #[test]
-fn registered_and_protocol_claim_names_are_refused() {
+fn protocol_and_native_claim_names_are_refused() {
     for name in super::RESERVED_CLAIM_NAMES {
         let bad = BREG.replace("registry_purpose: string", &format!("{name}: string"));
         assert!(
