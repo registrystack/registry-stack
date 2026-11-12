@@ -916,12 +916,11 @@ product-owned. Both use the platform delivery primitives. A product needing
 only the fixed policy must use the shared block; a different name or field
 shape alone is never a reason to copy it.
 
-**CFG-SCHEMA-6 (MUST). Every authored and operator format is mapped for
-editors** by
-`editors/configure.py`, per project directory; where file names collide
-across products, the modeline (CFG-SCHEMA-7) selects the schema. A format
-whose files are JSON is mapped through a `json.schemas` entry, written for a
-pattern that ends in `.json`.
+**CFG-SCHEMA-6 (MUST). A released adopter tool's editor mapping covers every
+registered file pattern for each schema the tool maps.** Tool-specific tests
+establish which schemas the tool supports. Where file names collide across
+products, the modeline (CFG-SCHEMA-7) selects the schema. A JSON format's
+mapping ends in `.json`.
 
 **CFG-SCHEMA-7 (MUST). A tool that creates a YAML file writes the
 `# yaml-language-server: $schema=<$id>` modeline on its first line.** The
@@ -958,11 +957,12 @@ column); a source lint over the reader-type closure of every registered
 format for `serde(flatten`, `serde(untagged`, `serde(tag`, and unit variants
 in tagged enums, ratcheted by the exceptions register.
 
-**CFG-SCHEMA-9 (SHOULD). Editors get the same rules without a source
-checkout.** The editor mapping is installable from the released tools
-(`init` writes it, or `<product>ctl editor setup`), and a rule the schema
-cannot express (an `http` issuer allowed only on development loopback, a
-cross-file reference) is stated in the member's `description`.
+**CFG-SCHEMA-9 (SHOULD). Editor integrations get the same rules without a
+source checkout.** When a product supplies an editor mapping, it is
+installable from the released tools (`init` writes it, or `<product>ctl editor
+setup`), and a rule the schema cannot express (an `http` issuer allowed only
+on development loopback, a cross-file reference) is stated in the member's
+`description`.
 
 ## 12. Checking commands
 

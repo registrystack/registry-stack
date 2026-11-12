@@ -145,9 +145,10 @@ requests, audit history, or running-service state. Candidates are bounded to
 
 Write an explicit resolution file and supply it to diff or update. A
 resolution file is a closed JSON document of kind `EvidenceSourceResolution`;
-the conventional names `source-resolutions.json` and `*.resolutions.json` get
-an editor schema from `editors/configure.py`, and a file written with
-`formatVersion` is refused with `config.removed-key`:
+for editor validation, map the conventional names `source-resolutions.json`
+and `*.resolutions.json` to the shipped
+[source-resolution schema](../../../../crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json).
+A file written with `formatVersion` is refused with `config.removed-key`:
 
 ```json
 {

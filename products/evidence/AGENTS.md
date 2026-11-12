@@ -25,9 +25,10 @@ client's offline request preparation and verifier with governed trust pins.
 - `registry-evidence-authoring` owns the authoring model and its checks without
   file, network, process, or standard-stream I/O, so one compiler serves the
   CLI and unsaved editor buffers.
-- `registry-language-server` consumes those shared checks and observes neither
-  source values nor SQLite. Its entire source is covered by Evidence's
-  neutrality checks because it ships inside `evidencectl`.
+- The standalone `registry-language-server` consumes those shared checks and
+  observes neither source values nor SQLite. Its entire source remains covered
+  by Evidence's neutrality checks because it is a public Evidence authoring
+  surface, but it does not ship inside `evidencectl`.
 - The [OID4VCI adapter](../../crates/registry-evidence-oid4vci/AGENTS.md) is a
   supporting service. Evidence has no runtime dependency on it. Reuse platform
   primitives where their contracts fit directly.

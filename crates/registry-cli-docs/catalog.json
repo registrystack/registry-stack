@@ -18984,6 +18984,100 @@
           ]
         },
         {
+          "name": "tooling",
+          "invocation": "evidencectl tooling",
+          "about": "Advanced: editor and tooling integration surfaces",
+          "long_about": null,
+          "usage": "evidencectl tooling [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json",
+                "junit"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "editor",
+              "invocation": "evidencectl tooling editor",
+              "about": "Write project-local schema mappings for a YAML-aware editor",
+              "long_about": null,
+              "usage": "evidencectl tooling editor [OPTIONS] [PROJECT]",
+              "arguments": [
+                {
+                  "display": "[PROJECT]",
+                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project holding evidence.yaml.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--workspace <WORKSPACE>",
+                  "description": "Editor workspace directory containing the Evidence project. Writes settings here with workspace-relative schema mappings. Defaults to the project directory; does not select a runtime target.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "connection",
           "invocation": "evidencectl connection",
           "about": "Manage named Evidence API connections",
@@ -21436,134 +21530,6 @@
           ],
           "constraints": [],
           "subcommands": []
-        },
-        {
-          "name": "tooling",
-          "invocation": "evidencectl tooling",
-          "about": "Advanced: editor and tooling integration surfaces",
-          "long_about": null,
-          "usage": "evidencectl tooling [OPTIONS] <COMMAND>",
-          "arguments": [],
-          "options": [
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json",
-                "junit"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": [
-            {
-              "name": "editor",
-              "invocation": "evidencectl tooling editor",
-              "about": "Write project-local schema mappings for a YAML-aware editor",
-              "long_about": null,
-              "usage": "evidencectl tooling editor [OPTIONS] [PROJECT]",
-              "arguments": [
-                {
-                  "display": "[PROJECT]",
-                  "description": "Evidence project directory; defaults to the current directory. This command needs an editable project holding evidence.yaml.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--workspace <WORKSPACE>",
-                  "description": "Editor workspace directory containing the Evidence project. Writes settings here with workspace-relative schema mappings. Defaults to the project directory; does not select a runtime target.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json",
-                    "junit"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help (see a summary with '-h')",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "language-server",
-              "invocation": "evidencectl tooling language-server",
-              "about": "Run cross-file navigation over the Language Server Protocol",
-              "long_about": null,
-              "usage": "evidencectl tooling language-server [OPTIONS]",
-              "arguments": [],
-              "options": [
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Select human-readable output; this command provides no JSON report",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            }
-          ]
         },
         {
           "name": "runtime",

@@ -154,7 +154,7 @@ class ReleaseUnitsTest(TestCase):
         self.assertEqual("distribution", registry.artifact_owner("rstack-v0.45.0-linux-amd64"))
         self.assertEqual("distribution", registry.artifact_owner("rstack-install.sh"))
         self.assertEqual(
-            ("docs", "editors/vscode", "editors/zed", "rstack"),
+            ("docs", "rstack"),
             registry.distribution_members,
         )
 

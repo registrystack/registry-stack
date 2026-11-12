@@ -403,7 +403,6 @@ class CiChangesTest(unittest.TestCase):
                 "needs.changes.outputs.breg_evidence_composition == 'true'"
             ),
             "docs-archives": "needs.changes.outputs.docs_archives == 'true'",
-            "editor-extensions": "needs.changes.outputs.editors == 'true'",
             "config-conformance": (
                 "needs.changes.outputs.config_conformance == 'true'"
             ),
@@ -527,7 +526,6 @@ class CiChangesTest(unittest.TestCase):
             "docs",
             "docs-required",
             "docs-archives",
-            "editor-extensions",
             "client-bindings",
             "release-linux-node-clients",
             "ci-result",
@@ -604,7 +602,6 @@ class CiChangesTest(unittest.TestCase):
                 "breg-evidence-composition",
                 "evidence-anchors",
                 "docs",
-                "editor-extensions",
                 "client-bindings",
                 "release-linux-node-clients",
             ),
@@ -646,7 +643,6 @@ class CiChangesTest(unittest.TestCase):
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
-            "editor-extensions",
             "client-bindings",
             "release-linux-node-clients",
         }
@@ -654,7 +650,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(43, len(final_needs))
+        self.assertEqual(42, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -750,7 +746,6 @@ class CiChangesTest(unittest.TestCase):
             "products/platform/CONFIG-CONVENTIONS.md",
             "products/platform/scripts/check-config-conventions.py",
             "products/platform/scripts/test_check_config_conventions.py",
-            "editors/configure.py",
             # A schema nobody registered yet must reach the lint, which
             # refuses it until it is registered or declared out of scope.
             "products/render/generated/bundle/bundle.schema.json",
@@ -2307,7 +2302,7 @@ class CiChangesTest(unittest.TestCase):
         # The workflow does not alter archived bytes; the nightly full sweep
         # replays the archive job's own recipe.
         self.assertFalse(outputs["docs_archives"])
-        self.assertTrue(outputs["editors"])
+        self.assertNotIn("editors", outputs)
 
     def test_casework_postgres_job_names_existing_integration_test_targets(self) -> None:
         commands = "\n".join(
@@ -2422,11 +2417,10 @@ class CiChangesTest(unittest.TestCase):
 
         # A products/evidence path belongs to no crate directory, so it seeds
         # every Evidence package and its closure runs wider than the runtime
-        # crate's. registry-language-server reads the authoring model and
-        # The language server reads the authoring form, so a change reaches the
-        # editor tooling that has to keep agreeing with it. A product contract
-        # cannot say in advance which
-        # package it constrains, so the closure reaches every dependent shard.
+        # crate's. The language server reads the authoring form, so a change
+        # reaches the developer tooling that has to keep agreeing with it. A
+        # product contract cannot say in advance which package it constrains,
+        # so the closure reaches every dependent shard.
         for path in (
             "products/evidence/contracts/source-contract.yaml",
             "products/evidence/reference/request-adapter/ADAPTER-API.md",
@@ -2448,12 +2442,12 @@ class CiChangesTest(unittest.TestCase):
                     },
                 )
 
-    def test_an_authoring_form_change_runs_the_editor_tooling_that_reads_it(self) -> None:
+    def test_an_authoring_form_change_runs_the_language_server_that_reads_it(self) -> None:
         # registry-language-server links registry-evidence-authoring to index
-        # an adopter's Evidence documents, and evidencectl is its supported CLI
-        # host. A change to the authoring form can therefore break an
-        # editor session or dependent build without touching a host, so the
-        # closure has to carry it into their shards. BReg also validates its
+        # an adopter's Evidence documents. A change to the authoring form can
+        # therefore break a language-server session or dependent build without
+        # touching a host, so the closure has to carry it into their shards.
+        # BReg also validates its
         # exported Evidence fragments against this form in a test, so the
         # direct dev-dependency selects the BReg test shard without propagating
         # through BReg's own dependents.
@@ -2467,7 +2461,7 @@ class CiChangesTest(unittest.TestCase):
 
         # The language server also dev-depends on the authoring form for its
         # own test suite. Repeating the closure over normal edges alone ties
-        # the editor routing claim to the link the editor actually compiles.
+        # the language-server routing claim to the link it actually compiles.
         strict = classify(
             Workspace(normal_dependency_metadata(self.metadata)),
             AUTHORING_FORM_CHANGE,
@@ -2478,7 +2472,7 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-language-server", strict["rust_packages"])
 
-    def test_editor_integration_routing_follows_language_server_dependency_closure(
+    def test_language_server_routing_follows_its_dependency_closure(
         self,
     ) -> None:
         for path in (
@@ -2486,32 +2480,19 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-language-server/src/lib.rs",
         ):
             with self.subTest(path=path):
-                self.assertTrue(classify(self.workspace, (path,))["editors"])
+                outputs = classify(self.workspace, (path,))
+                self.assertIn("registry-language-server", outputs["rust_packages"])
+                self.assertIn(
+                    "developer-tools",
+                    {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+                )
+                self.assertNotIn("editors", outputs)
 
-        self.assertFalse(
-            classify(
-                self.workspace,
-                ("crates/registry-evidence-client/src/lib.rs",),
-            )["editors"]
+        client_outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-client/src/lib.rs",),
         )
-
-    def test_editor_configuration_follows_its_copied_product_schemas(self) -> None:
-        for path in (
-            "products/breg/generated/authoring/registry-project.schema.json",
-            "products/breg/generated/runtime/runtime.schema.json",
-            "products/breg/generated/tools/journeys.v1.schema.json",
-            "products/casework/generated/project/project.schema.json",
-            "products/casework/generated/runtime/runtime.schema.json",
-            "products/scheduling/generated/runtime/runtime.schema.json",
-            "products/scheduling/generated/project/project.schema.json",
-            "products/scheduling/generated/records/records.schema.json",
-            "products/scheduling/generated/fixture/fixture.schema.json",
-            "products/messaging/generated/authoring/project.schema.json",
-            "products/messaging/generated/runtime/runtime.schema.json",
-            "products/discovery/schemas/origins.schema.json",
-        ):
-            with self.subTest(path=path):
-                self.assertTrue(classify(self.workspace, (path,))["editors"])
+        self.assertNotIn("editors", client_outputs)
 
     def test_a_casework_schema_change_runs_its_drift_check_on_a_pull_request(
         self,

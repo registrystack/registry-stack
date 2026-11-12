@@ -1718,10 +1718,6 @@ class GateInventoryTest(unittest.TestCase):
                 r"^docs/site/\.repo-docs-cache/",
                 "docs/site/.repo-docs-cache/generated.txt",
             ),
-            (
-                r"^editors/vscode/\.vscode-test/",
-                "editors/vscode/.vscode-test/generated.txt",
-            ),
         )
         for allowlist_path, generated_probe in generated_trees:
             with self.subTest(generated_probe=generated_probe):

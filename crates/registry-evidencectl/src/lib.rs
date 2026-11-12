@@ -340,7 +340,6 @@ const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
     &["target", "new"],
     &["request", "prepare"],
     &["verify"],
-    &["tooling", "language-server"],
     &["__dev-supervisor"],
 ];
 

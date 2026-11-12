@@ -1,7 +1,7 @@
 {
   "schema_version": "registry-stack.release-units.v1",
   "distribution": {
-    "members": ["docs", "editors/vscode", "editors/zed", "rstack"],
+    "members": ["docs", "rstack"],
     "artifact_patterns": [
       "THIRD_PARTY_NOTICES",
       "registry-docs-v*.tar.gz",

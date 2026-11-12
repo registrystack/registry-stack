@@ -116,7 +116,7 @@ not products of their own.
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
 | `crates/registry-evidence-oid4vp` | Wallet-facing OpenID4VP verifier exchange for holder-presented Evidence sources, and the `evidence-oid4vp` binary |
 | `crates/registry-evidence-presentation` | Pure verification of third-party SD-JWT VC presentations against a channel's issuer trust and policy; no network, storage or clock |
-| `crates/registry-language-server` | Editor language server for Evidence authoring documents, hosted for adopters by `evidencectl`; product navigation rules add no runtime dependencies |
+| `crates/registry-language-server` | Standalone editor language server for Registry Stack authoring documents; product navigation rules add no runtime dependencies |
 | `crates/registry-thunderid-tooling` | Tooling-only support for adopter CLIs and integration tests against a pinned upstream ThunderID issuer; no runtime depends on it |
 | `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
 | `crates/registry-cli-reference` | Deterministic reference data walked from one Clap command tree, shared by `registry-cli-docs` and each binary's `help --format json` |
