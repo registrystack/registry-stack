@@ -549,12 +549,11 @@ verdict on the issuer, not a failure of the file's integrity.
   that block offline, with `--signer-name` as the certificate's display name, and signs nothing.
 - Render embeds no revocation data (no B-LT or B-LTA) and does not pin the timestamp authority's
   identity; validators decide trust in both.
-- A production seal key is never loaded into Render: Vault or OpenBao Transit holds it
-  non-exportable and signs for Render through the proxy, so a render worker that gained code
-  execution cannot read it. Transit is the only production signer. Render has no direct HSM,
-  PKCS#11, or cloud KMS signer, and it does not check how Transit stores the key. A test seal's
-  key is a local JWK file, which a worker running as the serving user can read, so never use a
-  test seal for production or copy its key off the development host.
+- Vault or OpenBao Transit holds the production seal key outside the Render process and signs
+  through the proxy. At startup, Render checks Transit metadata for a non-exportable, non-derived
+  `ecdsa-p256` key with plaintext backups disabled. Verify the underlying storage and any hardware
+  custody requirements in your Transit deployment. A local test seal uses a JWK file that a worker
+  running as the serving user can read. Use local test seals only for development.
 - A render worker starts from an empty environment but is not a sandbox. A worker that gained code
   execution could get arbitrary content sealed, because it renders the content, and could rewrite
   a `file` audit destination. For a deployment that seals, use `audit.destination: stdout` and
@@ -567,6 +566,7 @@ verdict on the issuer, not a failure of the file's integrity.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime and signing_findings;
     crates/registry-render/src/seal.rs, Seal::load, check_chain and EXPIRY_WARNING_DAYS;
+    crates/registry-platform-crypto/src/lib.rs, transit_public_key_pem;
     crates/registry-render/src/server.rs, seal_route, respond_sealed and ready;
     crates/registry-render/src/audit.rs, RenderAuditEvent::for_seal;
     crates/registry-render/tests/serve_seal.rs, a_b_t_seal_verifies_over_its_byte_ranges_and_carries_its_timestamp,

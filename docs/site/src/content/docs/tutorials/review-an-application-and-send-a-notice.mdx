@@ -29,43 +29,28 @@ approval email from Registry Messaging. Coordinator does the rest, even across a
   prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64', 'Verified native tools, a matching source archive, and the unified Python client']}
 />
 
-## Prepare verified candidate or release assets
+## Prepare verified release assets
 
-:::note[Coordinator distribution is pending]
-The published v0.43.0 release does not include Coordinator. The verified local
-evaluation uses v0.44.0 candidate native tools and the candidate unified wheel
-with published Messaging v0.43.0 at
+Choose a [published release](https://github.com/registrystack/registry-stack/releases)
+from v0.44.0 onward. Download its source archive and follow `release/VERIFY.md`
+at that tag to verify the manifest and asset checksums. Keep the verified
+manifest, `SHA256SUMS`, the unified Python wheel for your platform, and the six
+native assets named below in one directory. Extract the source archive in a
+fresh directory and work from its root.
+
+:::note[Original candidate evaluation]
+The first run used v0.44.0 candidate tools and wheel on macOS arm64 under
+OrbStack with the Linux amd64 Messaging v0.43.0 image at
 `sha256:695b6a6dc2f72ab2f2341510f171d683cc87a19c7d37c253b545198557bd8a2c`.
-It ran on macOS arm64 with the Linux amd64 image under OrbStack. An actual
-Linux amd64 host run, the macOS binary platform release work, and a fully
-published Coordinator distribution are still pending. Use this path only
-with a release or a reviewed candidate that supplies the Coordinator pair and
-unified client. A candidate rehearsal is not proof that those assets have been
-published. The [deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md)
-retains the contributor build procedure.
 :::
 
-Verify the selected release's manifest and checksums using the
-[release operations procedure](https://github.com/registrystack/registry-stack/blob/main/release/OPERATIONS.md).
-For a local candidate, use the maintainer's reviewed source and checksum-bound
-artifact handoff. The asset directory must contain its verified `SHA256SUMS`,
-the host's unified wheel, and all six native assets named below. Do not use
-v0.43.0 downloads as substitutes for missing Coordinator assets.
+Set `REGISTRY_STACK_VERSION` to the release version without the leading `v`
+and `REGISTRY_STACK_ASSETS` to the absolute path of the asset directory.
+The preparation checks the file hashes, gives the Linux binaries their
+command names, and keeps the macOS FIPS libraries beside the executables.
 
-Get GitHub's source-code archive for that verified source tag or commit, or the
-maintainer's checksum-bound `git archive` export of the same reviewed commit.
-These are ordinary Git source archives, not a separate published support asset.
-Extract it and run from its root. Rust is not required. Use a fresh working
-directory; the maintained macOS extractor refuses an existing destination.
-
-Set `REGISTRY_STACK_VERSION` to the candidate or release version and
-`REGISTRY_STACK_ASSETS` to the absolute directory containing its verified local
-artifacts. The preparation checks the selected file checksums, renames raw
-Linux assets to executable tool names, and uses the existing strict macOS
-archive extractor while retaining its adjacent FIPS libraries.
-
-```sh test-skip="asset preparation is verified separately against the candidate handoff"
-: "${REGISTRY_STACK_VERSION:?set the verified candidate or release version}"
+```sh test-skip="published archive preparation uses downloaded release assets"
+: "${REGISTRY_STACK_VERSION:?set the verified release version without the leading v}"
 : "${REGISTRY_STACK_ASSETS:?set the absolute verified artifact directory}"
 mkdir -p tutorial-work
 python3 - "$REGISTRY_STACK_VERSION" "$REGISTRY_STACK_ASSETS" >tutorial-work/prepared-tools.json <<'PY'
@@ -109,7 +94,7 @@ for tool, path in zip(tools, files):
         for library in extracted.glob("libaws_lc_fips_*.dylib"):
             destination = output / library.name
             if destination.exists() and destination.read_bytes() != library.read_bytes():
-                raise SystemExit("Conflicting FIPS library bytes; stop and inspect the candidate.")
+                raise SystemExit("Conflicting FIPS library bytes. Check that the archives match the selected release.")
             if not destination.exists():
                 shutil.copy2(library, destination)
     else:
@@ -118,17 +103,26 @@ for tool, path in zip(tools, files):
     (output / tool).chmod(0o755)
 print(json.dumps({"tools": str(output), "clientWheel": str(wheels[0])}))
 PY
+
+release_manifest="$REGISTRY_STACK_ASSETS/registry-stack-v${REGISTRY_STACK_VERSION}-release-manifest.json"
+MESSAGING_IMAGE="$(
+  jq -er --arg version "$REGISTRY_STACK_VERSION" '
+    select(.release.version == $version)
+    | [.images[] | select(.name == "messaging")]
+    | select(length == 1)
+    | "ghcr.io/registrystack/messaging@" + .[0].digest
+  ' "$release_manifest"
+)"
 ```
 
-For the tested candidate evaluation, set `MESSAGING_IMAGE` to the exact public
-Messaging v0.43.0 digest above, prefixed by
-`ghcr.io/registrystack/messaging@`. Future published journeys must use the
-combination recorded for their release, including the supported binary
-platform roster. The helper accepts the public Messaging repository only; it
-does not accept a private candidate-image reference.
+The last command reads the Messaging image digest for the selected release.
+Docker pulls the Linux amd64 image for this local run.
+
+{/* Evidence: release/VERIFY.md, Verify release identity and image bindings;
+    products/coordinator/examples/reviewed-notice/session.py, messaging_image_tools. */}
 
 ```sh
-: "${REGISTRY_STACK_VERSION:?set the verified release or candidate version}"
+: "${REGISTRY_STACK_VERSION:?set the verified release version without the leading v}"
 : "${COORDINATOR_TUTORIAL_BIN_DIR:=$(jq -r .tools tutorial-work/prepared-tools.json)}"
 : "${REGISTRY_STACK_CLIENT:=$(jq -r .clientWheel tutorial-work/prepared-tools.json)}"
 : "${MESSAGING_IMAGE:?set the published Messaging image digest}"
