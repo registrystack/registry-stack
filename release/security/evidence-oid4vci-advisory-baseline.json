@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:f0472c01fc09123ecaeb0166cb057fec44033eb98600a67f8ef0b7151b4c9d69",
+      "sha256:6e826716a5205c9c8686186e43014a1c3244abd90dd8f0d8d019809cae47a528",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818"
+    "definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef"
   },
   "policies": [
     {
@@ -75,7 +75,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -93,14 +93,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
-      "component_layer_id": "sha256:f0472c01fc09123ecaeb0166cb057fec44033eb98600a67f8ef0b7151b4c9d69",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
+      "component_layer_id": "sha256:6e826716a5205c9c8686186e43014a1c3244abd90dd8f0d8d019809cae47a528",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -133,7 +133,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -151,14 +151,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
-      "component_layer_id": "sha256:f0472c01fc09123ecaeb0166cb057fec44033eb98600a67f8ef0b7151b4c9d69",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
+      "component_layer_id": "sha256:6e826716a5205c9c8686186e43014a1c3244abd90dd8f0d8d019809cae47a528",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -191,7 +191,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Proposed risk acceptance for owner review: the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 was reviewed on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. Native Grype reports CVE-2026-84243 as High and not-fixed with no fixed version for libc6 2.41-12+deb13u4; Debian also still lists this package as vulnerable without a fixed version. The affected gettext implementation remains in libc and can be reached internally by ordinary error reporting. Exploitation additionally requires non-C LC_MESSAGES, attacker-controlled LANGUAGE across an environment trust boundary, and a crafted readable .mo catalog. In the exact Debian glibc source, guess_category_value reads the current category and returns for C or C.<encoding> before consulting LANGUAGE; POSIX is stopped before catalog loading. Programs start in C, and libc does not call setlocale itself. Independently cross-checked GNU and LLVM ELF reports cover /usr/local/bin/evidence-oid4vci; their loaded closure is only the executable, loader, libc, libm and libpthread. Neither the applications nor their non-libc loaded libraries import global or thread locale setters, and source review found no compiled locale-changing path or such constructor. pg_query NLS is compiled out where present; AWS-LC constructors perform CPU and cryptographic initialization. The exact exports contain no locale catalogs, and the pinned nonroot OCI processes set only PATH and SSL_CERT_FILE. These reviewed processes retain their startup C locale; locale environment variables alone do not change it. The runtime and operator-tool reports, where present, have no review-required or unlocated dynamic lookup. All resolved application dlsym lookups select only __pthread_get_minstack, _dl_find_object and getrandom, not locale or gettext entrypoints. The exact ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exported rootfs. The whole application-layer binding covers every shipped operator tool as well as the entrypoint. Locale/gettext calls, a changed runtime or tool dependency closure, deployment-supplied native libraries, or plugin/extension enablement require re-review under the existing exposure-assertion and runtime invalidation rules. This is a conditional exposure decision for the reviewed Linux amd64 processes, not a dependency fix. The proposed owner is @jeremi and expiry remains 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Proposed risk acceptance for owner review: the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 was reviewed on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. Native Grype reports CVE-2026-84243 as High and not-fixed with no fixed version for libc6 2.41-12+deb13u4; Debian also still lists this package as vulnerable without a fixed version. The affected gettext implementation remains in libc and can be reached internally by ordinary error reporting. Exploitation additionally requires non-C LC_MESSAGES, attacker-controlled LANGUAGE across an environment trust boundary, and a crafted readable .mo catalog. In the exact Debian glibc source, guess_category_value reads the current category and returns for C or C.<encoding> before consulting LANGUAGE; POSIX is stopped before catalog loading. Programs start in C, and libc does not call setlocale itself. Independently cross-checked GNU and LLVM ELF reports cover /usr/local/bin/evidence-oid4vci; their loaded closure is only the executable, loader, libc, libm and libpthread. Neither the applications nor their non-libc loaded libraries import global or thread locale setters, and source review found no compiled locale-changing path or such constructor. pg_query NLS is compiled out where present; AWS-LC constructors perform CPU and cryptographic initialization. The exact exports contain no locale catalogs, and the pinned nonroot OCI processes set only PATH and SSL_CERT_FILE. These reviewed processes retain their startup C locale; locale environment variables alone do not change it. The runtime and operator-tool reports, where present, have no review-required or unlocated dynamic lookup. All resolved application dlsym lookups select only __pthread_get_minstack, _dl_find_object and getrandom, not locale or gettext entrypoints. The exact ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exported rootfs. The whole application-layer binding covers every shipped operator tool as well as the entrypoint. Locale/gettext calls, a changed runtime or tool dependency closure, deployment-supplied native libraries, or plugin/extension enablement require re-review under the existing exposure-assertion and runtime invalidation rules. This is a conditional exposure decision for the reviewed Linux amd64 processes, not a dependency fix. The proposed owner is @jeremi and expiry remains 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -209,14 +209,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
-      "component_layer_id": "sha256:f0472c01fc09123ecaeb0166cb057fec44033eb98600a67f8ef0b7151b4c9d69",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
+      "component_layer_id": "sha256:6e826716a5205c9c8686186e43014a1c3244abd90dd8f0d8d019809cae47a528",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +236,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -249,7 +249,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -267,14 +267,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -294,10 +294,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -307,7 +307,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -325,14 +325,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -352,10 +352,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -365,7 +365,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -383,14 +383,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -410,10 +410,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -423,7 +423,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -441,14 +441,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -468,10 +468,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -481,7 +481,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -499,14 +499,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -526,10 +526,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -539,7 +539,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -557,14 +557,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -584,10 +584,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -597,7 +597,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -615,14 +615,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -642,10 +642,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     },
     {
@@ -655,7 +655,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence-oid4vci image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence-oid4vci; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence-oid4vci local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/evidence-oid4vci.json record no review-required dynamic lookup in /usr/local/bin/evidence-oid4vci; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. The shipped load path selects the process-local OfferStore; the PostgreSQL and sealing backend is neither called by that entrypoint nor selectable in configuration. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -673,14 +673,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+      "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:6ac888d68fe2ad84d4100ecbf08fd12c5622fd3a48ab44d62d6e877c3a7e3818",
+        "runtime_definition_digest": "sha256:584bb41b7be4afa1cc59fe2c3db3089235406f4e9ddc504dcc9e51dc43a25bef",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -700,10 +700,10 @@
           },
           {
             "path": "/usr/local/bin/evidence-oid4vci",
-            "sha256": "sha256:15201a036aa8a6c9b10b2c2a73dce0af64879e2589f12b33338f8f834e8d4b2e"
+            "sha256": "sha256:d9e2075490b2c9947b496aba398b4251a3c2106b21514e6bc5b06d85778023e3"
           }
         ],
-        "definition_digest": "sha256:57c579f08bd3a735e8645db2751869a3a47f9b6583b82284c1c06be56ffbfa03"
+        "definition_digest": "sha256:0f924fe26bfe10fd5ccfd4ab59b1404a47893487c633a0711283c90de3b0e8b8"
       }
     }
   ]

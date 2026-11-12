@@ -34,15 +34,19 @@ LIVE_REFERENCE_IMAGE_DIGESTS = {
     "breg": "sha256:27ab040c51ae9128076e75c695b2b93127d2b835328b84f5dba5563000d20f08",
     "casework": "sha256:f67bcd930d410c794e9ff1c9c439f9c8415388143c07b2bc48e9b07788cf6a47",
     "discovery": "sha256:18fa0bb76973d47172576e7b548f7ff6a825528d4c3c13dc32b0db265bd450e1",
-    "evidence": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
+    "evidence": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
     "scheduling": "sha256:d88901bf4c4c09c1f89e2c9742892e26ec3193396f3345135c327f243e5b93cf",
     "breg-mcp": "sha256:e3d9948b190f99ab80f901d6d3f8d558a4be7fe9d74d53bfa0d47ef144f9c068",
     "breg-review": "sha256:dc00c122b1b5b81f185e3158877193c31666d1b13532e005f35a3204f9c211b1",
-    "evidence-oid4vci": "sha256:a1526603efff0b170086a7881a528b784986371b28895e5dce7e96f1ec7bbf90",
+    "evidence-oid4vci": "sha256:78a16f3bac4950324ce4ffa2c2122998621f36df3b45c9540d3e8f1bfe9cf336",
     "messaging": "sha256:e7af37ec4c01c1263330f050832215f765ae547e3b5a98284480fda65f298765",
     "registry-render": "sha256:1b7a68acbbb75d9ecb6ddcdcb3891083b77e0f25f49cf556bbc7ae44646ba29b",
 }
 LIVE_REFERENCE_SOURCE_REVISION = "f7839e59bc283a8e38985d7585c2866a85f4f786"
+LIVE_RENEWED_SOURCE_REVISIONS = {
+    "evidence": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
+    "evidence-oid4vci": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
+}
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
@@ -1466,7 +1470,9 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                     live_assertion["reference_image_digest"],
                 )
                 self.assertEqual(
-                    LIVE_REFERENCE_SOURCE_REVISION,
+                    LIVE_RENEWED_SOURCE_REVISIONS.get(
+                        service, LIVE_REFERENCE_SOURCE_REVISION
+                    ),
                     live_assertion["reference_source_revision"],
                 )
                 self.assertEqual(
