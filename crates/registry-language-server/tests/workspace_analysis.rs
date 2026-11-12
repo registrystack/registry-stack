@@ -186,6 +186,23 @@ fn absent_authored_file_targets_are_safe_unresolved_identities() {
 }
 
 #[test]
+fn explicit_authored_file_definition_query_remains_available() {
+    let mut input = request("definition");
+    input["target"] = json!({ "kind": "authored-file", "path": "actions/a.yaml" });
+
+    let output = execute_workspace_analysis(input).expect("explicit file query succeeds");
+    assert_eq!(output["definition"]["targetExists"], true);
+    assert_eq!(
+        output["definition"]["definitions"][0]["identity"],
+        json!({ "kind": "authored-file", "path": "actions/a.yaml" })
+    );
+    assert_eq!(
+        output["definition"]["definitions"][0]["location"],
+        json!({ "file": "actions/a.yaml", "pointer": "" })
+    );
+}
+
+#[test]
 fn declared_mapping_retains_a_missing_repairable_authored_source() {
     let mut input = request("analyze");
     input["facts"]["definitions"] = json!([definition("actions", "apply", "actions/a.yaml")]);

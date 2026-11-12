@@ -204,29 +204,38 @@ impl YamlPointerResolver {
         &self.source
     }
 
-    /// Resolve a JSON pointer into the exact YAML value range used by LSP navigation.
+    /// Resolve a JSON pointer into a precise token range for cursor navigation.
     ///
-    /// Empty pointers name the whole document. Non-empty pointers retain the full syntax-node
-    /// range, including scalar quotes and collection delimiters, matching what an LSP client sees.
+    /// Scalar ranges cover their content and exclude quote delimiters, as native indexing does.
+    /// A mapping pointer resolves only its identifying `id` scalar. Empty pointers, sequences, and
+    /// mappings without an `id` have no precise positional range.
     pub(crate) fn range_at_pointer(&self, pointer: &str) -> Option<Range> {
         if pointer.is_empty() {
-            return Some(self.range(0, self.source.len()));
+            return None;
         }
+        let node = self.node_at_pointer(pointer)?;
+        if let Some((_, _, start, end)) = scalar_parts(node, &self.source, 0) {
+            return Some(self.range(start, end));
+        }
+        if matches!(node.kind(), "block_mapping" | "flow_mapping" | "ERROR") {
+            let value = mapping_value(node, "id", &self.source)?;
+            let (_, _, start, end) = scalar_parts(value, &self.source, 0)?;
+            return Some(self.range(start, end));
+        }
+        None
+    }
+
+    pub(crate) fn document_range(&self) -> Range {
+        self.range(0, self.source.len())
+    }
+
+    fn node_at_pointer(&self, pointer: &str) -> Option<Node<'_>> {
         let segments = pointer_segments(pointer)?;
         let mut node = unwrap_value_node(self.tree.root_node())?;
         for segment in segments {
             node = match node.kind() {
                 "block_mapping" | "flow_mapping" | "ERROR" => {
-                    let mut cursor = node.walk();
-                    let pair = node
-                        .named_children(&mut cursor)
-                        .filter(|child| matches!(child.kind(), "block_mapping_pair" | "flow_pair"))
-                        .find(|pair| {
-                            pair.child_by_field_name("key")
-                                .and_then(|key| scalar_parts(key, &self.source, 0))
-                                .is_some_and(|(key, _, _, _)| key == segment)
-                        })?;
-                    pair.child_by_field_name("value")?
+                    mapping_value(node, &segment, &self.source)?
                 }
                 "block_sequence" | "flow_sequence" => {
                     let index = segment.parse::<usize>().ok()?;
@@ -239,7 +248,7 @@ impl YamlPointerResolver {
             };
             node = unwrap_value_node(node)?;
         }
-        Some(self.range(node.start_byte(), node.end_byte()))
+        Some(node)
     }
 
     fn range(&self, start: usize, end: usize) -> Range {
@@ -249,6 +258,19 @@ impl YamlPointerResolver {
     fn position(&self, byte: usize) -> Position {
         position_from_line_starts(&self.source, &self.line_starts, byte)
     }
+}
+
+fn mapping_value<'tree>(node: Node<'tree>, key: &str, source: &str) -> Option<Node<'tree>> {
+    let mut cursor = node.walk();
+    let pair = node
+        .named_children(&mut cursor)
+        .filter(|child| matches!(child.kind(), "block_mapping_pair" | "flow_pair"))
+        .find(|pair| {
+            pair.child_by_field_name("key")
+                .and_then(|key| scalar_parts(key, source, 0))
+                .is_some_and(|(value, _, _, _)| value == key)
+        })?;
+    pair.child_by_field_name("value")
 }
 
 fn unwrap_value_node(mut node: Node<'_>) -> Option<Node<'_>> {
@@ -534,18 +556,20 @@ mod tests {
         assert_eq!(range.start, Position::new(4, 29));
         assert_eq!(range.end, Position::new(4, 34));
 
-        let quoted = "name: \"apply\"\nmap: { key: value }\n";
+        let quoted = "name: \"apply\"\nmap: { id: item, key: value }\n";
         let resolver = YamlPointerResolver::parse(quoted.to_owned()).expect("document parses once");
         let range = resolver
             .range_at_pointer("/name")
             .expect("quoted scalar resolves");
-        assert_eq!(range.start, Position::new(0, 6));
-        assert_eq!(range.end, Position::new(0, 13));
+        assert_eq!(range.start, Position::new(0, 7));
+        assert_eq!(range.end, Position::new(0, 12));
         let range = resolver
             .range_at_pointer("/map")
-            .expect("mapping resolves from the same tree");
-        assert_eq!(range.start, Position::new(1, 5));
-        assert_eq!(range.end, Position::new(1, 19));
+            .expect("mapping resolves to its id from the same tree");
+        assert_eq!(range.start, Position::new(1, 11));
+        assert_eq!(range.end, Position::new(1, 15));
+        assert_eq!(resolver.range_at_pointer(""), None);
+        assert_eq!(resolver.document_range().start, Position::new(0, 0));
     }
 
     use super::*;
