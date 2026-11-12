@@ -496,6 +496,22 @@ mitigation, and related matrix IDs.
   refuses it with `breg.runtime.plaintext-database`.
 
 `rstack dev` can instead activate BReg as part of an isolated project run.
+Its generated Python connection and person picker remain inside that run's
+owner-only state. Workload bindings name one configured product endpoint,
+issuer, subject, client, profile, resource, scopes and declared claims; the
+runner replaces short-lived token state atomically without extending the run.
+The Python client checks each generation against the declared binding and
+refuses a stopped, expired, mismatched or reversed generation before another
+product call. A picker accepts only its live-run descriptor and exact loopback
+origin, resolves a complete declared person grant set before opening a session,
+and keeps tokens and the issuer signing key out of the browser. The picker is
+local admission simulation, not proof of production OIDC or consent. The
+session owner can edit or replace these private development files; production
+deployments require an operated issuer, separate registrations and the
+runtime's own token and access-profile checks. The runner and picker
+regressions are in `crates/registry-bregctl/src/project_dev/` and
+`crates/registry-stack-client-py/tests/test_dev_picker.py`; the combined
+licensing journey uses `products/platform/scripts/test-rstack-dev.py`.
 It uses the normal package and database activation checks, distinct TLS
 PostgreSQL credentials, and a loopback listener. The runtime trusts the
 run's static signing key under the declared issuer name. See
