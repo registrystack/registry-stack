@@ -23,8 +23,8 @@ PostgreSQL server to a `breg` process that serves the project's first
 facility template that `bregctl init --template facility-registry facility` creates.
 
 Two roles take part. The author prepares a package from the project. The operator, holding the
-migration credential, activates the package and runs the server. One person may hold both on a
-pilot; the commands stay the same. A package carries no signature: the migration credential is
+migration credential, activates the package and runs the server. One person may hold both in a
+small deployment; the commands stay the same. A package carries no signature: the migration credential is
 what authorizes an activation, and the database records every activation in its own ledger.
 
 Deployment commands take absolute paths with no `..` component and no symbolic link anywhere in
@@ -95,7 +95,7 @@ Base Registry Engine (BReg) is pre-1.0. A minor release may break APIs, package 
 deployment contracts, and each break carries a `BREAKING:` entry in `products/breg/CHANGELOG.md` at
 the release tag you run. Security fixes land only in the latest release; see
 [API stability](../../reference/api-stability/) and the
-[support window](../../security/support-window/). A pilot holds three conditions: run `breg` under
+[support window](../../security/support-window/). A deployment meets three conditions: run `breg` under
 a supervisor that restarts it, treat the holder of the migration credential as the activation gate,
 and stay inside the verified deployment profile, which leaves out Kubernetes.
 
