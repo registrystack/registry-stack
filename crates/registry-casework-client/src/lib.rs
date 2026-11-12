@@ -61,7 +61,7 @@ pub use registry_casework_core::{
     WorkingDaysBefore, WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
-pub use registry_review_client::ReviewMutationErrorClass;
+pub use registry_review_client::{ReviewMutationErrorClass, ReviewProgressCode};
 pub use task_assertion_source::CaseworkTaskAssertionSource;
 /// The identifier type every task, request, and event argument carries, so a
 /// caller names it through this crate rather than a second `uuid` dependency.

@@ -85,6 +85,10 @@ proposal, and inert result-reference classes exposed by the maintained BReg
 binding. Their helpers inspect only an already loaded page and do not fetch
 targets or advance pagination.
 
+Use `read_proposal_review_status_with_progress(proposal)` with the applicant's
+BReg credential to request the configured `progressCode`.
+[Proposal client reference](https://docs.registrystack.org/reference/breg-client-capabilities/#proposals)
+
 The `crates/registry-stack-client-py` directory in the Registry Stack
 repository holds this public metadata and the Python facade. It is not built
 directly. `release/scripts/assemble-registry-client-wheel.py` combines the version-selected
