@@ -194,6 +194,51 @@ fn payment_check_keeps_the_shared_reader_diagnostic_and_position() {
 }
 
 #[test]
+fn payment_check_keeps_companion_paths_as_supplied() {
+    let directory = tempfile::tempdir().unwrap();
+    let pack = "apiVersion: id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1\nkind: AdapterPaymentProviderPack\nid: legacy\nversion: '1'\nconnector: mifos-ph-ee-legacy/v1\ncapabilities: [collection]\n";
+    let pack_path = directory.path().join("pack.yaml");
+    std::fs::write(&pack_path, format!("{pack}unexpected: true\n")).unwrap();
+    let fixture = "apiVersion: id.registrystack.org/formats/adapter/payment-provider-fixture/v1alpha1\nkind: AdapterPaymentProviderFixture\ntype: 42\n";
+    std::fs::write(directory.path().join("fixture.yaml"), fixture).unwrap();
+    let payments = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/payment-collections/payments.example.yaml");
+    let check = |additional: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+            .current_dir(directory.path())
+            .args(["--format", "json", "payments", "check"])
+            .arg(&payments)
+            .args(["--provider-pack", "pack.yaml"])
+            .args(additional)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let report = check(&[]);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "config.unknown-key");
+    assert_eq!(diagnostic["artifact"], "AdapterPaymentProviderPack");
+    assert_eq!(diagnostic["path"], "/unexpected");
+    assert_eq!(
+        diagnostic["source"],
+        json!({"file": "pack.yaml", "line": 7, "column": 1})
+    );
+
+    std::fs::write(&pack_path, pack).unwrap();
+    let report = check(&["--fixtures", "fixture.yaml"]);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "config.invalid-type");
+    assert_eq!(diagnostic["artifact"], "AdapterPaymentProviderFixture");
+    assert_eq!(diagnostic["path"], "/type");
+    assert_eq!(
+        diagnostic["source"],
+        json!({"file": "fixture.yaml", "line": 3, "column": 7})
+    );
+}
+
+#[test]
 fn payment_provider_variants_keep_nested_source_positions() {
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("payments.yaml");
