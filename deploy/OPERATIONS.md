@@ -61,11 +61,15 @@ The operator supplies the active runtime config and package to BReg, mounts the 
 
 ### Resolve an interrupted upgrade
 
-Read the failed Job's diagnostics and record the exact target. A completed BReg activation followed by a Helm failure can be resumed with the same target and backup receipt. The operator confirms the candidate is the direct successor in the ledger and applies the desired release after the readiness checks. Where Helm already recorded the successor, get `status` with the successor values and use `install` to reconcile the same active package.
+Before a BReg successor can change the database, the operator saves an immutable ConfigMap named `<release>-operator-upgrade` in the release namespace. It records the database, predecessor activation, candidate package and digests of the local chart with effective values and the backup receipt. Grant the operator ConfigMap get, create and delete permissions in the release namespace. Helm readiness completes the operation and clears the record.
+
+If the upgrade stops with a record still present, inspect the Job, the BReg ledger and Helm's status. If Helm reports a pending operation, resolve it with traffic closed before retrying. Run `upgrade` again with the original chart, values and predecessor backup receipt, even if Helm already recorded the successor. The operator checks the recorded inputs and, after a completed BReg activation, verifies the direct successor in the ledger and resumes Helm without repeating the migration. If the record is already gone and Helm reports the successor deployed, verify the completed release and ledger. Use a backup of the current activation for a separate configuration or image upgrade.
+
+If BReg already committed before this operator recorded its inputs, keep traffic closed and use your reviewed recovery procedure with the original verified chart and values or the paired backup. Finish any interrupted upgrades before switching to this operator.
 
 If BReg still holds a maintenance target, keep traffic closed. Run the product's read-only `bregctl migration reconcile` for the exact pinned target and inspect the result before taking the product's prescribed transition. A manual Job render uses `breg.operation.kind=reconcile` and the same `breg.operation.candidate` claim and digest as the failed apply. Verify that the Job finished and the activation ledger is ready before removing an abandoned operator Lease. Inspect its exact identity and Jobs before deleting it.
 
-For a serving configuration failure before any database change, point the release back to the previous verified package and values. A Helm revision only restores Kubernetes objects. For an incompatible committed database change, recover the paired application, database, authority and audit state from the chosen snapshot and account for writes made after that point.
+To abandon an upgrade before any database change, match the ready ledger activation to the predecessor in the upgrade record. Verify that Helm is still on the predecessor and no Job or Helm operation is running or uncertain. With other operator activity stopped, remove only that release's upgrade ConfigMap and use the previous verified package and values. A Helm revision only restores Kubernetes objects. For an incompatible committed database change, recover the paired application, database, authority and audit state from the chosen snapshot and account for writes made after that point.
 
 ## Restore to a clean target
 

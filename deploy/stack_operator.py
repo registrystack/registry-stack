@@ -4,17 +4,20 @@
 import argparse
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from state_bundle import BundleError, verify_capture_age
+from state_bundle import BundleError, file_hashes, verify_capture_age
 
 CHART = Path(__file__).resolve().parent / "helm" / "registry-stack"
 PACKAGE_ANNOTATION = "registrystack.org/package-digest"
@@ -87,6 +90,23 @@ def release_values(target, *, serve):
 def require_install_retry(target, deployed):
     if deployed not in (release_values(target, serve=True), release_values(target, serve=False)):
         raise OperationError("Installed inputs differ from the requested values. Use upgrade for changes to an existing release.")
+
+
+def json_sha256(value):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def upgrade_inputs_sha256(chart, target):
+    if chart.is_dir():
+        try:
+            chart_contents = file_hashes(chart)
+        except BundleError as error:
+            raise OperationError("Cannot hash the staged chart directory.") from error
+    else:
+        with chart.open("rb") as stream:
+            chart_contents = hashlib.file_digest(stream, "sha256").hexdigest()
+    return json_sha256({"chart": chart_contents, "values": release_values(target, serve=True)})
 
 
 def verify_backup_receipt(receipt, namespace, release, database_id, digest, activation_id, max_age_hours=26):
@@ -166,9 +186,11 @@ def rendered_operation(output):
 class Installation:
     def __init__(self, args):
         self.args = args
+        self.chart = args.chart
         self.kube = [args.kubectl_bin, "--context", args.kube_context, "--namespace", args.namespace]
         self.helm = [args.helm_bin, "--kube-context", args.kube_context, "--namespace", args.namespace]
         self.selector = f"app.kubernetes.io/instance={args.release}"
+        self.upgrade_record_name = f"{args.release}-operator-upgrade"
         self.active_job = None
         self.target = decode_json(args.values.read_text(), "Operator values")
 
@@ -216,7 +238,7 @@ class Installation:
         name = f"{kind[:12]}-{uuid.uuid4().hex[:8]}"
         values = self.target if not overrides else {**self.target, "breg": {**self.target["breg"], **overrides["breg"]}}
         manifest = command_output([
-            *self.helm, "template", self.args.release, str(self.args.chart), "-f", "-",
+            *self.helm, "template", self.args.release, str(self.chart), "-f", "-",
             "--show-only", "templates/breg-operation-job.yaml",
             "--set", "breg.operation.enabled=true",
             "--set-string", f"breg.operation.name={name}",
@@ -280,7 +302,7 @@ class Installation:
 
     def apply_release(self, serve):
         command_output([
-            *self.helm, "upgrade", "--install", self.args.release, str(self.args.chart),
+            *self.helm, "upgrade", "--install", self.args.release, str(self.chart),
             "-f", "-", "--wait", f"--timeout={self.args.timeout}s",
         ], "Apply Helm release", data=json.dumps(release_values(self.target, serve=serve)), timeout=self.args.timeout + 30)
 
@@ -299,49 +321,134 @@ class Installation:
             receipt, self.args.namespace, self.args.release, self.args.database_id, digest, activation_id,
             self.args.max_backup_age_hours,
         )
+        return receipt
 
-    def apply(self):
-        command = self.args.action
-        existing = bool(self.releases())
-        if command == "install" and existing:
-            require_install_retry(self.target, self.values(all_values=False))
+    def upgrade_record(self):
+        output = self.kubectl("get", "configmap", self.upgrade_record_name, "--ignore-not-found", "-o", "json")
+        return decode_json(output, "Upgrade checkpoint") if output.strip() else None
+
+    def create_upgrade_record(self, data):
+        record = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": self.upgrade_record_name, "namespace": self.args.namespace},
+            "immutable": True,
+            "data": data,
+        }
+        created = decode_json(self.kubectl("create", "-f", "-", "-o", "json", data=json.dumps(record)), "Upgrade checkpoint")
+        if created.get("data") != data or created.get("immutable") is not True or not created["metadata"].get("uid"):
+            raise OperationError("The upgrade checkpoint did not preserve the accepted inputs.")
+        return created
+
+    def remove_upgrade_record(self, record):
+        path = f"/api/v1/namespaces/{self.args.namespace}/configmaps/{self.upgrade_record_name}"
+        options = {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": record["metadata"]["uid"]}}
+        try:
+            self.kubectl("delete", "--raw", path, "-f", "-", data=json.dumps(options))
+        except OperationError:
+            if self.upgrade_record() is not None:
+                raise
+
+    def require_no_upgrade_record(self):
+        if self.upgrade_record() is not None:
+            raise OperationError("An upgrade is pending. Use upgrade with the original chart, values and backup receipt.")
+
+    def upgrade(self):
+        if not self.releases():
+            raise OperationError("Helm has no existing release to upgrade.")
+        deployed = self.values()["breg"]
+        current = deployed["package"]["expectedDigest"]
         target = self.target["breg"]["package"]
         digest = target["expectedDigest"]
-        overrides = None
-        if command == "upgrade":
-            if not existing:
-                raise OperationError("Helm has no existing release to upgrade.")
-            deployed = self.values()["breg"]
-            previous = deployed["package"]["expectedDigest"]
-            status, _ = self.job("status", digest)
-            if previous != digest and status.get("activePackageDigest") == digest:
-                verify_active(status, digest, self.args.database_id)
-                self.verify_backup(previous, previous_activation(status, previous))
-                self.stop()
-                status = self.verify_ready(digest)
-                self.apply_release(serve=True)
-                return status
-            verify_active(status, previous, self.args.database_id)
-            self.verify_backup(previous, status["activationId"])
-            if previous != digest:
-                overrides = successor_job_values(deployed, target)
-        plan, _ = self.job("plan", digest, overrides)
-        action = activation_action(plan, digest, command)
-        if command == "install" and not existing and action is None:
+        identity = {
+            "version": "1",
+            "databaseId": self.args.database_id,
+            "candidatePackageDigest": digest,
+            "inputsSha256": upgrade_inputs_sha256(self.chart, self.target),
+        }
+        record = self.upgrade_record()
+        previous = current
+        if record is not None:
+            data = record["data"]
+            if any(data.get(key) != value for key, value in identity.items()):
+                raise OperationError("An upgrade is pending. Retry with the original chart and values for this database.")
+            previous = data["previousPackageDigest"]
+            if previous == digest or current not in (previous, digest):
+                raise OperationError("Helm does not identify the predecessor or candidate of the pending upgrade.")
+
+        status, _ = self.job("status", digest)
+        committed = previous != digest and status.get("activePackageDigest") == digest
+        verify_active(status, digest if committed else previous, self.args.database_id)
+        activation_id = previous_activation(status, previous) if committed else status["activationId"]
+        backup_sha256 = json_sha256(self.verify_backup(previous, activation_id))
+        if committed and record is None:
+            raise OperationError("BReg committed a successor with no recorded upgrade. Use reviewed recovery with the original inputs.")
+        if record is not None:
+            if record["data"]["previousActivationId"] != activation_id:
+                raise OperationError("The recorded upgrade identifies a different predecessor activation.")
+            if record["data"].get("backupSha256") != backup_sha256:
+                raise OperationError("An upgrade is pending. Retry with the original backup receipt.")
+
+        action = overrides = None
+        if not committed:
+            if current != previous:
+                raise OperationError("Helm records the candidate before its BReg activation. Inspect both before continuing.")
+            overrides = successor_job_values(deployed, target) if previous != digest else None
+            plan, _ = self.job("plan", digest, overrides)
+            action = activation_action(plan, digest, "upgrade")
+            if plan.get("activePackageDigest") != previous:
+                raise OperationError("The database's active package differs from the serving Helm release.")
+            if action == "apply-successor" and record is None:
+                record = self.create_upgrade_record({
+                    **identity, "previousPackageDigest": previous, "previousActivationId": activation_id,
+                    "backupSha256": backup_sha256,
+                })
+
+        self.stop()
+        if action:
+            self.job(action, digest, overrides)
+        status = self.verify_ready(digest)
+        self.apply_release(serve=True)
+        if record is not None:
+            self.remove_upgrade_record(record)
+        return status
+
+    def apply(self):
+        if self.args.action == "upgrade":
+            # Use the same chart bytes for the plan, activation and Helm apply.
+            with tempfile.TemporaryDirectory(prefix="registry-stack-chart-") as directory:
+                if self.chart.is_dir():
+                    staged = Path(directory) / "chart"
+                    shutil.copytree(self.chart, staged)
+                else:
+                    staged = Path(directory) / "chart.tgz"
+                    shutil.copyfile(self.chart, staged)
+                self.chart = staged
+                try:
+                    return self.upgrade()
+                finally:
+                    self.chart = self.args.chart
+        self.require_no_upgrade_record()
+        existing = bool(self.releases())
+        if existing:
+            require_install_retry(self.target, self.values(all_values=False))
+        digest = self.target["breg"]["package"]["expectedDigest"]
+        plan, _ = self.job("plan", digest)
+        action = activation_action(plan, digest, "install")
+        if not existing and action is None:
             raise OperationError("The database is already active outside this Helm release. Use the recovery procedure.")
-        if command == "upgrade" and plan.get("activePackageDigest") != previous:
-            raise OperationError("The database's active package differs from the serving Helm release.")
-        if existing and (action or command == "upgrade"):
+        if existing and action:
             self.stop()
         elif not existing:
             self.apply_release(serve=False)
         if action:
-            self.job(action, digest, overrides)
+            self.job(action, digest)
         status = self.verify_ready(digest)
         self.apply_release(serve=True)
         return status
 
     def adopt(self):
+        self.require_no_upgrade_record()
         report, digest = self.job("claim-status")
         claim = report.get("instanceClaim", report.get("status", {}))
         if not claim.get("claim") or type(claim.get("matches")) is not bool:
