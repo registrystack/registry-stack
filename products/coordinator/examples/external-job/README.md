@@ -117,3 +117,21 @@ the real external command and GET adapters, durable Coordinator store and worker
 accepted and declared-refused admission, unusable post-effect responses, same-command recovery,
 restart, correlation, pending/success/declared job failure, observation exhaustion, timeout,
 cancellation and deadline. A skipped database test is not evidence for either durable store.
+
+An opt-in test in that target composes the Coordinator worker with the actual Python example
+application and its separate PostgreSQL store. It requires the assembled Python wheel to be
+installed in the selected interpreter:
+
+```sh
+COORDINATOR_TEST_DATABASE_URL=<disposable-coordinator-database> \
+EXTERNAL_JOB_TEST_DATABASE_URL=<separate-disposable-job-database> \
+EXTERNAL_JOB_PYTHON=<installed-wheel-python> \
+  cargo test --locked -p registry-coordinator --features postgres-test \
+  --test external_wait_postgres installed_python_job_recovers_the_original_command_after_commit \
+  -- --ignored
+```
+
+The test-only loopback host uses synthetic machine admission. It asserts that a malformed
+response after application commit leaves Coordinator uncertain, then `retry-same` reuses the
+original saved command and receipt before observing terminal success. It does not prove live
+issuer token exchange or institutional deployment.
