@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:fcda7f40c9851929fbf291c6e7982d71d67bd9144874c4ee470ef559512a7392",
+      "sha256:f268f158b7a669c80293a28ff3d89d5f8c71ef4f4bfc33075a9dae3cf8e37158",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456"
+    "definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897"
   },
   "policies": [
     {
@@ -75,7 +75,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -93,14 +93,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
-      "component_layer_id": "sha256:fcda7f40c9851929fbf291c6e7982d71d67bd9144874c4ee470ef559512a7392",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
+      "component_layer_id": "sha256:f268f158b7a669c80293a28ff3d89d5f8c71ef4f4bfc33075a9dae3cf8e37158",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -133,7 +133,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -151,14 +151,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
-      "component_layer_id": "sha256:fcda7f40c9851929fbf291c6e7982d71d67bd9144874c4ee470ef559512a7392",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
+      "component_layer_id": "sha256:f268f158b7a669c80293a28ff3d89d5f8c71ef4f4bfc33075a9dae3cf8e37158",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -191,7 +191,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Proposed risk acceptance for owner review: the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 was reviewed on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. Native Grype reports CVE-2026-84243 as High and not-fixed with no fixed version for libc6 2.41-12+deb13u4; Debian also still lists this package as vulnerable without a fixed version. The affected gettext implementation remains in libc and can be reached internally by ordinary error reporting. Exploitation additionally requires non-C LC_MESSAGES, attacker-controlled LANGUAGE across an environment trust boundary, and a crafted readable .mo catalog. In the exact Debian glibc source, guess_category_value reads the current category and returns for C or C.<encoding> before consulting LANGUAGE; POSIX is stopped before catalog loading. Programs start in C, and libc does not call setlocale itself. Independently cross-checked GNU and LLVM ELF reports cover /usr/local/bin/evidence; their loaded closure is only the executable, loader, libc, libm and libpthread. Neither the applications nor their non-libc loaded libraries import global or thread locale setters, and source review found no compiled locale-changing path or such constructor. pg_query NLS is compiled out where present; AWS-LC constructors perform CPU and cryptographic initialization. The exact exports contain no locale catalogs, and the pinned nonroot OCI processes set only PATH and SSL_CERT_FILE. These reviewed processes retain their startup C locale; locale environment variables alone do not change it. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The Evidence report retains one nonconstant dlsym wrapper in bundled SQLite. Source review found no first-party C extension loader call, rusqlite omits its load_extension feature, and registry-platform-sqlite denies SQL load_extension; the latent C loader is not an enabled runtime path. All resolved application dlsym lookups select only __pthread_get_minstack, _dl_find_object and getrandom, not locale or gettext entrypoints. The exact ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exported rootfs. The whole application-layer binding covers every shipped operator tool as well as the entrypoint. Locale/gettext calls, a changed runtime or tool dependency closure, deployment-supplied native libraries, or plugin/extension enablement require re-review under the existing exposure-assertion and runtime invalidation rules. This is a conditional exposure decision for the reviewed Linux amd64 processes, not a dependency fix. The proposed owner is @jeremi and expiry remains 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Proposed risk acceptance for owner review: the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 was reviewed on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. Native Grype reports CVE-2026-84243 as High and not-fixed with no fixed version for libc6 2.41-12+deb13u4; Debian also still lists this package as vulnerable without a fixed version. The affected gettext implementation remains in libc and can be reached internally by ordinary error reporting. Exploitation additionally requires non-C LC_MESSAGES, attacker-controlled LANGUAGE across an environment trust boundary, and a crafted readable .mo catalog. In the exact Debian glibc source, guess_category_value reads the current category and returns for C or C.<encoding> before consulting LANGUAGE; POSIX is stopped before catalog loading. Programs start in C, and libc does not call setlocale itself. Independently cross-checked GNU and LLVM ELF reports cover /usr/local/bin/evidence; their loaded closure is only the executable, loader, libc, libm and libpthread. Neither the applications nor their non-libc loaded libraries import global or thread locale setters, and source review found no compiled locale-changing path or such constructor. pg_query NLS is compiled out where present; AWS-LC constructors perform CPU and cryptographic initialization. The exact exports contain no locale catalogs, and the pinned nonroot OCI processes set only PATH and SSL_CERT_FILE. These reviewed processes retain their startup C locale; locale environment variables alone do not change it. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The Evidence report retains one nonconstant dlsym wrapper in bundled SQLite. Source review found no first-party C extension loader call, rusqlite omits its load_extension feature, and registry-platform-sqlite denies SQL load_extension; the latent C loader is not an enabled runtime path. All resolved application dlsym lookups select only __pthread_get_minstack, _dl_find_object and getrandom, not locale or gettext entrypoints. The exact ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exported rootfs. The whole application-layer binding covers every shipped operator tool as well as the entrypoint. Locale/gettext calls, a changed runtime or tool dependency closure, deployment-supplied native libraries, or plugin/extension enablement require re-review under the existing exposure-assertion and runtime invalidation rules. This is a conditional exposure decision for the reviewed Linux amd64 processes, not a dependency fix. The proposed owner is @jeremi and expiry remains 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -209,14 +209,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
-      "component_layer_id": "sha256:fcda7f40c9851929fbf291c6e7982d71d67bd9144874c4ee470ef559512a7392",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
+      "component_layer_id": "sha256:f268f158b7a669c80293a28ff3d89d5f8c71ef4f4bfc33075a9dae3cf8e37158",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +236,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -249,7 +249,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -267,14 +267,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -294,10 +294,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -307,7 +307,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -325,14 +325,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -352,10 +352,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -365,7 +365,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -383,14 +383,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -410,10 +410,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -423,7 +423,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -441,14 +441,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -468,10 +468,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -481,7 +481,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -499,14 +499,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -526,10 +526,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -539,7 +539,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -557,14 +557,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -584,10 +584,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -597,7 +597,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -615,14 +615,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -642,10 +642,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     },
     {
@@ -655,7 +655,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "The 2026-11-12 re-review of review-only rehearsal 43302002187 at source 9fa76858d16ef2120e92ae692c9c4a51e629b710 compared its v0.46.1 Linux amd64 evidence image with rehearsal 43276256359. Exactly one exported rootfs file changed, /usr/local/bin/evidence; the Distroless base layers, OCI process contract, loader, libc, libm and libpthread bytes, 14 Syft packages, and all 53 Grype finding identities (11 High) match. The executable keeps the same needed libraries and dynamic lookup target names and review-required count; call-site offsets in the exposure report changed. The service runtime source and locked third-party package versions are unchanged; the cause of the executable byte difference has not been experimentally isolated. This renewal updates the executable and application-layer bindings while retaining exception status, owner, expiry and invalidation triggers. Reviewed the v0.46.1 Linux amd64 evidence local reproduction from review-only rehearsal 43276256359 on 2026-11-12. The new Distroless base changes the time zone data, CA certificates, and zlib layers; the recorded loader, libc, libm, and libpthread file digests and all 11 high finding identities are unchanged. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed exposure/evidence.json report retains one review-required nonconstant dlsym site, bundled SQLite's extension-symbol wrapper; its other resolved lookups select only __pthread_get_minstack, _dl_find_object, getrandom. registry-platform-sqlite denies SQL load_extension, the compiled rusqlite features omit its load_extension API, and no first-party runtime caller enables or invokes C extension loading. Runtime SQLite connections are read-only and authorizer guarded. Source review therefore closes that reported path without claiming the wrapper bytes are absent. Adapter pack Sources link the hickory DNS resolver through registry-platform-httputil, adding gethostname, sendto and recvfrom imports for ordinary socket I/O; they reach no libc resolver printing, monetary-format, gettext or locale entrypoint. The PostgreSQL status ledger is library code uncalled by the shipped entrypoint; its Rust protocol clients add no libpq or dynamic C-library edge. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-11-12",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -673,14 +673,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+      "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:43feacf0567a663bd8e2da6437a718a5283626228da336c249ba0bad9a6c040c",
-        "reference_source_revision": "f7839e59bc283a8e38985d7585c2866a85f4f786",
+        "reference_image_digest": "sha256:3f48d8a48d64acbbc73e3e75628790af3de6b411f900ce26aa2b5ca738f0d00f",
+        "reference_source_revision": "9fa76858d16ef2120e92ae692c9c4a51e629b710",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9f37bf916d24c2fe6d0838482b0506df67aa2d5ee092403d5bf443fb5bc46456",
+        "runtime_definition_digest": "sha256:df3e9d151ebca71b7c8eccdd84342da3dd4143d71066091b65c745eedca57897",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -700,10 +700,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:4d95a8fb9d46ec216b13562b919a9906aa0d139e55945a041948f37425ea298c"
+            "sha256": "sha256:91fa6ef6884d9cfa328ac64edb0b167da1eb3a5fe6343e67d1b86f5ae4935096"
           }
         ],
-        "definition_digest": "sha256:fb5b9e3f1e923e8c442e52cf349d826753ab46dce2bb622e86f6501d43944d0f"
+        "definition_digest": "sha256:42eb0b6b38993bdb3f59161d7c08ae1ab1be1889a911553f3092dfa989d8ba69"
       }
     }
   ]
