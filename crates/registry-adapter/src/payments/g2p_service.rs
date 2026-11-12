@@ -4,7 +4,7 @@
 use super::{
     g2p_model::{
         canonical_digest, G2pAttempt, G2pAttemptState, G2pConnectionSnapshot, G2pError,
-        G2pHttpAuth, G2pProviderBinding,
+        G2pHttpAuth, G2pProviderBinding, G2pProviderIntent, G2pTransitRsaNoOidKeyBinding,
     },
     g2p_registry::{bind_inputs_for, confirmation_inputs, G2pInstructionState, G2pRegistryPort},
     g2p_store::{DispatchAuthorization, G2pStore},
@@ -15,12 +15,17 @@ use super::{
     },
 };
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD, Engine};
+use registry_payment_mifos_connector::{legacy_signature_digest, LegacySignatureHeaders};
 use registry_platform_config::SecretResolver;
+use registry_platform_crypto::transit_rsa_no_oid::{
+    TransitRsaNoOidKeyConfig, TransitRsaNoOidSigner, TransitRsaNoOidVerifier,
+};
 use registry_platform_httputil::client::BearerToken;
 use registry_platform_httputil::{read_bounded, validate_response_headers, ServiceBaseUrl};
 use serde::Serialize;
 use serde_json::Value;
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,18 +67,21 @@ pub trait G2pProviderPort: Send + Sync {
     async fn preflight_submit(
         &self,
         binding: &G2pProviderBinding,
+        intent: &G2pProviderIntent,
         request: &PreparedProviderRequest,
     ) -> Result<PreparedG2pSend, G2pProviderError>;
 
     async fn recover_acceptance(
         &self,
         binding: &G2pProviderBinding,
+        intent: &G2pProviderIntent,
         request: &PreparedProviderRequest,
     ) -> Result<Option<ProviderAcceptance>, G2pProviderError>;
 
     async fn observe(
         &self,
         binding: &G2pProviderBinding,
+        intent: &G2pProviderIntent,
         request: &PreparedProviderRequest,
     ) -> Result<ProviderHttpResponse, G2pProviderError>;
 }
@@ -130,31 +138,99 @@ impl G2pMappingPort for PaymentMappingRegistry {
     }
 }
 
-/// Provider-neutral HTTP host. Bearer requests send only the exact retained
-/// request plan. The Mifos legacy signature remains fail closed until its
-/// signer and response verifier are integrated into this boundary.
+struct LegacySignatureRuntime {
+    tenant: String,
+    signer: Arc<TransitRsaNoOidSigner>,
+    verifier: Arc<TransitRsaNoOidVerifier>,
+}
+
+enum ProviderResponseTrust {
+    ProviderReport,
+    SignedBulk(Arc<LegacySignatureRuntime>),
+}
+
+/// Provider-neutral HTTP host. It injects only host-owned authentication and
+/// correlation headers around the exact retained request bytes.
 pub struct HttpG2pProvider {
     resolver: Arc<SecretResolver>,
+    signature_runtimes: BTreeMap<String, Arc<LegacySignatureRuntime>>,
 }
 
 impl HttpG2pProvider {
     pub fn new(resolver: Arc<SecretResolver>) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            signature_runtimes: BTreeMap::new(),
+        }
+    }
+
+    pub async fn initialize(
+        resolver: Arc<SecretResolver>,
+        bindings: &[G2pProviderBinding],
+    ) -> Result<Self, G2pProviderError> {
+        let mut provider = Self::new(resolver);
+        for binding in bindings {
+            binding
+                .validate()
+                .map_err(|_| G2pProviderError::Unavailable)?;
+            let auth = binding.auth();
+            if !matches!(auth, G2pHttpAuth::MifosLegacySignature { .. }) {
+                continue;
+            }
+            let identity = canonical_digest(auth).map_err(|_| G2pProviderError::Unavailable)?;
+            if provider.signature_runtimes.contains_key(&identity) {
+                continue;
+            }
+            provider.signature_runtimes.insert(
+                identity,
+                Arc::new(initialize_signature_runtime(auth).await?),
+            );
+        }
+        Ok(provider)
     }
 
     fn bearer_token(&self, binding: &G2pProviderBinding) -> Result<BearerToken, G2pProviderError> {
+        if !matches!(binding.auth(), G2pHttpAuth::Bearer { .. }) {
+            return Err(G2pProviderError::Unavailable);
+        }
+        self.resolve_bearer(binding)
+    }
+
+    fn operations_bearer_token(
+        &self,
+        binding: &G2pProviderBinding,
+    ) -> Result<BearerToken, G2pProviderError> {
+        if !matches!(binding.auth(), G2pHttpAuth::MifosLegacySignature { .. }) {
+            return Err(G2pProviderError::Unavailable);
+        }
+        self.resolve_bearer(binding)
+    }
+
+    fn resolve_bearer(
+        &self,
+        binding: &G2pProviderBinding,
+    ) -> Result<BearerToken, G2pProviderError> {
         let secret = self
             .resolver
             .resolve(binding.credential_ref().as_str())
             .map_err(|_| G2pProviderError::Unavailable)?;
         let token = std::str::from_utf8(secret.expose_secret())
             .map_err(|_| G2pProviderError::Unavailable)?;
-        match binding.auth() {
-            G2pHttpAuth::Bearer => {
-                BearerToken::new(token.to_owned()).map_err(|_| G2pProviderError::Unavailable)
-            }
-            G2pHttpAuth::MifosLegacySignature { .. } => Err(G2pProviderError::Unavailable),
+        BearerToken::new(token.to_owned()).map_err(|_| G2pProviderError::Unavailable)
+    }
+
+    async fn signature_runtime(
+        &self,
+        binding: &G2pProviderBinding,
+    ) -> Result<Arc<LegacySignatureRuntime>, G2pProviderError> {
+        let identity =
+            canonical_digest(binding.auth()).map_err(|_| G2pProviderError::Unavailable)?;
+        if let Some(runtime) = self.signature_runtimes.get(&identity) {
+            return Ok(runtime.clone());
         }
+        initialize_signature_runtime(binding.auth())
+            .await
+            .map(Arc::new)
     }
 
     fn prepare_url(
@@ -182,16 +258,22 @@ impl HttpG2pProvider {
         Ok(url)
     }
 
-    async fn send_prepared(
+    async fn send_status(
         &self,
         binding: &G2pProviderBinding,
+        intent: &G2pProviderIntent,
         prepared: &PreparedProviderRequest,
     ) -> Result<ProviderHttpResponse, G2pProviderError> {
+        if prepared.role != PaymentEndpointRole::DisbursementStatus
+            || prepared.method != super::provider_mapping::PaymentHttpMethod::Get
+            || prepared.body.is_some()
+        {
+            return Err(G2pProviderError::Unavailable);
+        }
         binding
             .validate()
             .map_err(|_| G2pProviderError::Unavailable)?;
         let url = Self::prepare_url(binding, prepared)?;
-        let token = self.bearer_token(binding)?;
         let client = registry_platform_httputil::client::build_client(
             registry_platform_httputil::client::OutboundOptions {
                 request_timeout: Duration::from_secs(15),
@@ -206,41 +288,53 @@ impl HttpG2pProvider {
             super::provider_mapping::PaymentHttpMethod::Get => client.get(url),
         };
         for (name, value) in &prepared.headers {
+            if host_owned_header(name) {
+                return Err(G2pProviderError::Unavailable);
+            }
             request = request.header(name, value);
         }
-        request = request.header(
-            http::header::AUTHORIZATION,
-            token.authorization_header_value(),
-        );
+        match binding.auth() {
+            G2pHttpAuth::Bearer { .. } => {
+                let token = self.bearer_token(binding)?;
+                request = request.header(
+                    http::header::AUTHORIZATION,
+                    token.authorization_header_value(),
+                );
+                request = request.header("X-CorrelationID", &intent.correlation_id);
+            }
+            G2pHttpAuth::MifosLegacySignature { tenant, .. } => {
+                let token = self.operations_bearer_token(binding)?;
+                request = request
+                    .header("Platform-TenantId", tenant)
+                    .header("X-CorrelationID", &intent.correlation_id)
+                    .header(
+                        http::header::AUTHORIZATION,
+                        token.authorization_header_value(),
+                    );
+            }
+        }
         if let Some(body) = &prepared.body {
             request = request
                 .header(http::header::CONTENT_TYPE, "application/json")
                 .body(body.clone());
         }
-        let mutation = prepared.role.is_submit();
-        let response = request.send().await.map_err(|_| {
-            if mutation {
-                G2pProviderError::OutcomeUnknown
-            } else {
-                G2pProviderError::Unavailable
-            }
-        })?;
-        validate_response_headers(response.headers()).map_err(|_| {
-            if mutation {
-                G2pProviderError::OutcomeUnknown
-            } else {
-                G2pProviderError::Unavailable
-            }
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|_| G2pProviderError::Unavailable)?;
+        validate_response_headers(response.headers()).map_err(|_| G2pProviderError::Unavailable)?;
         let status = response.status().as_u16();
-        let body = read_bounded(response, 131_072).await.map_err(|_| {
-            if mutation {
-                G2pProviderError::OutcomeUnknown
-            } else {
-                G2pProviderError::Unavailable
-            }
-        })?;
-        Ok(ProviderHttpResponse { status, body })
+        let body = read_bounded(response, 131_072)
+            .await
+            .map_err(|_| G2pProviderError::Unavailable)?;
+        finish_provider_response(
+            status,
+            body,
+            None,
+            ProviderResponseTrust::ProviderReport,
+            false,
+        )
+        .await
     }
 }
 
@@ -249,6 +343,7 @@ impl G2pProviderPort for HttpG2pProvider {
     async fn preflight_submit(
         &self,
         binding: &G2pProviderBinding,
+        intent: &G2pProviderIntent,
         request: &PreparedProviderRequest,
     ) -> Result<PreparedG2pSend, G2pProviderError> {
         binding
@@ -258,7 +353,6 @@ impl G2pProviderPort for HttpG2pProvider {
             return Err(G2pProviderError::Unavailable);
         }
         let url = Self::prepare_url(binding, request)?;
-        let token = self.bearer_token(binding)?;
         let client = registry_platform_httputil::client::build_client(
             registry_platform_httputil::client::OutboundOptions {
                 request_timeout: Duration::from_secs(15),
@@ -270,13 +364,49 @@ impl G2pProviderPort for HttpG2pProvider {
         .map_err(|_| G2pProviderError::Unavailable)?;
         let mut builder = client.post(url);
         for (name, value) in &request.headers {
+            if host_owned_header(name)
+                || (matches!(binding.auth(), G2pHttpAuth::MifosLegacySignature { .. })
+                    && name.eq_ignore_ascii_case("x-batchid"))
+            {
+                return Err(G2pProviderError::Unavailable);
+            }
             builder = builder.header(name, value);
         }
-        builder = builder.header(
-            http::header::AUTHORIZATION,
-            token.authorization_header_value(),
-        );
         let body = request.body.as_ref().ok_or(G2pProviderError::Unavailable)?;
+        let response_trust = match binding.auth() {
+            G2pHttpAuth::Bearer { .. } => {
+                let token = self.bearer_token(binding)?;
+                builder = builder.header(
+                    http::header::AUTHORIZATION,
+                    token.authorization_header_value(),
+                );
+                builder = builder.header("X-CorrelationID", &intent.correlation_id);
+                ProviderResponseTrust::ProviderReport
+            }
+            G2pHttpAuth::MifosLegacySignature { .. } => {
+                let runtime = self.signature_runtime(binding).await?;
+                let digest = legacy_signature_digest(
+                    LegacySignatureHeaders::bulk_request(&intent.correlation_id, &runtime.tenant),
+                    body,
+                )
+                .map_err(|_| G2pProviderError::Unavailable)?;
+                let signature = runtime
+                    .signer
+                    .sign_digest_hex(digest.as_bytes())
+                    .await
+                    .map_err(|_| G2pProviderError::Unavailable)?;
+                let encoded_signature = STANDARD.encode(signature.as_bytes());
+                let mut signature_header =
+                    http::HeaderValue::from_bytes(encoded_signature.as_bytes())
+                        .map_err(|_| G2pProviderError::Unavailable)?;
+                signature_header.set_sensitive(true);
+                builder = builder
+                    .header("Platform-TenantId", &runtime.tenant)
+                    .header("X-CorrelationID", &intent.correlation_id)
+                    .header("X-SIGNATURE", signature_header);
+                ProviderResponseTrust::SignedBulk(runtime)
+            }
+        };
         let prepared = builder
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(body.clone())
@@ -290,16 +420,24 @@ impl G2pProviderPort for HttpG2pProvider {
             validate_response_headers(response.headers())
                 .map_err(|_| G2pProviderError::OutcomeUnknown)?;
             let status = response.status().as_u16();
+            let signature = match &response_trust {
+                ProviderResponseTrust::ProviderReport => None,
+                ProviderResponseTrust::SignedBulk(runtime) => Some(
+                    signed_response_headers(response.headers(), &runtime.tenant)
+                        .map_err(|_| G2pProviderError::OutcomeUnknown)?,
+                ),
+            };
             let body = read_bounded(response, 131_072)
                 .await
                 .map_err(|_| G2pProviderError::OutcomeUnknown)?;
-            Ok(ProviderHttpResponse { status, body })
+            finish_provider_response(status, body, signature, response_trust, true).await
         }))
     }
 
     async fn recover_acceptance(
         &self,
         _binding: &G2pProviderBinding,
+        _intent: &G2pProviderIntent,
         _request: &PreparedProviderRequest,
     ) -> Result<Option<ProviderAcceptance>, G2pProviderError> {
         Ok(None)
@@ -308,13 +446,133 @@ impl G2pProviderPort for HttpG2pProvider {
     async fn observe(
         &self,
         binding: &G2pProviderBinding,
+        intent: &G2pProviderIntent,
         request: &PreparedProviderRequest,
     ) -> Result<ProviderHttpResponse, G2pProviderError> {
         if request.role != PaymentEndpointRole::DisbursementStatus {
             return Err(G2pProviderError::Unavailable);
         }
-        self.send_prepared(binding, request).await
+        self.send_status(binding, intent, request).await
     }
+}
+
+async fn initialize_signature_runtime(
+    auth: &G2pHttpAuth,
+) -> Result<LegacySignatureRuntime, G2pProviderError> {
+    let G2pHttpAuth::MifosLegacySignature {
+        tenant,
+        signing_key,
+        response_key,
+        ..
+    } = auth
+    else {
+        return Err(G2pProviderError::Unavailable);
+    };
+    let signer = TransitRsaNoOidSigner::initialize(transit_config(signing_key)?)
+        .await
+        .map_err(|_| G2pProviderError::Unavailable)?;
+    let verifier = TransitRsaNoOidVerifier::initialize(transit_config(response_key)?)
+        .await
+        .map_err(|_| G2pProviderError::Unavailable)?;
+    Ok(LegacySignatureRuntime {
+        tenant: tenant.clone(),
+        signer: Arc::new(signer),
+        verifier: Arc::new(verifier),
+    })
+}
+
+fn transit_config(
+    binding: &G2pTransitRsaNoOidKeyBinding,
+) -> Result<TransitRsaNoOidKeyConfig, G2pProviderError> {
+    TransitRsaNoOidKeyConfig::new(
+        binding.socket_path.clone(),
+        binding.mount.clone(),
+        binding.key.clone(),
+        binding.version.get(),
+        binding
+            .public_key_sha256()
+            .map_err(|_| G2pProviderError::Unavailable)?,
+        Duration::from_millis(u64::from(binding.attempt_timeout_milliseconds.get())),
+    )
+    .map_err(|_| G2pProviderError::Unavailable)
+}
+
+fn host_owned_header(name: &str) -> bool {
+    [
+        http::header::AUTHORIZATION.as_str(),
+        "platform-tenantid",
+        "x-correlationid",
+        "x-signature",
+    ]
+    .iter()
+    .any(|protected| name.eq_ignore_ascii_case(protected))
+}
+
+fn signed_response_headers(
+    headers: &http::HeaderMap,
+    expected_tenant: &str,
+) -> Result<Vec<u8>, G2pProviderError> {
+    let tenants = headers
+        .get_all("Platform-TenantId")
+        .iter()
+        .collect::<Vec<_>>();
+    let signatures = headers.get_all("X-SIGNATURE").iter().collect::<Vec<_>>();
+    if tenants.len() != 1
+        || signatures.len() != 1
+        || tenants[0].as_bytes() != expected_tenant.as_bytes()
+    {
+        return Err(G2pProviderError::Unavailable);
+    }
+    let encoded = signatures[0]
+        .to_str()
+        .map_err(|_| G2pProviderError::Unavailable)?;
+    let signature = STANDARD
+        .decode(encoded)
+        .map_err(|_| G2pProviderError::Unavailable)?;
+    if STANDARD.encode(&signature) != encoded {
+        return Err(G2pProviderError::Unavailable);
+    }
+    Ok(signature)
+}
+
+async fn verify_response(
+    runtime: &LegacySignatureRuntime,
+    body: &[u8],
+    signature: &[u8],
+) -> Result<(), G2pProviderError> {
+    let digest = legacy_signature_digest(LegacySignatureHeaders::empty(), body)
+        .map_err(|_| G2pProviderError::Unavailable)?;
+    runtime
+        .verifier
+        .verify_digest_hex(digest.as_bytes(), signature)
+        .await
+        .map_err(|_| G2pProviderError::Unavailable)
+}
+
+async fn finish_provider_response(
+    status: u16,
+    body: Vec<u8>,
+    signature: Option<Vec<u8>>,
+    trust: ProviderResponseTrust,
+    mutation: bool,
+) -> Result<ProviderHttpResponse, G2pProviderError> {
+    let failure = || {
+        if mutation {
+            G2pProviderError::OutcomeUnknown
+        } else {
+            G2pProviderError::Unavailable
+        }
+    };
+    match (trust, signature) {
+        (ProviderResponseTrust::ProviderReport, None) => {}
+        (ProviderResponseTrust::SignedBulk(runtime), Some(signature)) => {
+            verify_response(&runtime, &body, &signature)
+                .await
+                .map_err(|_| failure())?;
+        }
+        _ => return Err(failure()),
+    }
+    Ok(ProviderHttpResponse { status, body })
 }
 
 pub struct G2pService {
@@ -474,7 +732,11 @@ impl G2pService {
         if attempt.state == G2pAttemptState::DispatchStarted {
             let recovered = self
                 .provider
-                .recover_acceptance(&attempt.binding.provider, &attempt.prepared_submit)
+                .recover_acceptance(
+                    &attempt.binding.provider,
+                    &attempt.provider_intent,
+                    &attempt.prepared_submit,
+                )
                 .await
                 .map_err(provider_read_error)?;
             let Some(accepted) = recovered else {
@@ -512,7 +774,11 @@ impl G2pService {
                 .map_err(mapping_read_error)?;
             let response = self
                 .provider
-                .observe(&attempt.binding.provider, &status_request)
+                .observe(
+                    &attempt.binding.provider,
+                    &attempt.provider_intent,
+                    &status_request,
+                )
                 .await
                 .map_err(provider_read_error)?;
             let mapped = mapping
@@ -630,7 +896,11 @@ impl G2pService {
                 .map_err(mapping_read_error)?;
             Some(
                 self.provider
-                    .preflight_submit(&attempt.binding.provider, &attempt.prepared_submit)
+                    .preflight_submit(
+                        &attempt.binding.provider,
+                        &attempt.provider_intent,
+                        &attempt.prepared_submit,
+                    )
                     .await
                     .map_err(provider_read_error)?,
             )
@@ -677,7 +947,11 @@ impl G2pService {
                 }
                 let recovered = self
                     .provider
-                    .recover_acceptance(&held.binding.provider, &held.prepared_submit)
+                    .recover_acceptance(
+                        &held.binding.provider,
+                        &held.provider_intent,
+                        &held.prepared_submit,
+                    )
                     .await
                     .map_err(provider_read_error)?;
                 match recovered {

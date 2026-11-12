@@ -549,6 +549,8 @@ fn response(intent, settings, acceptance, response) {
 "#;
     for header in [
         "authorization",
+        "x-signature",
+        "X-SIGNATURE",
         "x-http-method-override",
         "x-method-override",
         "x-original-url",

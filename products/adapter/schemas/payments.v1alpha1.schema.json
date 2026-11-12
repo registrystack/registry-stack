@@ -165,30 +165,47 @@
         {
           "additionalProperties": false,
           "properties": {
+            "credentialIdentity": {
+              "type": "string"
+            },
+            "credentialRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
             "type": {
               "const": "bearer",
               "type": "string"
             }
           },
           "required": [
-            "type"
+            "type",
+            "credentialIdentity",
+            "credentialRef"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
+            "operationsCredentialIdentity": {
+              "type": "string"
+            },
+            "operationsCredentialRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "responseKey": {
+              "$ref": "#/$defs/G2pTransitRsaNoOidKeyBinding"
+            },
             "responseKeyIdentity": {
               "type": "string"
             },
-            "responseKeyRef": {
-              "$ref": "#/$defs/SecretReference"
+            "signingKey": {
+              "$ref": "#/$defs/G2pTransitRsaNoOidKeyBinding"
             },
             "signingKeyIdentity": {
               "type": "string"
             },
-            "signingKeyRef": {
-              "$ref": "#/$defs/SecretReference"
+            "tenant": {
+              "type": "string"
             },
             "type": {
               "const": "mifos-legacy-signature",
@@ -197,10 +214,13 @@
           },
           "required": [
             "type",
+            "tenant",
             "signingKeyIdentity",
-            "signingKeyRef",
+            "signingKey",
             "responseKeyIdentity",
-            "responseKeyRef"
+            "responseKey",
+            "operationsCredentialIdentity",
+            "operationsCredentialRef"
           ],
           "type": "object"
         }
@@ -214,12 +234,6 @@
           "properties": {
             "auth": {
               "$ref": "#/$defs/G2pHttpAuth"
-            },
-            "credentialIdentity": {
-              "type": "string"
-            },
-            "credentialRef": {
-              "$ref": "#/$defs/SecretReference"
             },
             "revision": {
               "type": "string"
@@ -241,8 +255,6 @@
             "revision",
             "submitBaseUrl",
             "statusBaseUrl",
-            "credentialIdentity",
-            "credentialRef",
             "auth",
             "settings"
           ],
@@ -296,6 +308,45 @@
         "bindProfile",
         "reportAction",
         "reportProfile"
+      ],
+      "type": "object"
+    },
+    "G2pTransitRsaNoOidKeyBinding": {
+      "additionalProperties": false,
+      "description": "Exact Transit RSA key version and SPKI identity retained with an attempt.\nPrivate key bytes never enter Adapter configuration or durable custody.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "format": "uint32",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "mount": {
+          "type": "string"
+        },
+        "publicKeyDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "socketPath": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "socketPath",
+        "mount",
+        "key",
+        "version",
+        "publicKeyDigest",
+        "attemptTimeoutMilliseconds"
       ],
       "type": "object"
     },

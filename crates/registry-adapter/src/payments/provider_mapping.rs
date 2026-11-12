@@ -801,6 +801,7 @@ fn forbidden_header(name: &str) -> bool {
             | "trailer"
             | "upgrade"
             | "x-api-key"
+            | "x-signature"
             | "api-key"
             | "x-auth-token"
             | "x-access-token"

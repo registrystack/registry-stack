@@ -447,9 +447,10 @@ fn attempt_for_registry(
             revision: "http-test-v1".to_owned(),
             submit_base_url: "http://127.0.0.1:31002/".to_owned(),
             status_base_url: "http://127.0.0.1:31003/".to_owned(),
-            credential_identity: "provider-test-client".to_owned(),
-            credential_ref: SecretReference::new("secret:env/PROVIDER_TEST_TOKEN").unwrap(),
-            auth: G2pHttpAuth::Bearer,
+            auth: G2pHttpAuth::Bearer {
+                credential_identity: "provider-test-client".to_owned(),
+                credential_ref: SecretReference::new("secret:env/PROVIDER_TEST_TOKEN").unwrap(),
+            },
             settings: json!({"tenant": "default"}),
         },
         registry,
@@ -512,6 +513,7 @@ impl G2pProviderPort for PreflightFailureProvider {
     async fn preflight_submit(
         &self,
         _binding: &G2pProviderBinding,
+        _intent: &registry_adapter::payments::g2p_model::G2pProviderIntent,
         _request: &PreparedProviderRequest,
     ) -> Result<PreparedG2pSend, G2pProviderError> {
         self.preflights.fetch_add(1, Ordering::SeqCst);
@@ -521,6 +523,7 @@ impl G2pProviderPort for PreflightFailureProvider {
     async fn recover_acceptance(
         &self,
         _binding: &G2pProviderBinding,
+        _intent: &registry_adapter::payments::g2p_model::G2pProviderIntent,
         _request: &PreparedProviderRequest,
     ) -> Result<Option<ProviderAcceptance>, G2pProviderError> {
         panic!("preflight failure must not enter recovery")
@@ -529,6 +532,7 @@ impl G2pProviderPort for PreflightFailureProvider {
     async fn observe(
         &self,
         _binding: &G2pProviderBinding,
+        _intent: &registry_adapter::payments::g2p_model::G2pProviderIntent,
         _request: &PreparedProviderRequest,
     ) -> Result<ProviderHttpResponse, G2pProviderError> {
         panic!("preflight failure must not observe the provider")

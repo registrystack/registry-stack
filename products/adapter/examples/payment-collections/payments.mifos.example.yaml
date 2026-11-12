@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/payments/payments.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/payments/v1alpha1
+kind: AdapterPayments
+connections:
+  - id: licence-fees
+    institutionId: institution-a
+    serviceId: licence-issuance
+    allowedClients: [coordinator-payments]
+    requiredScope: payments:collect
+    binding:
+      simulation: true
+      currency: USD
+      currencyScale: 2
+      providerCredentialRef: secret:env/PAYMENT_SIMULATOR_TOKEN
+      providerCredentialIdentity: registry
+      # The simulator retains commands in its database. The host permits
+      # recovery sends for only this bounded window after the first dispatch.
+      replayWindowSeconds: 3600
+      provider:
+        type: simulator
+        connection:
+          baseUrl: http://127.0.0.1:8099/
+          tenant: pilot
+          biller: ministry
+          billerName: Ministry
+          callbackUrl: https://programme.example.test/callback
+          payerFiBic: SIMBANK
+      registry:
+        baseUrl: http://127.0.0.1:8080/
+        recordType: service-fee-bill
+        recordRoute: service-fee-bills
+        readProfile: payment-adapter-reporter
+        bindProfile: payment-adapter-binder
+        receiptProfile: payment-adapter-reporter
+        bindAction: bind-payment-attempt
+        receiptAction: record-payment-receipt
+        credentialRef: secret:env/PAYMENT_ADAPTER_BREG_TOKEN
+        credentialIdentity: payment-adapter
+disbursements:
+  - id: cash-transfers
+    allowedClients: [coordinator-g2p]
+    requiredScope: payments:disburse
+    binding:
+      institutionId: ministry-social-protection
+      serviceId: cash-transfer
+      programmeId: cash-programme
+      fundingAccountId: programme-account
+      currency: KES
+      currencyScale: 2
+      providerPack:
+        id: mifos-payment-hub
+        version: '1'
+        digest: sha256:2130ab2942bb7acc3929ab670099f28d714e0a885e2b866844b0f655cfeb7978
+      fundingPartyKey: ACCOUNT_ID
+      recipientPartyKey: MSISDN
+      provider:
+        type: http
+        revision: mifos-bulk-v1.12.1-operations-v1.17.1
+        submitBaseUrl: https://mifos-bulk.example.test/
+        statusBaseUrl: https://mifos-operations.example.test/
+        auth:
+          type: mifos-legacy-signature
+          tenant: pilot
+          signingKeyIdentity: transit:mifos-bulk-request:v7
+          signingKey:
+            socketPath: /run/registry-adapter/transit.sock
+            mount: transit
+            key: mifos-bulk-request
+            version: 7
+            publicKeyDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            attemptTimeoutMilliseconds: 2000
+          responseKeyIdentity: transit:mifos-bulk-response:v4
+          responseKey:
+            socketPath: /run/registry-adapter/transit.sock
+            mount: transit
+            key: mifos-bulk-response
+            version: 4
+            publicKeyDigest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            attemptTimeoutMilliseconds: 2000
+          operationsCredentialIdentity: mifos-operations-client
+          operationsCredentialRef: secret:env/MIFOS_OPERATIONS_TOKEN
+        settings:
+          tenant: pilot
+          fundingPartyKey: ACCOUNT_ID
+          recipientPartyKey: MSISDN
+          purpose: GOVERNMENT_TRANSFER
+          subType: BENEFIT
+          descriptionText: Social protection disbursement
+      registry:
+        baseUrl: https://breg.example.test/
+        credentialIdentity: g2p-payment-adapter
+        credentialRef: secret:env/G2P_PAYMENT_ADAPTER_BREG_TOKEN
+        recordRoute: disbursement-instructions
+        recordType: disbursement-instruction
+        readProfile: g2p-adapter-read
+        bindAction: bind-payout-attempt
+        bindProfile: g2p-adapter-bind
+        reportAction: record-provider-confirmation
+        reportProfile: g2p-adapter-report

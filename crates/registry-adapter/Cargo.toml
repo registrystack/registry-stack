@@ -71,7 +71,7 @@ schemars = { workspace = true, optional = true }
 async-trait.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
-registry-platform-crypto.workspace = true
+registry-platform-crypto = { workspace = true, features = ["transit"] }
 registry-platform-httputil.workspace = true
 registry-platform-script.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }

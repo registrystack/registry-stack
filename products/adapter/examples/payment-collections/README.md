@@ -1,11 +1,14 @@
-# Synthetic payment collection
+# Payment collection and G2P configuration
 
-This source example combines the Adapter payment host with the maintained
+The baseline `payments.example.yaml` combines the Adapter payment host with the maintained
 [service-fee BReg project](../../../breg/examples/payment-fee-issuance/README.md).
 The first provider is the repository's [P2G simulator](../../../../tools/payment-simulator/README.md).
 It does not accept real payments or claim general GovStack Payments conformance.
 The [contract and capability comparison](CONTRACT.md) names the exact HTTP
 surface, ownership and differences from the earlier composition capability.
+The separate `payments.mifos.example.yaml` adds an authoritative G2P
+disbursement connection pinned to the public `mifos-payment-hub` pack. It is
+an operator configuration example, not evidence of a live Mifos deployment.
 
 A service creates the authoritative bill. The Coordinator workflow then uses
 native payment operations:
@@ -27,10 +30,12 @@ and [connection setup](../../../coordinator/DEPLOYMENT.md).
 ## Bind the connection
 
 Copy `payments.example.yaml` and `runtime.example.yaml` into the operator's
-configuration directory. `payments.yaml` binds the service to one provider
-tenant/biller and one registry. Its caller policy must agree with the shared
-runtime's OIDC issuer, audience and admitted clients. Its currency and scale
-must agree with the authoritative bill.
+configuration directory for the simulator-only baseline. Copy
+`payments.mifos.example.yaml` instead when configuring the mixed P2G and G2P
+deployment. The resulting `payments.yaml` binds each service to its provider
+and registry. Its caller policy must agree with the shared runtime's OIDC
+issuer, audience and admitted clients. Its currency and scale must agree with
+the authoritative bill or disbursement instruction.
 
 The provider token identifies the synthetic producer. The BReg token belongs
 to `payment-adapter`, with `registry:payment-attempt:bind` and
@@ -41,13 +46,36 @@ renew externally supplied bearer tokens at those references; the host
 resolves them on each exchange. Rotation must preserve the original logical
 provider or registry identity.
 
+The disbursement binding separates the two released Mifos roles. Bulk POSTs
+carry no bearer token: Adapter signs the exact retained body, tenant and
+correlation through the configured Transit key, then verifies the signed Bulk
+response through the distinct response key. Operations GETs carry the separate
+`operationsCredentialRef` bearer token and host-owned tenant and correlation
+headers. Released Operations v1.17.1 permits `/api/v1/**` by default unless
+route authorization is enabled, so the deployment must enable and verify
+bearer authorization or enforce it at a trusted gateway. The status response
+is not signed; Adapter treats it only as a bounded provider report and compares
+its batch, correlation, amount, currency, funding party and recipient with the
+retained BReg instruction before reporting confirmation.
+
+Replace the example Transit SPKI digests, key versions, key names, socket path,
+origins and secret references with deployment-owned values. The socket must be
+an absolute local Unix socket protected by ACLs and a trusted proxy policy.
+The host validates the pinned key metadata at startup and never receives
+private key bytes. Repository tests use a fake Transit endpoint and do not
+establish live OpenBao `/none` plus `prehashed` interoperability.
+
 Build matching `adapter` and `adapterctl` binaries from this checkout, using
 the repository's external Cargo target directory. Check the configuration
-without resolving credentials or contacting a provider:
+against the exact pack pinned in `providerPack`, without resolving credentials
+or contacting a provider. The pack path must contain bytes whose id, version
+and digest match that pin:
 
 ```sh
-adapterctl payments check /absolute/path/payments.yaml
-adapterctl --format json payments contract /absolute/path/payments.yaml
+adapterctl payments check /absolute/path/payments.mifos.yaml \
+  --provider-pack /absolute/path/mifos-payment-hub/pack.yaml
+adapterctl --format json payments contract /absolute/path/payments.mifos.yaml \
+  --provider-pack /absolute/path/mifos-payment-hub/pack.yaml
 ```
 
 Start the payment-only host with the configured PostgreSQL and OIDC service:
@@ -92,6 +120,13 @@ A lost provider response retains the original exact command, tenant, biller
 and connection revision. Recovery may resend only inside the original replay
 window. After that window, the attempt remains held. A changed connection
 config applies to new attempts; it does not redirect retained ones.
+
+G2P Bulk sends are never replayed. If the first response is lost, the attempt
+stays held because no accepted batch reference exists for the Operations
+status query. An operator must reconcile it with the provider; an unknown send
+cannot become a failure or authorize a fresh submission. After a signed Bulk
+acceptance supplies the retained batch reference, status recovery is read-only
+through the Operations bearer path.
 
 The host persists bind and receipt commands before sending them. A lost BReg
 acknowledgement is recovered through the same command/key or exact bill and

@@ -4609,7 +4609,53 @@ formats:
       - {pointer: /connections/*/binding/registry/receiptProfile, whenOmitted: refused}
       - {pointer: /connections/*/binding/registry/bindAction, whenOmitted: refused}
       - {pointer: /connections/*/binding/registry/receiptAction, whenOmitted: refused}
-    restrictingMembers: [/connections/*/allowedClients, /connections/*/requiredScope, /connections/*/institutionId, /connections/*/serviceId, /connections/*/binding/simulation]
+      - {pointer: /disbursements, whenOmitted: closed}
+      - {pointer: /disbursements/*/allowedClients, whenOmitted: refused}
+      - {pointer: /disbursements/*/requiredScope, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/institutionId, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/serviceId, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/programmeId, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/fundingAccountId, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/currency, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/currencyScale, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/providerPack, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/fundingPartyKey, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/recipientPartyKey, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/type, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/revision, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/submitBaseUrl, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/statusBaseUrl, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/type, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/credentialIdentity, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/credentialRef, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/tenant, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/signingKeyIdentity, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/signingKey/socketPath, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/signingKey/mount, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/signingKey/key, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/signingKey/version, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/signingKey/publicKeyDigest, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/signingKey/attemptTimeoutMilliseconds, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/responseKeyIdentity, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/responseKey/socketPath, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/responseKey/mount, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/responseKey/key, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/responseKey/version, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/responseKey/publicKeyDigest, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/responseKey/attemptTimeoutMilliseconds, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/operationsCredentialIdentity, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/provider/auth/operationsCredentialRef, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/baseUrl, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/credentialIdentity, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/credentialRef, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/recordRoute, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/recordType, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/readProfile, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/bindProfile, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/reportProfile, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/bindAction, whenOmitted: refused}
+      - {pointer: /disbursements/*/binding/registry/reportAction, whenOmitted: refused}
+    restrictingMembers: [/connections/*/allowedClients, /connections/*/requiredScope, /connections/*/institutionId, /connections/*/serviceId, /connections/*/binding/simulation, /disbursements/*/allowedClients, /disbursements/*/requiredScope, /disbursements/*/binding/institutionId, /disbursements/*/binding/serviceId, /disbursements/*/binding/programmeId, /disbursements/*/binding/fundingAccountId]
 
   - id: adapter/job-runtime
     product: adapter
