@@ -19,8 +19,9 @@ verification scripts. Read the workspace `AGENTS.md`, this file,
 | `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks; no I/O (it depends on `registry-platform-httputil` only for its pure header predicates and bounds) |
 | `crates/registry-adapter-engine` | Bounded route engine, components, compilation and replay shared by facade, jobs and Evidence; no listener or PostgreSQL client |
 | `crates/registry-adapter` | Governed facade, caller security, audit journal and idempotency custody over the shared engine; optional typed payment host and PostgreSQL attempts (CONCEPT section 19) |
-| `crates/registry-payment-protocol` | Runtime-free typed collection, observation, receipt and problem contract |
+| `crates/registry-payment-protocol` | Runtime-free typed collection, disbursement, observation, reporting and problem contract |
 | `crates/registry-payment-simulator-connector` | Standalone synthetic P2G wire and transport; no product clients, stores or runtimes |
+| `crates/registry-payment-mifos-connector` | Released Mifos Payment Hub EE wire and signature profile; the payment host owns key custody |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
 | `crates/registry-adapter-job` | The ingestion-job host and the `adapter-job` binary: the item table, the pass, interval and authenticated hook triggers, and the destination seam; it keeps identity and position only, never payloads (`CONCEPT.md` section 17) |
 | `crates/registry-adapter-connectors` | BReg connector over `registry-breg-client`, behind the job host's off-by-default `direct-breg` feature. Engine and facade cannot reach it; the dependency gate names the exact permitted path |
@@ -45,12 +46,14 @@ only, behind a feature, never a product runtime, CLI, or database crate, and
 `products/adapter/scripts/check_dependency_direction.py` enforces that
 boundary mechanically (`CONCEPT.md` section 17.5). No facade binary and
 neither engine crate links the ingestion connector crate.
-The payment-host exception is `registry-adapter::payments`: the host links
-the payment protocol, standalone synthetic provider connector, and public
-`registry-breg-client` for restricted bill and receipt Actions. Its authoring
-tool may inherit that host closure. Core and engine remain source-neutral;
-neither gains payment types, stores or product clients. No product runtime,
-tooling, database crate or Coordinator client enters the payment host closure.
+The payment-host exception is `registry-adapter::payments`. The host links
+the payment protocol, standalone simulator and Mifos provider connectors, and
+public `registry-breg-client` for authoritative bill and instruction reads and
+restricted binding and reporting Actions. Its authoring tool may inherit that
+host closure and link the provider connectors for offline fixture replay. Core
+and engine remain source-neutral and have no payment types, stores or product
+clients. No product runtime, tooling, database crate or Coordinator client
+enters the payment host closure.
 
 ## Gates
 

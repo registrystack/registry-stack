@@ -55,6 +55,7 @@ not products of their own.
 | `crates/registry-payment-protocol` | Runtime-free exact-money payment intents, observations, receipts and problem vocabulary |
 | `crates/registry-payment-client` | Bounded typed HTTP client for the Adapter payment contract |
 | `crates/registry-payment-simulator-connector` | Standalone synthetic P2G provider connector; no Adapter, Coordinator or product runtime dependency |
+| `crates/registry-payment-mifos-connector` | Bounded Mifos Payment Hub EE wire and legacy signature profile; key custody belongs to the payment host |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
 | `crates/registry-adapter-job` | Adapter ingestion-job host and the `adapter-job` binary: item table, pass, interval and authenticated hook triggers, and destination seam; identity and position only, never payloads |
 | `crates/registry-adapter-connectors` | Ingestion BReg connector over `registry-breg-client`, reachable only through the job host's explicit off-by-default `direct-breg` feature; never through the engine or facade; distinct from the payment host's direct public BReg client dependency |
@@ -338,9 +339,10 @@ crate, and
 split. The adapter inherits no authorization
 from any product. The optional payment module is a separate approved host
 exception: `registry-adapter` may use `registry-payment-protocol`, the
-standalone synthetic provider connector, and the public `registry-breg-client`
-for authoritative bill reads and restricted binding/receipt Actions. The
-source-neutral core, engine and generic job host gain no payment dependencies.
+standalone simulator and Mifos provider connectors, and the public
+`registry-breg-client` for authoritative bill and instruction reads and
+restricted binding and reporting Actions. The source-neutral core, engine and
+generic job host gain no payment dependencies.
 The payment host retains original attempt bindings and grants no authority
 to Coordinator or callers to assert financial facts. The record facade
 inherits no authorization

@@ -2,12 +2,13 @@
 
 //! Bounded client for Adapter collection and disbursement capabilities.
 //!
-//! The client sends only the authoritative bill identifier and version a
-//! service workflow supplies. Amount, provider state, and receipt evidence
-//! are decoded from the Adapter's typed responses and validated before they
-//! leave this crate. Reads are single exchanges. Keyed mutations may resend
-//! only the exact request under the caller's original key, within the bounded
-//! retry policy selected in [`PaymentClientConfig`].
+//! The client requests a collection by bill identity and version, or a
+//! disbursement by instruction record identity and version. It validates
+//! amount, provider state, and evidence in the Adapter's typed responses.
+//! Reads are single exchanges. Disbursement submission sends once and uses a
+//! read-only lookup to reconcile an unknown result. For mutations that permit
+//! a resend, the bounded policy in [`PaymentClientConfig`] preserves the exact
+//! request and the caller's original key.
 
 #![deny(unsafe_code)]
 

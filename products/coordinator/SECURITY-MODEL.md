@@ -673,12 +673,13 @@ The disbursement catalog accepts only `instructionRecordId` and positive `instru
 requesting a disbursement, and only `disbursementId` when reading it or reporting provider
 confirmation.
 `PaymentConnectionConfig` fixes the Adapter origin, Adapter payment connection and ordinary service
-authorization. The maintained payment client validates strict typed responses and exact bill or
-collection correlation before returning them. A request is durably keyed. Reconciliation uses only
-Adapter's read-only original-request endpoint with that saved key and body under current connection
-authorization. Provider-protocol failures, malformed or mismatched success documents, broken
-post-dispatch exchanges, `recovery-held`, and `outcome-unknown` remain uncertain. An unresolved or
-expired receipt proves no absence and grants no fresh effect.
+authorization. The maintained payment client validates strict typed responses against the exact
+bill, collection, instruction or disbursement identity before returning them. A request is durably
+keyed. Reconciliation uses only Adapter's read-only original-request endpoint with that saved key
+and body under current connection authorization. Provider-protocol failures, malformed or
+mismatched success documents, broken post-dispatch exchanges, `recovery-held`, and
+`outcome-unknown` remain uncertain. An unresolved or expired receipt proves no absence and grants
+no fresh effect.
 
 Disbursement request recovery is deliberately narrower than collection recovery. The request
 descriptor exposes Adapter's read-only original-command lookup but declares `hold-after-dispatch`,
@@ -766,9 +767,9 @@ For disbursements in the same files:
     check this.
 12. Run workflows that must not share a Casework producer identity in separate
     deployments: one deployment is one trust domain.
-13. Give Coordinator only the Adapter payment capability. Keep the BReg bill-binding and receipt
-    grants on Adapter's reporter identity, and investigate an unresolved original-request receipt
-    before any same-command recovery or cancellation decision.
+13. Give Coordinator only the Adapter payment capability. Keep the BReg bill and instruction
+    binding and reporting grants with the authorized Adapter identities. Investigate an unresolved
+    original-request receipt before any same-command recovery or cancellation decision.
 
 ## 4. Accepted residuals
 

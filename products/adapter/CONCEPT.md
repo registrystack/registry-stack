@@ -2531,20 +2531,21 @@ paging. Consultation's protected response headers stay unchanged.
 ## 19. Typed payment hosting
 
 The optional `registry-adapter::payments` module mounts dedicated collection,
-observation and receipt operations on the Adapter listener. Coordinator
-exposes them as native typed steps. Workflows supply an authoritative bill
-identifier/version or an existing collection identifier; tenant, biller,
-provider origin, credentials, currency policy and restricted BReg Actions are
-operator-owned connection configuration. A payment-only deployment needs no
-record project or generic HTTP workflow step.
+disbursement, observation and reporting operations on the Adapter listener.
+Coordinator exposes them as native typed steps. Workflows supply the bill or
+instruction record identity and version, then use the accepted attempt ID for
+observation and reporting. Tenant, biller, provider origins, credentials,
+currency policy and restricted BReg Actions are operator-owned connection
+configuration. A payment-only deployment uses these dedicated operations.
 
-BReg owns the authoritative immutable bill and fee policy, the recorded
-receipt, and the service's paid/unused issuance guard. The payment host owns
-durable attempts, original provider and registry binding snapshots, exact
-prepared commands, correlation and verified observations. Coordinator owns
-workflow progress and waits. The provider owns the financial transaction.
-The host is not a settlement ledger and does not move payment truth into
-Coordinator.
+BReg owns the authoritative bills and fee policy, approved disbursement
+instructions, recorded receipts and provider confirmations, and the service's
+paid/unused issuance guard. The payment host owns durable attempts, original
+provider and registry binding snapshots, exact prepared commands, correlation
+and verified observations. Coordinator owns workflow progress and waits.
+The provider owns the financial transaction.
+
+### 19.1 Payment collection
 
 Before any provider send, PostgreSQL reserves one attempt per institution,
 service, bill and bill version across workflow command keys. The host
@@ -2552,9 +2553,9 @@ persists the exact bind Action and key, invokes that restricted Action, and
 verifies the frozen authoritative bill binding. It then persists the first
 dispatch time before sending the original exact provider command. An
 accepted response means provider acceptance has been established, not merely
-that a local row exists. Unknown remains unresolved. A same-command resend
-is admitted only inside the original connection's declared provider replay
-window; later uncertainty is held and cannot mint another attempt.
+that a local row exists. Unknown remains unresolved. The simulator allows an
+exact same-command resend inside the original connection's declared replay
+window. An unknown HTTP provider submission stays held after dispatch.
 
 Provider identifiers derive from a domain-separated digest of the full
 immutable bill and provider origin, producer identity, tenant and biller.
@@ -2573,23 +2574,40 @@ The receipt step accepts only a collection identifier. The host derives the
 receipt from its confirmed observation and frozen bill, persists the exact
 restricted BReg report Action/key, and verifies authoritative readback. Lost
 bind or report acknowledgements recover from the saved command or exact
-readback, never from a generic paid flag. Only the dedicated payment Adapter
-identity has bind/report grants. Every lookup rechecks the current caller,
-connection and service scope; possession of an attempt UUID grants nothing.
-Changing connection configuration affects new attempts. Old attempts retain
-their original provider origin, tenant, biller, credential identity and
-registry binding. Rotation at the same credential reference is supported.
+readback. The numeric-loopback simulator preserves exact decimal JSON and
+requires synthetic response provenance to authorize a synthetic fee receipt.
+Generic provider-pack observations are available as correlated status.
 
-The initial provider connector is the repository's explicitly synthetic P2G
-simulator profile. It accepts only numeric loopback HTTP origins, preserves
-exact decimal JSON and requires synthetic response provenance. Configuration
-refuses live mode. This is not general GovStack Payments conformance or a
-live FSP integration. No G2P, refunds, settlement, callbacks, replacement
-attempts or second autonomous payment orchestration loop are implemented.
+### 19.2 Disbursement
+
+Adapter reads the approved instruction from BReg, including the exact money,
+beneficiary destination and funding account. Adapter prepares the exact
+provider command under the pinned binding and reserves one attempt for the
+authoritative source, instruction identity and version. It commits the
+restricted BReg binding Action and records the first dispatch before sending.
+An uncertain submission stays held. Coordinator can reconcile the original
+acceptance through a read-only lookup for the saved key and instruction.
+
+The separate confirmation operation accepts only a disbursement ID. Adapter
+reports verified provider completion through its restricted BReg Action,
+using the original instruction facts and a separately keyed exact command.
+The resulting confirmation records what the provider reported. Beneficiary
+credit and settlement require separate authoritative evidence.
+
+### 19.3 Authorization and retained attempts
+
+Every lookup rechecks the current caller, connection and service scope. The
+Adapter identity holds the restricted BReg grants to bind and report attempts.
+Changing connection configuration affects new attempts. Retained attempts use
+their original provider origins, tenant and party bindings, credential
+identities, exact pack pin and registry binding. Load the original pack
+alongside the active pack to resume retained work. A missing pack holds the
+attempt before provider I/O. Bearer credentials can rotate at the same
+configured reference.
 
 Payment attempts and command receipts remain durable without automatic
-expiry in this first slice. They include restricted bill/payer facts needed
-for recovery and require protected PostgreSQL storage and backup. Generic
+expiry. They include restricted bill and instruction facts needed for
+recovery and require protected PostgreSQL storage and backup. Generic
 facade response-retention sweeps do not delete payment attempts. Payment
 audit events are value-free and commit before effects or response release.
 The host's snapshots are a scoped exception to the record facade's

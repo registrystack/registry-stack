@@ -186,6 +186,8 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
   interpreter for one previously selected external job.
 - [Payment collection](examples/payment-collections/README.md) requests one Adapter-owned
   collection, waits for its named completion, and records only a confirmed receipt.
+- [Disbursement](examples/g2p-disbursements/README.md) submits one approved instruction,
+  waits for the correlated provider observation, and reports verified provider completion.
 
 ## Calendar starts
 
@@ -565,12 +567,13 @@ deadline while obtaining fresh credentials. Messaging submission and Scheduling 
 creation or hold confirmation offer original-key receipt reads. Payment collection requests use
 the Adapter's read-only original-request lookup with the saved bill identity, version, key, and
 current connection authorization. An unresolved, expired, held, or unknown payment receipt never
-proves that a new collection may be requested. Scheduling hold creation,
-Payment disbursement submission is stricter: an uncertain
-`payments.request-disbursement/v1` stays held and permits only the Adapter's read-only lookup for
-the exact original instruction and key. It cannot use `retry-same`. The separate
+proves that a new collection may be requested.
+
+An uncertain `payments.request-disbursement/v1` stays held and permits only the Adapter's read-only
+lookup for the exact original instruction and key. The separate
 `payments.record-provider-confirmation/v1` reporting command may use `retry-same` with its frozen
 body and key. An unresolved disbursement lookup never proves absence or licenses a fresh submit.
+
 Scheduling hold creation,
 rescheduling, and cancellation have no original-result receipt; a later appointment read cannot
 prove which command produced current state. Scheduling hold release is unkeyed, so an ambiguous
