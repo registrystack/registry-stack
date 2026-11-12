@@ -92,12 +92,13 @@ of releases.
   packs. Binaries and installer ship from v0.46.0.
   Docs: [Registry Adapter](products/adapter/README.md).
 
-Evidence Gateway can use a fixed Base Registry Engine route or another bounded
-HTTP endpoint as a source, and keeps its own authorization either way. The stack also
+Evidence Gateway reads its sources through reviewed Adapter pack routes, such
+as a fixed Base Registry Engine route or another bounded HTTP endpoint, and
+keeps its own authorization either way. The stack also
 includes Registry Platform shared primitives, the `bregctl`, `caseworkctl`,
-`schedulingctl`, `messagingctl`, `evidencectl`, and `discoveryctl`
-adopter tools, unified Node.js and Python clients, and release tooling for validating the
-public source model.
+`schedulingctl`, `messagingctl`, `coordinatorctl`, `adapterctl`,
+`evidencectl`, and `discoveryctl` adopter tools, unified Node.js and Python
+clients, and release tooling for validating the public source model.
 
 ### Explore individual and combined examples
 
