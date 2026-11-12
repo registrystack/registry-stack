@@ -115,9 +115,9 @@ pub enum G2pHttpAuth {
     MifosLegacySignature {
         tenant: String,
         signing_key_identity: String,
-        signing_key: G2pTransitRsaNoOidKeyBinding,
+        signing_key: Box<G2pTransitRsaNoOidKeyBinding>,
         response_key_identity: String,
-        response_key: G2pTransitRsaNoOidKeyBinding,
+        response_key: Box<G2pTransitRsaNoOidKeyBinding>,
         operations_credential_identity: String,
         operations_credential_ref: SecretReference,
     },
@@ -177,9 +177,9 @@ enum G2pHttpAuthReader {
     MifosLegacySignature {
         tenant: String,
         signing_key_identity: String,
-        signing_key: G2pTransitRsaNoOidKeyBinding,
+        signing_key: Box<G2pTransitRsaNoOidKeyBinding>,
         response_key_identity: String,
-        response_key: G2pTransitRsaNoOidKeyBinding,
+        response_key: Box<G2pTransitRsaNoOidKeyBinding>,
         operations_credential_identity: String,
         operations_credential_ref: SecretReference,
     },

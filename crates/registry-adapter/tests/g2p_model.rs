@@ -339,9 +339,9 @@ fn provider_binding_exposes_the_exact_pack_auth_profile() {
     *auth = G2pHttpAuth::MifosLegacySignature {
         tenant: "default".to_owned(),
         signing_key_identity: "mifos-signing-key".to_owned(),
-        signing_key: transit_key("mifos-request", 7, 'a'),
+        signing_key: Box::new(transit_key("mifos-request", 7, 'a')),
         response_key_identity: "mifos-response-key".to_owned(),
-        response_key: transit_key("mifos-response", 4, 'b'),
+        response_key: Box::new(transit_key("mifos-response", 4, 'b')),
         operations_credential_identity: "mifos-operations-client".to_owned(),
         operations_credential_ref: SecretReference::new("secret:env/MIFOS_OPERATIONS_TOKEN")
             .unwrap(),
@@ -359,9 +359,9 @@ fn provider_identity_freezes_transit_versions_and_logical_operations_identity() 
     *auth = G2pHttpAuth::MifosLegacySignature {
         tenant: "default".to_owned(),
         signing_key_identity: "mifos-signing-key".to_owned(),
-        signing_key: transit_key("mifos-request", 7, 'a'),
+        signing_key: Box::new(transit_key("mifos-request", 7, 'a')),
         response_key_identity: "mifos-response-key".to_owned(),
-        response_key: transit_key("mifos-response", 4, 'b'),
+        response_key: Box::new(transit_key("mifos-response", 4, 'b')),
         operations_credential_identity: "mifos-operations-client".to_owned(),
         operations_credential_ref: SecretReference::new("secret:env/MIFOS_OPERATIONS_TOKEN")
             .unwrap(),
@@ -399,7 +399,7 @@ fn provider_identity_freezes_transit_versions_and_logical_operations_identity() 
     else {
         unreachable!()
     };
-    *signing_key = transit_key("mifos-request", 8, 'a');
+    **signing_key = transit_key("mifos-request", 8, 'a');
     assert_ne!(
         new_signing_version
             .provider_intent(&instruction)

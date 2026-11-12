@@ -202,9 +202,9 @@ async fn bearer_http_host_preserves_one_send_and_validates_wire_observations() {
         G2pHttpAuth::MifosLegacySignature {
             tenant: "pilot-beta".to_owned(),
             signing_key_identity: "test-signing-key".to_owned(),
-            signing_key: transit_key("test-signing-key", 7, 'a'),
+            signing_key: Box::new(transit_key("test-signing-key", 7, 'a')),
             response_key_identity: "test-response-key".to_owned(),
-            response_key: transit_key("test-response-key", 4, 'b'),
+            response_key: Box::new(transit_key("test-response-key", 4, 'b')),
             operations_credential_identity: "test-operations-client".to_owned(),
             operations_credential_ref: SecretReference::new("secret:file/provider-token").unwrap(),
         },
@@ -291,9 +291,17 @@ async fn mifos_legacy_signature_host_signs_exact_requests_and_verifies_before_ma
         G2pHttpAuth::MifosLegacySignature {
             tenant: fixture_text(&fixture, "tenant").to_owned(),
             signing_key_identity: "transit:mifos-request:v7".to_owned(),
-            signing_key: released_transit_key(&socket_path, "mifos-request", &fixture),
+            signing_key: Box::new(released_transit_key(
+                &socket_path,
+                "mifos-request",
+                &fixture,
+            )),
             response_key_identity: "transit:mifos-response:v7".to_owned(),
-            response_key: released_transit_key(&socket_path, "mifos-response", &fixture),
+            response_key: Box::new(released_transit_key(
+                &socket_path,
+                "mifos-response",
+                &fixture,
+            )),
             operations_credential_identity: "mifos-operations-client".to_owned(),
             operations_credential_ref: SecretReference::new("secret:file/operations-token")
                 .unwrap(),
