@@ -31,6 +31,7 @@ fn test_policy() -> Policy {
         3_600,
         0,
         vec!["registry_principal".to_owned(), "actor_kind".to_owned()],
+        vec![],
     )
     .expect("test policy")
 }
