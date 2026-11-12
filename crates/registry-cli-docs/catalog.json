@@ -66,6 +66,15 @@
               "environment": null
             },
             {
+              "display": "--payment-provider-pack <FILE>",
+              "description": "Reviewed provider packs for current connections and retained attempts",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--profile <FILE>",
               "description": "The profile file; defaults to profile.yaml beside the project",
               "always_required": false,
@@ -93,7 +102,15 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--payment-provider-pack <FILE>",
+              "arguments": [
+                "--payments-config <ABSOLUTE_FILE>"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {
@@ -1456,6 +1473,51 @@
           "constraints": [],
           "subcommands": [
             {
+              "name": "check-pack",
+              "invocation": "adapterctl payments check-pack",
+              "about": "Validate one reviewed payment provider pack without a deployment",
+              "long_about": null,
+              "usage": "adapterctl payments check-pack [OPTIONS] <FILE>",
+              "arguments": [
+                {
+                  "display": "<FILE>",
+                  "description": "Provider pack file to validate",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
               "name": "check",
               "invocation": "adapterctl payments check",
               "about": "Validate one AdapterPayments file without fetching credentials or services",
@@ -1473,6 +1535,24 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--provider-pack <FILE>",
+                  "description": "Exact provider pack pinned by the payment connections",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--fixtures <FILE>",
+                  "description": "Offline provider request and response fixtures to check",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--deny-warnings",
                   "description": "Refuse warnings as well as errors",
@@ -1528,6 +1608,15 @@
               ],
               "options": [
                 {
+                  "display": "--provider-pack <FILE>",
+                  "description": "Exact provider pack pinned by the payment connections",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -1553,6 +1642,105 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "fixtures",
+              "invocation": "adapterctl payments fixtures",
+              "about": "Replay provider mappings without connecting to Mifos or BReg",
+              "long_about": null,
+              "usage": "adapterctl payments fixtures [OPTIONS] <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "replay",
+                  "invocation": "adapterctl payments fixtures replay",
+                  "about": "Compare the pinned provider request and response mappings with fixtures",
+                  "long_about": null,
+                  "usage": "adapterctl payments fixtures replay [OPTIONS] --provider-pack <FILE> --fixtures <FILE> <FILE>",
+                  "arguments": [
+                    {
+                      "display": "<FILE>",
+                      "description": "Payment connection configuration used for replay",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "options": [
+                    {
+                      "display": "--provider-pack <FILE>",
+                      "description": "Provider pack pinned by the payment connection",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--fixtures <FILE>",
+                      "description": "Payment fixture file. Repeat to replay multiple files",
+                      "always_required": true,
+                      "repeatable": true,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--format <FORMAT>",
+                      "description": "Emit the selected command's report in this format",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [
+                        "human"
+                      ],
+                      "possible_values": [
+                        "human",
+                        "json"
+                      ],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                }
+              ]
             }
           ]
         },
