@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::grants;
 use crate::identity::{self, DrivenTool, Failure, GenerateOptions, Input, ProductSpec};
 use crate::install::{self, BootstrapOptions};
 use crate::store::{GenerationStore, InvocationLease};
@@ -153,6 +154,15 @@ enum Command {
     Identity {
         #[command(subcommand)]
         command: IdentityCommand,
+    },
+    /// Report configured bindings and known profile facts without certifying live grants.
+    Grants {
+        /// Python service connection file.
+        #[arg(value_name = "CONNECTION")]
+        connection: PathBuf,
+        /// Product identity facts file; repeat for each known product.
+        #[arg(long = "facts", value_name = "FILE")]
+        facts: Vec<PathBuf>,
     },
     /// Run and inspect a local Registry Stack development environment.
     #[command(
@@ -669,6 +679,7 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
                 reportln!("rstack <product> <action> [options]");
                 reportln!("Use rstack help <product> for offline product help.");
                 reportln!("Use rstack dev --help for local development commands.");
+                reportln!("Use rstack grants --help for the advisory grants report.");
                 reportln!("Use rstack components list to inspect installation availability.");
                 reportln!("Products: {}", PRODUCTS.join(", "));
             }
@@ -858,6 +869,17 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
                 }
             }
         },
+        Some(Command::Grants { connection, facts }) => {
+            let report = grants::build(connection, facts).map_err(CliFailure::domain)?;
+            match format {
+                ReportFormat::Human => reportln!("{}", grants::human(&report)),
+                ReportFormat::Json => reportln!(
+                    "{}",
+                    serde_json::to_string(&report)
+                        .map_err(|error| CliFailure::operational(error.to_string()))?
+                ),
+            }
+        }
         Some(Command::Product(arguments)) => {
             let product = arguments
                 .first()

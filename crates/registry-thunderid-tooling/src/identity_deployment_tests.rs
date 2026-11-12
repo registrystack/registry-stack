@@ -68,6 +68,7 @@ fn a_complete_deployment_reads() {
         "keys/case-portal.jwks.json"
     );
     assert_eq!(deployment.browser_apps[0].product, "breg");
+    assert_eq!(deployment.browser_apps[0].client_profile, None);
     assert_eq!(deployment.users[0].grants[0].access_profiles, ["case-read"]);
     assert_eq!(
         deployment.jwks_files(),
@@ -80,6 +81,21 @@ fn a_complete_deployment_reads() {
             "STAFF_PORTAL_CLIENT_SECRET".to_owned()
         ]
     );
+}
+
+#[test]
+fn browser_client_profile_is_closed_and_optional() {
+    let explicit = DEPLOYMENT.replacen(
+        "    clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET\n",
+        "    clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET\n    clientProfile: python-portal\n",
+        1,
+    );
+    let (deployment, _) = read_text(&explicit).expect("the Python portal profile reads");
+    assert_eq!(
+        deployment.browser_apps[0].client_profile,
+        Some(BrowserClientProfile::PythonPortal)
+    );
+    assert!(read_text(&explicit.replace("python-portal", "generic-browser")).is_err());
 }
 
 #[test]

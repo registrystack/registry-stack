@@ -339,6 +339,7 @@ fn render(
                 "clientAssertionKeyRef": client_assertion_key_ref,
             });
         }
+        Product::Messaging => {}
     }
 }
 
@@ -895,6 +896,8 @@ mod tests {
                     },
                 ),
             ]),
+            workloads: BTreeMap::new(),
+            development_pickers: Default::default(),
             bindings: Bindings {
                 breg_review_authority: Some(BregReviewAuthority {
                     id: "casework".to_owned(),
@@ -930,6 +933,7 @@ mod tests {
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),
+            messaging_clients: BTreeSet::new(),
             binaries: BTreeMap::new(),
         }
     }

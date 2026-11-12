@@ -216,6 +216,7 @@ fn an_http_issuer_is_refused_for_a_deployment_and_dev_stays_loopback_only() {
             redirect_uris: vec!["https://staff.registry.example/cb".into()],
             audience: description.resource_servers[0].identifier.clone(),
             token_attributes: vec!["registry_role".into()],
+            refresh_tokens: false,
         });
     assert!(description.validate().is_err());
 }
@@ -1000,6 +1001,46 @@ fn browser_apps_users_and_extension_types_render_without_secrets_or_a_logo_by_de
     assert!(farmer["attributes"].get("password").is_none());
     let organization = of_type(&documents, "organization_unit");
     assert_eq!(organization[0]["handle"], "registry");
+}
+
+#[test]
+fn python_portal_profile_enables_refresh_without_changing_the_omitted_default() {
+    let generated = case().run().expect("the explicit Python portal profile generates");
+    let documents = resources(&generated);
+    let oauth = &of_type(&documents, "application")[0]["inboundAuthConfig"][0]["config"];
+    assert_eq!(
+        oauth["grantTypes"],
+        serde_json::json!(["authorization_code", "refresh_token"])
+    );
+    assert_eq!(oauth["tokenEndpointAuthMethod"], "client_secret_post");
+    assert_eq!(oauth["pkceRequired"], true);
+    assert_eq!(oauth["publicClient"], false);
+    assert_eq!(
+        oauth["postLogoutRedirectUris"],
+        serde_json::json!([
+            "https://staff.registry.example",
+            "https://staff.registry.example/auth/login"
+        ])
+    );
+    assert_eq!(
+        oauth["token"]["accessToken"]["defaultAudience"],
+        "urn:breg:example"
+    );
+
+    let mut omitted = case();
+    let explicit = "    clientProfile: python-portal\n";
+    assert!(omitted.deployment.contains(explicit));
+    omitted.deployment = omitted.deployment.replacen(explicit, "", 1);
+    let generated = omitted
+        .run()
+        .expect("omitting the profile keeps the existing browser client behavior");
+    let documents = resources(&generated);
+    let oauth = &of_type(&documents, "application")[0]["inboundAuthConfig"][0]["config"];
+    assert_eq!(oauth["grantTypes"], serde_json::json!(["authorization_code"]));
+    assert_eq!(
+        oauth["postLogoutRedirectUris"],
+        serde_json::json!(["https://staff.registry.example"])
+    );
 }
 
 #[test]

@@ -201,7 +201,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for index, line in enumerate(self.rendered)
             if "maturin build --release --locked" in line
         ]
-        self.assertEqual(len(self.module.PRODUCTS), len(builds))
+        self.assertEqual(len(self.module.PRODUCTS) + 2, len(builds))
         assemble = next(
             index
             for index, line in enumerate(self.rendered)
@@ -280,6 +280,11 @@ class AssembleClientPackagesTest(unittest.TestCase):
                         f"registry-{product}-client-py"
                         for product in self.module.PRODUCTS
                     ]
+                    expected_products.append("registry-platform-oidc-py")
+                    expected_products.append("registry-platform-yaml-py")
+                else:
+                    expected_products.append("oidc")
+                    expected_products.append("yaml")
                 self.assertEqual(products, expected_products)
 
     def test_source_integration_can_explicitly_include_unreleased_messaging(self) -> None:
@@ -346,7 +351,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for step in steps
             if step.argv[0].endswith("build-linux-python-client")
         ]
-        self.assertEqual(len(builds), len(self.module.PRODUCTS))
+        self.assertEqual(len(builds), len(self.module.PRODUCTS) + 2)
         for product, step in zip(self.module.PRODUCTS, builds):
             self.assertEqual(step.cwd, ROOT)
             self.assertIn(("--client", product), tuple(zip(step.argv, step.argv[1:])))
@@ -372,6 +377,30 @@ class AssembleClientPackagesTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for entry in self.module.PLATFORMS.values():
             self.assertIn(f"registry_wheel_tag: {entry['wheel_tag']}", candidate)
+
+    def test_python_plan_builds_and_packs_the_oidc_verifier(self) -> None:
+        steps = self.module.python_steps(
+            ROOT, "0.46.1", "darwin-arm64", "maturin", Path("/work"), Path("/out")
+        )
+        verifier = [step for step in steps if step.description == "build the OIDC verifier wheel"]
+        self.assertEqual(len(verifier), 1)
+        self.assertEqual(verifier[0].cwd, ROOT / "crates" / "registry-platform-oidc-py")
+        assemble = steps[-1].argv
+        self.assertIn("--include-oidc", assemble)
+        self.assertIn("--oidc-wheel", assemble)
+        self.assertIn(
+            "/work/product-wheels/registry_platform_oidc-0.46.1-cp311-abi3-macosx_11_0_arm64.whl",
+            assemble,
+        )
+        reader = [step for step in steps if step.description == "build the shared configuration reader wheel"]
+        self.assertEqual(len(reader), 1)
+        self.assertEqual(reader[0].cwd, ROOT / "crates" / "registry-platform-yaml-py")
+        self.assertIn("--include-yaml", assemble)
+        self.assertIn("--yaml-wheel", assemble)
+        self.assertIn(
+            "/work/product-wheels/registry_platform_yaml-0.46.1-cp311-abi3-macosx_11_0_arm64.whl",
+            assemble,
+        )
 
     def test_the_artifact_selection_splits_the_two_halves(self) -> None:
         node_only = self.candidate_plan(

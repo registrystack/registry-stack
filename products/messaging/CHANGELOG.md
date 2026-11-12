@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `messagingctl check` now reports each access profile's principal claim,
+  required scopes, requester clients and actor kind alongside its ID and
+  `actsAs` value. Composition tools can validate a local grant against the
+  same checked package without parsing `messaging.yaml` themselves.
+
 ## 0.46.0 - 2026-11-08
 
 - Each access profile may carry an optional `label` and `description`, accepted for authoring and tooling; Messaging does not serve them until a view exists. Neither is matched against a caller, and a profile that writes neither reads as before.

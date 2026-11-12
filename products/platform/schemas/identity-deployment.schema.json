@@ -4,6 +4,10 @@
       "additionalProperties": false,
       "description": "A browser application: an authorization-code client with PKCE.",
       "properties": {
+        "clientProfile": {
+          "$ref": "#/$defs/BrowserClientProfile",
+          "description": "Optional client behavior. When omitted, the client remains\nauthorization-code-only with only its origin as a logout return.\n`python-portal` also admits refresh grants and same-origin `/auth/login`."
+        },
         "clientSecretRef": {
           "$ref": "#/$defs/SecretReference",
           "allOf": [
@@ -77,6 +81,16 @@
         "grants"
       ],
       "type": "object"
+    },
+    "BrowserClientProfile": {
+      "description": "An optional browser-client behavior profile.",
+      "oneOf": [
+        {
+          "const": "python-portal",
+          "description": "A confidential Python portal using authorization code with PKCE and\nrotating refresh tokens for one requested resource. It also registers\nsame-origin `/auth/login` for an account-switch logout return.",
+          "type": "string"
+        }
+      ]
     },
     "ClaimValue": {
       "anyOf": [

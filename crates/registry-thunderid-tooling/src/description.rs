@@ -244,6 +244,7 @@ pub struct InteractiveApplication {
     pub redirect_uris: Vec<String>,
     pub audience: String,
     pub token_attributes: Vec<String>,
+    pub refresh_tokens: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1014,6 +1015,7 @@ mod tests {
             redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
             audience: description.resource_servers[0].identifier.clone(),
             token_attributes: vec!["registry_role".into()],
+            refresh_tokens: false,
         };
         let user = |n: usize| SyntheticUser {
             id: format!("0197aaaa-0000-7000-8000-0000000002{n:02x}"),
@@ -1054,6 +1056,7 @@ mod tests {
                 redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
+                refresh_tokens: false,
             });
         description.synthetic_users = vec![
             SyntheticUser {
@@ -1094,6 +1097,7 @@ mod tests {
                 redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
+                refresh_tokens: false,
             });
         description.synthetic_users = vec![SyntheticUser {
             id: "0197aaaa-0000-7000-8000-0000000000e2".into(),

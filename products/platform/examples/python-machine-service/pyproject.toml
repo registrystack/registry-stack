@@ -1,0 +1,10 @@
+[project]
+name = "registry-python-machine-service"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "flask==3.1.2",
+]
+
+[tool.uv]
+package = false

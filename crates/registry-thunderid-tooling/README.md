@@ -249,6 +249,11 @@ resolves no secret.
   reserved; set them through the user's `username`, `email` and `passwordRef`
   fields. A grant to a client a product does not admit, any other unknown claim,
   or a JWK carrying `d`, `p`, `q`, `dp`, `dq` or `qi` is refused.
+- A browser application with no `clientProfile` remains authorization-code-only.
+  The closed `python-portal` profile keeps the confidential client, PKCE and its
+  one default product audience, and additionally registers the `refresh_token`
+  grant. The portal must request one exact resource for each access or refresh
+  grant; the profile does not widen the application's product permissions.
 - Generated users are declarative users. Authority-bearing extension attributes
   must remain on those users in this deployment path. ThunderID database-backed
   users of the same type can edit ordinary custom attributes through their
@@ -269,7 +274,9 @@ resolves no secret.
   application pins that graph explicitly, while ThunderID resolves and clears
   the session belonging to that application's authentication flow. A logout
   without an ID-token hint requires confirmation. The exact application
-  `origin` is the only generated post-logout return URI.
+  `origin` is the only generated post-logout return URI by default. The
+  `python-portal` profile additionally registers same-origin `/auth/login` for
+  the portal's fail-closed account-switch flow.
 - Identifiers use the crate's `local::agent_id` and scope-tree formulas seeded
   by the issuer, so output is byte-identical across runs.
 

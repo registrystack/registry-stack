@@ -39,6 +39,7 @@ SHARDS = {
         "registry-platform-metrics",
         "registry-platform-objectstore",
         "registry-platform-oidc",
+        "registry-platform-oidc-py",
         "registry-platform-ratelimit",
         "registry-platform-resilience",
         "registry-platform-script",
@@ -48,6 +49,7 @@ SHARDS = {
         "registry-platform-text",
         "registry-platform-x509",
         "registry-platform-yaml",
+        "registry-platform-yaml-py",
     ),
     "mcp": (
         "registry-mcp",
@@ -522,6 +524,7 @@ NATIVE_BINDING_PACKAGES = (
     | SCHEDULING_BINDING_PACKAGES
     | COORDINATOR_BINDING_PACKAGES
     | frozenset({"registry-render-client-node", "registry-render-client-py"})
+    | frozenset({"registry-platform-oidc-py", "registry-platform-yaml-py"})
 )
 
 # The breg-contracts matrix lanes. Review runs the first two; the merge
@@ -559,7 +562,7 @@ EVIDENCE_TUTORIAL_PACKAGES = (
 # package, so a change under it already selects the complete matrix.
 ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
     package for package in NATIVE_BINDING_PACKAGES if package.endswith("-client-py")
-)
+) | frozenset({"registry-platform-oidc-py", "registry-platform-yaml-py"})
 
 # The gate builds and runs the registry, the tool that applies its package, and
 # issuer tooling, because the `bregctl dev` session the tutorial starts issues
@@ -1512,8 +1515,12 @@ def classify(
         complete
         or bool(affected & NATIVE_BINDING_PACKAGES)
         or unified_client_changed
+        or "release/scripts/smoke-registry-client-service.py" in changed_paths
+        or "release/scripts/smoke-registry-client-extras.py" in changed_paths
         or any(path.startswith((
             "products/platform/examples/python-composition/",
+            "products/platform/examples/python-machine-service/",
+            "products/platform/examples/python-portal/",
             "products/coordinator/examples/reviewed-notice/",
         )) for path in changed_paths)
     )

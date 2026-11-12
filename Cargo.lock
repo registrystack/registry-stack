@@ -7898,6 +7898,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-oidc-py"
+version = "0.46.1"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-platform-oidc",
+ "registry-platform-testing",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "registry-platform-ratelimit"
 version = "0.46.1"
 dependencies = [
@@ -8025,6 +8037,19 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "registry-platform-yaml-py"
+version = "0.46.1"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-platform-config",
+ "registry-platform-yaml",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

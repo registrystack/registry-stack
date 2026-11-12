@@ -71,6 +71,22 @@ impl Issuer {
             .block_on(self.sign(input, person, product, expires))
     }
 
+    /// Sign one runner-owned envelope with the exact issuance time written
+    /// beside it. The supervisor supplies this time once for the whole
+    /// generation, so Python never has to infer whether files came from the
+    /// same rotation.
+    pub(super) fn token_at(
+        &self,
+        input: &RunInput,
+        person: &TestPerson,
+        product: Product,
+        issued_at: u64,
+        expires: u64,
+    ) -> Result<Zeroizing<String>> {
+        self.runtime
+            .block_on(self.sign_at(input, person, product, issued_at, expires))
+    }
+
     pub(super) async fn sign(
         &self,
         input: &RunInput,
@@ -79,8 +95,19 @@ impl Issuer {
         expires: u64,
     ) -> Result<Zeroizing<String>> {
         let now = clock()?;
-        let expires = token_expiry(expires, now);
-        ensure!(expires > now, "the development run has expired");
+        self.sign_at(input, person, product, now, expires).await
+    }
+
+    async fn sign_at(
+        &self,
+        input: &RunInput,
+        person: &TestPerson,
+        product: Product,
+        issued_at: u64,
+        expires: u64,
+    ) -> Result<Zeroizing<String>> {
+        let expires = token_expiry(expires, issued_at);
+        ensure!(expires > issued_at, "the development run has expired");
         let plan = &input.plan;
         let grant = &person.grants[&product];
         let forward_context = product == Product::Casework && person.casework_context;
@@ -117,7 +144,7 @@ impl Issuer {
                 "scope".to_owned(),
                 json!(scopes.into_iter().collect::<Vec<_>>().join(" ")),
             ),
-            ("iat".to_owned(), json!(now)),
+            ("iat".to_owned(), json!(issued_at)),
             ("exp".to_owned(), json!(expires)),
             ("jti".to_owned(), json!(uuid::Uuid::new_v4())),
         ]);

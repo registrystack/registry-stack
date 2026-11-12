@@ -16,7 +16,7 @@ use registry_coordinator::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 use wiremock::{
-    matchers::{method, path, query_param},
+    matchers::{body_json, header_exists, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -31,9 +31,46 @@ impl AdapterSet for ExternalAdapter {
     }
 
     async fn call(&self, request: &CallRequest) -> CallOutcome {
-        assert_eq!(request.operation, Operation::ExternalGet);
         assert_eq!(request.connection, "jobs");
-        self.0.get(&request.input, false).await
+        match request.operation {
+            Operation::ExternalGet => self.0.get(&request.input, false).await,
+            Operation::ExternalCommand => {
+                self.0
+                    .command(
+                        &request.input,
+                        request
+                            .idempotency_key
+                            .as_deref()
+                            .expect("the durable admission has a frozen command key"),
+                        false,
+                    )
+                    .await
+            }
+            operation => panic!("unexpected external-job operation {operation:?}"),
+        }
+    }
+
+    async fn call_attempt(
+        &self,
+        request: &CallRequest,
+        prepared: Option<&[u8]>,
+        final_attempt: bool,
+    ) -> CallOutcome {
+        assert!(prepared.is_none(), "external HTTP has no prepared evidence");
+        if request.operation == Operation::ExternalCommand {
+            return self
+                .0
+                .command(
+                    &request.input,
+                    request
+                        .idempotency_key
+                        .as_deref()
+                        .expect("the durable admission has a frozen command key"),
+                    final_attempt,
+                )
+                .await;
+        }
+        self.call(request).await
     }
 
     async fn observe_completion(
@@ -78,6 +115,7 @@ impl Harness {
         let server = MockServer::start().await;
         let config: ExternalHttpConfig = serde_json::from_value(json!({
             "baseUrl":server.uri(), "paths":["jobs/status"], "queryParameters":["id"],
+            "commandPath":"jobs",
             "responseSchema":{"type":"object"}
         }))
         .unwrap();
@@ -115,11 +153,31 @@ impl Harness {
             .await;
     }
 
+    async fn admitted(&self, state: &str) {
+        self.server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/jobs"))
+            .and(header_exists("idempotency-key"))
+            .and(body_json(json!({"reference":"case-001"})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({"jobId":JOB})))
+            .expect(1)
+            .mount(&self.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/jobs/status"))
+            .and(query_param("id", JOB))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"jobId":JOB,"state":state})),
+            )
+            .mount(&self.server)
+            .await;
+    }
+
     async fn start(&self) -> Uuid {
         self.store
             .admit(
                 &self.definition,
-                json!({"jobId":JOB}),
+                json!({"reference":"case-001"}),
                 "external-fixture-producer",
                 &Uuid::new_v4().to_string(),
                 self.adapters.binding_digest(),
@@ -160,7 +218,7 @@ impl Harness {
     }
 
     async fn begin_wait(&self) -> Uuid {
-        self.state("running").await;
+        self.admitted("running").await;
         let run = self.start().await;
         self.drain(&self.worker()).await;
         let inspection = self
@@ -171,8 +229,99 @@ impl Harness {
         assert_eq!(inspection.run.step, "await-terminal");
         assert_eq!(inspection.waits.len(), 1);
         assert_eq!(inspection.waits[0].observations, 1);
+        assert_eq!(inspection.effects.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&inspection.effects[0]).unwrap()["state"],
+            "accepted"
+        );
         run
     }
+}
+
+#[tokio::test]
+async fn declared_admission_refusal_takes_the_authored_no_effect_route() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path("/jobs"))
+        .and(header_exists("idempotency-key"))
+        .and(body_json(json!({"reference":"case-001"})))
+        .respond_with(ResponseTemplate::new(422).set_body_json(json!({"reason":"invalid-job"})))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let run = h.start().await;
+    h.drain(&h.worker()).await;
+    let inspection = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(inspection.run.state, "finished");
+    assert_eq!(
+        inspection.run.outcome.as_deref(),
+        Some("job-admission-refused")
+    );
+    assert_eq!(
+        inspection.run.output,
+        Some(json!({"refusalCode":"invalid-job"}))
+    );
+    assert!(
+        inspection.effects.is_empty(),
+        "a refusal claims no admitted job"
+    );
+    assert!(inspection.waits.is_empty());
+}
+
+#[tokio::test]
+async fn unusable_post_commit_response_is_unknown_and_same_command_recovers() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path("/jobs"))
+        .and(header_exists("idempotency-key"))
+        .respond_with(ResponseTemplate::new(201).set_body_string("not-json-after-admission"))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+    let run = h.start().await;
+    h.drain(&h.worker()).await;
+    let held = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(held.run.state, "attention");
+    assert!(held.run.uncertain);
+    assert_eq!(
+        serde_json::to_value(&held.effects[0]).unwrap()["state"],
+        "unknown"
+    );
+    assert!(held.recovery.retry_allowed);
+    let first = h.server.received_requests().await.unwrap();
+    let key = first[0].headers["idempotency-key"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    h.admitted("running").await;
+    h.store
+        .retry_same(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    h.drain(&h.worker()).await;
+    let recovered = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(recovered.run.step, "await-terminal");
+    assert_eq!(recovered.waits.len(), 1);
+    let requests = h.server.received_requests().await.unwrap();
+    let post = requests
+        .iter()
+        .find(|request| request.method.as_str() == "POST")
+        .unwrap();
+    assert_eq!(post.headers["idempotency-key"].to_str().unwrap(), key);
 }
 
 #[tokio::test]
@@ -189,9 +338,10 @@ async fn frozen_external_read_survives_restart_and_inspects_its_bounded_wait() {
     assert_eq!(wait.completion, "terminal");
     assert_eq!(wait.minimum_interval_seconds, 30);
     assert_eq!(wait.observation_limit, 21);
-    assert!(
-        before.effects.is_empty(),
-        "GET acceptance is not a mutation effect"
+    assert_eq!(
+        before.effects.len(),
+        1,
+        "only durable admission is an effect"
     );
     assert!(!serde_json::to_string(&before).unwrap().contains(JOB));
 

@@ -29,7 +29,8 @@ use crate::description::{
     DEFAULT_OU_HANDLE, DEFAULT_OU_ID, PRIVATE_JWK_MEMBERS,
 };
 use crate::identity_deployment::{
-    self as deployment_file, relative_path, ClaimValue, Grant, IdentityDeployment,
+    self as deployment_file, relative_path, BrowserClientProfile, ClaimValue, Grant,
+    IdentityDeployment,
 };
 use crate::identity_facts::{
     self as facts_file, https_url, AccessProfile, ActorKind, Admission, AssertionMapping,
@@ -1341,6 +1342,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 redirect_uris: app.redirect_uris.clone(),
                 audience: product.audience.clone(),
                 token_attributes,
+                refresh_tokens: app.client_profile == Some(BrowserClientProfile::PythonPortal),
             });
         description.roles.push(Role {
             id: local::derived_uuid(&format!("{sid}:role:application:{}", app.id)),

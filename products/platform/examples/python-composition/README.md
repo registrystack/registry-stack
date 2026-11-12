@@ -24,16 +24,23 @@ with `uv run --with`, as shown below; ordinary use does not require Rust. Retain
 the archive layout: the example reads BReg's maintained generated lifecycle
 schema at
 `products/breg/generated/event-schemas/proposal-lifecycle.schema.json`. Copy
-`config.example.json` to a private operator file and replace its service origins,
-profiles, and credential file paths.
-Each product gets a separate resource-bound provider. A `privateKeyJwt` object
-uses the released canonical helper's `token_endpoint`, `client_id`,
-`client_key`, `resource`, and `scopes` settings instead of a `headerFile`.
-Its optional `audience` identifies the OAuth token endpoint as the client
-assertion's recipient. It is distinct from `resource`, which requests the
-product access token. Each product validates that access token's audience,
-scopes, and permissions; this application does not impose a singleton audience.
-Keep the key and token configuration out of source control.
+`config.example.json` and `connection.example.json` to private operator files.
+Set `REGISTRY_STACK_CONNECTION` to the connection file before commands that use
+BReg or Messaging. The connection declares their separate endpoints, resource
+audiences, scopes, workload identities, and private-key references. The
+application calls `connect()` and uses the default `stack.breg` and
+`stack.messaging` bindings; it does not construct either client or handle their
+bearer tokens.
+
+Casework deliberately remains on its existing path in this L1 migration. Its
+URL and token provider remain in the application config, and every Casework call
+still supplies that provider's bearer. For this remaining provider, a
+`privateKeyJwt` object uses the released canonical helper's `token_endpoint`,
+`client_id`, `client_key`, `resource`, and `scopes` settings instead of a
+`headerFile`. Its optional `audience` identifies the OAuth token endpoint as the
+client assertion's recipient. It is distinct from `resource`, which requests
+the Casework access token. Keep the connection, keys, and token configuration
+out of source control.
 
 Give `inbox` a durable application-owned directory. The example creates its
 SQLite file owner-only. The wake receiver listens on loopback behind your
@@ -74,6 +81,7 @@ copies no document.
 ```sh
 sdk='registry-stack-client==<matching-release-version>'
 # For prepared source: sdk='/absolute/path/to/registry_stack_client-<candidate>-<wheel-tag>.whl'
+export REGISTRY_STACK_CONNECTION=/run/secrets/app/officer-connection.json
 uv run --locked --with "$sdk" service.py --config officer.json prepare issue-licence inputs.json issue-example --intake-proposal <applied-intake-proposal-id>
 uv run --locked --with "$sdk" service.py --config staff.json review-tasks
 uv run --locked --with "$sdk" service.py --config staff.json review-context <task-id>
@@ -99,6 +107,7 @@ never invoked automatically by a wake.
 ```sh
 uv run --locked --with "$sdk" service.py --config staff.json claim <task-id> <displayed-revision> <claim-key>
 uv run --locked --with "$sdk" service.py --config staff.json decide <task-id> <claimed-revision> <decision-key> decision.json
+export REGISTRY_STACK_CONNECTION=/run/secrets/app/applier-connection.json
 uv run --locked --with "$sdk" service.py --config applier.json reconcile
 ```
 
@@ -149,8 +158,9 @@ horizon and data retention still apply.
 ## Verify
 
 `uv run --locked --with "$sdk" python -m unittest discover -s tests -v` covers durable wake
-acceptance, restart persistence, replay conflicts, the current native constructors,
-review context authority, HTTP acknowledgment ordering, and uncertain notice
-receipt recovery. Live composition proof requires configured BReg, Casework, and
+acceptance, restart persistence, replay conflicts, token-free BReg and Messaging
+connection selection, the remaining Casework token path, review context authority,
+HTTP acknowledgment ordering, and uncertain notice receipt recovery. Live
+composition proof requires configured BReg, Casework, and
 Messaging instances, separate least-privilege callers, and a real reviewed
 issuance Action. Unit tests and an import smoke do not establish that journey.

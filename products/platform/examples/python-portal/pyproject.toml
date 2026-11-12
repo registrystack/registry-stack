@@ -1,0 +1,24 @@
+[project]
+name = "registry-python-portal-example"
+version = "0.1.0"
+description = "Prepared Flask and FastAPI person portal for Registry Stack"
+requires-python = ">=3.11"
+dependencies = [
+  "Authlib>=1.9.5,<2",
+  "cryptography>=50.0.2,<51",
+  "fastapi>=0.115,<1",
+  "Flask>=3.1,<4",
+  "gunicorn>=23,<24",
+  "psycopg[binary]>=3.3.6,<4",
+  "requests>=2.31,<3",
+  "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28,<1",
+  "ruff==0.14.3",
+]
+
+[tool.uv]
+package = false

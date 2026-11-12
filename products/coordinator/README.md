@@ -182,8 +182,8 @@ text by default or a `CoordinatorCtlReport` with `--format json`. Exit codes are
 - [Product events](examples/product-events/README.md) admits committed BReg events and a
   conforming alternate-source fixture through the same signed event contract.
 - [External directory](examples/external-directory/README.md) performs a configured HTTP GET.
-- [External job](examples/external-job/README.md) uses a bounded completion poll and pure
-  interpreter for one previously selected external job.
+- [External job](examples/external-job/README.md) durably admits application work, then uses a
+  bounded completion poll and pure interpreter for the admitted job.
 
 ## Calendar starts
 

@@ -1,0 +1,57 @@
+{
+  "apiVersion": "id.registrystack.org/formats/platform/python-connection/v1alpha1",
+  "kind": "PlatformPythonConnection",
+  "service": "licence-issuance",
+  "audience": "service",
+  "secretProviders": {
+    "file": {
+      "root": "/run/secrets/app"
+    }
+  },
+  "bindings": [
+    {
+      "name": "licensing-registry",
+      "product": "breg",
+      "url": "https://registry.example.org/",
+      "default": true,
+      "credential": {
+        "type": "private-key-jwt",
+        "issuer": "https://identity.example.org/",
+        "subject": "licence-issuance-service",
+        "tokenEndpoint": "https://identity.example.org/oauth/token",
+        "clientId": "licence-issuance-breg",
+        "profile": "licence-issuer",
+        "clientKeyRef": "secret:file/breg-client.jwk",
+        "resource": "urn:example:breg",
+        "scopes": [
+          "licensing:issue"
+        ],
+        "claims": {
+          "registry_actor_kind": "service"
+        }
+      }
+    },
+    {
+      "name": "approval-notices",
+      "product": "messaging",
+      "url": "https://messaging.example.org/",
+      "default": true,
+      "credential": {
+        "type": "private-key-jwt",
+        "issuer": "https://identity.example.org/",
+        "subject": "licence-issuance-service",
+        "tokenEndpoint": "https://identity.example.org/oauth/token",
+        "clientId": "licence-issuance-messaging",
+        "profile": "service-sender",
+        "clientKeyRef": "secret:file/messaging-client.jwk",
+        "resource": "urn:example:messaging",
+        "scopes": [
+          "messaging:send"
+        ],
+        "claims": {
+          "registry_actor_kind": "service"
+        }
+      }
+    }
+  ]
+}

@@ -16,6 +16,7 @@ clients:
 browserApps:
   - id: staff-portal
     clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET
+    clientProfile: python-portal
     origin: https://staff.registry.example
     redirectUris: [https://staff.registry.example/auth/callback]
     product: breg

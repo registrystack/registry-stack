@@ -187,27 +187,33 @@ class ClientConstructionTests(unittest.TestCase):
         file = Path(root) / "canary.headers"
         file.write_text("Authorization: Bearer canary-token\n")
         return {
-            "bregUrl": "https://registry.example.org/",
             "bregProfile": "applier",
             "caseworkUrl": "https://casework.example.org/",
             "caseworkProfile": "staff",
-            "messagingUrl": "https://messaging.example.org/",
             "tokens": {
-                name: {
+                "casework": {
                     "headerFile": str(file),
-                    "resource": "urn:example:" + name,
-                    "scopes": [name + ":call"],
+                    "resource": "urn:example:casework",
+                    "scopes": ["casework:call"],
                 }
-                for name in ("breg", "casework", "messaging")
             },
         }
 
-    def test_native_constructors_are_called_with_current_spellings(self):
+    def test_breg_and_messaging_use_the_token_free_connection(self):
         with tempfile.TemporaryDirectory() as root:
-            app = Composition(self.config(root), Inbox(Path(root) / "inbox.sqlite"))
-            self.assertIsNotNone(app.registry)
+            registry = object()
+            messages = object()
+            stack = SimpleNamespace(breg=registry, messaging=messages)
+            with patch("registry_client.connect", return_value=stack) as connect:
+                app = Composition(
+                    self.config(root),
+                    Inbox(Path(root) / "inbox.sqlite"),
+                    with_messaging=True,
+                )
+            connect.assert_called_once_with()
+            self.assertIs(app.registry, registry)
             self.assertIsNotNone(app.reviews)
-            self.assertIsNotNone(app.messages)
+            self.assertIs(app.messages, messages)
 
     def test_closed_resource_bound_provider_configuration(self):
         for config in [
@@ -281,9 +287,6 @@ class ReceiptRecoveryTests(unittest.TestCase):
                 "to": {"email": "person@example.org"},
             },
         )
-        app.tokens = {
-            "messaging": SimpleNamespace(bearer_token=lambda: "canary-messaging-token")
-        }
         app.registry = SimpleNamespace(
             registry_contract=lambda _: SimpleNamespace(
                 select_proposal_get=lambda _: None
@@ -298,68 +301,24 @@ class ReceiptRecoveryTests(unittest.TestCase):
         )
         return app
 
-    def test_token_failure_keeps_prepared_job_and_recovers_with_one_original_submit(
-        self,
-    ):
-        cases = (
-            ("credential-file", CompositionError("canary credential unavailable"), 0),
-            (
-                "token-endpoint",
-                RuntimeError("canary token endpoint unavailable"),
-                MAXIMUM_ATTEMPTS - 1,
-            ),
-        )
-        for fault, error, attempts in cases:
-            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
-                app = self.app(root)
-                with app.inbox.connect() as db:
-                    db.execute("UPDATE jobs SET attempts=?", (attempts,))
-                    original = db.execute(
-                        "SELECT body,state,attempts FROM jobs"
-                    ).fetchone()
-                submits = []
-                app.messages = SimpleNamespace(
-                    submit=lambda *args: submits.append(args),
-                    message_receipt=lambda *_: self.fail(
-                        "an unsent notice has no receipt"
-                    ),
-                )
-                with (
-                    patch.object(
-                        app.tokens["messaging"],
-                        "bearer_token",
-                        side_effect=[error, "canary-messaging-token"],
-                    ) as tokens,
-                    patch("service.LOG.error") as diagnostic,
-                ):
-                    with self.assertRaises(type(error)):
-                        app.reconcile()
-                    with app.inbox.connect() as db:
-                        body, state, count = db.execute(
-                            "SELECT body,state,attempts FROM jobs"
-                        ).fetchone()
-                        self.assertEqual((state, count), original[1:])
-                        self.assertEqual(body, original[0])
-                    self.assertEqual(submits, [])
-                    diagnostic.assert_not_called()
-                    self.assertEqual(app.reconcile(), 1)
-                    self.assertEqual(app.reconcile(), 0)
-                    self.assertEqual(tokens.call_count, 2)
-                self.assertEqual(
-                    submits,
-                    [
-                        (
-                            "canary-messaging-token",
-                            "proposal-one:1:notice",
-                            json.loads(original[0])["notice"],
-                        )
-                    ],
-                )
-                with app.inbox.connect() as db:
-                    self.assertEqual(
-                        db.execute("SELECT body,state,attempts FROM jobs").fetchone(),
-                        (original[0], "notified", attempts + 1),
+    def test_submit_uses_the_token_free_signature_and_original_command(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = self.app(root)
+            with app.inbox.connect() as db:
+                original = db.execute("SELECT body FROM jobs").fetchone()[0]
+            submits = []
+            app.messages = SimpleNamespace(submit=lambda *args: submits.append(args))
+
+            self.assertEqual(app.reconcile(), 1)
+            self.assertEqual(
+                submits,
+                [
+                    (
+                        "proposal-one:1:notice",
+                        json.loads(original)["notice"],
                     )
+                ],
+            )
 
     def test_lost_notice_response_reads_original_receipt_without_resubmitting(self):
         with tempfile.TemporaryDirectory() as root:
@@ -532,7 +491,7 @@ class NativeFailureRecoveryTests(unittest.TestCase):
 
             def submit(*args):
                 try:
-                    return native.submit(*args)
+                    return native.submit("canary-native-token", *args)
                 except messaging.MessagingClientError as error:
                     failures.append(error)
                     raise
@@ -802,7 +761,7 @@ class ReconcileIsolationTests(unittest.TestCase):
             self.assertEqual(completed, [1, 0])
             self.assertEqual(reads, ["proposal-one", "proposal-two", "proposal-one"])
             self.assertEqual(len(submits), 1)
-            self.assertEqual(submits[0][1], "proposal-two:1:notice")
+            self.assertEqual(submits[0][0], "proposal-two:1:notice")
             with app.inbox.connect() as db:
                 self.assertEqual(
                     db.execute(
@@ -897,7 +856,7 @@ class ReconcileIsolationTests(unittest.TestCase):
 
                 def submit(*args):
                     submits.append(args)
-                    if fault == "submit" and args[1] == "proposal-one:1:notice":
+                    if fault == "submit" and args[0] == "proposal-one:1:notice":
                         raise RuntimeError("canary private remote failure")
                     return {"kind": "complete"}
 
@@ -944,7 +903,7 @@ class ReconcileIsolationTests(unittest.TestCase):
                         ("notified",),
                     )
                 self.assertIn("proposal-two", reads)
-                self.assertEqual(submits[-1][1], "proposal-two:1:notice")
+                self.assertEqual(submits[-1][0], "proposal-two:1:notice")
                 if applies:
                     self.assertEqual(
                         preparations,
@@ -965,7 +924,7 @@ class ReconcileIsolationTests(unittest.TestCase):
                 if fault.startswith("receipt-"):
                     self.assertEqual(
                         receipts,
-                        [("canary-messaging-token", "proposal-one:1:notice", notice)],
+                        [("proposal-one:1:notice", notice)],
                     )
                     self.assertEqual(len(submits), 1)
 
@@ -1006,7 +965,7 @@ class ReconcileIsolationTests(unittest.TestCase):
                 )
 
     def test_global_contract_configuration_and_persistence_failures_still_escape(self):
-        for fault in ("contract", "credential", "persistence", "stored-body"):
+        for fault in ("contract", "persistence", "stored-body"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
                 app = ReceiptRecoveryTests().app(root)
                 app.messages = SimpleNamespace(submit=lambda *_: {"kind": "complete"})
@@ -1015,12 +974,6 @@ class ReconcileIsolationTests(unittest.TestCase):
                         app.registry,
                         "registry_contract",
                         RuntimeError("canary startup refusal"),
-                    )
-                elif fault == "credential":
-                    target, member, error = (
-                        app.tokens["messaging"],
-                        "bearer_token",
-                        CompositionError("credential could not be read"),
                     )
                 elif fault == "persistence":
                     target, member, error = (

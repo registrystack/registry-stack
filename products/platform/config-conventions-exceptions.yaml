@@ -901,3 +901,39 @@ exceptions:
   class: exchange-model
   reason: "The publication block carries the `title` member of the published bundle metadata, which that exchange model fixes."
   resolution: Permanent for the published bundle metadata.
+- rule: CFG-NAME-2
+  format: platform/python-connection
+  location: products/platform/schemas/python-connection.v1alpha1.schema.json#/$defs/TokenAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/python-connection
+  location: products/platform/schemas/python-connection.v1alpha1.schema.json#/$defs/TokenAlgorithm/enum/ES384
+  class: protocol-constant
+  reason: ES384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/python-connection
+  location: products/platform/schemas/python-connection.v1alpha1.schema.json#/$defs/TokenAlgorithm/enum/EdDSA
+  class: protocol-constant
+  reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/python-connection
+  location: products/platform/schemas/python-connection.v1alpha1.schema.json#/$defs/TokenAlgorithm/enum/RS256
+  class: protocol-constant
+  reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/python-connection
+  location: products/platform/schemas/python-connection.v1alpha1.schema.json#/$defs/TokenAlgorithm/enum/RS384
+  class: protocol-constant
+  reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-SEC-1
+  format: platform/dev-workload-token
+  location: products/platform/schemas/dev-workload-token.v1alpha1.schema.json#/properties/token
+  class: exchange-model
+  reason: "The development runner atomically writes the short-lived bearer only into its private mode-0600 state file, while the operator-authored connection holds a SecretReference to that file. The Python workload reader checks the run authority, expiry, and monotonic generation before each protected call."
+  resolution: "Permanent for the dev-workload-token v1alpha1 producer-consumer contract. Remove this exception when a later format version no longer serializes the bearer in read-back state."

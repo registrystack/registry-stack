@@ -198,7 +198,7 @@ fn declared_refusal_without_an_authored_edge_preserves_refused_behavior() {
 }
 
 #[test]
-fn external_job_example_observes_one_saved_read_through_a_bounded_completion() {
+fn external_job_example_admits_then_observes_one_saved_read_through_a_bounded_completion() {
     use registry_coordinator::definition::Step;
     let (definition, document) = fixture("external-job");
     assert_eq!(definition.workflow.steps.values().filter(|step| matches!(step, Step::Call { call, .. } if call.operation == Operation::ExternalGet)).count(), 1);
@@ -236,7 +236,31 @@ fn external_job_example_observes_one_saved_read_through_a_bounded_completion() {
         .unwrap();
     assert_eq!(timeout.outcome.as_deref(), Some("job-wait-expired"));
     assert_eq!(timeout.elapsed_seconds, 600);
-    assert!(reports.iter().all(|report| report.frozen_commands == 0));
+    assert!(reports.iter().all(|report| report.frozen_commands == 1));
+    let refused_admission = reports
+        .iter()
+        .find(|r| r.name == "invalid-job-is-a-declared-no-effect-refusal")
+        .unwrap();
+    assert_eq!(
+        refused_admission.output,
+        Some(json!({"refusalCode":"invalid-job"}))
+    );
+    let uncertain = reports
+        .iter()
+        .find(|r| r.name == "unusable-admission-response-is-uncertain")
+        .unwrap();
+    assert_eq!(uncertain.state, "uncertain");
+    let conflict = reports
+        .iter()
+        .find(|r| r.name == "changed-command-conflict-is-uncertain")
+        .unwrap();
+    assert_eq!(conflict.state, "uncertain");
+    let recovered = reports
+        .iter()
+        .find(|r| r.name == "lost-admission-reply-recovers-the-same-command")
+        .unwrap();
+    assert_eq!(recovered.call_attempts["admit"], 2);
+    assert_eq!(recovered.frozen_commands, 1);
 }
 
 #[test]

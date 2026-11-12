@@ -1,17 +1,17 @@
 # Run a project for development
 
-Use `rstack dev` to start a checkout's BReg and Casework projects together.
-Install matching BReg and Casework components and supply a dedicated development
+Use `rstack dev` to start a checkout's BReg, Casework, and Messaging projects
+together. Install matching product components and supply a dedicated development
 PostgreSQL server over TLS. `rstack dev` does not start PostgreSQL and does not
 use Docker: you supply the server. The products' own development modes are
 unchanged by `rstack dev`.
 
-For a walk-through from a checkout to a running pair, see
+For a walk-through from a checkout to a running project, see
 [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
 This file is the reference.
 
 ```sh
-rstack install breg casework
+rstack install breg casework messaging
 # Set RSTACK_DEV_DATABASE_URL through your shell's secret provider.
 rstack dev check ./licensing --json
 rstack dev start ./licensing --ttl 30m --json
@@ -38,10 +38,20 @@ defaults to 30 minutes.
 Supply one whole-number value from `1s` to `24h` with an `s`, `m`, or `h` suffix.
 
 The [licensing example](examples/licensing/dev.yaml) creates an application in
-BReg, requests approval of the captured application in Casework, and checks the
-reviewer's decision. Point `start` at the directory containing `dev.yaml`.
+BReg, submits and reads back an idempotency-keyed receipt from Messaging,
+requests approval of the captured application in Casework, and checks the
+reviewer's decision. Its Messaging provider is deliberately unconfigured: the
+journey proves local authenticated acceptance and receipt storage, not external
+email delivery. Point `start` at the directory containing `dev.yaml`.
 Product files remain byte-for-byte unchanged. Generated runtime settings, keys,
 and packages live in the run's owner-only scratch directory.
+
+The [prepared Python script](examples/python-script/README.md) consumes the
+generated connection with `registry_client.connect()`, reads BReg, and submits
+and reads one keyed Messaging receipt without handling a bearer. Its optional
+rotation check keeps one Python process and connection alive across a local
+runner rotation. Source tests use protocol doubles; the documented live command
+is required to establish real runner, credential, and product behavior.
 
 ## Supply the PostgreSQL server
 
@@ -135,7 +145,107 @@ before it provisions anything. The error names the plan pointer, for example
 `/people/NAME/grants/breg/profile`. A Casework grant must name an access profile
 of the Casework project, reported at `/people/NAME/grants/casework/profile`. The run does not compare
 scopes with the profile: a profile's required scopes are a per-entity rule, and
-a mismatch appears as a failed journey step.
+a mismatch appears as a failed journey step. A Messaging grant must name one
+of the checked package's access profiles. Its client, exact scopes, and actor
+kind must match that profile. The local runner accepts Messaging profiles whose
+`principalClaim` is `sub`, keeping receipt ownership bound to the declared
+service subject.
+
+### Python workload connection
+
+Declare `workloads` when a local Python script or service needs a BReg or
+Messaging workload identity. Each binding names one of those products, a
+stable synthetic `subject` and `client`, and a `grant` containing one product
+profile, one or more exact scopes, and additional claims. Mark exactly one
+binding as `default` for each product that has workload bindings. `rstack dev check` verifies BReg profiles
+and protects the BReg principal claim. For Messaging it also checks that the
+profile is a sender, uses `sub`, admits the client, requires the exact scopes,
+and agrees with any required `registry_actor_kind` claim.
+
+When the run becomes ready, `connection_file` in the start and status report
+names an owner-only generated Registry Stack Python connection. It contains
+the `PlatformPythonConnection` envelope, endpoint and authority metadata, and
+a private token reference. Each referenced state is a complete
+`PlatformDevWorkloadToken` envelope. Set
+`REGISTRY_STACK_CONNECTION` to that path, or pass it to `connect(path=...)`.
+The existing run supervisor atomically replaces one complete token-state file
+per binding every minute. Tokens expire after at most five minutes and never
+outlive or extend the run. The Python process can observe later generations
+without restarting. Stopping the run or reaching its TTL removes the
+connection and token state with the rest of the run directory.
+
+Each Messaging run gets its own package, loopback runtime, database, migration
+role, and runtime role. It trusts the run issuer only for its declared
+Messaging audience. A Messaging token is not a BReg token and carries only its
+binding's Messaging client, scopes and claims.
+
+The runner's issuer signing key is not referenced by the connection or token
+state. The generated client must reject a token state whose run, binding,
+product, issuer, subject, client, profile, resource, scopes, declared claims or
+run expiry does not match the connection. It must also reject expired state
+and generation rollback rather than reusing another binding or credential.
+
+### Local Python person picker
+
+The optional local picker simulates holder or staff admission for a fast edit
+loop. It is not OIDC and does not qualify real sign-in, SSO, renewal or
+production enrollment. Use real OIDC for shared or non-loopback development.
+
+Declare each local service and its complete authority in `developmentPickers`:
+
+```yaml
+developmentPickers:
+  holder:
+    people: [applicant, applicant-other]
+    personProducts: [breg, casework]
+    workloads: [registry-script, messaging-service]
+  staff:
+    people: [reviewer]
+    personProducts: [breg, casework]
+    workloads: [registry-script, messaging-service]
+```
+
+The whole `developmentPickers` field is optional. `holder` and `staff` are
+independently optional, but their people must be disjoint. Every named person
+must have a grant for every `personProducts` entry. `workloads` must explicitly
+name the complete top-level workload set. This prevents a picker service from
+loading an undeclared production credential or another local service binding.
+If the plan declares no workloads, omit `workloads` or use an empty list.
+
+`start` and `status` add `picker_files`, keyed by persona. Pass only that
+owner-only descriptor path to the matching service:
+
+```python
+import os
+
+from registry_client.dev_picker import DevelopmentPicker, install_flask
+
+picker = DevelopmentPicker.from_descriptor(
+    os.environ["REGISTRY_STACK_DEV_PICKER"]
+)
+install_flask(
+    app,
+    picker,
+    person_factory=person_factory,
+    request_seconds=2,
+)
+```
+
+There is no boolean development switch. The library mounts the routes only
+when the descriptor is in the private run directory, the supervisor still
+holds that run's lock, the report is ready and unexpired, and the generated
+origin is an exact loopback origin. Bind the Flask or FastAPI development
+server to the host and port in `picker.origin`; a different Host or browser
+Origin is refused.
+
+The selection page receives non-secret labels and opaque selectors. Person and
+workload tokens, subjects, product endpoints and token references remain
+server-side. The picker resolves the complete person token set before it opens
+a memory-only session. Its pending and authenticated cookies use a random
+run-specific namespace, so a restarted run cannot accept an old-run cookie.
+The same Python process observes runner token rotation. Stop, TTL expiry,
+mixed rotation or a lost supervisor refuses the session before another product
+call. The library has no issuer key and cannot mint a replacement token.
 
 For a native review handoff, `bindings.bregReviewAuthority` identifies the
 Casework producer, and `bindings.caseworkContextProvider` identifies the BReg
@@ -207,7 +317,9 @@ gives the person's `alias`, the `expires_at` time when the tokens expire
 and the `header_file` path.
 Pass the file to curl with `--header @HEADER_FILE`. With BReg, include the
 selected profile as the `accessProfile` query parameter. With Casework, the
-header file carries the profile.
+header file carries the profile. Messaging resolves its access profile from
+the token's admitted client, scopes and actor kind, so its header file contains
+only the bearer header.
 
 ## Run isolation
 

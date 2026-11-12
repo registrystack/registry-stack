@@ -1371,7 +1371,16 @@ fn package_report(loaded: &LoadedPackage) -> Result<Value, Outcome> {
     let profiles: Vec<Value> = package
         .access_profiles()
         .iter()
-        .map(|profile| json!({"id": profile.id, "actsAs": profile.acts_as}))
+        .map(|profile| {
+            json!({
+                "id": profile.id,
+                "actsAs": profile.acts_as,
+                "principalClaim": profile.principal_claim,
+                "requiredScopes": profile.required_scopes,
+                "requesterClients": profile.requester_clients,
+                "actorKind": profile.actor_kind,
+            })
+        })
         .collect();
     let mut templates = Vec::new();
     for template in package.templates() {
@@ -2619,6 +2628,16 @@ audit:
         assert_eq!(report["metricsListener"], "127.0.0.1:9107");
         assert_eq!(report["accessProfiles"][0]["id"], "operations");
         assert_eq!(report["accessProfiles"][0]["actsAs"], "operator");
+        assert_eq!(report["accessProfiles"][0]["principalClaim"], "sub");
+        assert_eq!(
+            report["accessProfiles"][0]["requiredScopes"],
+            json!(["messaging:operate"])
+        );
+        assert_eq!(
+            report["accessProfiles"][0]["requesterClients"],
+            json!(["operations-console"])
+        );
+        assert_eq!(report["accessProfiles"][0]["actorKind"], Value::Null);
         assert_eq!(report["retention"]["payloadRetentionDays"], 7);
 
         let (exit, stdout, stderr) = run(&[

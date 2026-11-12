@@ -2,10 +2,14 @@
 
 ## Unreleased
 
-- `rstack dev check|start|status|token|stop` runs a checkout's BReg and Casework
-  projects together against a PostgreSQL server you supply. See
+- `rstack dev check|start|status|token|stop` runs a checkout's BReg, Casework,
+  and Messaging projects together against a PostgreSQL server you supply. See
   [PROJECT-DEV.md](PROJECT-DEV.md). It is an alpha developer tool and may
   change.
+- A live `rstack dev` run can generate a private `PlatformPythonConnection`
+  for declared BReg and Messaging workloads. The supervisor atomically rotates
+  each binding's short-lived `PlatformDevWorkloadToken` state without extending
+  the run, and invalidates it before cleanup.
 - `rstack dev stop RUN_ID --recover` releases a run whose supervisor is gone.
   It waits for the process guards to finish, drops the run's databases and roles
   on the original PostgreSQL cluster, and removes the run directory. You can

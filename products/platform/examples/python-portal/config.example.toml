@@ -1,0 +1,90 @@
+[issuer]
+url = "https://identity.licensing.example.test"
+authorizationEndpoint = "https://identity.licensing.example.test/authorize"
+tokenEndpoint = "https://identity.licensing.example.test/token"
+endSessionEndpoint = "https://identity.licensing.example.test/logout"
+jwksUri = "https://identity.licensing.example.test/jwks.json"
+algorithm = "ES256"
+accessTokenType = "at+jwt"
+maximumAccessTokenLifetimeSeconds = 300
+maximumIdTokenLifetimeSeconds = 3600
+
+[products]
+recordsUrl = "https://records.licensing.example.test"
+reviewsUrl = "https://reviews.licensing.example.test"
+recordRoute = "applications"
+recordFields = ["reference", "profession", "status"]
+reviewQueue = "applications"
+reviewActionId = "submit-application"
+reviewRecordInput = "application"
+reviewSubjectSource = "licensing"
+reviewSubjectType = "proposal"
+
+[sessionStore]
+databaseUrlEnv = "PORTAL_DATABASE_URL"
+primaryKeyId = "current"
+
+[sessionStore.encryptionKeyEnvs]
+current = "PORTAL_SESSION_KEY_CURRENT"
+
+[services.holder]
+clientId = "applicant-portal"
+clientSecretEnv = "PORTAL_HOLDER_CLIENT_SECRET"
+origin = "https://holder.example.test"
+redirectUri = "https://holder.example.test/auth/callback"
+switchRedirectUri = "https://holder.example.test/auth/login"
+bregProfile = "applicant"
+caseworkProfile = "applicant"
+sessionSeconds = 900
+pendingSeconds = 300
+requestSeconds = 10
+sameSite = "Lax"
+
+[services.holder.grants.breg]
+resource = "urn:example:licensing:registry"
+scopes = ["licensing:apply"]
+profile = "applicant"
+
+[services.holder.grants.breg.requiredClaims]
+application_reference = "application-001"
+registry_actor_kind = "human"
+
+[services.holder.grants.casework]
+resource = "urn:example:licensing:review"
+scopes = ["casework:history"]
+profile = "applicant"
+
+[services.holder.grants.casework.requiredClaims]
+registry_actor_kind = "human"
+
+[services.staff]
+clientId = "licensing-auditor"
+clientSecretEnv = "PORTAL_STAFF_CLIENT_SECRET"
+origin = "https://staff.example.test"
+redirectUri = "https://staff.example.test/auth/callback"
+switchRedirectUri = "https://staff.example.test/auth/login"
+bregProfile = "auditor"
+caseworkProfile = "reviewer"
+sessionSeconds = 900
+pendingSeconds = 300
+requestSeconds = 10
+sameSite = "Lax"
+
+[services.staff.grants.breg]
+resource = "urn:example:licensing:registry"
+scopes = ["licensing:audit"]
+profile = "auditor"
+
+[services.staff.grants.breg.requiredClaims]
+application_reference = "application-001"
+registry_actor_kind = "human"
+
+[services.staff.grants.casework]
+resource = "urn:example:licensing:review"
+forwardResource = "urn:example:licensing:registry"
+scopes = ["casework:review", "licensing:audit"]
+profile = "reviewer"
+
+[services.staff.grants.casework.requiredClaims]
+application_reference = "application-001"
+registry_actor_kind = "human"

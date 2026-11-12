@@ -469,26 +469,41 @@ impl fmt::Debug for JwksFetcher {
 }
 
 /// Parse an operator-supplied static JWKS document for
-/// [`JwksFetcher::new_static`]: a non-empty key set of RSA or elliptic-curve
+/// [`JwksFetcher::new_static`]: a non-empty key set of RSA, elliptic-curve, or Ed25519
 /// keys, each with a non-empty `kid` no other key in the set repeats. A
-/// symmetric key or an unnamed key is refused here, at startup, rather than
+/// symmetric or private key, or an unnamed key, is refused here at startup rather than
 /// when a token first selects it.
 pub fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, OidcError> {
-    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| OidcError::Parse)?;
+    let raw: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| OidcError::Parse)?;
+    let jwks: JwkSet = serde_json::from_value(raw.clone()).map_err(|_| OidcError::Parse)?;
     if jwks.keys.is_empty() {
         return Err(OidcError::EmptyKeySet);
     }
     let mut kids = BTreeSet::new();
-    let all_named_asymmetric = jwks.keys.iter().all(|key| {
-        matches!(
-            key.algorithm,
-            AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
-        ) && key
-            .common
-            .key_id
-            .as_deref()
-            .is_some_and(|kid| !kid.is_empty() && kids.insert(kid))
+    let public_only = raw["keys"].as_array().is_some_and(|keys| {
+        keys.iter().all(|key| {
+            key.as_object().is_some_and(|fields| {
+                ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
+                    .iter()
+                    .all(|field| !fields.contains_key(*field))
+            })
+        })
     });
+    let all_named_asymmetric = public_only
+        && jwks.keys.iter().all(|key| {
+            (matches!(
+                key.algorithm,
+                AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
+            ) || matches!(
+                &key.algorithm,
+                AlgorithmParameters::OctetKeyPair(parameters)
+                    if parameters.curve == EllipticCurve::Ed25519
+            )) && key
+                .common
+                .key_id
+                .as_deref()
+                .is_some_and(|kid| !kid.is_empty() && kids.insert(kid))
+        });
     if all_named_asymmetric {
         Ok(jwks)
     } else {
@@ -4590,10 +4605,10 @@ mod tests {
     #[test]
     fn a_static_key_set_requires_unique_named_asymmetric_keys() {
         let keys = parse_static_jwks(
-            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"EC","kid":"two","crv":"P-256","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo"}]}"#,
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"EC","kid":"two","crv":"P-256","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo"},{"kty":"OKP","kid":"three","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc"}]}"#,
         )
-        .expect("RSA and EC keys with distinct kids");
-        assert_eq!(keys.keys.len(), 2);
+        .expect("RSA, EC, and Ed25519 keys with distinct kids");
+        assert_eq!(keys.keys.len(), 3);
 
         for (reason, invalid, expected) in [
             ("no keys member", br#"{}"#.as_slice(), "parse"),
@@ -4602,6 +4617,11 @@ mod tests {
             (
                 "a symmetric key",
                 br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#,
+                "jwk",
+            ),
+            (
+                "a private Ed25519 key",
+                br#"{"keys":[{"kty":"OKP","kid":"one","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","d":"private"}]}"#,
                 "jwk",
             ),
             (

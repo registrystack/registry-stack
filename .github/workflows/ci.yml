@@ -2695,7 +2695,8 @@ jobs:
           cargo build --locked \
             -p registry-casework -p registry-caseworkctl \
             -p registry-breg --features registry-breg/runtime \
-            -p registry-bregctl -p registry-rstack --bins
+            -p registry-bregctl -p registry-messaging -p registry-messagingctl \
+            -p registry-rstack --bins
 
       - name: Install native PostgreSQL 18 and PostGIS for project development
         # The Ubuntu runner's PostgreSQL 16 is below BReg's minimum.
@@ -3341,11 +3342,28 @@ jobs:
               cmp ../../LICENSE LICENSE
             )
           done
+          for client in registry-platform-oidc-py registry-platform-yaml-py; do
+            cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
+            (
+              cd "crates/${client}"
+              python3 -m unittest discover -s tests/python -v
+              cmp ../../LICENSE LICENSE
+            )
+          done
 
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.11.16"
+
+      - name: Test Python connection facade
+        working-directory: crates/registry-stack-client-py
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --locked --all-extras --with httpx==0.28.1 \
+            python -W error::ResourceWarning -m unittest discover \
+            -s tests -p 'test_*.py' -v
 
       - name: Test direct Python composition with the exact checkout client
         working-directory: products/platform/examples/python-composition
@@ -3376,6 +3394,56 @@ jobs:
           fi
           uv run --locked --with "${wheels[0]}" \
             python -m unittest discover -s tests -v
+          printf 'REGISTRY_CLIENT_PY_WHEEL=%s\n' "${wheels[0]}" >>"${GITHUB_ENV}"
+
+      - name: Exercise installed Python service client on Linux
+        working-directory: products/platform/examples/python-portal
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --locked --with "${REGISTRY_CLIENT_PY_WHEEL}" \
+            python -I "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-service.py"
+
+      - name: Test Python machine service
+        working-directory: products/platform/examples/python-machine-service
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --locked python -W error::ResourceWarning \
+            -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Check isolated Python service extras
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in core flask fastapi human-flask human-fastapi; do
+            environment="${RUNNER_TEMP}/client-${mode}"
+            uv venv "${environment}"
+            case "${mode}" in
+              core)
+                uv pip install --python "${environment}/bin/python" \
+                  --no-deps "${REGISTRY_CLIENT_PY_WHEEL}"
+                ;;
+              flask)
+                uv pip install --python "${environment}/bin/python" \
+                  "${REGISTRY_CLIENT_PY_WHEEL}[flask]"
+                ;;
+              fastapi)
+                uv pip install --python "${environment}/bin/python" \
+                  "${REGISTRY_CLIENT_PY_WHEEL}[fastapi]" httpx==0.28.1
+                ;;
+              human-flask)
+                uv pip install --python "${environment}/bin/python" \
+                  "${REGISTRY_CLIENT_PY_WHEEL}[human,flask,postgres]"
+                ;;
+              human-fastapi)
+                uv pip install --python "${environment}/bin/python" \
+                  "${REGISTRY_CLIENT_PY_WHEEL}[human,fastapi,postgres]"
+                ;;
+            esac
+            "${environment}/bin/python" -I \
+              release/scripts/smoke-registry-client-extras.py "${mode}"
+          done
 
       - name: Test released-client Coordinator example
         working-directory: products/coordinator/examples/reviewed-notice

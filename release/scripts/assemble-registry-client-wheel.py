@@ -59,6 +59,26 @@ def metadata(version: str) -> bytes:
     # PyPI renders the facade README, so the page that a Python developer reads
     # first carries the install name, the import name, and a working example.
     description = (FACADE / "README.md").read_text(encoding="utf-8")
+    project = tomllib.loads((FACADE / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    requirements: list[str] = []
+    for dependency in project.get("dependencies", []):
+        if "\n" in dependency or "\r" in dependency:
+            raise ValueError("invalid Python dependency metadata")
+        requirements.append(f"Requires-Dist: {dependency}\n")
+    for extra, dependencies in sorted(project.get("optional-dependencies", {}).items()):
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", extra):
+            raise ValueError("invalid Python extra name")
+        requirements.append(f"Provides-Extra: {extra}\n")
+        for dependency in dependencies:
+            if "\n" in dependency or "\r" in dependency:
+                raise ValueError("invalid Python dependency metadata")
+            requirement, separator, marker = dependency.partition(";")
+            if separator:
+                requirements.append(
+                    f'Requires-Dist: {requirement.strip()}; ({marker.strip()}) and extra == "{extra}"\n'
+                )
+            else:
+                requirements.append(f'Requires-Dist: {dependency}; extra == "{extra}"\n')
     return (
         "Metadata-Version: 2.4\n"
         "Name: registry-stack-client\n"
@@ -72,6 +92,7 @@ def metadata(version: str) -> bytes:
         "Classifier: Development Status :: 4 - Beta\n"
         "Classifier: License :: OSI Approved :: Apache Software License\n"
         "Classifier: Programming Language :: Python :: 3\n"
+        f"{''.join(requirements)}"
         "Description-Content-Type: text/markdown\n\n"
         f"{description}"
     ).encode()
@@ -106,6 +127,7 @@ def bundle_macos_wheel_files(
             consumers=consumers,
             library_roots=library_roots,
             library_directory=staging / "registry_client" / ".dylibs",
+            allow_plain_consumers=True,
         )
         return {
             path.relative_to(staging).as_posix(): path.read_bytes()
@@ -142,6 +164,10 @@ def main() -> int:
     )
     parser.add_argument("--include-render", action="store_true")
     parser.add_argument("--include-coordinator", action="store_true")
+    parser.add_argument("--include-oidc", action="store_true")
+    parser.add_argument("--oidc-wheel", type=Path)
+    parser.add_argument("--include-yaml", action="store_true")
+    parser.add_argument("--yaml-wheel", type=Path)
     for product in PRODUCTS:
         parser.add_argument(f"--{product}-wheel", type=Path, required=product != "render")
     args = parser.parse_args()
@@ -178,9 +204,10 @@ def main() -> int:
 
     configured_version = None
     try:
-        configured_version = tomllib.loads(
+        configured_project = tomllib.loads(
             (FACADE / "pyproject.toml").read_text(encoding="utf-8")
-        )["project"]["version"]
+        )["project"]
+        configured_version = configured_project["version"]
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
         parser.error(f"cannot read the unified client version: {exc}")
     if configured_version != args.version:
@@ -188,6 +215,14 @@ def main() -> int:
             "the unified Python facade version does not match "
             f"{args.version}: {configured_version}"
         )
+    if configured_project.get("optional-dependencies") and not args.include_oidc:
+        parser.error("Python service extras require --include-oidc and its verifier wheel")
+    if args.include_oidc != (args.oidc_wheel is not None):
+        parser.error("--include-oidc requires --oidc-wheel, and the wheel requires the flag")
+    if args.include_yaml != (args.yaml_wheel is not None):
+        parser.error("--include-yaml requires --yaml-wheel, and the wheel requires the flag")
+    if client_registry.release_version(args.version) >= (0, 46, 1) and not args.include_yaml:
+        parser.error("the Python connection format requires --include-yaml")
 
     products = client_registry.stack_python_namespaces(args.version,
         include_casework=args.include_casework, include_messaging=args.include_messaging,
@@ -223,6 +258,38 @@ def main() -> int:
                 if destination in files and files[destination] != data:
                     parser.error(f"conflicting wheel member: {destination}")
                 files[destination] = data
+    if args.include_oidc:
+        match = WHEEL_PATTERN.match(args.oidc_wheel.name)
+        if match is None or match.group("version") != args.version:
+            parser.error("the OIDC verifier wheel does not match the unified client version")
+        tags.add(match.group("tag"))
+        with zipfile.ZipFile(args.oidc_wheel) as archive:
+            for name in archive.namelist():
+                if ".dist-info/" in name or name.endswith("/"):
+                    continue
+                prefix = "registry_platform_oidc/"
+                if not name.startswith(prefix):
+                    parser.error("the OIDC verifier wheel contains an unexpected namespace")
+                destination = f"registry_client/oidc/{name[len(prefix):]}"
+                if destination in files and files[destination] != archive.read(name):
+                    parser.error(f"conflicting wheel member: {destination}")
+                files[destination] = archive.read(name)
+    if args.include_yaml:
+        match = WHEEL_PATTERN.match(args.yaml_wheel.name)
+        if match is None or match.group("version") != args.version:
+            parser.error("the shared configuration reader wheel does not match the unified client version")
+        tags.add(match.group("tag"))
+        with zipfile.ZipFile(args.yaml_wheel) as archive:
+            for name in archive.namelist():
+                if ".dist-info/" in name or name.endswith("/"):
+                    continue
+                prefix = "registry_platform_yaml/"
+                if not name.startswith(prefix):
+                    parser.error("the shared configuration reader wheel contains an unexpected namespace")
+                destination = f"registry_client/yaml/{name[len(prefix):]}"
+                if destination in files and files[destination] != archive.read(name):
+                    parser.error(f"conflicting wheel member: {destination}")
+                files[destination] = archive.read(name)
     if len(tags) != 1:
         parser.error(f"input wheels have different compatibility tags: {sorted(tags)}")
     tag = tags.pop()
@@ -247,7 +314,13 @@ def main() -> int:
                 data = data.replace(b"import registry_client.render as render\n", b"")
                 data = data.replace(b"from . import render as render\n", b"")
                 data = data.replace(b'"render", ', b"")
+                data = data.replace(b'    "render",\n', b"")
             files[f"registry_client/{path.name}"] = data
+    if (facade_root / "portal_postgres.py").is_file():
+        migration = facade_root / "_sql" / "portal_postgres_v1.sql"
+        if not migration.is_file():
+            parser.error("the portal PostgreSQL migration is missing")
+        files["registry_client/_sql/portal_postgres_v1.sql"] = migration.read_bytes()
     try:
         files["registry_client/compatibility.json"] = compatibility_metadata(
             args.version

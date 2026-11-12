@@ -2,15 +2,52 @@ apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
 kind: CoordinatorProject
 project:
   id: external-job
-  version: "1"
+  version: "2"
 
 types:
   job-input:
     type: object
     additionalProperties: false
+    required: [reference]
+    properties:
+      reference: {type: string, minLength: 1, maxLength: 64}
+  job-receipt:
+    type: object
+    additionalProperties: false
     required: [jobId]
     properties:
       jobId: {type: string, minLength: 1, maxLength: 64}
+  job-admission-response:
+    type: object
+    additionalProperties: false
+    required: [status, body]
+    properties:
+      status: {type: integer, minimum: 200, maximum: 499}
+      body:
+        type: object
+        additionalProperties: false
+        properties:
+          jobId: {type: string, minLength: 1, maxLength: 64}
+          reason: {type: string, enum: [invalid-job, idempotency-conflict]}
+  job-admission-outcome:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state, result]
+        properties:
+          state: {type: string, const: accepted}
+          result: {typeRef: job-receipt}
+      - type: object
+        additionalProperties: false
+        required: [state, code]
+        properties:
+          state: {type: string, const: refused}
+          code: {type: string, enum: [invalid-job]}
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties:
+          state: {type: string, const: uncertain}
   job-response:
     type: object
     additionalProperties: false
@@ -51,12 +88,27 @@ types:
           code: {type: string, enum: [external-job-failed]}
 
 functions:
+  job-command:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: job_command
+    inputs:
+      request: {typeRef: job-input}
+    output: {operationInput: admit-job}
+  job-admission:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: job_admission
+    inputs:
+      command: {operationInput: admit-job}
+      response: {operationOutput: admit-job}
+    output: {typeRef: job-admission-outcome}
   job-request:
     runtime: rhai
     source: functions.rhai
     entrypoint: job_request
     inputs:
-      request: {typeRef: job-input}
+      receipt: {typeRef: job-receipt}
     output: {operationInput: read-job}
   job-observation:
     runtime: rhai
@@ -68,6 +120,11 @@ functions:
     output: {typeRef: job-observation}
 
 operations:
+  admit-job:
+    uses: external.command/v1
+    connection: jobs
+    responseSchema: {typeRef: job-admission-response}
+    interpret: job-admission
   read-job:
     uses: external.get/v1
     connection: jobs
@@ -81,8 +138,19 @@ operations:
 workflow:
   input: {typeRef: job-input}
   deadlineSeconds: 900
-  start: read
+  start: admit
   steps:
+    admit:
+      label: Durably admit this job
+      type: call
+      operation: admit-job
+      input:
+        type: function
+        function: job-command
+        inputs:
+          request: {type: input}
+      next: read
+      onDeclaredRefusal: admission-refused
     read:
       label: Read this job's status
       type: call
@@ -91,7 +159,7 @@ workflow:
         type: function
         function: job-request
         inputs:
-          request: {type: input}
+          receipt: {type: step, step: admit}
       next: await-terminal
     await-terminal:
       type: wait-for
@@ -106,7 +174,12 @@ workflow:
     stopped-waiting:
       type: finish
       outcome: job-wait-expired
+    admission-refused:
+      type: finish
+      outcome: job-admission-refused
+      output: {type: step, step: admit}
   outcomes:
     job-result:
       completionOutput: {operation: read-job, name: terminal}
     job-wait-expired: {type: "null"}
+    job-admission-refused: {operationRefusal: admit-job}

@@ -46,7 +46,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         pyproject = self.facade / "pyproject.toml"
         configured_version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
         pyproject.write_text(
-            pyproject.read_text(encoding="utf-8").replace(
+            pyproject.read_text(encoding="utf-8").split("\n[project.optional-dependencies]\n")[0].replace(
                 f'version = "{configured_version}"', f'version = "{self.version}"'
             ),
             encoding="utf-8",
@@ -88,11 +88,25 @@ class AssembleRegistryClientWheelTest(TestCase):
                     f"Name: registry-{product}-client\nVersion: {self.version}\n",
                 )
             self.wheels[product] = wheel
+        self.oidc_wheel = self.directory / f"registry_platform_oidc-{self.version}-{TAG}.whl"
+        with zipfile.ZipFile(self.oidc_wheel, "w") as archive:
+            archive.writestr("registry_platform_oidc/__init__.py", "class AccessTokenVerifier: pass\n")
+            archive.writestr("registry_platform_oidc/__init__.pyi", "class AccessTokenVerifier: ...\n")
+            archive.writestr("registry_platform_oidc/py.typed", b"")
+            archive.writestr("registry_platform_oidc/registry_platform_oidc.abi3.so", b"native")
+        self.yaml_wheel = self.directory / f"registry_platform_yaml-{self.version}-{TAG}.whl"
+        with zipfile.ZipFile(self.yaml_wheel, "w") as archive:
+            archive.writestr("registry_platform_yaml/__init__.py", "class ConfigReadError: pass\n")
+            archive.writestr("registry_platform_yaml/__init__.pyi", "class ConfigReadError: ...\n")
+            archive.writestr("registry_platform_yaml/py.typed", b"")
+            archive.writestr("registry_platform_yaml/registry_platform_yaml.abi3.so", b"native")
 
     def run_assembler(
         self, *, version: str | None = None, include_casework: bool = False,
         include_messaging: bool = False, include_scheduling: bool = False,
-        include_coordinator: bool = True, include_render: bool = True
+        include_coordinator: bool = True, include_render: bool = True,
+        include_oidc: bool = False,
+        include_yaml: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -106,6 +120,10 @@ class AssembleRegistryClientWheelTest(TestCase):
             command.append("--include-render")
         if include_coordinator:
             command.append("--include-coordinator")
+        if include_oidc:
+            command.extend(("--include-oidc", "--oidc-wheel", str(self.oidc_wheel)))
+        if include_yaml:
+            command.extend(("--include-yaml", "--yaml-wheel", str(self.yaml_wheel)))
         if include_casework:
             command.append("--include-casework")
         if include_messaging:
@@ -255,6 +273,90 @@ class AssembleRegistryClientWheelTest(TestCase):
         for product in PRODUCTS:
             self.assertIn(f"`registry_client.{product}`", description)
 
+    def test_connection_core_is_in_the_wheel_without_web_dependencies(self) -> None:
+        result = self.run_assembler()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+            names = set(archive.namelist())
+            self.assertIn("registry_client/connection.py", names)
+            self.assertIn("registry_client/connection.pyi", names)
+            self.assertIn("registry_client/workload.py", names)
+            self.assertIn("registry_client/workload.pyi", names)
+            self.assertIn("registry_client/runner.py", names)
+            self.assertIn("registry_client/machine.py", names)
+            self.assertIn("registry_client/machine.pyi", names)
+            for module in ("web", "flask_adapter", "fastapi_adapter"):
+                self.assertIn(f"registry_client/{module}.py", names)
+                self.assertIn(f"registry_client/{module}.pyi", names)
+            self.assertIn("registry_client/workload_breg.py", names)
+            self.assertIn("registry_client/workload_breg.pyi", names)
+            self.assertIn("registry_client/py.typed", names)
+            self.assertIn("registry_client/_sql/portal_postgres_v1.sql", names)
+            metadata = archive.read(
+                f"registry_stack_client-{self.version}.dist-info/METADATA"
+            ).decode()
+            for line in metadata.splitlines():
+                if line.lower().startswith(
+                    ("requires-dist: flask", "requires-dist: fastapi", "requires-dist: authlib")
+                ):
+                    self.assertIn('extra == "', line)
+
+    def test_optional_dependencies_in_project_are_emitted_in_wheel_metadata(self) -> None:
+        pyproject = self.facade / "pyproject.toml"
+        with pyproject.open("a", encoding="utf-8") as project:
+            project.write(
+                "\n[project.optional-dependencies]\n"
+                'flask = ["Flask>=3.1,<4"]\n'
+                'fastapi = ["fastapi>=0.115,<1"]\n'
+            )
+        result = self.run_assembler(include_oidc=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+            metadata = archive.read(
+                f"registry_stack_client-{self.version}.dist-info/METADATA"
+            ).decode()
+        self.assertIn("Provides-Extra: flask\n", metadata)
+        self.assertIn('Requires-Dist: Flask>=3.1,<4; extra == "flask"\n', metadata)
+        self.assertIn("Provides-Extra: fastapi\n", metadata)
+        self.assertIn('Requires-Dist: fastapi>=0.115,<1; extra == "fastapi"\n', metadata)
+
+    def test_current_extras_keep_optional_frameworks_and_session_packages_out_of_core(self) -> None:
+        module = load_module()
+        metadata = module.metadata("0.46.1").decode()
+        self.assertIn('Requires-Dist: Flask>=3.1,<4; extra == "flask"', metadata)
+        self.assertIn('Requires-Dist: fastapi>=0.115,<1; extra == "fastapi"', metadata)
+        self.assertIn('Requires-Dist: Authlib>=1.9.5,<2; extra == "human"', metadata)
+        self.assertIn('Requires-Dist: psycopg[binary]>=3.3.6,<4; extra == "postgres"', metadata)
+        self.assertNotIn("Requires-Dist: Flask>=3.1,<4\n", metadata)
+
+    def test_oidc_extra_cannot_be_advertised_without_verifier_wheel(self) -> None:
+        pyproject = self.facade / "pyproject.toml"
+        with pyproject.open("a", encoding="utf-8") as project:
+            project.write('\n[project.optional-dependencies]\nflask = ["Flask>=3.1,<4"]\n')
+        result = self.run_assembler()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--include-oidc", result.stderr)
+
+    def test_optional_verifier_is_relocated_with_typing(self) -> None:
+        result = self.run_assembler(include_oidc=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+            names = set(archive.namelist())
+        self.assertIn("registry_client/oidc/__init__.py", names)
+        self.assertIn("registry_client/oidc/__init__.pyi", names)
+        self.assertIn("registry_client/oidc/py.typed", names)
+        self.assertIn("registry_client/oidc/registry_platform_oidc.abi3.so", names)
+
+    def test_shared_configuration_reader_is_relocated_with_typing(self) -> None:
+        result = self.run_assembler(include_yaml=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+            names = set(archive.namelist())
+        self.assertIn("registry_client/yaml/__init__.py", names)
+        self.assertIn("registry_client/yaml/__init__.pyi", names)
+        self.assertIn("registry_client/yaml/py.typed", names)
+        self.assertIn("registry_client/yaml/registry_platform_yaml.abi3.so", names)
+
     def test_assembled_facade_imports_all_six_product_namespaces(self) -> None:
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -358,12 +460,13 @@ class AssembleRegistryClientWheelTest(TestCase):
         files["registry_client/discovery/client.py"] = b"class Client: pass\n"
         seen: dict[str, object] = {}
 
-        def fake_bundle(*, consumers, library_roots, library_directory):
+        def fake_bundle(*, consumers, library_roots, library_directory, allow_plain_consumers):
             seen["consumers"] = [
                 path.relative_to(library_directory.parents[1]).as_posix()
                 for path in consumers
             ]
             seen["library_roots"] = list(library_roots)
+            seen["allow_plain_consumers"] = allow_plain_consumers
             for consumer in consumers:
                 consumer.write_bytes(consumer.read_bytes() + b" signed")
             library_directory.mkdir(parents=True)
@@ -382,6 +485,7 @@ class AssembleRegistryClientWheelTest(TestCase):
             ),
         )
         self.assertEqual(seen["library_roots"], [Path("/cargo-target")])
+        self.assertTrue(seen["allow_plain_consumers"])
         for product in PRODUCTS:
             self.assertEqual(
                 bundled[f"registry_client/{product}/native.abi3.so"],

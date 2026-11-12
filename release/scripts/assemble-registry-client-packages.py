@@ -330,6 +330,32 @@ def python_steps(
                 cwd,
             )
         )
+    include_oidc = client_registry.release_version(version) >= (0, 46, 1)
+    if include_oidc:
+        if napi_platform.startswith("linux-"):
+            verifier_argv = (
+                str(root / "release" / "scripts" / "build-linux-python-client"),
+                "--client", "oidc", "--target", PLATFORMS[napi_platform]["rust_target"],
+                "--compatibility", "manylinux_2_17", "--zig-python", zig_python,
+                "--maturin", maturin, "--out", str(built), "--profile", python_profile,
+            )
+            verifier_cwd = root
+        else:
+            verifier_argv = (maturin, "build", *profile_flags, "--locked", "--out", str(built))
+            verifier_cwd = root / "crates" / "registry-platform-oidc-py"
+        steps.append(Step("build the OIDC verifier wheel", verifier_argv, verifier_cwd))
+        if napi_platform.startswith("linux-"):
+            reader_argv = (
+                str(root / "release" / "scripts" / "build-linux-python-client"),
+                "--client", "yaml", "--target", PLATFORMS[napi_platform]["rust_target"],
+                "--compatibility", "manylinux_2_17", "--zig-python", zig_python,
+                "--maturin", maturin, "--out", str(built), "--profile", python_profile,
+            )
+            reader_cwd = root
+        else:
+            reader_argv = (maturin, "build", *profile_flags, "--locked", "--out", str(built))
+            reader_cwd = root / "crates" / "registry-platform-yaml-py"
+        steps.append(Step("build the shared configuration reader wheel", reader_argv, reader_cwd))
     assemble = [
         "python3",
         str(root / "release" / "scripts" / "assemble-registry-client-wheel.py"),
@@ -338,6 +364,15 @@ def python_steps(
         "--output-dir",
         str(output_dir),
     ]
+    if include_oidc:
+        assemble += [
+            "--include-oidc",
+            "--oidc-wheel",
+            str(built / f"registry_platform_oidc-{version}-{wheel_tag}.whl"),
+            "--include-yaml",
+            "--yaml-wheel",
+            str(built / f"registry_platform_yaml-{version}-{wheel_tag}.whl"),
+        ]
     if include_casework:
         assemble.append("--include-casework")
     if include_messaging:

@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+kind: MessagingProject
+project: {id: licensing-notices, version: "1"}
+providers:
+  - {id: mail-relay, type: smtp}
+senderProfiles:
+  - id: licensing-email
+    channel: email
+    provider: mail-relay
+    sender: licensing@example.test
+templates:
+  - {id: application-received, version: "1"}
+accessProfiles:
+  - id: licensing-sender
+    principalClaim: sub
+    requiredScopes: [messaging:send]
+    requesterClients: [licensing-service]
+    actorKind: service
+    actsAs: sender
+    senderProfiles: [licensing-email]
+    templates: [application-received]
+    requestsPerMinute: 60
+    burst: 10

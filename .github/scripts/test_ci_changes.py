@@ -2865,6 +2865,10 @@ class CiChangesTest(unittest.TestCase):
         for path in (
             "products/platform/examples/python-composition/service.py",
             "products/platform/examples/python-composition/uv.lock",
+            "products/platform/examples/python-machine-service/service.py",
+            "products/platform/examples/python-portal/portal_example.py",
+            "release/scripts/smoke-registry-client-service.py",
+            "release/scripts/smoke-registry-client-extras.py",
             "products/coordinator/examples/reviewed-notice/released_client.py",
             "products/coordinator/examples/reviewed-notice/tests/test_released_client.py",
         ):

@@ -146,6 +146,7 @@ fn expected_json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::
 pub(super) enum Product {
     Breg,
     Casework,
+    Messaging,
 }
 
 impl Product {
@@ -153,6 +154,7 @@ impl Product {
         match self {
             Self::Breg => "breg",
             Self::Casework => "casework",
+            Self::Messaging => "messaging",
         }
     }
 }
@@ -173,6 +175,16 @@ pub(super) struct Plan {
         schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
     )]
     pub people: BTreeMap<String, TestPerson>,
+    /// Service workload bindings whose short-lived credentials the live run owns and rotates.
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, Workload>")
+    )]
+    pub workloads: BTreeMap<String, Workload>,
+    /// Explicit local person-picker services. Omit this map for normal production-style connections.
+    #[serde(default)]
+    pub development_pickers: DevelopmentPickers,
     /// The ordered sequence of HTTP requests the run sends to the started products.
     pub journey: Journey,
     /// Run-local connections between BReg and Casework. Leave empty when the products do not call each other.
@@ -194,7 +206,7 @@ pub(super) struct Plan {
 pub(super) struct ProductPlan {
     /// Which product to start.
     pub product: Product,
-    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg or casework.yaml for Casework.
+    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, or messaging.yaml for Messaging.
     pub project: PathBuf,
     /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
@@ -212,7 +224,7 @@ pub(super) struct TestPerson {
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
-    /// The authority this person holds in each product, keyed by `breg` or `casework`. Give at least one grant, only for products listed in `products`.
+    /// The authority this person holds in each product, keyed by `breg`, `casework`, or `messaging`. Give at least one grant, only for products listed in `products`.
     #[serde(deserialize_with = "deserialize_grants")]
     pub grants: BTreeMap<Product, Grant>,
     /// Forward the same authority to both products. Both grants must declare the same scopes and additional claims.
@@ -220,8 +232,8 @@ pub(super) struct TestPerson {
     pub casework_context: bool,
 }
 
-/// The authority a test person holds in one product.
-#[derive(Deserialize, Serialize)]
+/// The authority a test person or service workload holds in one product.
+#[derive(Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Grant {
@@ -238,11 +250,87 @@ pub(super) struct Grant {
     pub claims: Map<String, Value>,
 }
 
+/// One runner-owned service identity and its fixed product authority.
+#[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct Workload {
+    /// Product this binding calls. Generated workload connections support BReg and Messaging.
+    pub product: Product,
+    /// Whether this is the generated connection's default binding for its product.
+    pub default: bool,
+    /// Stable subject claim preserved across token generations.
+    #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
+    pub subject: String,
+    /// Stable client identifier preserved across token generations.
+    #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
+    pub client: String,
+    /// Fixed profile, scopes and additional claims for this binding.
+    pub grant: Grant,
+}
+
+/// The two deliberately separate local browser personas a development run may expose.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum PickerPersona {
+    Holder,
+    Staff,
+}
+
+impl PickerPersona {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Holder => "holder",
+            Self::Staff => "staff",
+        }
+    }
+}
+
+/// Optional local picker services. Holder and staff keep distinct origins and cookies.
+#[derive(Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(super) struct DevelopmentPickers {
+    /// A holder-only local admission simulation.
+    pub holder: Option<DevelopmentPicker>,
+    /// A staff-only local admission simulation.
+    pub staff: Option<DevelopmentPicker>,
+}
+
+impl DevelopmentPickers {
+    pub(super) fn iter(&self) -> impl Iterator<Item = (PickerPersona, &DevelopmentPicker)> {
+        [
+            (PickerPersona::Holder, self.holder.as_ref()),
+            (PickerPersona::Staff, self.staff.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(persona, picker)| picker.map(|picker| (persona, picker)))
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.holder.is_none() && self.staff.is_none()
+    }
+}
+
+/// One runner-generated loopback picker and exactly the authority it may expose.
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct DevelopmentPicker {
+    /// Test-person aliases eligible for this persona. The browser receives opaque selectors instead.
+    pub people: Vec<String>,
+    /// Complete person credential set required before a picker session opens.
+    pub person_products: Vec<Product>,
+    /// Service workload bindings available to this picker-backed application.
+    #[serde(default)]
+    pub workloads: Vec<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GrantsDocument {
     breg: Option<Grant>,
     casework: Option<Grant>,
+    messaging: Option<Grant>,
 }
 
 fn deserialize_grants<'de, D>(
@@ -255,6 +343,7 @@ where
     Ok([
         grants.breg.map(|grant| (Product::Breg, grant)),
         grants.casework.map(|grant| (Product::Casework, grant)),
+        grants.messaging.map(|grant| (Product::Messaging, grant)),
     ]
     .into_iter()
     .flatten()
@@ -688,7 +777,7 @@ impl Plan {
             !self.products.is_empty(),
             "/products",
             "The plan must name at least one product.",
-            "Add a BReg or Casework product to products.",
+            "Add a BReg, Casework, or Messaging product to products.",
         )?;
         let mut products = BTreeSet::new();
         let mut audiences = BTreeSet::new();
@@ -720,6 +809,7 @@ impl Plan {
             let manifest = match entry.product {
                 Product::Breg => "registry.yaml",
                 Product::Casework => "casework.yaml",
+                Product::Messaging => "messaging.yaml",
             };
             require(
                 root.join(&entry.project)
@@ -761,7 +851,7 @@ impl Plan {
                 !person.grants.is_empty(),
                 &format!("{field}/grants"),
                 "The test person must have at least one product grant.",
-                "Add a BReg or Casework grant for this test person.",
+                "Add a BReg, Casework, or Messaging grant for this test person.",
             )?;
             for (product, grant) in &person.grants {
                 let field = format!("{field}/grants/{}", product.name());
@@ -771,29 +861,7 @@ impl Plan {
                     "The grant names a product that is not started.",
                     "Add the grant's product to products, or remove this grant.",
                 )?;
-                require(
-                    identifier(&grant.profile),
-                    &format!("{field}/profile"),
-                    "The grant profile must be a local identifier.",
-                    "Set profile to a lowercase local identifier of at most 64 characters.",
-                )?;
-                let scopes = grant.scopes.iter().collect::<BTreeSet<_>>();
-                require(
-                    scopes.len() == grant.scopes.len()
-                        && scopes.len() <= 32
-                        && scopes.iter().all(|scope| bounded_atom(scope)),
-                    &format!("{field}/scopes"),
-                    "The grant must contain at most 32 distinct bounded scopes.",
-                    "Remove duplicate or excess scopes, and keep each scope within 256 characters without whitespace or control characters.",
-                )?;
-                for claim in grant.claims.keys() {
-                    require(
-                        bounded_atom(claim) && !reserved_claim(claim),
-                        &format!("{field}/claims"),
-                        "The grant contains a reserved or invalid additional claim name.",
-                        "Remove the claim or rename it to bounded text that is not reserved by the token contract.",
-                    )?;
-                }
+                validate_grant(grant, &field)?;
             }
             if person.casework_context {
                 require(
@@ -821,6 +889,139 @@ impl Plan {
                     &format!("{field}/caseworkContext"),
                     "Casework context forwarding requires the same scopes and additional claims in both grants.",
                     "Make the BReg and Casework grant scopes and additional claims identical.",
+                )?;
+            }
+        }
+        let mut workload_products = BTreeSet::new();
+        let mut workload_defaults = BTreeMap::<Product, usize>::new();
+        for (name, workload) in &self.workloads {
+            let escaped = escape_pointer_segment(name);
+            let field = format!("/workloads/{escaped}");
+            require(
+                identifier(name),
+                "/workloads",
+                "A workload binding name is not a local identifier.",
+                "Rename the workload binding with a lowercase local identifier of at most 64 characters.",
+            )?;
+            require(
+                matches!(workload.product, Product::Breg | Product::Messaging)
+                    && products.contains(&workload.product),
+                &format!("{field}/product"),
+                "The workload binding must name a started product supported by the generated Python connection.",
+                "Use a started BReg or Messaging product, or remove this workload binding.",
+            )?;
+            require(
+                bounded_atom(&workload.subject),
+                &format!("{field}/subject"),
+                "The workload subject must be bounded text without whitespace or control characters.",
+                "Set subject to at most 256 characters without whitespace or control characters.",
+            )?;
+            require(
+                bounded_atom(&workload.client),
+                &format!("{field}/client"),
+                "The workload client must be a bounded client identifier.",
+                "Set client to at most 256 characters without whitespace or control characters.",
+            )?;
+            let grant_field = format!("{field}/grant");
+            validate_grant(&workload.grant, &grant_field)?;
+            require(
+                !workload.grant.scopes.is_empty()
+                    && workload.grant.scopes.iter().all(|scope| scope.len() <= 128),
+                &format!("{grant_field}/scopes"),
+                "A generated Python workload needs one to 32 scopes of at most 128 characters.",
+                "Add the exact workload scopes and keep each scope within 128 characters.",
+            )?;
+            workload_products.insert(workload.product);
+            if workload.default {
+                *workload_defaults.entry(workload.product).or_default() += 1;
+            }
+        }
+        for product in workload_products {
+            require(
+                workload_defaults.get(&product) == Some(&1),
+                "/workloads",
+                format!(
+                    "The generated connection needs exactly one default workload binding for {}.",
+                    product.name()
+                ),
+                format!(
+                    "Mark exactly one {} workload binding as default.",
+                    product.name()
+                ),
+            )?;
+        }
+        let mut picker_people = BTreeSet::new();
+        for (persona, picker) in self.development_pickers.iter() {
+            let field = format!("/developmentPickers/{}", persona.name());
+            let people = picker.people.iter().collect::<BTreeSet<_>>();
+            require(
+                (1..=32).contains(&picker.people.len()) && people.len() == picker.people.len(),
+                &format!("{field}/people"),
+                "A development picker needs 1 to 32 distinct test people.",
+                "Name each eligible test person exactly once.",
+            )?;
+            for person in &picker.people {
+                require(
+                    self.people.contains_key(person),
+                    &format!("{field}/people"),
+                    "A development picker names an unknown test person.",
+                    "Name a test person declared in people.",
+                )?;
+                require(
+                    picker_people.insert(person),
+                    &format!("{field}/people"),
+                    "One test person cannot be eligible for both local picker personas.",
+                    "Use separate synthetic test people for holder and staff services.",
+                )?;
+            }
+            let person_products = picker.person_products.iter().collect::<BTreeSet<_>>();
+            require(
+                !picker.person_products.is_empty()
+                    && person_products.len() == picker.person_products.len(),
+                &format!("{field}/personProducts"),
+                "A development picker needs a distinct nonempty person product set.",
+                "List every product grant required before the local session opens.",
+            )?;
+            for product in &picker.person_products {
+                require(
+                    matches!(product, Product::Breg | Product::Casework)
+                        && products.contains(product),
+                    &format!("{field}/personProducts"),
+                    "A development picker person product must be a started BReg or Casework product.",
+                    "Use BReg and Casework person grants; keep Messaging authority in a declared service workload.",
+                )?;
+                for person in &picker.people {
+                    require(
+                        self.people[person].grants.contains_key(product),
+                        &format!("{field}/people"),
+                        format!(
+                            "Test person {person} lacks the complete {} grant required by this picker.",
+                            product.name()
+                        ),
+                        "Add the declared product grant or remove this person from the picker.",
+                    )?;
+                }
+            }
+            let picker_workloads = picker.workloads.iter().collect::<BTreeSet<_>>();
+            require(
+                picker.workloads.len() <= 32 && picker_workloads.len() == picker.workloads.len(),
+                &format!("{field}/workloads"),
+                "A development picker may name at most 32 distinct workload bindings.",
+                "Remove duplicate or excess workload binding names.",
+            )?;
+            require(
+                picker_workloads
+                    == self.workloads.keys().collect::<BTreeSet<_>>(),
+                &format!("{field}/workloads"),
+                "A development picker must explicitly bind the complete runner workload set.",
+                "List every runner-owned workload binding, or remove workloads not intended for this local service.",
+            )?;
+            for workload in &picker.workloads {
+                require(
+                    self.workloads.contains_key(workload),
+                    &format!("{field}/workloads"),
+                    "A development picker names an unknown workload binding.",
+                    "Name a runner-owned binding declared in workloads.",
                 )?;
             }
         }
@@ -860,6 +1061,33 @@ impl Plan {
         self.bindings.validate(self)?;
         self.journey.validate(self)
     }
+}
+
+fn validate_grant(grant: &Grant, field: &str) -> SemanticResult<()> {
+    require(
+        identifier(&grant.profile),
+        &format!("{field}/profile"),
+        "The grant profile must be a local identifier.",
+        "Set profile to a lowercase local identifier of at most 64 characters.",
+    )?;
+    let scopes = grant.scopes.iter().collect::<BTreeSet<_>>();
+    require(
+        scopes.len() == grant.scopes.len()
+            && scopes.len() <= 32
+            && scopes.iter().all(|scope| bounded_atom(scope)),
+        &format!("{field}/scopes"),
+        "The grant must contain at most 32 distinct bounded scopes.",
+        "Remove duplicate or excess scopes, and keep each scope within 256 characters without whitespace or control characters.",
+    )?;
+    for claim in grant.claims.keys() {
+        require(
+            bounded_atom(claim) && !reserved_claim(claim),
+            &format!("{field}/claims"),
+            "The grant contains a reserved or invalid additional claim name.",
+            "Remove the claim or rename it to bounded text that is not reserved by the token contract.",
+        )?;
+    }
+    Ok(())
 }
 
 impl Journey {
@@ -1241,6 +1469,173 @@ mod tests {
             Capture::Header { .. }
         ));
         assert!(!plan.people["operator"].casework_context);
+    }
+
+    #[test]
+    fn workload_bindings_declare_service_authority_without_a_key_or_token() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["workloads"] = json!({
+            "registry": {
+                "product": "breg", "default": true,
+                "subject": "licensing-service", "client": "licensing-service",
+                "grant": {
+                    "profile": "operator", "scopes": ["registry:read"],
+                    "claims": {"registry_actor_kind": "service"}
+                }
+            }
+        });
+        let plan: Plan = serde_json::from_value(value).unwrap();
+
+        plan.validate(&canonical(&root)).unwrap();
+        let binding = &plan.workloads["registry"];
+        assert_eq!(binding.product, Product::Breg);
+        assert!(binding.default);
+        assert_eq!(binding.grant.profile, "operator");
+    }
+
+    #[test]
+    fn workload_bindings_require_one_default_and_started_products() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let base = serde_json::to_value(plan).unwrap();
+        for workloads in [
+            json!({
+                "one": {"product": "breg", "default": false, "subject": "service",
+                    "client": "service", "grant": {
+                        "profile": "operator", "scopes": ["registry:read"]}}
+            }),
+            json!({
+                "one": {"product": "breg", "default": true, "subject": "service",
+                    "client": "service", "grant": {
+                        "profile": "operator", "scopes": ["registry:read"]}},
+                "two": {"product": "breg", "default": true, "subject": "service-two",
+                    "client": "service-two", "grant": {
+                        "profile": "operator", "scopes": ["registry:read"]}}
+            }),
+        ] {
+            let mut value = base.clone();
+            value["workloads"] = workloads;
+            let plan: Plan = serde_json::from_value(value).unwrap();
+            let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+            assert!(error.contains("default workload binding"), "{error}");
+        }
+    }
+
+    #[test]
+    fn messaging_people_and_workloads_use_their_own_product_authority() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        fs::create_dir(root.path().join("messaging")).unwrap();
+        fs::write(root.path().join("messaging/messaging.yaml"), "fixture").unwrap();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["products"].as_array_mut().unwrap().push(json!({
+            "product": "messaging",
+            "project": "messaging",
+            "audience": "urn:test:messaging"
+        }));
+        value["people"]["operator"]["grants"]["messaging"] = json!({
+            "profile": "service-sender",
+            "scopes": ["messaging:send"],
+            "claims": {"registry_actor_kind": "service"}
+        });
+        value["workloads"] = json!({
+            "registry": {
+                "product": "breg", "default": true,
+                "subject": "registry-service", "client": "registry-service",
+                "grant": {"profile": "operator", "scopes": ["registry:read"]}
+            },
+            "notices": {
+                "product": "messaging", "default": true,
+                "subject": "notice-service", "client": "notice-service",
+                "grant": {
+                    "profile": "service-sender", "scopes": ["messaging:send"],
+                    "claims": {"registry_actor_kind": "service"}
+                }
+            }
+        });
+        let plan: Plan = serde_json::from_value(value).unwrap();
+
+        plan.validate(&canonical(&root)).unwrap();
+        assert_eq!(plan.workloads["notices"].product, Product::Messaging);
+        assert_ne!(
+            plan.product(Product::Breg).audience,
+            plan.product(Product::Messaging).audience
+        );
+    }
+
+    #[test]
+    fn development_pickers_explicitly_bind_persona_people_products_and_workloads() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["workloads"] = json!({
+            "registry": {
+                "product": "breg", "default": true,
+                "subject": "portal-service", "client": "portal-service",
+                "grant": {"profile": "operator", "scopes": ["registry:read"]}
+            }
+        });
+        value["developmentPickers"] = json!({
+            "holder": {
+                "people": ["operator"],
+                "personProducts": ["breg"],
+                "workloads": ["registry"]
+            }
+        });
+        let plan: Plan = serde_json::from_value(value).unwrap();
+
+        plan.validate(&canonical(&root)).unwrap();
+        let picker = plan.development_pickers.holder.as_ref().unwrap();
+        assert_eq!(picker.people, ["operator"]);
+        assert_eq!(picker.person_products, [Product::Breg]);
+        assert_eq!(picker.workloads, ["registry"]);
+    }
+
+    #[test]
+    fn development_pickers_refuse_implicit_people_incomplete_grants_and_external_workloads() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let base = serde_json::to_value(plan).unwrap();
+        for picker in [
+            json!({"holder": {
+                "people": ["unknown"], "personProducts": ["breg"], "workloads": []
+            }}),
+            json!({"holder": {
+                "people": ["operator"], "personProducts": ["casework"], "workloads": []
+            }}),
+            json!({"holder": {
+                "people": ["operator"], "personProducts": ["breg"],
+                "workloads": ["production"]
+            }}),
+        ] {
+            let mut value = base.clone();
+            value["developmentPickers"] = picker;
+            let plan: Plan = serde_json::from_value(value).unwrap();
+            assert!(plan.validate(&canonical(&root)).is_err());
+        }
+        let mut value = base;
+        value["developmentPickers"] = json!({
+            "holder": {"people": ["operator"], "personProducts": ["breg"]},
+            "staff": {"people": ["operator"], "personProducts": ["breg"]}
+        });
+        let plan: Plan = serde_json::from_value(value).unwrap();
+        assert!(plan
+            .validate(&canonical(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("both local picker personas"));
     }
 
     #[test]

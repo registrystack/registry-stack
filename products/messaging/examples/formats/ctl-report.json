@@ -8,11 +8,27 @@
   "accessProfiles": [
     {
       "actsAs": "sender",
-      "id": "case-notices"
+      "actorKind": "service",
+      "id": "case-notices",
+      "principalClaim": "sub",
+      "requesterClients": [
+        "case-system"
+      ],
+      "requiredScopes": [
+        "messaging:send"
+      ]
     },
     {
       "actsAs": "operator",
-      "id": "operations"
+      "actorKind": null,
+      "id": "operations",
+      "principalClaim": "sub",
+      "requesterClients": [
+        "operations-console"
+      ],
+      "requiredScopes": [
+        "messaging:operate"
+      ]
     }
   ],
   "filesChecked": 18,

@@ -17,3 +17,17 @@ journeys:
           outcome: success
           status: 201
           fields: {reference: application-001, profession: Surveyor}
+        capture: application
+      - id: start-reviewed-submission
+        action: submit-application
+        accessProfile: applicant
+        claims:
+          principal: applicant
+          scopes: ["licensing:apply"]
+          directClaims: {application_reference: application-001}
+        request:
+          type: proposal
+          transition: start
+          input: {application: {recordCapture: application}, status: submitted}
+        expect: {outcome: success, status: 201, fields: {state: draft}}
+        capture: submission-draft

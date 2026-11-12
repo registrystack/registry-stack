@@ -5,6 +5,10 @@ issuer: https://identity.licensing.example.test
 products:
   - {product: breg, project: registry, audience: "urn:example:licensing:registry"}
   - {product: casework, project: casework, audience: "urn:example:licensing:review"}
+  - {product: messaging, project: messaging, audience: "urn:example:licensing:messaging"}
+bindings:
+  bregReviewAuthority: {id: casework, producer: licensing-intake, identity: intake}
+  caseworkContextProvider: {id: licensing, identity: context-status, action: submit-application}
 people:
   applicant:
     subject: applicant
@@ -14,6 +18,22 @@ people:
         profile: applicant
         scopes: ["licensing:apply"]
         claims: {application_reference: application-001, registry_actor_kind: human}
+      casework:
+        profile: applicant
+        scopes: ["casework:history"]
+        claims: {registry_actor_kind: human}
+  applicant-other:
+    subject: applicant-other
+    client: applicant-portal
+    grants:
+      breg:
+        profile: applicant
+        scopes: ["licensing:apply"]
+        claims: {application_reference: application-002, registry_actor_kind: human}
+      casework:
+        profile: applicant
+        scopes: ["casework:history"]
+        claims: {registry_actor_kind: human}
   intake:
     subject: intake
     client: licensing-intake
@@ -21,6 +41,22 @@ people:
       casework:
         profile: intake
         scopes: ["casework:intake"]
+        claims: {registry_actor_kind: service}
+  context-status:
+    subject: context-status
+    client: licensing-context
+    grants:
+      breg:
+        profile: review-status
+        scopes: ["licensing:review-status"]
+        claims: {registry_actor_kind: service}
+  notifier:
+    subject: licensing-service
+    client: licensing-service
+    grants:
+      messaging:
+        profile: licensing-sender
+        scopes: ["messaging:send"]
         claims: {registry_actor_kind: service}
   administrator:
     subject: administrator
@@ -32,12 +68,49 @@ people:
         claims: {registry_actor_kind: human}
   reviewer:
     subject: reviewer
-    client: licensing-workbench
+    client: licensing-auditor
+    caseworkContext: true
     grants:
+      breg:
+        profile: auditor
+        scopes: ["licensing:audit", "casework:review"]
+        claims: {application_reference: application-001, registry_actor_kind: human}
       casework:
         profile: reviewer
-        scopes: ["casework:review"]
-        claims: {registry_actor_kind: human}
+        scopes: ["licensing:audit", "casework:review"]
+        claims: {application_reference: application-001, registry_actor_kind: human}
+workloads:
+  registry-script:
+    product: breg
+    default: true
+    subject: licensing-service
+    client: licensing-service
+    grant:
+      profile: applicant
+      scopes: ["licensing:apply"]
+      claims: {application_reference: application-001, registry_actor_kind: service}
+  messaging-service:
+    product: messaging
+    default: true
+    subject: licensing-service
+    client: licensing-service
+    grant:
+      profile: licensing-sender
+      scopes: ["messaging:send"]
+      claims: {registry_actor_kind: service}
+developmentPickers:
+  holder:
+    people: [applicant, applicant-other]
+    personProducts: [breg, casework]
+    workloads: [registry-script, messaging-service]
+  staff:
+    people: [reviewer]
+    personProducts: [breg, casework]
+    workloads: [registry-script, messaging-service]
+schemaTestPeople:
+  submit-application:
+    submit: applicant
+    start-reviewed-submission: applicant
 journey:
   id: licensing-approval
   steps:
@@ -50,6 +123,43 @@ journey:
       body: {data: {reference: application-001, profession: Surveyor}}
       expect: {status: 201}
       capture: {application: {type: pointer, pointer: /data/recordIdentifier}}
+    - id: create-other-application
+      product: breg
+      as: applicant-other
+      method: POST
+      path: /v1/records/applications
+      headers: {Idempotency-Key: create-other-application}
+      body: {data: {reference: application-002, profession: Surveyor}}
+      expect: {status: 201}
+    - id: send-application-receipt
+      product: messaging
+      as: notifier
+      method: POST
+      path: /v1/messages
+      headers: {Idempotency-Key: application-received}
+      body:
+        senderProfile: licensing-email
+        to: {email: applicant@example.test}
+        template: {id: application-received, version: "1"}
+        locale: en
+        data: {reference: application-001}
+        correlationId: application-001
+      expect: {status: 202, json: {/status: queued}}
+      capture: {message: {type: pointer, pointer: /id}}
+    - id: read-application-receipt
+      product: messaging
+      as: notifier
+      method: POST
+      path: /v1/messages/receipt
+      headers: {Idempotency-Key: application-received}
+      body:
+        senderProfile: licensing-email
+        to: {email: applicant@example.test}
+        template: {id: application-received, version: "1"}
+        locale: en
+        data: {reference: application-001}
+        correlationId: application-001
+      expect: {status: 200, json: {/id: "{{message}}", /status: queued}}
     - id: staff-review-queue
       product: casework
       as: administrator
@@ -62,43 +172,43 @@ journey:
         supervisors: []
         queueId: applications
       expect: {status: 200}
-    - id: request-approval
-      product: casework
-      as: intake
+    - id: start-reviewed-submission
+      product: breg
+      as: applicant
       method: POST
-      path: /v1/review-requests
-      headers: {Idempotency-Key: request-approval}
-      body:
-        policy: {id: licensing-approval}
-        subject:
-          source: licensing
-          type: application
-          id: "{{application}}"
-          version: "1"
-          # SHA-256 of the synthetic submitted snapshot's canonical JSON.
-          digest: "sha256:847c1042e1013e5b80dc8bdb7c021b584be3a7b778a4f242e42777b07539b9e5"
-        requesterReference: application-001
-        initiator: {issuer: https://identity.licensing.example.test, subject: applicant}
-        context:
-          mode: submitted
-          snapshot: {reference: application-001, profession: Surveyor}
+      path: /v1/actions/submit-application/proposals
+      headers: {Idempotency-Key: start-reviewed-submission}
+      body: {input: {application: "{{application}}", status: submitted}}
       expect: {status: 201}
-      capture: {request: {type: pointer, pointer: /requestId}}
+      capture:
+        proposal: {type: pointer, pointer: /id}
+        draft-etag: {type: header, header: etag}
+    - id: submit-reviewed-application
+      product: breg
+      as: applicant
+      method: POST
+      path: "/v1/proposals/{{proposal}}/submit"
+      headers: {If-Match: "{{draft-etag}}", Idempotency-Key: submit-reviewed-application}
+      body: {}
+      expect: {status: 200, json: {/state: submitted}}
     - id: find-review-task
       product: casework
       as: reviewer
       method: GET
       path: /v1/review-tasks?queue=applications
-      expect: {status: 200, json: {/items/0/requestId: "{{request}}"}}
+      headers: {Registry-Source-Profile: auditor}
+      expect: {status: 200}
+      poll: {maximumWaitMilliseconds: 60000, pollIntervalMilliseconds: 500}
       capture:
-        task: {type: pointer, pointer: /items/0/taskId}
-        task-revision: {type: pointer, pointer: /items/0/revision}
+        task: {type: find, find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /taskId}
+        request: {type: find, find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /requestId}
+        task-revision: {type: find, find: /items, where: {pointer: /subject/id, equals: "{{proposal}}"}, pointer: /revision}
     - id: claim-review
       product: casework
       as: reviewer
       method: POST
       path: "/v1/review-tasks/{{task}}/claim"
-      headers: {If-Match: '"{{task-revision}}"', Idempotency-Key: claim-review}
+      headers: {If-Match: '"{{task-revision}}"', Idempotency-Key: claim-review, Registry-Source-Profile: auditor}
       expect: {status: 200}
       capture: {claim-revision: {type: pointer, pointer: /revision}}
     - id: approve-application
@@ -106,7 +216,7 @@ journey:
       as: reviewer
       method: POST
       path: "/v1/review-tasks/{{task}}/decisions"
-      headers: {If-Match: '"{{claim-revision}}"', Idempotency-Key: approve-application}
+      headers: {If-Match: '"{{claim-revision}}"', Idempotency-Key: approve-application, Registry-Source-Profile: auditor}
       body: {decision: {type: approve, outcome: approved}}
       expect: {status: 204}
     - id: read-approval
@@ -117,6 +227,6 @@ journey:
       expect:
         status: 200
         json:
-          /subject/id: "{{application}}"
+          /subject/id: "{{proposal}}"
           /status: approved
           /outcome: approved

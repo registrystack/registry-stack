@@ -8,10 +8,10 @@ zig_python=""
 maturin=""
 output_dir=""
 profile="release"
-while (( "$#" )); do
+while (("$#")); do
   case "$1" in
-    --client|--target|--compatibility|--zig-python|--maturin|--out|--profile)
-      if (( "$#" < 2 )); then
+    --client | --target | --compatibility | --zig-python | --maturin | --out | --profile)
+      if (("$#" < 2)); then
         printf '%s requires a value\n' "$1" >&2
         exit 2
       fi
@@ -34,9 +34,9 @@ while (( "$#" )); do
 done
 
 case "${client}" in
-  discovery|evidence|breg|casework|messaging|scheduling|coordinator|render) ;;
+  discovery | evidence | breg | casework | messaging | scheduling | coordinator | render | oidc | yaml) ;;
   *)
-    printf 'client must be discovery, evidence, breg, casework, messaging, scheduling, coordinator, or render\n' >&2
+    printf 'client must be discovery, evidence, breg, casework, messaging, scheduling, coordinator, render, oidc, or yaml\n' >&2
     exit 2
     ;;
 esac
@@ -55,7 +55,7 @@ case "${rust_target}" in
 esac
 
 case "${compatibility}" in
-  linux|manylinux_2_17) ;;
+  linux | manylinux_2_17) ;;
   *)
     printf 'compatibility must be linux or manylinux_2_17\n' >&2
     exit 2
@@ -80,7 +80,11 @@ esac
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-client_dir="${repo_root}/crates/registry-${client}-client-py"
+if [[ "${client}" == "oidc" || "${client}" == "yaml" ]]; then
+  client_dir="${repo_root}/crates/registry-platform-${client}-py"
+else
+  client_dir="${repo_root}/crates/registry-${client}-client-py"
+fi
 if [[ ! -f "${client_dir}/pyproject.toml" ]]; then
   printf 'Python client manifest is missing: %s\n' "${client_dir}/pyproject.toml" >&2
   exit 2
@@ -127,7 +131,7 @@ fi
 for driver in zig-cc zig-cxx; do
   if ! ln -s "${compiler}" "${wrapper_root}/${driver}" 2>/dev/null; then
     if [[ ! -L "${wrapper_root}/${driver}" ||
-          "$(readlink -- "${wrapper_root}/${driver}")" != "${compiler}" ]]; then
+      "$(readlink -- "${wrapper_root}/${driver}")" != "${compiler}" ]]; then
       printf 'unexpected compiler wrapper: %s\n' "${wrapper_root}/${driver}" >&2
       exit 2
     fi

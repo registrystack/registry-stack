@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import concurrent.futures
 import fcntl
@@ -16,6 +17,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -222,12 +224,17 @@ def dev_output(bin_dir, env, cwd, *args, expected=0):
     return report, result.stdout + result.stderr
 
 
-def credential(bin_dir, env, cwd, run, alias):
+def credential(bin_dir, env, cwd, run, alias, product=None):
     before = time.time()
     report = dev(bin_dir, env, cwd, "token", run, "--as", alias)
     # The report gives the expiry the tokens carry, at most five minutes away.
     assert before < report["expires_at"] <= time.time() + 300, report
-    [entry] = report["credentials"]
+    selected = [
+        entry
+        for entry in report["credentials"]
+        if product is None or entry["product"] == product
+    ]
+    [entry] = selected
     header_file = Path(entry["header_file"])
     assert header_file.stat().st_mode & 0o077 == 0
     return dict(line.split(": ", 1) for line in header_file.read_text().splitlines())
@@ -404,7 +411,7 @@ def create_owner(pg, pg_env, url):
     return owner_url, {**pg_env, "PGUSER": "devowner", "PGPASSWORD": password}
 
 
-def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
+def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial, python_client):
     checkout = root / "licensing"
     shutil.copytree(project, checkout)
     before = files(checkout)
@@ -419,9 +426,11 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
         "RSTACK_BREG_BIN": str(bin_dir / "breg"),
         "RSTACK_CASEWORKCTL_BIN": str(bin_dir / "caseworkctl"),
         "RSTACK_CASEWORK_BIN": str(bin_dir / "casework"),
+        "RSTACK_MESSAGINGCTL_BIN": str(bin_dir / "messagingctl"),
+        "RSTACK_MESSAGING_BIN": str(bin_dir / "messaging"),
     }
     try:
-        exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env)
+        exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env, python_client)
         verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
         verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env)
         verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env)
@@ -438,7 +447,7 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
             dev(bin_dir, env, checkout, "stop", run_root.name)
 
 
-def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
+def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env, python_client):
     baseline = inventory(pg, pg_env)
     baseline_locks = administrator_locks(pg, pg_env)
     with concurrent.futures.ThreadPoolExecutor(2) as pool:
@@ -449,11 +458,11 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     assert all(run["journey"]["result"] == "passed" for run in runs)
     assert a["run_id"] != b["run_id"]
     assert len(administrator_locks(pg, pg_env) - baseline_locks) == 2
-    assert len({url for run in runs for url in run["products"].values()}) == 4
+    assert len({url for run in runs for url in run["products"].values()}) == 6
     databases, roles = inventory(pg, pg_env)
-    assert all(sum(run["run_id"] in item for item in databases) == 3 for run in runs)
-    assert all(sum(run["run_id"] in item for item in roles) == 6 for run in runs)
-    for product in ("breg", "casework"):
+    assert all(sum(run["run_id"] in item for item in databases) == 4 for run in runs)
+    assert all(sum(run["run_id"] in item for item in roles) == 8 for run in runs)
+    for product in ("breg", "casework", "messaging"):
         own_db = next(
             name
             for name in databases
@@ -485,8 +494,8 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
         ("breg", "applicant", "/v1/records/applications?accessProfile=applicant"),
         ("casework", "intake", "/v1/review-policies/licensing-approval"),
     ]:
-        first = credential(bin_dir, env, checkout, a["run_id"], alias)
-        second = credential(bin_dir, env, checkout, b["run_id"], alias)
+        first = credential(bin_dir, env, checkout, a["run_id"], alias, product)
+        second = credential(bin_dir, env, checkout, b["run_id"], alias, product)
         assert kid(first) != kid(second)
         assert get(a["products"][product] + path, first) == 200
         assert get(b["products"][product] + path, second) == 200
@@ -497,8 +506,48 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
         bin_dir,
         env,
         state / a["run_id"],
-        credential(bin_dir, env, checkout, a["run_id"], "applicant"),
+        credential(bin_dir, env, checkout, a["run_id"], "applicant", "breg"),
     )
+    if python_client is not None:
+        connection_file = a.get("connection_file")
+        assert isinstance(connection_file, str), "the run omitted its Python connection"
+        script = STACK / "products/platform/examples/python-script/script.py"
+
+        def call_python(connection):
+            return command(
+                python_client,
+                script,
+                env={**env, "REGISTRY_STACK_CONNECTION": str(connection)},
+                cwd=checkout,
+            )
+
+        result = call_python(connection_file)
+        assert result.returncode == 0, "the generated Python workload call failed"
+        receipt = json.loads(result.stdout)
+        assert receipt["applications"] == 1 and receipt["status"] == "queued"
+
+        for name, mutation in (
+            ("foreign-endpoint", ("url", b["products"]["messaging"])),
+            ("foreign-run", ("runId", b["run_id"])),
+        ):
+            alternate = json.loads(Path(connection_file).read_text())
+            messaging = next(
+                binding
+                for binding in alternate["bindings"]
+                if binding["product"] == "messaging"
+            )
+            field, value = mutation
+            target = messaging if field == "url" else messaging["credential"]
+            target[field] = value
+            alternate_path = root / f"{name}-python-connection.json"
+            alternate_path.write_text(json.dumps(alternate))
+            alternate_path.chmod(0o600)
+            refused = call_python(alternate_path)
+            assert refused.returncode != 0, f"Python accepted a {name} workload"
+        print(
+            "A Python service used local BReg and Messaging workload grants; "
+            "foreign-run and endpoint substitutions failed"
+        )
     print(
         "Concurrent licensing journeys passed with isolated product tokens, ports, databases and roles"
     )
@@ -663,7 +712,11 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
     assert recovery["run_directory"] == str(state / run), recovery
     processes = recovery["processes"]
     assert processes == recorded
-    assert sorted(p["product"] for p in processes) == ["breg", "casework"], recovery
+    assert sorted(p["product"] for p in processes) == [
+        "breg",
+        "casework",
+        "messaging",
+    ], recovery
     assert_nothing_listening(bin_dir, report["products"].values())
     databases, roles = inventory(pg, pg_env)
     assert {item["database"] for item in recovery["objects"]} == (
@@ -703,7 +756,7 @@ def verify_recover(bin_dir, pg, checkout, state, env, pg_env):
     report, run = lose_supervisor(bin_dir, checkout, state, env)
     recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
     assert recovered["status"] == "stopped", recovered
-    assert len(recovered["recovered"]["stopped_process_groups"]) == 2, recovered
+    assert len(recovered["recovered"]["stopped_process_groups"]) == 3, recovered
     assert_nothing_listening(bin_dir, report["products"].values())
     assert inventory(pg, pg_env) == baseline
     eventually(
@@ -725,7 +778,7 @@ def verify_recover(bin_dir, pg, checkout, state, env, pg_env):
     refused = dev(bin_dir, no_url, checkout, "stop", run, "--recover", expected=3)
     assert "no PostgreSQL administrator URL" in refused["error"]["message"], refused
     assert refused["run_id"] == run, refused
-    assert len(refused["recovery"]["processes"]) == 2, refused
+    assert len(refused["recovery"]["processes"]) == 3, refused
     assert (state / run).is_dir() and inventory(pg, pg_env) != baseline
     dev(bin_dir, env, checkout, "stop", run, "--recover")
     assert_nothing_listening(bin_dir, report["products"].values())
@@ -876,7 +929,7 @@ def verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env):
     baseline = inventory(pg, pg_env)
     shim = state.parent / "slow-bregctl"
     ready = state.parent / "slow-bregctl-ready"
-    shim.write_text("""#!/usr/bin/env python3
+    shim.write_text(f"""#!{sys.executable}
 import os
 import sys
 import time
@@ -899,7 +952,37 @@ os.execv(os.environ["RSTACK_TEST_BREGCTL"], sys.argv)
         starting = pool.submit(
             dev, bin_dir, slow_env, checkout, "start", ".", expected=3
         )
-        eventually(ready.is_file, "the provisioning tool did not start", timeout=30)
+
+        def rehearsal_started():
+            if ready.is_file():
+                return True
+            if starting.done():
+                try:
+                    result = starting.result()
+                except Exception as error:
+                    match = re.search(
+                        r"rstack dev start exited [0-9]+: (\{.*\})", str(error)
+                    )
+                    try:
+                        report = ast.literal_eval(match.group(1)) if match else {}
+                    except (SyntaxError, ValueError):
+                        report = {}
+                    failure = report.get("error", {})
+                    no_json = "did not return JSON" in str(error)
+                    exit_code = re.search(r"exit(?:ed)? (-?[0-9]+)", str(error))
+                    raise AssertionError(
+                        "development startup failed before the BReg rehearsal: "
+                        f"{type(error).__name__}, no_json={no_json}, "
+                        f"exit={exit_code.group(1) if exit_code else 'unknown'}, "
+                        f"{failure.get('class')}, "
+                        f"{[(item.get('code'), item.get('path')) for item in report.get('diagnostics', [])]}"
+                    ) from None
+                raise AssertionError(
+                    f"development startup returned {result['status']} before the BReg rehearsal"
+                )
+            return False
+
+        eventually(rehearsal_started, "the provisioning tool did not start", timeout=60)
         [run_root] = live_runs(state)
         assert not (run_root / "processes.json").exists()
         assert inventory(pg, pg_env) != baseline
@@ -1351,10 +1434,12 @@ def verify_offline_plan(root, bin_dir, project):
             "RSTACK_DEV_DATABASE_CA",
             "RSTACK_BREG_BIN",
             "RSTACK_CASEWORK_BIN",
+            "RSTACK_MESSAGING_BIN",
         }
     }
     check_env["RSTACK_BREGCTL_BIN"] = str(bin_dir / "bregctl")
     check_env["RSTACK_CASEWORKCTL_BIN"] = str(bin_dir / "caseworkctl")
+    check_env["RSTACK_MESSAGINGCTL_BIN"] = str(bin_dir / "messagingctl")
     check_env["RSTACK_DEV_STATE_DIR"] = str(state)
     report = dev(bin_dir, check_env, project, "check", ".")
     assert report["ok"] and report["status"] == "complete"
@@ -1403,6 +1488,11 @@ def main():
     parser.add_argument("--postgres-bin-dir", type=Path, required=True)
     parser.add_argument("--scratch-parent", type=Path)
     parser.add_argument("--spatial", action="store_true", help="also verify PostGIS")
+    parser.add_argument(
+        "--python-client",
+        type=Path,
+        help="installed-wheel Python executable for the generated workload call",
+    )
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(
         prefix="rstack-dev-", dir=args.scratch_parent
@@ -1434,6 +1524,7 @@ def main():
                 url,
                 pg_env,
                 args.spatial,
+                args.python_client,
             )
         finally:
             checked(pg / "pg_ctl", "-D", cluster, "-m", "fast", "-w", "stop")

@@ -3521,6 +3521,178 @@ formats:
     restrictingMembers: []
 
   # platform
+  - id: platform/python-connection
+    product: platform
+    title: Python service connection
+    files: [python-connection.json, connection.json, connection.example.json]
+    syntax: json
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/python-connection/v1alpha1
+      kind: PlatformPythonConnection
+      checkedBy:
+        file: crates/registry-platform-yaml-py/src/formats.rs
+        symbol: PYTHON_CONNECTION_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/python-connection/v1alpha1
+      kind: PlatformPythonConnection
+    schema:
+      path: products/platform/schemas/python-connection.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/platform/python-connection/python-connection.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-yaml-py --features schema --example python-formats-schema -- --output products/platform/schemas
+      driftCheck: crates/registry-platform-yaml-py/src/tests.rs
+    reader:
+      crate: registry-platform-yaml-py
+      file: crates/registry-platform-yaml-py/src/formats.rs
+      function: read_python_connection
+      type: PythonConnection
+    check: python -m registry_client.check_connection {file}
+    example: products/platform/examples/python-composition/connection.example.json
+    conformance:
+      requiredText: /service
+      optionalText: none
+      integer: none
+      boolean: /bindings/0/default
+      idList: none
+      set: /bindings/0/credential/scopes
+      reference: none
+      operand: none
+    securityMembers:
+      - pointer: /audience
+        whenOmitted: refused
+      - pointer: /secretProviders
+        whenOmitted: refused
+      - pointer: /bindings/*/product
+        whenOmitted: refused
+      - pointer: /bindings/*/url
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/type
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/tokenEndpoint
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/clientId
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/clientKeyRef
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/tokenRef
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/runId
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/binding
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/issuer
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/subject
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/profile
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/resource
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/scopes
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/claims
+        whenOmitted: refused
+      - pointer: /bindings/*/credential/runExpiresAt
+        whenOmitted: refused
+      - pointer: /admission
+        whenOmitted: closed
+      - pointer: /admission/issuer
+        whenOmitted: refused
+      - pointer: /admission/resource
+        whenOmitted: refused
+      - pointer: /admission/clientId
+        whenOmitted: refused
+      - pointer: /admission/profile
+        whenOmitted: refused
+      - pointer: /admission/requiredScopes
+        whenOmitted: refused
+      - pointer: /admission/requiredClaims
+        whenOmitted: refused
+      - pointer: /admission/algorithm
+        whenOmitted: refused
+      - pointer: /admission/accessTokenType
+        whenOmitted: refused
+      - pointer: /admission/maximumAccessTokenLifetimeSeconds
+        whenOmitted: refused
+      - pointer: /admission/jwksUri
+        whenOmitted: open
+      - pointer: /admission/clockSkewSeconds
+        whenOmitted: open
+      - pointer: /admission/allowInsecureHttp
+        whenOmitted: closed
+    restrictingMembers: [/audience, /bindings/*/product, /bindings/*/credential/resource, /bindings/*/credential/scopes, /bindings/*/credential/claims, /bindings/*/credential/runExpiresAt, /admission/issuer, /admission/resource, /admission/clientId, /admission/profile, /admission/requiredScopes, /admission/requiredClaims, /admission/algorithm, /admission/maximumAccessTokenLifetimeSeconds]
+
+  - id: platform/dev-workload-token
+    product: platform
+    title: Development workload token state
+    files: ['workload-*.json', dev-workload-token-stopped.json]
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/dev-workload-token/v1alpha1
+      kind: PlatformDevWorkloadToken
+      checkedBy:
+        file: crates/registry-platform-yaml-py/src/formats.rs
+        symbol: DEV_WORKLOAD_TOKEN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/dev-workload-token/v1alpha1
+      kind: PlatformDevWorkloadToken
+    schema:
+      path: products/platform/schemas/dev-workload-token.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/platform/dev-workload-token/dev-workload-token.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-yaml-py --features schema --example python-formats-schema -- --output products/platform/schemas
+      driftCheck: crates/registry-platform-yaml-py/src/tests.rs
+    reader:
+      crate: registry-platform-yaml-py
+      file: crates/registry-platform-yaml-py/src/formats.rs
+      function: read_dev_workload_token
+      type: DevWorkloadToken
+    check: python -m registry_client.check_connection {file}
+    example: products/platform/examples/dev-workload-token-stopped.json
+    conformance:
+      requiredText: /runId
+      optionalText: none
+      integer: /generation
+      boolean: none
+      idList: none
+      set: /scopes
+      reference: none
+      operand: none
+    securityMembers:
+      - pointer: /product
+        whenOmitted: refused
+      - pointer: /issuer
+        whenOmitted: refused
+      - pointer: /subject
+        whenOmitted: refused
+      - pointer: /clientId
+        whenOmitted: refused
+      - pointer: /profile
+        whenOmitted: refused
+      - pointer: /resource
+        whenOmitted: refused
+      - pointer: /scopes
+        whenOmitted: refused
+      - pointer: /claims
+        whenOmitted: refused
+      - pointer: /generation
+        whenOmitted: refused
+      - pointer: /issuedAt
+        whenOmitted: refused
+      - pointer: /expiresAt
+        whenOmitted: refused
+      - pointer: /runExpiresAt
+        whenOmitted: refused
+      - pointer: /status
+        whenOmitted: open
+      - pointer: /token
+        whenOmitted: closed
+    restrictingMembers: [/product, /profile, /resource, /scopes, /claims, /expiresAt, /runExpiresAt]
+
   - id: platform/package-sums
     product: platform
     title: Package SHA256SUMS

@@ -1169,7 +1169,62 @@ jobs:
               exit 1
             fi
           done
+          oidc_in_release=0
+          if (( client_major > 0 || client_minor > 46 ||
+                (client_minor == 46 && client_patch >= 1) )); then
+            oidc_in_release=1
+            oidc_dir="${GITHUB_WORKSPACE}/crates/registry-platform-oidc-py"
+            configured_version="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "${oidc_dir}/pyproject.toml")"
+            test "${configured_version}" = "${CLIENT_VERSION}"
+            if [[ "${RUNNER_OS}" == Linux ]]; then
+              release/scripts/build-linux-python-client \
+                --client oidc \
+                --target "${{ matrix.target }}" \
+                --compatibility manylinux_2_17 \
+                --zig-python "${RUNNER_TEMP}/maturin/bin/python" \
+                --maturin "${RUNNER_TEMP}/maturin/bin/maturin" \
+                --out "${built_wheel_dir}" \
+                --profile release
+            else
+              (cd "${oidc_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
+                --release --locked --out "${built_wheel_dir}")
+            fi
+            test -f "${built_wheel_dir}/registry_platform_oidc-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+            yaml_dir="${GITHUB_WORKSPACE}/crates/registry-platform-yaml-py"
+            configured_version="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "${yaml_dir}/pyproject.toml")"
+            test "${configured_version}" = "${CLIENT_VERSION}"
+            if [[ "${RUNNER_OS}" == Linux ]]; then
+              release/scripts/build-linux-python-client \
+                --client yaml \
+                --target "${{ matrix.target }}" \
+                --compatibility manylinux_2_17 \
+                --zig-python "${RUNNER_TEMP}/maturin/bin/python" \
+                --maturin "${RUNNER_TEMP}/maturin/bin/maturin" \
+                --out "${built_wheel_dir}" \
+                --profile release
+            else
+              (cd "${yaml_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
+                --release --locked --out "${built_wheel_dir}")
+            fi
+            test -f "${built_wheel_dir}/registry_platform_yaml-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+          fi
           if [[ "${unified_client}" -eq 1 ]]; then
+            oidc_wheel_args=()
+            if [[ "${oidc_in_release}" -eq 1 ]]; then
+              oidc_wheel_args=(
+                --include-oidc
+                --oidc-wheel
+                "${built_wheel_dir}/registry_platform_oidc-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+              )
+            fi
+            yaml_wheel_args=()
+            if [[ "${oidc_in_release}" -eq 1 ]]; then
+              yaml_wheel_args=(
+                --include-yaml
+                --yaml-wheel
+                "${built_wheel_dir}/registry_platform_yaml-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl"
+              )
+            fi
             casework_wheel_args=()
             if [[ "${include_casework}" -eq 1 ]]; then
               casework_wheel_args=(
@@ -1215,7 +1270,9 @@ jobs:
               ${casework_wheel_args[@]+"${casework_wheel_args[@]}"} \
               ${messaging_wheel_args[@]+"${messaging_wheel_args[@]}"} \
               ${scheduling_wheel_args[@]+"${scheduling_wheel_args[@]}"} \
-              ${coordinator_wheel_args[@]+"${coordinator_wheel_args[@]}"}
+              ${coordinator_wheel_args[@]+"${coordinator_wheel_args[@]}"} \
+              ${oidc_wheel_args[@]+"${oidc_wheel_args[@]}"} \
+              ${yaml_wheel_args[@]+"${yaml_wheel_args[@]}"}
             expected_wheels=1
           else
             cp "${built_wheel_dir}"/*.whl "${wheel_dir}/"

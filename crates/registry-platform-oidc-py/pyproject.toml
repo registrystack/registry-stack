@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "registry-platform-oidc"
+version = "0.46.1"
+description = "Bounded Python token verification over Registry Stack OIDC primitives."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+keywords = ["oidc", "registry", "registrystack"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+
+[project.urls]
+Documentation = "https://docs.registrystack.org/"
+Issues = "https://github.com/registrystack/registry-stack/issues"
+Repository = "https://github.com/registrystack/registry-stack"
+
+[tool.maturin]
+python-source = "python"
+module-name = "registry_platform_oidc.registry_platform_oidc"
+features = ["extension-module"]

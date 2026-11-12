@@ -935,9 +935,11 @@ inboundAuthConfig:
     clientSecret: '{{.STAFF_PORTAL_CLIENT_SECRET}}'
     grantTypes:
     - authorization_code
+    - refresh_token
     pkceRequired: true
     postLogoutRedirectUris:
     - https://staff.registry.example
+    - https://staff.registry.example/auth/login
     publicClient: false
     redirectUris:
     - https://staff.registry.example/auth/callback

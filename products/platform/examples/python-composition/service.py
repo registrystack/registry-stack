@@ -314,51 +314,31 @@ class TokenSource:
                 "the configured product credential could not be read"
             ) from None
 
-    def breg_authorization(self):
-        if self.provider is not None:
-            return {"private_key_jwt": self.config["privateKeyJwt"]}
-        return {"static": self.bearer_token()}
-
 
 class Composition:
-    def __init__(self, config, inbox):
-        from registry_client import breg, casework, messaging
+    def __init__(self, config, inbox, *, with_messaging=False):
+        from registry_client import casework, connect
 
         self.config, self.inbox = config, inbox
+        selected = {"casework"} if "caseworkUrl" in config else set()
         if (
-            set(config["tokens"]) - {"breg", "casework", "messaging"}
-            or "breg" not in config["tokens"]
+            not isinstance(config.get("tokens"), dict)
+            or set(config["tokens"]) != selected
         ):
             raise CompositionError(
-                "configure only the selected product token providers"
+                "configure only the selected Casework token provider"
             )
-        selected = {"breg"} | {
-            name for name in ("casework", "messaging") if name + "Url" in config
-        }
-        if set(config["tokens"]) != selected:
-            raise CompositionError("each selected product needs its own token provider")
         self.tokens = {
             name: TokenSource(value) for name, value in config["tokens"].items()
         }
-        self.registry = breg.BaseRegistryClient(
-            config["bregUrl"],
-            authorization=self.tokens["breg"].breg_authorization(),
-            maximum_mutation_retries=0,
-        )
+        stack = connect()
+        self.registry = stack.breg
         self.reviews = (
-            casework.CaseworkClient(
-                config["caseworkUrl"], maximum_mutation_retries=0
-            )
+            casework.CaseworkClient(config["caseworkUrl"], maximum_mutation_retries=0)
             if "caseworkUrl" in config
             else None
         )
-        self.messages = (
-            messaging.MessagingClient(
-                config["messagingUrl"], maximum_mutation_retries=0
-            )
-            if "messagingUrl" in config
-            else None
-        )
+        self.messages = stack.messaging if with_messaging else None
 
     def prepare(self, action, inputs, key, intake_proposal_id=None):
         profile = self.config["bregProfile"]
@@ -556,9 +536,8 @@ class Composition:
                     continue
             notice_key = f"{proposal_id}:{version}:notice"
             if state == "notice-uncertain":
-                token = self.tokens["messaging"].bearer_token()
                 try:
-                    receipt = self.messages.message_receipt(token, notice_key, notice)
+                    receipt = self.messages.message_receipt(notice_key, notice)
                 except Exception:
                     self._job_failed(proposal_id, "receipt")
                     continue
@@ -569,7 +548,6 @@ class Composition:
                 if attempts >= MAXIMUM_ATTEMPTS:
                     self._job_failed(proposal_id, "budget")
                     continue
-                token = self.tokens["messaging"].bearer_token()
                 with self.inbox.connect() as db:
                     db.execute(
                         "UPDATE jobs SET state='notice-uncertain',attempts=attempts+1 WHERE id=?",
@@ -578,7 +556,7 @@ class Composition:
                 # A lost response leaves notice-uncertain on disk. The next
                 # pass reads the receipt; it never blindly repeats submission.
                 try:
-                    self.messages.submit(token, notice_key, notice)
+                    self.messages.submit(notice_key, notice)
                 except MessagingClientError as error:
                     # A native known refusal permits another bounded attempt.
                     # Expired or conflicting keys can describe earlier accepted
@@ -736,7 +714,7 @@ def main():
         )
         print(json.dumps({"registered": True}))
         return
-    app = Composition(config, inbox)
+    app = Composition(config, inbox, with_messaging=args.command == "reconcile")
     if args.command == "prepare":
         proposal = app.prepare(
             args.action,

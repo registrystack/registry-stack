@@ -109,8 +109,12 @@ def _assert_supported_macos_deployment_target(path: Path) -> None:
 
 def _assert_plain_macos_loads(path: Path) -> None:
     _assert_supported_macos_deployment_target(path)
+    identity_lines = _run(["otool", "-D", str(path)]).splitlines()[1:]
+    identities = {line.strip() for line in identity_lines if line.strip()}
+    if len(identities) > 1:
+        raise PackagingError(f"multiple macOS install names in plain binary {path}")
     for command in _load_commands(path):
-        if not command.startswith(SYSTEM_LOAD_PREFIXES):
+        if command not in identities and not command.startswith(SYSTEM_LOAD_PREFIXES):
             raise PackagingError(
                 f"non-system macOS load command in plain binary {path}: {command}"
             )
@@ -190,6 +194,8 @@ def bundle_macos_fips(
     consumers: Sequence[Path],
     library_roots: Sequence[Path],
     library_directory: Path,
+    *,
+    allow_plain_consumers: bool = False,
 ) -> list[str]:
     """Bundle and relocate the complete FIPS dylib closure for consumers.
 
@@ -215,7 +221,12 @@ def bundle_macos_fips(
     for consumer in normalized_consumers:
         loads = _fips_load_commands(consumer)
         if not loads:
-            raise PackagingError(f"macOS consumer has no AWS-LC FIPS dylib: {consumer}")
+            if not allow_plain_consumers:
+                raise PackagingError(
+                    f"macOS consumer has no AWS-LC FIPS dylib: {consumer}"
+                )
+            _assert_plain_macos_loads(consumer)
+            continue
         direct_loads[consumer] = loads
         pending.extend(loads)
 

@@ -1,0 +1,23 @@
+{
+  "apiVersion": "id.registrystack.org/formats/platform/dev-workload-token/v1alpha1",
+  "kind": "PlatformDevWorkloadToken",
+  "status": "stopped",
+  "runId": "0123456789abcdef0123456789abcdef",
+  "binding": "messaging-service",
+  "product": "messaging",
+  "issuer": "https://identity.example.test",
+  "subject": "licensing-service",
+  "clientId": "licensing-service",
+  "profile": "licensing-sender",
+  "resource": "urn:example:licensing:messaging",
+  "scopes": [
+    "messaging:send"
+  ],
+  "claims": {
+    "registry_actor_kind": "service"
+  },
+  "generation": 3,
+  "issuedAt": 1700000000,
+  "expiresAt": 1700000000,
+  "runExpiresAt": 1700000000
+}

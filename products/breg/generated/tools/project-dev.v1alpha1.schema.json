@@ -196,6 +196,54 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
       "type": "string"
     },
+    "DevelopmentPicker": {
+      "additionalProperties": false,
+      "description": "One runner-generated loopback picker and exactly the authority it may expose.",
+      "properties": {
+        "people": {
+          "description": "Test-person aliases eligible for this persona. The browser receives opaque selectors instead.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "personProducts": {
+          "description": "Complete person credential set required before a picker session opens.",
+          "items": {
+            "$ref": "#/$defs/Product"
+          },
+          "type": "array"
+        },
+        "workloads": {
+          "default": [],
+          "description": "Service workload bindings available to this picker-backed application.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "people",
+        "personProducts"
+      ],
+      "type": "object"
+    },
+    "DevelopmentPickers": {
+      "additionalProperties": false,
+      "description": "Optional local picker services. Holder and staff keep distinct origins and cookies.",
+      "properties": {
+        "holder": {
+          "$ref": "#/$defs/DevelopmentPicker",
+          "description": "A holder-only local admission simulation."
+        },
+        "staff": {
+          "$ref": "#/$defs/DevelopmentPicker",
+          "description": "A staff-only local admission simulation."
+        }
+      },
+      "type": "object"
+    },
     "Expected": {
       "additionalProperties": false,
       "description": "The conditions a response must meet.",
@@ -281,7 +329,7 @@
     },
     "Grant": {
       "additionalProperties": false,
-      "description": "The authority a test person holds in one product.",
+      "description": "The authority a test person or service workload holds in one product.",
       "properties": {
         "claims": {
           "additionalProperties": true,
@@ -380,7 +428,8 @@
       "description": "A product the development run can start.",
       "enum": [
         "breg",
-        "casework"
+        "casework",
+        "messaging"
       ],
       "type": "string"
     },
@@ -397,7 +446,7 @@
           "description": "Which product to start."
         },
         "project": {
-          "description": "Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg or casework.yaml for Casework.",
+          "description": "Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, or messaging.yaml for Messaging.",
           "type": "string"
         }
       },
@@ -530,12 +579,15 @@
         },
         "grants": {
           "additionalProperties": false,
-          "description": "The authority this person holds in each product, keyed by `breg` or `casework`. Give at least one grant, only for products listed in `products`.",
+          "description": "The authority this person holds in each product, keyed by `breg`, `casework`, or `messaging`. Give at least one grant, only for products listed in `products`.",
           "properties": {
             "breg": {
               "$ref": "#/$defs/Grant"
             },
             "casework": {
+              "$ref": "#/$defs/Grant"
+            },
+            "messaging": {
               "$ref": "#/$defs/Grant"
             }
           },
@@ -559,6 +611,40 @@
       "maxLength": 2048,
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
+    },
+    "Workload": {
+      "additionalProperties": false,
+      "description": "One runner-owned service identity and its fixed product authority.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Stable client identifier preserved across token generations."
+        },
+        "default": {
+          "description": "Whether this is the generated connection's default binding for its product.",
+          "type": "boolean"
+        },
+        "grant": {
+          "$ref": "#/$defs/Grant",
+          "description": "Fixed profile, scopes and additional claims for this binding."
+        },
+        "product": {
+          "$ref": "#/$defs/Product",
+          "description": "Product this binding calls. Generated workload connections support BReg and Messaging."
+        },
+        "subject": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "Stable subject claim preserved across token generations."
+        }
+      },
+      "required": [
+        "product",
+        "default",
+        "subject",
+        "client",
+        "grant"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
@@ -575,6 +661,14 @@
       "$ref": "#/$defs/Bindings",
       "default": {},
       "description": "Run-local connections between BReg and Casework. Leave empty when the products do not call each other."
+    },
+    "developmentPickers": {
+      "$ref": "#/$defs/DevelopmentPickers",
+      "default": {
+        "holder": null,
+        "staff": null
+      },
+      "description": "Explicit local person-picker services. Omit this map for normal production-style connections."
     },
     "issuer": {
       "$ref": "#/$defs/Url",
@@ -625,6 +719,17 @@
       },
       "default": {},
       "description": "Chooses the test person for a BReg fixture step in tests/journeys.yaml, keyed by journey identifier and then step identifier. Needed only when several people could run the step; every named person needs a BReg grant.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "workloads": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Workload"
+      },
+      "default": {},
+      "description": "Service workload bindings whose short-lived credentials the live run owns and rotates.",
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },

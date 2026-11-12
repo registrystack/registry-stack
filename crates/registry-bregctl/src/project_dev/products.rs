@@ -90,11 +90,16 @@ impl<'a> ProductRunner<'a> {
                 // packaging; the published source is left intact.
                 continue;
             }
-            self.tool(
-                entry.product,
-                "check",
-                &[self.input.project.join(&entry.project).as_os_str()],
-            )?;
+            let project = self.input.project.join(&entry.project);
+            if entry.product == Product::Messaging {
+                self.tool(
+                    entry.product,
+                    "check",
+                    &["--project".as_ref(), project.as_os_str()],
+                )?;
+            } else {
+                self.tool(entry.product, "check", &[project.as_os_str()])?;
+            }
         }
         Ok(())
     }
@@ -148,6 +153,7 @@ impl<'a> ProductRunner<'a> {
                 Product::Casework => {
                     self.activate_casework(database, &project, bind, breg_package.as_deref())?
                 }
+                Product::Messaging => self.activate_messaging(database, &project, bind)?,
             };
             let binaries = &self.input.binaries[&product];
             let mut command = guard::Command::new(
@@ -157,7 +163,7 @@ impl<'a> ProductRunner<'a> {
             )
             .map_err(operational)?;
             command.arg("--runtime-config").arg(config);
-            if product == Product::Casework {
+            if matches!(product, Product::Casework | Product::Messaging) {
                 command.arg("serve");
             }
             let log = open_log(self.root, &format!("{}-runtime", product.name()))?;
@@ -366,6 +372,32 @@ impl<'a> ProductRunner<'a> {
         Ok(config)
     }
 
+    fn activate_messaging(
+        &self,
+        database: &mut Database,
+        project: &Path,
+        bind: &str,
+    ) -> Result<PathBuf> {
+        let package = self.root.join("messaging-package");
+        self.tool(
+            Product::Messaging,
+            "package",
+            &[
+                project.as_os_str(),
+                "--output".as_ref(),
+                package.as_os_str(),
+            ],
+        )?;
+        let urls = database
+            .provision("messaging", false, false)
+            .map_err(operational)?;
+        let config = self.config(Product::Messaging, "messaging", bind, &package, urls)?;
+        let arguments = ["--runtime-config".as_ref(), config.as_os_str()];
+        self.tool(Product::Messaging, "apply", &arguments)?;
+        self.tool(Product::Messaging, "status", &arguments)?;
+        Ok(config)
+    }
+
     fn config(
         &self,
         product: Product,
@@ -444,6 +476,15 @@ impl<'a> ProductRunner<'a> {
                 config
             }
             Product::Casework => casework_config(plan, name, self.root, package, &identity, bind),
+            Product::Messaging => messaging_config(
+                plan,
+                name,
+                self.root,
+                package,
+                &identity,
+                bind,
+                &self.input.messaging_clients,
+            ),
         };
         if let Some(bindings) = &self.bindings {
             bindings.configure(product, &mut config);
@@ -742,6 +783,12 @@ fn shared_config(
         .values()
         .filter(|person| person.grants.contains_key(&product))
         .map(|person| person.client.as_str())
+        .chain(
+            plan.workloads
+                .values()
+                .filter(|workload| workload.product == product)
+                .map(|workload| workload.client.as_str()),
+        )
         .chain(extra_clients.iter().map(String::as_str))
         .collect();
     let oidc = json!({
@@ -795,6 +842,39 @@ fn casework_config(
     config["listener"] = json!({"bind": bind, "tlsTermination": "development-loopback"});
     config["identity"] = json!({"databaseId": identity});
     config["authentication"] = json!({"oidc": oidc});
+    config
+}
+
+/// Messaging keeps its own package, database roles, runtime listener and
+/// authorization boundary. A project provider without a run-local connection
+/// remains deliberately unconfigured; the smoke journey proves acceptance and
+/// receipt storage without introducing another broker.
+fn messaging_config(
+    plan: &Plan,
+    name: &str,
+    root: &Path,
+    package: &Path,
+    identity: &str,
+    bind: &str,
+    clients: &BTreeSet<String>,
+) -> Value {
+    let (mut config, oidc) = shared_config(plan, Product::Messaging, name, root, package, clients);
+    config["apiVersion"] = json!("id.registrystack.org/formats/messaging/runtime/v1alpha1");
+    config["kind"] = json!("MessagingRuntimeConfig");
+    config["identity"] = json!({"databaseId": identity});
+    config["listener"] = json!({
+        "bind": bind,
+        "tlsTermination": "development-loopback",
+        "networkExposure": "private-address"
+    });
+    config["authentication"] = json!({"oidc": oidc});
+    config["audit"]["destination"] = json!("file");
+    config["audit"]["path"] = json!(root.join("messaging-audit.jsonl"));
+    config["retention"] = json!({
+        "payloadRetentionDays": 1,
+        "recordRetentionDays": 1,
+        "receiptRetentionDays": 1
+    });
     config
 }
 
@@ -855,6 +935,7 @@ fn copy_project(source: &Path, target: &Path) -> Result<()> {
 pub(super) struct ProductInspection {
     pub(super) breg_authority: Option<BregAuthority>,
     pub(super) casework_principals: BTreeMap<String, String>,
+    pub(super) messaging_clients: BTreeSet<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -922,9 +1003,11 @@ pub(super) fn inspect(
     super::bindings::check_with_breg_reader(plan)?;
     let breg_authority = breg_authority(root, plan)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
+    let messaging_clients = check_messaging_project(root, plan, terminate)?;
     Ok(ProductInspection {
         breg_authority,
         casework_principals,
+        messaging_clients,
     })
 }
 
@@ -958,6 +1041,7 @@ fn product_root(
     let manifest_name = match product {
         Product::Breg => "registry.yaml",
         Product::Casework => "casework.yaml",
+        Product::Messaging => "messaging.yaml",
     };
     let manifest = project.join(manifest_name).canonicalize().map_err(|_| {
         plan::SemanticRefusal::new(
@@ -1003,6 +1087,7 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
         .collect();
     validate_breg_binding_ids(&plan.bindings, &review_authorities, &actions)?;
     check_breg_grants(&registry, &plan.people)?;
+    check_breg_workloads(&registry, &plan.workloads)?;
     let inventory = registry_breg::authority::authority_inventory(&registry)?;
     let principal = breg_principal(plan, &project.field, &inventory.principal_claims)?;
     Ok(Some(BregAuthority {
@@ -1040,6 +1125,19 @@ fn breg_principal(
                 ),
                 "The BReg grant claims cannot replace the principal claim selected by the BReg project.",
                 "Remove the selected principal claim from this grant's additional claims.",
+            )?;
+        }
+    }
+    for (name, workload) in &plan.workloads {
+        if workload.product == Product::Breg {
+            plan::require(
+                !workload.grant.claims.contains_key(&principal),
+                &format!(
+                    "/workloads/{}/grant/claims",
+                    registry_platform_yaml::escape_pointer_segment(name)
+                ),
+                "The BReg workload claims cannot replace the principal claim selected by the BReg project.",
+                "Remove the selected principal claim from this workload's additional claims.",
             )?;
         }
     }
@@ -1104,6 +1202,31 @@ fn check_breg_grants(
                     registry_platform_yaml::escape_pointer_segment(name)
                 ),
                 "The BReg grant profile does not name an access profile in the BReg project.",
+                "Set profile to an access profile defined by the BReg project.",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn check_breg_workloads(
+    registry: &registry_breg::CompiledRegistry,
+    workloads: &BTreeMap<String, plan::Workload>,
+) -> plan::SemanticResult<()> {
+    let profiles: BTreeSet<_> = registry
+        .access_profile_displays()
+        .iter()
+        .map(|profile| profile.id.as_str())
+        .collect();
+    for (name, workload) in workloads {
+        if workload.product == Product::Breg {
+            plan::require(
+                profiles.contains(workload.grant.profile.as_str()),
+                &format!(
+                    "/workloads/{}/grant/profile",
+                    registry_platform_yaml::escape_pointer_segment(name)
+                ),
+                "The BReg workload profile does not name an access profile in the BReg project.",
                 "Set profile to an access profile defined by the BReg project.",
             )?;
         }
@@ -1208,12 +1331,277 @@ fn casework_principals_from_facts(
     Ok(principals)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct MessagingProfile {
+    principal_claim: String,
+    scopes: BTreeSet<String>,
+    clients: BTreeSet<String>,
+    actor_kind: Option<String>,
+    sender: bool,
+}
+
+fn check_messaging_project(
+    root: &Path,
+    plan: &Plan,
+    terminate: &AtomicBool,
+) -> Result<BTreeSet<String>> {
+    let Some(project) = product_root(root, plan, Product::Messaging)? else {
+        return Ok(BTreeSet::new());
+    };
+    let tool = super::product_tool(Product::Messaging).map_err(|_| {
+        InspectionUnavailable::new(
+            &project.field,
+            "The Messaging project cannot be inspected because its owning tool is unavailable.",
+            "Install the matching Messaging tools or provide RSTACK_MESSAGINGCTL_BIN, then run the check again.",
+        )
+    })?;
+    let checked = tool_report(
+        &tool,
+        "messagingctl",
+        "check",
+        &["--project".as_ref(), project.root.as_os_str()],
+        terminate,
+    );
+    let (status, report) = match checked {
+        Ok(checked) => checked,
+        Err(error) if terminate.load(Ordering::Relaxed) => return Err(error),
+        Err(error) => {
+            return Err(InspectionUnavailable::new(
+                &project.field,
+                &format!(
+                    "The selected `messagingctl` helper could not inspect the Messaging project: {error:#}."
+                ),
+                "Install the matching Messaging tools or provide RSTACK_MESSAGINGCTL_BIN, then run the check again.",
+            )
+            .into())
+        }
+    };
+    if status.code() == Some(1) && messaging_domain_refusal(&report) {
+        return Err(plan::SemanticRefusal::new(
+            &project.field,
+            "The Messaging project did not pass validation by its owning tool.",
+            "Run `messagingctl check --project PROJECT` for authored diagnostics, then correct the Messaging project.",
+        )
+        .into());
+    }
+    if !status.success() {
+        return Err(InspectionUnavailable::new(
+            &project.field,
+            "The selected `messagingctl` helper did not complete the Messaging project check.",
+            "Install the matching Registry Stack Messaging tools, then run the check again.",
+        )
+        .into());
+    }
+    let profiles = messaging_report_profiles(&report).map_err(|error| {
+        InspectionUnavailable::new(
+            &project.field,
+            &format!(
+                "The selected `messagingctl` helper returned an incompatible report: {error:#}."
+            ),
+            "Install the matching Registry Stack Messaging tools, then run the check again.",
+        )
+    })?;
+    validate_messaging_grants(plan, &profiles)?;
+    Ok(profiles
+        .values()
+        .flat_map(|profile| profile.clients.iter().cloned())
+        .collect())
+}
+
+fn messaging_domain_refusal(report: &Value) -> bool {
+    report["apiVersion"] == "id.registrystack.org/formats/messaging/ctl-report/v1alpha1"
+        && report["kind"] == "MessagingCtlReport"
+        && report["command"] == "check"
+        && report["status"] == "domain-refusal"
+        && report["ok"] == false
+        && report["diagnostics"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+}
+
+fn messaging_report_profiles(report: &Value) -> Result<BTreeMap<String, MessagingProfile>> {
+    ensure!(
+        report["apiVersion"] == "id.registrystack.org/formats/messaging/ctl-report/v1alpha1"
+            && report["kind"] == "MessagingCtlReport"
+            && report["command"] == "check"
+            && report["status"] == "complete"
+            && report["ok"] == true,
+        "messagingctl check returned an incompatible envelope"
+    );
+    let entries = report["accessProfiles"]
+        .as_array()
+        .context("messagingctl check did not report access profiles")?;
+    let mut profiles = BTreeMap::new();
+    for entry in entries {
+        let id = entry["id"]
+            .as_str()
+            .context("a Messaging access profile has no ID")?;
+        let principal_claim = entry["principalClaim"]
+            .as_str()
+            .filter(|claim| !claim.is_empty())
+            .context("a Messaging access profile has no principal claim")?;
+        let string_set = |member: &str| -> Result<BTreeSet<String>> {
+            let values: Vec<String> = entry[member]
+                .as_array()
+                .with_context(|| format!("a Messaging access profile has no {member}"))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .with_context(|| {
+                            format!("a Messaging access profile has an invalid {member} value")
+                        })
+                })
+                .collect::<Result<_>>()?;
+            let unique: BTreeSet<String> = values.iter().cloned().collect();
+            ensure!(
+                unique.len() == values.len(),
+                "a Messaging access profile has duplicate {member} values"
+            );
+            Ok(unique)
+        };
+        let actor_kind = match entry.get("actorKind") {
+            Some(Value::Null) => None,
+            Some(Value::String(kind)) if matches!(kind.as_str(), "human" | "agent" | "service") => {
+                Some(kind.clone())
+            }
+            _ => bail!("a Messaging access profile has an invalid actorKind"),
+        };
+        let acts_as = entry["actsAs"]
+            .as_str()
+            .context("a Messaging access profile has no actsAs value")?;
+        ensure!(
+            matches!(acts_as, "sender" | "operator"),
+            "a Messaging access profile has an invalid actsAs value"
+        );
+        let profile = MessagingProfile {
+            principal_claim: principal_claim.to_owned(),
+            scopes: string_set("requiredScopes")?,
+            clients: string_set("requesterClients")?,
+            actor_kind,
+            sender: acts_as == "sender",
+        };
+        ensure!(
+            profiles.insert(id.to_owned(), profile).is_none(),
+            "messagingctl check returned duplicate access profiles"
+        );
+    }
+    Ok(profiles)
+}
+
+fn validate_messaging_grant(
+    field: &str,
+    client_field: &str,
+    grant: &plan::Grant,
+    client: &str,
+    profiles: &BTreeMap<String, MessagingProfile>,
+    workload: bool,
+) -> plan::SemanticResult<()> {
+    let profile = profiles.get(&grant.profile).ok_or_else(|| {
+        plan::SemanticRefusal::new(
+            format!("{field}/profile"),
+            "The Messaging grant profile does not name an access profile in the Messaging project.",
+            "Set profile to an access profile defined by the Messaging project.",
+        )
+    })?;
+    plan::require(
+        profile.principal_claim == "sub",
+        &format!("{field}/profile"),
+        "The local Messaging runner requires a profile whose principalClaim is `sub`.",
+        "Use a Messaging profile bound to `sub`, so receipt ownership remains the service subject.",
+    )?;
+    plan::require(
+        profile.clients.contains(client),
+        client_field,
+        "The Messaging grant client is not admitted by its access profile.",
+        "Set client to one of the profile's requesterClients.",
+    )?;
+    plan::require(
+        grant.scopes.iter().cloned().collect::<BTreeSet<_>>() == profile.scopes,
+        &format!("{field}/scopes"),
+        "The Messaging grant scopes differ from the access profile's requiredScopes.",
+        "Set scopes to exactly the Messaging access profile's requiredScopes.",
+    )?;
+    if let Some(kind) = &profile.actor_kind {
+        plan::require(
+            grant
+                .claims
+                .get("registry_actor_kind")
+                .and_then(Value::as_str)
+                == Some(kind),
+            &format!("{field}/claims/registry_actor_kind"),
+            "The Messaging grant actor kind differs from the access profile.",
+            "Set registry_actor_kind to the actorKind required by the Messaging access profile.",
+        )?;
+    }
+    if workload {
+        plan::require(
+            profile.sender,
+            &format!("{field}/profile"),
+            "A Messaging workload connection must use a sender access profile.",
+            "Select a Messaging profile whose actsAs value is sender.",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_messaging_grants(
+    plan: &Plan,
+    profiles: &BTreeMap<String, MessagingProfile>,
+) -> plan::SemanticResult<()> {
+    for (name, person) in &plan.people {
+        if let Some(grant) = person.grants.get(&Product::Messaging) {
+            let field = format!(
+                "/people/{}/grants/messaging",
+                registry_platform_yaml::escape_pointer_segment(name)
+            );
+            let client_field = format!(
+                "/people/{}/client",
+                registry_platform_yaml::escape_pointer_segment(name)
+            );
+            validate_messaging_grant(
+                &field,
+                &client_field,
+                grant,
+                &person.client,
+                profiles,
+                false,
+            )?;
+        }
+    }
+    for (name, workload) in &plan.workloads {
+        if workload.product == Product::Messaging {
+            let field = format!(
+                "/workloads/{}",
+                registry_platform_yaml::escape_pointer_segment(name)
+            );
+            validate_messaging_grant(
+                &format!("{field}/grant"),
+                &format!("{field}/client"),
+                &workload.grant,
+                &workload.client,
+                profiles,
+                true,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn explain_casework_facts(
     tool: &Path,
     project: &Path,
     terminate: &AtomicBool,
 ) -> Result<CaseworkFacts> {
-    let (status, report) = casework_report(tool, "explain", &[project.as_os_str()], terminate)?;
+    let (status, report) = tool_report(
+        tool,
+        "caseworkctl",
+        "explain",
+        &[project.as_os_str()],
+        terminate,
+    )?;
     if status.success() {
         return casework_report_facts(&report);
     }
@@ -1223,10 +1611,11 @@ fn explain_casework_facts(
     anyhow::bail!("caseworkctl explain did not complete successfully")
 }
 
-/// Runs `caseworkctl --format json <command> <arguments>` and returns its
-/// exit status with the JSON report it printed.
-fn casework_report(
+/// Runs a product tool's JSON command and returns its exit status with the
+/// report it printed.
+fn tool_report(
     tool: &Path,
+    tool_name: &str,
     command: &str,
     arguments: &[&std::ffi::OsStr],
     terminate: &AtomicBool,
@@ -1238,7 +1627,7 @@ fn casework_report(
         .args(arguments)
         .stdout(Stdio::piped())
         .spawn()
-        .with_context(|| format!("cannot start caseworkctl {command}"))?;
+        .with_context(|| format!("cannot start {tool_name} {command}"))?;
     let stdout = child.stdout.take().expect("the report output was piped");
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -1251,18 +1640,18 @@ fn casework_report(
             !terminate.load(Ordering::Relaxed),
             "development product inspection was interrupted"
         );
-        ensure!(Instant::now() < deadline, "caseworkctl {command} timed out");
+        ensure!(Instant::now() < deadline, "{tool_name} {command} timed out");
         Ok(())
     })?;
     let bytes = reader
         .join()
-        .map_err(|_| anyhow::anyhow!("cannot collect the caseworkctl {command} report"))??;
+        .map_err(|_| anyhow::anyhow!("cannot collect the {tool_name} {command} report"))??;
     ensure!(
         bytes.len() as u64 <= MAX_REPORT,
-        "the caseworkctl {command} report exceeds the size limit"
+        "the {tool_name} {command} report exceeds the size limit"
     );
     let report = serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("caseworkctl {command} did not emit a JSON report"))?;
+        .map_err(|_| anyhow::anyhow!("{tool_name} {command} did not emit a JSON report"))?;
     Ok((status, report))
 }
 
@@ -1321,8 +1710,9 @@ fn check_casework_binding(
         super::bindings::render_for_check(plan, Product::Casework, &mut config);
         let path = root.join("casework-runtime.yaml");
         write_private(&path, &serde_json::to_vec(&config)?)?;
-        casework_report(
+        tool_report(
             tool,
+            "caseworkctl",
             "check",
             &[
                 project.root.as_os_str(),
@@ -2277,6 +2667,157 @@ mod tests {
     }
 
     #[test]
+    fn messaging_config_uses_its_own_database_audience_and_workload_client() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let terminate = AtomicBool::new(false);
+        let mut input = breg_input(false);
+        input.breg_authority = None;
+        input.plan = serde_json::from_value(json!({
+            "issuer": "https://issuer.example.invalid",
+            "products": [{
+                "product": "messaging", "project": ".",
+                "audience": "urn:example:messaging"
+            }],
+            "people": {"sender": {
+                "subject": "sender", "client": "sender-client",
+                "grants": {"messaging": {
+                    "profile": "sender", "scopes": ["messaging:send"],
+                    "claims": {"registry_actor_kind": "service"}
+                }}
+            }},
+            "workloads": {"notices": {
+                "product": "messaging", "default": true,
+                "subject": "service", "client": "workload-client",
+                "grant": {
+                    "profile": "sender", "scopes": ["messaging:send"],
+                    "claims": {"registry_actor_kind": "service"}
+                }
+            }},
+            "journey": {"id": "send", "steps": [{
+                "id": "send", "product": "messaging", "as": "sender",
+                "method": "POST", "path": "/v1/messages", "body": {},
+                "expect": {"status": 202}
+            }]}
+        }))
+        .unwrap();
+        input.messaging_clients = BTreeSet::from(["package-operator".to_owned()]);
+        let runner = ProductRunner::new(Arc::new(input), &root, &terminate).unwrap();
+        let urls = DatabaseUrls {
+            runtime: "postgresql://runtime:password@127.0.0.1:5432/messaging".to_owned(),
+            migration: "postgresql://migration:password@127.0.0.1:5432/messaging".to_owned(),
+        };
+        let path = runner
+            .config(
+                Product::Messaging,
+                "messaging",
+                "127.0.0.1:8107",
+                &root.join("messaging-package"),
+                urls,
+            )
+            .unwrap();
+        let text = fs::read_to_string(path).unwrap();
+        let written: Value = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(written["kind"], "MessagingRuntimeConfig");
+        assert_eq!(
+            written["authentication"]["oidc"]["audience"],
+            "urn:example:messaging"
+        );
+        assert_eq!(
+            written["authentication"]["oidc"]["allowedClients"],
+            json!(["package-operator", "sender-client", "workload-client"])
+        );
+        assert_eq!(
+            written["listener"]["tlsTermination"],
+            "development-loopback"
+        );
+        assert_eq!(
+            written["database"]["runtimeUrlRef"],
+            "secret:file/messaging-runtime-url"
+        );
+        assert!(written.get("providers").is_none());
+        assert!(!text.contains("password"), "{written}");
+    }
+
+    #[test]
+    fn messaging_workloads_must_match_the_owning_profile_authority() {
+        let report = json!({
+            "apiVersion": "id.registrystack.org/formats/messaging/ctl-report/v1alpha1",
+            "kind": "MessagingCtlReport", "command": "check",
+            "status": "complete", "ok": true, "diagnostics": [],
+            "accessProfiles": [{
+                "id": "service-sender", "actsAs": "sender",
+                "principalClaim": "sub", "requiredScopes": ["messaging:send"],
+                "requesterClients": ["notice-service"], "actorKind": "service"
+            }]
+        });
+        let profiles = messaging_report_profiles(&report).unwrap();
+        let mut plan: Plan = serde_json::from_value(json!({
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "messaging", "project": ".", "audience": "urn:messaging"}],
+            "people": {"sender": {
+                "subject": "sender", "client": "notice-service",
+                "grants": {"messaging": {
+                    "profile": "service-sender", "scopes": ["messaging:send"],
+                    "claims": {"registry_actor_kind": "service"}
+                }}
+            }},
+            "workloads": {"notices": {
+                "product": "messaging", "default": true,
+                "subject": "service", "client": "notice-service",
+                "grant": {
+                    "profile": "service-sender", "scopes": ["messaging:send"],
+                    "claims": {"registry_actor_kind": "service"}
+                }
+            }},
+            "journey": {"id": "send", "steps": [{
+                "id": "send", "product": "messaging", "as": "sender",
+                "method": "POST", "path": "/v1/messages", "body": {},
+                "expect": {"status": 202}
+            }]}
+        }))
+        .unwrap();
+
+        validate_messaging_grants(&plan, &profiles).unwrap();
+        plan.workloads.get_mut("notices").unwrap().client = "other-service".to_owned();
+        let error = validate_messaging_grants(&plan, &profiles)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("/workloads/notices/client"), "{error}");
+    }
+
+    #[test]
+    fn messaging_reports_refuse_authority_values_the_owning_tool_cannot_emit() {
+        let report = || {
+            json!({
+                "apiVersion": "id.registrystack.org/formats/messaging/ctl-report/v1alpha1",
+                "kind": "MessagingCtlReport", "command": "check",
+                "status": "complete", "ok": true, "diagnostics": [],
+                "accessProfiles": [{
+                    "id": "service-sender", "actsAs": "sender",
+                    "principalClaim": "sub", "requiredScopes": ["messaging:send"],
+                    "requesterClients": ["notice-service"], "actorKind": "service"
+                }]
+            })
+        };
+
+        let mut duplicate = report();
+        duplicate["accessProfiles"][0]["requiredScopes"] =
+            json!(["messaging:send", "messaging:send"]);
+        assert!(messaging_report_profiles(&duplicate).is_err());
+
+        let mut invalid = report();
+        invalid["accessProfiles"][0]["actorKind"] = json!("robot");
+        assert!(messaging_report_profiles(&invalid).is_err());
+
+        let mut missing = report();
+        missing["accessProfiles"][0]["actsAs"] = Value::Null;
+        assert!(messaging_report_profiles(&missing).is_err());
+    }
+
+    #[test]
     fn a_report_without_the_access_profile_list_is_refused() {
         let report = json!({
             "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
@@ -2436,6 +2977,33 @@ mod tests {
     }
 
     #[test]
+    fn a_breg_workload_naming_an_unknown_profile_is_refused_at_its_pointer() {
+        let registry = minimal_registry(str::to_owned);
+        let workload = |profile: &str| {
+            serde_json::from_value(json!({
+                "product": "breg", "default": true,
+                "subject": "service", "client": "service",
+                "grant": {"profile": profile, "scopes": []}
+            }))
+            .unwrap()
+        };
+        let workloads = BTreeMap::from([("registry".to_owned(), workload("directory-edtor"))]);
+        let error = check_breg_workloads(&registry, &workloads)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("/workloads/registry/grant/profile"),
+            "{error}"
+        );
+        assert!(!error.contains("directory-edtor"), "{error}");
+        check_breg_workloads(
+            &registry,
+            &BTreeMap::from([("registry".to_owned(), workload("directory-editor"))]),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn a_breg_grant_may_name_a_profile_with_only_proposal_permissions() {
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/breg/acceptance/reviewed-evidence-journey/registry");
@@ -2496,6 +3064,7 @@ mod tests {
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::new(),
+            messaging_clients: BTreeSet::new(),
             binaries: BTreeMap::new(),
         }
     }

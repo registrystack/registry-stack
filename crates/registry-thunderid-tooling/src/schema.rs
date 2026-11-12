@@ -728,6 +728,30 @@ mod tests {
     }
 
     #[test]
+    fn browser_client_profiles_are_judged_alike_by_schema_and_reader() {
+        for (profile, accepted) in [
+            (json!("python-portal"), true),
+            (json!("generic-browser"), false),
+            (Value::Null, false),
+        ] {
+            deployment_judged("/browserApps/0/clientProfile", profile, accepted);
+        }
+
+        let mut omitted = identity_example("identity-deployment.yaml");
+        omitted["browserApps"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("clientProfile");
+        identity_judged_alike(
+            IDENTITY_DEPLOYMENT_SCHEMA_FILE,
+            reads_deployment,
+            &omitted,
+            true,
+            "an omitted browser client profile",
+        );
+    }
+
+    #[test]
     fn grants_are_judged_alike_by_schema_and_reader() {
         let grant = json!({"product": "breg", "accessProfiles": ["case-read"]});
         let many: Vec<Value> = (0..=crate::identity_deployment::MAXIMUM_GRANTS)

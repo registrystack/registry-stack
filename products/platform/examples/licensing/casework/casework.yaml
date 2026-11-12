@@ -18,14 +18,30 @@ accessProfiles:
     principalClaim: producer_identity
     requiredScopes: ["casework:intake"]
     actsAs: requester
+  applicant:
+    principalClaim: sub
+    requiredScopes: ["casework:history"]
+    actsAs: requester
 queues:
   applications:
     label: Applications awaiting review
+contextProviders:
+  licensing:
+    capabilities: [human-display, service-status]
+    sourceNamespace: licensing
+    deploymentRef: licensing
+    serviceProfiles: {service-status: review-status}
 reviewPolicies:
   licensing-approval:
     version: "1"
     purpose: approval
-    context: {mode: submitted}
+    context:
+      mode: current-source
+      provider: licensing
+      contract:
+        id: urn:registry:breg:review-context:licensing:submit-application:application-context
+        revision: sha256:379c74fbde7aa7670861fb5fef1d7d7919cc4e9c4a8d7c384cfb1860bd43e351
+        schemaDigest: sha256:691f4fcb9d28e93ad3c96fb23920824a8d91040094aa2fe82db53b10995a2b7d
     stages:
       - id: review
         queue: applications
@@ -35,13 +51,7 @@ reviewPolicies:
     retention:
       terminalRetentionDays: 30
       accountabilityRetentionDays: 90
-    displaySchema:
-      type: object
-      additionalProperties: false
-      required: [reference, profession]
-      properties:
-        reference: {type: string, maxLength: 80}
-        profession: {type: string, maxLength: 80}
+    displaySchema: {$ref: schemas/application-context.schema.json}
     outcomes:
       approved:
         label: Approve application
@@ -51,6 +61,7 @@ reviewPolicies:
 trustedProducers:
   licensing-intake:
     profile: intake
+    initiatorProfile: applicant
     issuer: https://identity.licensing.example.test
     subject: intake
     trustedInitiatorIssuer: https://identity.licensing.example.test

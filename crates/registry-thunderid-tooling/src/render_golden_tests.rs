@@ -67,6 +67,7 @@ fn the_development_render_of_a_full_description_is_byte_stable() {
             redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
             audience: description.resource_servers[0].identifier.clone(),
             token_attributes: vec!["registry_role".into()],
+            refresh_tokens: false,
         });
     description.synthetic_users.push(SyntheticUser {
         id: "0197aaaa-0000-7000-8000-0000000000e2".into(),

@@ -736,6 +736,7 @@ mod tests {
                 named_clients: Default::default(),
             }),
             casework_principals: BTreeMap::new(),
+            messaging_clients: Default::default(),
             binaries: BTreeMap::new(),
         }
     }

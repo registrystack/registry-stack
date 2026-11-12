@@ -4,7 +4,9 @@
 
 - `bregctl project-dev` runs BReg projects, including spatial projects, from a
   `breg/project-dev` v1alpha1 plan. It is an alpha format and may change.
-  `rstack dev` is its entry point.
+  `rstack dev` is its entry point. The plan can also start Casework and
+  Messaging, and can declare BReg or Messaging service workloads whose private,
+  short-lived token state the live run owns and rotates.
 - A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
   WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and
   an optional `bbox`, and the compiler validates it with PostGIS and generates

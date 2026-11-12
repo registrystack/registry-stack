@@ -46,6 +46,12 @@ if sys.argv[1] == "-l":
             print(f"    minos {line.split('=', 1)[1]}")
             print("      sdk 26.5")
     raise SystemExit(0)
+if sys.argv[1] == "-D":
+    print(f"{path}:")
+    for line in path.read_text().splitlines():
+        if line.startswith("id="):
+            print(line.split("=", 1)[1])
+    raise SystemExit(0)
 print(f"{path}:")
 for line in path.read_text().splitlines():
     if line.startswith(("id=", "load=")):
@@ -138,6 +144,40 @@ path.write_text(body.replace(old, new))
         )
         with self.assertRaisesRegex(MODULE.PackagingError, "2 nonidentical files"):
             MODULE.bundle_macos_fips([consumer], roots, self.root / "ambiguous")
+
+    def test_plain_extension_can_join_a_fips_wheel_without_unchecked_loads(
+        self,
+    ) -> None:
+        package = self.root / "package"
+        fips = package / "registry_client" / "oidc" / "native.so"
+        plain = package / "registry_client" / "yaml" / "native.so"
+        self._macho(fips, f"@rpath/{CRYPTO}")
+        self._macho(
+            plain,
+            "/usr/lib/libSystem.B.dylib",
+            identity="@rpath/registry_platform_yaml.registry_platform_yaml.abi3.so",
+        )
+        libraries = self.root / "build"
+        self._macho(libraries / CRYPTO, identity=f"@rpath/{CRYPTO}")
+
+        with self.assertRaisesRegex(MODULE.PackagingError, "no AWS-LC FIPS dylib"):
+            MODULE.bundle_macos_fips([fips, plain], [libraries], package / ".dylibs")
+
+        names = MODULE.bundle_macos_fips(
+            [fips, plain], [libraries], package / ".dylibs", allow_plain_consumers=True
+        )
+        self.assertEqual(names, [CRYPTO])
+        self.assertIn("/usr/lib/libSystem.B.dylib", plain.read_text())
+
+        disallowed = package / "registry_client" / "yaml" / "untrusted.so"
+        self._macho(disallowed, "@rpath/libunexpected.dylib")
+        with self.assertRaisesRegex(MODULE.PackagingError, "non-system macOS load"):
+            MODULE.bundle_macos_fips(
+                [disallowed],
+                [libraries],
+                package / "rejected",
+                allow_plain_consumers=True,
+            )
 
     def test_byte_identical_library_copies_are_one_unambiguous_input(self) -> None:
         consumer = self.root / "consumer"

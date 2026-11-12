@@ -3,6 +3,7 @@
 
 pub mod assets;
 mod cli;
+mod grants;
 mod identity;
 pub mod install;
 mod model;

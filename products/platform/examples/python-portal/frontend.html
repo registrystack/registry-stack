@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="registry-csrf" content="__REGISTRY_CSRF__">
+    <title>Professional licensing service</title>
+    <script id="registry-dashboard" type="application/json">__REGISTRY_DASHBOARD__</script>
+    <script src="/portal.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Professional licensing service</h1>
+      <p>Your records and review work are shown with your signed-in authority.</p>
+      <pre id="dashboard" aria-live="polite">Loading…</pre>
+      <form action="/auth/switch" method="post">
+        <input type="hidden" name="csrf_token" value="__REGISTRY_CSRF__">
+        <button type="submit">Use another account</button>
+      </form>
+      <form action="/auth/logout" method="post">
+        <input type="hidden" name="csrf_token" value="__REGISTRY_CSRF__">
+        <button type="submit">Sign out</button>
+      </form>
+    </main>
+  </body>
+</html>

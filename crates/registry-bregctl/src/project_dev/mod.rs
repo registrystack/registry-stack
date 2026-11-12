@@ -7,9 +7,11 @@ mod database;
 pub(crate) mod guard;
 mod issuer;
 mod journey;
+mod picker;
 pub(crate) mod plan;
 mod products;
 mod recovery;
+mod workload;
 
 use anyhow::{bail, ensure, Context, Result};
 use registry_platform_yaml::{Diagnostic, Report};
@@ -120,6 +122,8 @@ struct RunInput {
     schema_people: Vec<SchemaPerson>,
     breg_authority: Option<BregAuthority>,
     casework_principals: BTreeMap<String, String>,
+    #[serde(default)]
+    messaging_clients: BTreeSet<String>,
     binaries: BTreeMap<Product, Binaries>,
 }
 
@@ -295,6 +299,7 @@ fn provisioned_labels(root: &Path) -> Result<Vec<(&'static str, bool)>> {
                 labels.push(("breg", spatial));
             }
             Product::Casework => labels.push(("casework", false)),
+            Product::Messaging => labels.push(("messaging", false)),
         }
     }
     Ok(labels)
@@ -522,6 +527,18 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     if let Some(logs) = report["logs"].as_str() {
         writeln!(output, "  Logs {logs}")?;
     }
+    if let Some(connection) = report["connection_file"].as_str() {
+        writeln!(output, "  Python connection {connection}")?;
+    }
+    if let Some(pickers) = report["picker_files"].as_object() {
+        for (persona, descriptor) in pickers {
+            writeln!(
+                output,
+                "  Python {persona} picker {}",
+                descriptor.as_str().expect("picker descriptor path")
+            )?;
+        }
+    }
     if let Some(people) = report["people"].as_array() {
         for name in people {
             writeln!(
@@ -663,6 +680,7 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
         schema_people,
         breg_authority: inspection.breg_authority,
         casework_principals: inspection.casework_principals,
+        messaging_clients: inspection.messaging_clients,
         binaries,
     };
     let preparation = (|| {
@@ -811,6 +829,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     ensure_private(root, false)?;
     let mut database = None;
     let mut expiry = None;
+    let mut workload_credentials = None;
+    let mut picker_credentials = None;
     let prepared = catch_startup(|| {
         products.check()?;
         let ca = env::var_os(CA_FILE)
@@ -841,13 +861,40 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             products.services_alive()?,
             "a product exited during the journey"
         );
-        let expires_at = clock()? + input.ttl_seconds;
+        let now = clock()?;
+        let expires_at = now + input.ttl_seconds;
         expiry = Some(expires_at);
-        let report = json!({
+        workload_credentials = workload::WorkloadCredentials::prepare(
+            root,
+            input.clone(),
+            issuer.clone(),
+            &urls,
+            now,
+            expires_at,
+        )?;
+        let workload_connection = workload_credentials
+            .as_ref()
+            .map(|credentials| credentials.path());
+        picker_credentials = picker::PickerCredentials::prepare(
+            root,
+            input.clone(),
+            issuer,
+            &urls,
+            workload_connection.as_deref(),
+            now,
+            expires_at,
+        )?;
+        let mut report = json!({
             "schema_version": SCHEMA, "run_id": input.run_id, "status": "ready",
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),
             "journey": journey, "expires_at": expires_at, "logs": root.join("logs"),
         });
+        if let Some(credentials) = &workload_credentials {
+            report["connection_file"] = json!(credentials.path());
+        }
+        if let Some(credentials) = &picker_credentials {
+            report["picker_files"] = serde_json::to_value(credentials.paths())?;
+        }
         write_private(&root.join(REPORT), &capture_report(&report)?)?;
         Ok::<_, anyhow::Error>(report)
     });
@@ -866,6 +913,18 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                     && !stopping(root, &signals)
                     && !expiry.is_some_and(|at| clock().map_or(true, |now| expired(now, at)))
                 {
+                    if let Some(credentials) = workload_credentials.as_mut() {
+                        if let Err(error) = clock().and_then(|now| credentials.rotate_if_due(now)) {
+                            eprintln!("development workload rotation failed: {error:#}");
+                            break;
+                        }
+                    }
+                    if let Some(credentials) = picker_credentials.as_mut() {
+                        if let Err(error) = clock().and_then(|now| credentials.rotate_if_due(now)) {
+                            eprintln!("development person rotation failed: {error:#}");
+                            break;
+                        }
+                    }
                     if !products.services_alive().unwrap_or(false) {
                         break;
                     }
@@ -874,6 +933,16 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             }
         }
         Err(error) => failure = Some(WorkerReply::failed(&error)),
+    }
+    if let Some(credentials) = picker_credentials.as_mut() {
+        if let Err(error) = clock().and_then(|now| credentials.invalidate(now)) {
+            eprintln!("development person invalidation failed: {error:#}");
+        }
+    }
+    if let Some(credentials) = workload_credentials.as_mut() {
+        if let Err(error) = clock().and_then(|now| credentials.invalidate(now)) {
+            eprintln!("development workload invalidation failed: {error:#}");
+        }
     }
     let stopped = simple_report(&input.run_id, "stopping");
     let mark_stopping = write_private(&root.join(REPORT), &serde_json::to_vec(&stopped)?);
@@ -1007,7 +1076,9 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
             Uuid::new_v4().simple()
         ));
         let headers = match product {
-            Product::Breg => format!("Authorization: Bearer {}\n", &*token),
+            Product::Breg | Product::Messaging => {
+                format!("Authorization: Bearer {}\n", &*token)
+            }
             Product::Casework => format!("Authorization: Bearer {}\nRegistry-Casework-Profile: {}\nRegistry-Review-Profile: {}\n",
                 &*token, grant.profile, grant.profile),
         };
@@ -1218,6 +1289,7 @@ fn product_tool(product: Product) -> Result<PathBuf> {
         match product {
             Product::Breg => "RSTACK_BREGCTL_BIN",
             Product::Casework => "RSTACK_CASEWORKCTL_BIN",
+            Product::Messaging => "RSTACK_MESSAGINGCTL_BIN",
         },
     )
 }
@@ -1231,6 +1303,10 @@ fn binaries(product: Product) -> Result<Binaries> {
         Product::Casework => Binaries {
             tool: product_tool(product)?,
             runtime: binary(product, "RSTACK_CASEWORK_BIN")?,
+        },
+        Product::Messaging => Binaries {
+            tool: product_tool(product)?,
+            runtime: binary(product, "RSTACK_MESSAGING_BIN")?,
         },
     })
 }
@@ -1458,6 +1534,7 @@ mod tests {
                 "named_clients": []
             },
             "casework_principals": {},
+            "messaging_clients": [],
             "binaries": {}
         });
         fs::write(root.join("input.json"), input.to_string()).unwrap();
@@ -1498,7 +1575,8 @@ mod tests {
             root,
             json!([
                 {"product": "breg", "project": ".", "audience": "registry"},
-                {"product": "casework", "project": ".", "audience": "casework"}
+                {"product": "casework", "project": ".", "audience": "casework"},
+                {"product": "messaging", "project": ".", "audience": "messaging"}
             ]),
             true,
         );
@@ -1517,12 +1595,13 @@ mod tests {
             .iter()
             .map(|object| object["label"].as_str().unwrap())
             .collect();
-        assert_eq!(labels, ["breg_test", "breg", "casework"]);
+        assert_eq!(labels, ["breg_test", "breg", "casework", "messaging"]);
         let breg = &facts["objects"][1];
         assert_eq!(breg["database"], format!("rstack_{RUN_ID}_breg"));
         // Migration, runtime and the spatial bbox role.
         assert_eq!(breg["roles"].as_array().unwrap().len(), 3);
         assert_eq!(facts["objects"][2]["roles"].as_array().unwrap().len(), 2);
+        assert_eq!(facts["objects"][3]["roles"].as_array().unwrap().len(), 2);
         let text = recovery_message(RUN_ID, &facts);
         assert!(
             text.contains("process \"breg\" pid 4242 pgid 4242"),

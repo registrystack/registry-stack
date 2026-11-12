@@ -1,0 +1,384 @@
+{
+  "$defs": {
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "MachineAdmission": {
+      "additionalProperties": false,
+      "properties": {
+        "accessTokenType": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "algorithm": {
+          "$ref": "#/$defs/TokenAlgorithm"
+        },
+        "allowInsecureHttp": {
+          "type": "boolean"
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "clockSkewSeconds": {
+          "format": "uint64",
+          "maximum": 300,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "jwksUri": {
+          "$ref": "#/$defs/Url"
+        },
+        "maximumAccessTokenLifetimeSeconds": {
+          "format": "uint64",
+          "maximum": 7200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "profile": {
+          "$ref": "#/$defs/ExternalId"
+        },
+        "requiredClaims": {
+          "additionalProperties": false,
+          "minProperties": 1,
+          "patternProperties": {
+            "^[^\\u0000-\\u001F\\u007F-\\u009F]+$": {
+              "$ref": "#/$defs/ExternalId"
+            }
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "requiredScopes": {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "resource": {
+          "$ref": "#/$defs/ExternalId"
+        }
+      },
+      "required": [
+        "issuer",
+        "resource",
+        "clientId",
+        "profile",
+        "requiredScopes",
+        "requiredClaims",
+        "algorithm",
+        "accessTokenType",
+        "maximumAccessTokenLifetimeSeconds"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "ServiceAudience": {
+      "enum": [
+        "service",
+        "holder",
+        "staff"
+      ],
+      "type": "string"
+    },
+    "TokenAlgorithm": {
+      "enum": [
+        "EdDSA",
+        "ES256",
+        "ES384",
+        "RS256",
+        "RS384"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    },
+    "WorkloadBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/WorkloadCredential"
+        },
+        "default": {
+          "type": "boolean"
+        },
+        "name": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "type": "string"
+        },
+        "product": {
+          "$ref": "#/$defs/WorkloadProduct"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "name",
+        "product",
+        "url",
+        "default",
+        "credential"
+      ],
+      "type": "object"
+    },
+    "WorkloadCredential": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "claims": {
+              "additionalProperties": true,
+              "propertyNames": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "type": "object",
+              "x-registry-passthrough": "Claim values are written into the workload token as declared."
+            },
+            "clientId": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "clientKeyRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "issuer": {
+              "$ref": "#/$defs/Url"
+            },
+            "profile": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "resource": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "scopes": {
+              "items": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "subject": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "tokenEndpoint": {
+              "$ref": "#/$defs/Url"
+            },
+            "type": {
+              "const": "private-key-jwt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issuer",
+            "subject",
+            "tokenEndpoint",
+            "clientId",
+            "profile",
+            "clientKeyRef",
+            "resource",
+            "scopes",
+            "claims"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "binding": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "claims": {
+              "additionalProperties": true,
+              "propertyNames": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "type": "object",
+              "x-registry-passthrough": "Claim values are written into the workload token as declared."
+            },
+            "clientId": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "issuer": {
+              "$ref": "#/$defs/Url"
+            },
+            "profile": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "resource": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "runExpiresAt": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "runId": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "scopes": {
+              "items": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "subject": {
+              "$ref": "#/$defs/ExternalId"
+            },
+            "tokenRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "runner-token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenRef",
+            "runId",
+            "binding",
+            "issuer",
+            "subject",
+            "clientId",
+            "profile",
+            "resource",
+            "scopes",
+            "claims",
+            "runExpiresAt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkloadProduct": {
+      "enum": [
+        "breg",
+        "messaging"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/python-connection/python-connection.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "admission": {
+      "$ref": "#/$defs/MachineAdmission"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/python-connection/v1alpha1",
+      "type": "string"
+    },
+    "audience": {
+      "$ref": "#/$defs/ServiceAudience"
+    },
+    "bindings": {
+      "items": {
+        "$ref": "#/$defs/WorkloadBinding"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "PlatformPythonConnection",
+      "type": "string"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "service": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "service",
+    "audience",
+    "secretProviders",
+    "bindings"
+  ],
+  "title": "PythonConnection",
+  "type": "object"
+}

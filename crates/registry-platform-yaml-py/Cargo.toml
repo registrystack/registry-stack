@@ -1,0 +1,38 @@
+[package]
+name = "registry-platform-yaml-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded Python access to the Registry Stack configuration reader."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "registry_platform_yaml"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+extension-module = ["pyo3/extension-module"]
+schema = ["dep:schemars", "platform_config/schema", "yaml_core/schema"]
+
+[dependencies]
+pyo3.workspace = true
+platform_config = { package = "registry-platform-config", path = "../registry-platform-config" }
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+yaml_core = { package = "registry-platform-yaml", path = "../registry-platform-yaml" }
+serde_json.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true
+
+[dev-dependencies]
+pyo3 = { workspace = true, features = ["auto-initialize"] }
+
+[[example]]
+name = "python-formats-schema"
+required-features = ["schema"]

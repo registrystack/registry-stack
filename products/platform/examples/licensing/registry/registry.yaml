@@ -20,6 +20,44 @@ recordTypes:
     fields:
       - {id: reference, type: string, required: true, minimumLength: 1, maximumLength: 80, classification: internal}
       - {id: profession, type: string, required: true, minimumLength: 1, maximumLength: 80, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: application-status, classification: internal}
+    mutationPolicy: {patch: proposal-required}
+vocabularies:
+  - id: application-status
+    values: [submitted]
+reviewAuthorities:
+  - id: casework
+    protocol: id.registrystack.org/protocols/review/v1
+actions:
+  - id: submit-application
+    execution:
+      mode: proposal
+      proposal:
+        review:
+          type: required
+          authority: casework
+          source: licensing
+          policy: {id: licensing-approval}
+        reviewContext:
+          id: application-context
+          fields:
+            reference: {type: record, input: application, field: reference}
+            profession: {type: record, input: application, field: profession}
+        retention: {mode: retain}
+    inputs:
+      - {id: application, type: reference, target: application, required: true, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: application-status, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: application, revision: unchanged}
+    plan:
+      type: fixed
+      effects:
+        - id: mark-submitted
+          target: {fromInput: application}
+          operation: patch
+          set:
+            status: {fromInput: status}
 accessProfiles:
   - id: applicant
     default: true
@@ -29,10 +67,26 @@ accessProfiles:
       records:
         - recordType: application
           operations: [create, get, list]
-          readableFields: [reference, profession]
+          readableFields: [reference, profession, status]
           writableFields: [reference, profession]
           rowBoundaries:
             - {field: reference, claim: application_reference, operator: equals}
+      actions:
+        - action: submit-application
+          operations: [start]
+          targets:
+            - recordType: application
+              rowBoundaries:
+                - {field: reference, claim: application_reference, operator: equals}
+      proposals:
+        - action: submit-application
+          operations: [get, list, submit]
+          ownership: caller
+          readableInputs: [application, status]
+          targets:
+            - recordType: application
+              rowBoundaries:
+                - {field: reference, claim: application_reference, operator: equals}
   - id: auditor
     principalClaim: registry_principal
     actorKind: human
@@ -42,6 +96,24 @@ accessProfiles:
       records:
         - recordType: application
           operations: [get]
-          readableFields: [reference]
+          readableFields: [reference, profession, status]
           rowBoundaries:
             - {field: reference, claim: application_reference, operator: equals}
+      proposals:
+        - action: submit-application
+          operations: [get-review-context]
+          readableContextFields: [reference, profession]
+          targets:
+            - recordType: application
+              rowBoundaries:
+                - {field: reference, claim: application_reference, operator: equals}
+  - id: review-status
+    actorKind: service
+    principalClaim: registry_principal
+    requesterClients: [licensing-context]
+    requiredScopes: ["licensing:review-status"]
+    permissions:
+      proposals:
+        - action: submit-application
+          operations: [get-review-status]
+          reviewAuthority: casework

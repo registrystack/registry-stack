@@ -10,6 +10,7 @@ connections:
   jobs:
     type: external-http
     baseUrl: http://127.0.0.1:9010/
+    commandPath: jobs
     paths:
     - jobs/status
     queryParameters:

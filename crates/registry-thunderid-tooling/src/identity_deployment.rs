@@ -95,6 +95,17 @@ pub struct Client {
     pub claims: BTreeMap<String, ClaimValue>,
 }
 
+/// An optional browser-client behavior profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum BrowserClientProfile {
+    /// A confidential Python portal using authorization code with PKCE and
+    /// rotating refresh tokens for one requested resource. It also registers
+    /// same-origin `/auth/login` for an account-switch logout return.
+    PythonPortal,
+}
+
 /// A browser application: an authorization-code client with PKCE.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -104,6 +115,12 @@ pub struct BrowserApp {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub client_secret_ref: SecretReference,
+    /// Optional client behavior. When omitted, the client remains
+    /// authorization-code-only with only its origin as a logout return.
+    /// `python-portal` also admits refresh grants and same-origin `/auth/login`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "BrowserClientProfile"))]
+    pub client_profile: Option<BrowserClientProfile>,
     pub origin: String,
     #[serde(deserialize_with = "set")]
     pub redirect_uris: Vec<String>,

@@ -974,6 +974,19 @@ pub(crate) fn build(
             format!("flows/{auth_flow_id}.yaml"),
             &browser_authentication_flow(description, &app.id, &app.client_id),
         )?;
+        let grant_types = if app.refresh_tokens {
+            json!(["authorization_code", "refresh_token"])
+        } else {
+            json!(["authorization_code"])
+        };
+        let mut post_logout_redirect_uris = vec![app.origin.clone()];
+        if app.refresh_tokens {
+            let mut account_switch =
+                url::Url::parse(&app.origin).expect("the application origin was validated");
+            account_switch.set_path("/auth/login");
+            account_switch.set_query(None);
+            post_logout_redirect_uris.push(account_switch.to_string());
+        }
         let mut document = json!({
             "resource_type": "application", "id": app.id,
             "name": app.client_id,
@@ -993,8 +1006,8 @@ pub(crate) fn build(
             "inboundAuthConfig": [{"type": "oauth2", "config": {
                 "clientId": app.client_id, "clientSecret": secret,
                 "redirectUris": app.redirect_uris,
-                "postLogoutRedirectUris": [app.origin],
-                "grantTypes": ["authorization_code"], "responseTypes": ["code"],
+                "postLogoutRedirectUris": post_logout_redirect_uris,
+                "grantTypes": grant_types, "responseTypes": ["code"],
                 "tokenEndpointAuthMethod": "client_secret_post", "pkceRequired": true, "publicClient": false,
                 "token": {"accessToken": {"defaultAudience": app.audience,
                     "userConfig": {"validityPeriod": 300, "attributes": app.token_attributes}},
@@ -1583,6 +1596,7 @@ mod tests {
                 redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
+                refresh_tokens: false,
             });
         description
             .interactive_applications
@@ -1594,6 +1608,7 @@ mod tests {
                 redirect_uris: vec!["http://127.0.0.1:3001/auth/callback".into()],
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
+                refresh_tokens: false,
             });
         description.synthetic_users.push(SyntheticUser {
             id: "0197aaaa-0000-7000-8000-0000000000e2".into(),

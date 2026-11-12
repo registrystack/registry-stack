@@ -9,6 +9,28 @@ import registry_client.messaging as messaging
 import registry_client.scheduling as scheduling
 import registry_client.render as render
 import registry_client.coordinator as coordinator
+from .connection import (
+    Connection,
+    ConnectionError,
+    UnsupportedOperationError,
+    WorkloadAuthority,
+    connect,
+)
 
-__all__ = ["auth", "breg", "casework", "discovery", "evidence", "messaging", "scheduling", "render", "coordinator"]
+__all__ = [
+    "auth",
+    "breg",
+    "casework",
+    "discovery",
+    "evidence",
+    "messaging",
+    "scheduling",
+    "render",
+    "coordinator",
+    "Connection",
+    "ConnectionError",
+    "UnsupportedOperationError",
+    "WorkloadAuthority",
+    "connect",
+]
 __version__ = "0.46.1"
