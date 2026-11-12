@@ -24,6 +24,10 @@ PACKAGE_ANNOTATION = "registrystack.org/package-digest"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 MODULES = ("breg", "appKit", "casework", "evidence")
+BREG_SUCCESSOR_WARNINGS = (
+    "warning: Review authority bindings are absent; affected retained Proposals will require rebase or cancellation after activation.",
+    "warning: The retained Review closure could not be verified; affected Proposals will require rebase or cancellation after activation.",
+)
 
 
 class OperationError(Exception):
@@ -160,6 +164,36 @@ def decode_json(output, label):
         raise OperationError(f"{label} did not produce JSON.") from error
 
 
+def decode_job_report(output, kind, name):
+    def unique_members(pairs):
+        obj = dict(pairs)
+        if len(obj) != len(pairs):
+            raise ValueError("Duplicate JSON member")
+        return obj
+
+    def reject_constant(_):
+        raise ValueError("Invalid JSON numeric token")
+
+    warning = None
+    if kind == "apply-successor":
+        # kubectl combines stdout and stderr. Accept at most one complete,
+        # recognized BReg warning alongside the report.
+        lines = output.split("\n")
+        warnings = [index for index, line in enumerate(lines) if line in BREG_SUCCESSOR_WARNINGS]
+        if len(warnings) == 1:
+            warning = lines.pop(warnings[0])
+            output = "\n".join(lines)
+    try:
+        report = json.loads(output, object_pairs_hook=unique_members, parse_constant=reject_constant)
+        if not isinstance(report, dict):
+            raise ValueError("Expected a JSON object")
+    except (ValueError, RecursionError) as error:
+        raise OperationError(f"Job {name} did not produce one valid BReg JSON report. Review its logs and product ledger.") from error
+    if warning:
+        print(warning, file=sys.stderr)
+    return report
+
+
 def rendered_operation(output):
     """Read kubectl's individual JSON objects or List for an operation."""
     documents = []
@@ -280,7 +314,7 @@ class Installation:
         if terminal is None:
             raise OperationError(f"Job {name} timed out. Inspect the Job and product ledger before unlocking.")
         output = self.kubectl("logs", f"job/{name}", "--container", "bregctl")
-        report = decode_json(output, f"Job {name}")
+        report = decode_job_report(output, kind, name)
         if terminal != "Complete" or report.get("ok") is not True:
             diagnostic = next(iter(report.get("diagnostics", [])), {})
             code = diagnostic.get("code", "") if isinstance(diagnostic, dict) else ""

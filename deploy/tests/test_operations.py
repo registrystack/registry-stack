@@ -1,10 +1,12 @@
 """State transition checks for the Kubernetes operator workflow."""
 
 import copy
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -134,6 +136,95 @@ class ActivationTest(unittest.TestCase):
         other["appKit"]["image"]["digest"] = DIGEST
         with self.assertRaisesRegex(OperationError, "Use upgrade"):
             require_install_retry(other, release_values(values, serve=True))
+
+
+class JobReportTest(unittest.TestCase):
+    WARNINGS = (
+        "warning: Review authority bindings are absent; affected retained Proposals will require rebase or cancellation after activation.",
+        "warning: The retained Review closure could not be verified; affected Proposals will require rebase or cancellation after activation.",
+    )
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        values = root / "values.json"
+        values.write_text("{}")
+        self.args = SimpleNamespace(
+            namespace="pilot", release="directory", kube_context="test-only",
+            kubectl_bin="kubectl", helm_bin="helm", chart=root / "chart", values=values, timeout=2,
+        )
+        self.report = {
+            "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+            "kind": "BRegCtlReport", "ok": True, "command": "apply",
+            "packageDigest": DIGEST, "activation": "successor", "activationId": "synthetic-activation",
+            "diagnostics": [],
+        }
+        self.stdout = json.dumps(self.report, indent=2)
+
+    def job_runner(self, output, terminal):
+        installation = Installation(self.args)
+        installation.render_job = Mock(return_value=({"metadata": {"name": "breg-test-job"}}, None, DIGEST))
+        installation.kubectl = Mock(side_effect=[
+            json.dumps({"metadata": {"uid": "test-job-uid"}}),
+            json.dumps({"status": {"conditions": [{"type": terminal, "status": "True"}]}}),
+            output,
+        ])
+        return installation
+
+    def run_job(self, output, terminal="Complete", kind="apply-successor"):
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            return self.job_runner(output, terminal).job(kind, DIGEST)
+
+    def test_completed_successor_preserves_an_exact_review_warning(self):
+        for warning in self.WARNINGS:
+            for position, output in (
+                ("before", f"{warning}\n{self.stdout}\n"),
+                ("between", self.stdout.replace("{\n", f"{{\n{warning}\n", 1)),
+                ("after", f"{self.stdout}\n{warning}\n"),
+            ):
+                with self.subTest(warning=warning, position=position):
+                    self.assertEqual(self.run_job(output), (self.report, DIGEST))
+                    self.assertEqual(self.stderr.getvalue(), warning + "\n")
+
+    def test_plain_structured_report_remains_supported(self):
+        self.assertEqual(self.run_job(self.stdout), (self.report, DIGEST))
+        self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_rejects_malformed_or_ambiguous_job_logs(self):
+        warning = self.WARNINGS[0]
+        cases = {
+            "unknown preamble": f"warning: unknown text\n{self.stdout}",
+            "trailing junk": f"{warning}\n{self.stdout}\nother output",
+            "two warnings": f"{warning}\n{self.WARNINGS[1]}\n{self.stdout}",
+            "two reports": f"{warning}\n{self.stdout}\n{self.stdout}",
+            "no report": f"{warning}\n",
+            "array": f"[{self.stdout}]",
+            "duplicate outcome": self.stdout.replace('"ok": true', '"ok": false, "ok": true'),
+            "invalid numeric token": self.stdout.replace('"diagnostics": []', '"diagnostics": NaN'),
+        }
+        for description, output in cases.items():
+            with self.subTest(description=description), self.assertRaises(OperationError):
+                self.run_job(output)
+        with self.assertRaises(OperationError):
+            self.run_job(f"{warning}\n{self.stdout}", kind="status")
+
+    def test_success_report_cannot_override_a_failed_job(self):
+        with self.assertRaisesRegex(OperationError, "BReg apply-successor failed"):
+            self.run_job(f"{self.WARNINGS[0]}\n{self.stdout}", terminal="Failed")
+
+    def test_completed_job_still_refuses_a_reported_failure(self):
+        failure = {**self.report, "ok": False, "diagnostics": [{"code": "apply.synthetic-refusal"}]}
+        with self.assertRaisesRegex(OperationError, r"failed .*\(apply\.synthetic-refusal\)"):
+            self.run_job(f"{self.WARNINGS[0]}\n{json.dumps(failure)}")
+        self.assertEqual(self.stderr.getvalue(), self.WARNINGS[0] + "\n")
+
+    def test_wrong_package_is_refused_before_creating_a_job(self):
+        installation = self.job_runner(self.stdout, "Complete")
+        with self.assertRaisesRegex(OperationError, "configured package changed"):
+            installation.job("apply-successor", OTHER_DIGEST)
+        installation.kubectl.assert_not_called()
 
 
 class UpgradeRetryTest(unittest.TestCase):
