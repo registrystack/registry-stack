@@ -3323,37 +3323,41 @@ mod tests {
         };
         use std::sync::{Arc, Mutex};
 
+        struct ReviewFixture {
+            response: Value,
+            requests: Vec<String>,
+        }
+
         let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
             "submissionVersion":1,"revision":2,"effectDigest":REVISION,
             "subject":{"source":"directory","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},
             "context":{"reference":"breg:directory:correct-address:proposal:1"},"reviewable":true,
             "authority":"review","policy":{"id":"address-review"},"result":{"state":"pending"},
             "requestId":ID,"handoff":{"state":"accepted"},"progressCode":"awaiting-assignment"});
-        let response = Arc::new(Mutex::new(valid.clone()));
-        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
-        let app =
-            Router::new()
-                .fallback(any(
-                    |OriginalUri(uri): OriginalUri,
-                     State((value, requests)): State<(
-                        Arc<Mutex<Value>>,
-                        Arc<Mutex<Vec<String>>>,
-                    )>| async move {
-                        requests.lock().unwrap().push(uri.to_string());
-                        (
-                            [
-                                (
-                                    "traceparent",
-                                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-                                ),
-                                ("cache-control", "no-store"),
-                                ("vary", "authorization, accept"),
-                            ],
-                            Json(value.lock().unwrap().clone()),
-                        )
-                    },
-                ))
-                .with_state((response.clone(), requests.clone()));
+        let fixture = Arc::new(Mutex::new(ReviewFixture {
+            response: valid.clone(),
+            requests: Vec::new(),
+        }));
+        let app = Router::new()
+            .fallback(any(
+                |OriginalUri(uri): OriginalUri,
+                 State(fixture): State<Arc<Mutex<ReviewFixture>>>| async move {
+                    let mut fixture = fixture.lock().unwrap();
+                    fixture.requests.push(uri.to_string());
+                    (
+                        [
+                            (
+                                "traceparent",
+                                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            ),
+                            ("cache-control", "no-store"),
+                            ("vary", "authorization, accept"),
+                        ],
+                        Json(fixture.response.clone()),
+                    )
+                },
+            ))
+            .with_state(fixture.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -3366,7 +3370,7 @@ mod tests {
         assert!(client.read_proposal_review_status(&prior).await.is_err());
         let plain_status_path = format!("/v1/proposals/{ID}/review-status?accessProfile=author");
         assert_eq!(
-            requests.lock().unwrap().last().cloned(),
+            fixture.lock().unwrap().requests.last().cloned(),
             Some(plain_status_path)
         );
         let observed = client
@@ -3384,14 +3388,14 @@ mod tests {
         let progress_status_path =
             format!("/v1/proposals/{ID}/review-status?accessProfile=author&include=progress");
         assert_eq!(
-            requests.lock().unwrap().last().cloned(),
+            fixture.lock().unwrap().requests.last().cloned(),
             Some(progress_status_path)
         );
         assert!(client.read_proposal_review_context(&prior).await.is_err());
 
         let mut absent = valid.clone();
         absent.as_object_mut().unwrap().remove("progressCode");
-        *response.lock().unwrap() = absent;
+        fixture.lock().unwrap().response = absent;
         assert!(client
             .read_proposal_review_status_with_progress(&prior)
             .await
@@ -3423,7 +3427,7 @@ mod tests {
         missing_request.as_object_mut().unwrap().remove("requestId");
         invalid.push(missing_request);
         for document in invalid {
-            *response.lock().unwrap() = document;
+            fixture.lock().unwrap().response = document;
             assert!(client
                 .read_proposal_review_status_with_progress(&prior)
                 .await

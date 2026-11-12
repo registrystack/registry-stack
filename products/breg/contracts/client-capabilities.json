@@ -45,6 +45,7 @@
     "pendingManualApplication",
     "submissionVersion",
     "reviewContextField",
+    "include",
     "effectDigest",
     "contextSchemaDigest",
     "ids"
@@ -176,6 +177,12 @@
       "rust": ["BaseRegistryClient.download_proposal_review_document.field"],
       "node": ["BaseRegistryClient.downloadProposalReviewDocument.field"],
       "python": ["BaseRegistryClient.download_proposal_review_document.field"]
+    },
+    "include": {
+      "source": "fixed progress projection requested through the Proposal's server-issued status link",
+      "rust": ["BaseRegistryClient.read_proposal_review_status_with_progress.proposal"],
+      "node": ["BaseRegistryClient.readProposalReviewStatusWithProgress.proposal"],
+      "python": ["BaseRegistryClient.read_proposal_review_status_with_progress.proposal"]
     },
     "effectDigest": {
       "source": "exact frozen submission in the server-issued Review context",
