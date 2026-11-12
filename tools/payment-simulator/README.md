@@ -21,12 +21,17 @@ destination snapshots, replay responses and simulated credits across restarts.
 Amounts use exact minor units. Everything stays in this directory, with no
 Registry Stack runtime imports or Rust build.
 
+The maintained P2G integration uses the [Adapter payment host](../../products/adapter/examples/payment-collections/README.md)
+and native Coordinator payment operations. The host owns provider correlation,
+durable attempts, recovery and restricted registry receipt reporting. The
+simulator's HTTP profile also remains independently usable for connector tests.
+
 The Coordinator's generic `external.get/v1` and `external.command/v1` operations cannot call
 these seven APIs as written. They send only a bearer token, `Accept`, `Content-Type` and, for a
 command, `Idempotency-Key`, while every API here requires a tenant header (`Platform-TenantId` for
 G2P, `X-Platform-TenantId` for P2G). A command also POSTs one JSON object to one exact path with
 no query string, there is no `PUT`, and `GET /transferRequests/{transferRequestId}` has a path
-parameter. Payment meanings stay in the workflow definition. A compatible service can replace this simulator for new work after existing commands have settled.
+parameter. A compatible service can replace this simulator for new work after existing commands have settled.
 
 ## Start locally
 

@@ -9,6 +9,12 @@ reviewed projection either to a BReg Action or to a Coordinator workflow.
 The facade holds no records; the job stores item identity and progress, never
 source payloads. The institution's registry remains the system of record.
 
+The optional [typed payment host](examples/payment-collections/README.md)
+shares the listener and PostgreSQL infrastructure while keeping payment
+attempts outside generic record routes. Coordinator uses dedicated payment
+steps; operator configuration binds provider tenant, biller and restricted
+registry Actions. The initial connector is synthetic and local-only.
+
 Source-system knowledge and deployment mappings live in reviewed configuration. A reviewed, versioned pack
 declares a source's endpoints and route templates, with field mapping in
 Rhai scripts beside it; a project binds a pack to a profile's operations; a

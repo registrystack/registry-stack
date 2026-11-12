@@ -1,0 +1,31 @@
+[package]
+name = "registry-payment-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bounded Rust client for the Adapter payment collection capability."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+schema = ["registry-payment-protocol/schema"]
+
+[dependencies]
+registry-payment-protocol.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-httpsec.workspace = true
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["io-util"] }

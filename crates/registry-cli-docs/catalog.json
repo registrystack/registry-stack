@@ -33,9 +33,9 @@
         {
           "name": "serve",
           "invocation": "adapter serve",
-          "about": "Serve the governed facade",
+          "about": "Serve the governed record facade, typed payment connections, or both",
           "long_about": null,
-          "usage": "adapter serve [OPTIONS] --runtime-config <ABSOLUTE_FILE> --project <DIRECTORY>",
+          "usage": "adapter serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
@@ -50,7 +50,16 @@
             {
               "display": "--project <DIRECTORY>",
               "description": "The directory holding project.yaml",
-              "always_required": true,
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--payments-config <ABSOLUTE_FILE>",
+              "description": "Typed payment connections hosted on this listener",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -90,7 +99,7 @@
         {
           "name": "effective-contract",
           "invocation": "adapter effective-contract",
-          "about": "Export the loaded gateway contract without binding a listener",
+          "about": "Export the record-facade contract without binding a listener",
           "long_about": null,
           "usage": "adapter effective-contract [OPTIONS] --runtime-config <ABSOLUTE_FILE> --project <DIRECTORY>",
           "arguments": [],
@@ -1383,6 +1392,141 @@
                   "possible_values": [],
                   "environment": null
                 },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "payments",
+          "invocation": "adapterctl payments",
+          "about": "Check typed payment connections or export their fixed operation contract",
+          "long_about": null,
+          "usage": "adapterctl payments [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "adapterctl payments check",
+              "about": "Validate one AdapterPayments file without fetching credentials or services",
+              "long_about": null,
+              "usage": "adapterctl payments check [OPTIONS] <FILE>",
+              "arguments": [
+                {
+                  "display": "<FILE>",
+                  "description": "AdapterPayments configuration file to validate",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--deny-warnings",
+                  "description": "Refuse warnings as well as errors",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "contract",
+              "invocation": "adapterctl payments contract",
+              "about": "Export fixed payment routes, authority and schemas for configured connections",
+              "long_about": null,
+              "usage": "adapterctl payments contract [OPTIONS] <FILE>",
+              "arguments": [
+                {
+                  "display": "<FILE>",
+                  "description": "AdapterPayments configuration file whose contract is exported",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
                 {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
