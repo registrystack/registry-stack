@@ -519,7 +519,10 @@ No scheduling crate, directly or through any shared dependency, may reach a
 Base Registry Engine, Casework, Document Store, Evidence, or Messaging crate,
 and none of those products may reach a scheduling crate. The restriction is
 scoped to the MVP, because the crates that would compose across those
-boundaries do not exist yet; the workspace `AGENTS.md` records what changes when one does. The
+boundaries do not exist yet; the workspace `AGENTS.md` records what changes when one does.
+Registry Coordinator is the one product that composes Scheduling: its `scheduling.*` operations
+use `registry-scheduling-client` and `registry-scheduling-core` over the public HTTP contract,
+never the runtime or `schedulingctl`, and no scheduling crate reaches a Coordinator crate. The
 source-neutral core sits at the bottom of the product depending on no other
 scheduling crate, and the client shares the core without ever linking the
 runtime or adopter tooling.

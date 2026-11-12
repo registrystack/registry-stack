@@ -555,9 +555,11 @@ deployment security, bulk signatures, or production payment authorization.
 
 ## Coordinator integration boundary
 
-The Coordinator provides generic `external.command/v1` and `external.read/v1`
+The Coordinator provides generic `external.command/v1` and `external.get/v1`
 operations. A workflow project defines payment schemas, mappings, interpretation,
 and completion in YAML/Rhai. No payment-specific runtime operation or simulator database access is required.
+As written, those operations cannot call this profile: they send no tenant, institution, correlation
+or callback header, and a command POSTs one JSON object to one exact path with no query string.
 
 An integration must save the original command before dispatch, use
 same-command recovery, validate complete per-instruction results, and respect

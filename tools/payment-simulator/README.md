@@ -21,8 +21,12 @@ destination snapshots, replay responses and simulated credits across restarts.
 Amounts use exact minor units. Everything stays in this directory, with no
 Registry Stack runtime imports or Rust build.
 
-The Coordinator can bind these seven APIs through its generic HTTP operations;
-payment meanings stay in the workflow definition. A compatible service can replace this simulator for new work after existing commands have settled.
+The Coordinator's generic `external.get/v1` and `external.command/v1` operations cannot call
+these seven APIs as written. They send only a bearer token, `Accept`, `Content-Type` and, for a
+command, `Idempotency-Key`, while every API here requires a tenant header (`Platform-TenantId` for
+G2P, `X-Platform-TenantId` for P2G). A command also POSTs one JSON object to one exact path with
+no query string, there is no `PUT`, and `GET /transferRequests/{transferRequestId}` has a path
+parameter. Payment meanings stay in the workflow definition. A compatible service can replace this simulator for new work after existing commands have settled.
 
 ## Start locally
 
