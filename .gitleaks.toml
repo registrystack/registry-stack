@@ -75,6 +75,13 @@ regexTarget = "line"
 regexes = ['''^\s*idempotency-key: [0-9a-f]{64}$''']
 
 [[allowlists]]
+description = "Allow the deterministic flow identifier in the generated ThunderID fixture; it references a synthetic flow in the same fixture, not an API credential."
+condition = "AND"
+paths = ["^crates/registry-thunderid-tooling/fixtures/identity/expected/resources/resources\\.yaml$"]
+regexTarget = "line"
+regexes = ['''^authFlowId: 2abacd42-1674-7da5-8f7c-19c2f8c262f0$''']
+
+[[allowlists]]
 description = "Allow the OpenID4VP refusal codes in the client identifier module; they are diagnostic code strings that name a secret or key, not credentials."
 condition = "AND"
 paths = ["^crates/registry-evidence-oid4vp/src/client_identifier\\.rs$"]

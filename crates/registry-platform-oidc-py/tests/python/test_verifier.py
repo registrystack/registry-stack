@@ -46,18 +46,10 @@ def _sign(typ: str, claims: dict[str, object]) -> str:
     pkcs8 = bytes.fromhex("302e020100300506032b657004220420") + _decode_base64url(
         PRIVATE_D
     )
-    pem = (
-        "-----BEGIN PRIVATE KEY-----\n"
-        + "\n".join(
-            base64.b64encode(pkcs8).decode("ascii")[offset : offset + 64]
-            for offset in range(0, len(base64.b64encode(pkcs8)), 64)
-        )
-        + "\n-----END PRIVATE KEY-----\n"
-    )
     with tempfile.TemporaryDirectory() as directory:
-        key_path = pathlib.Path(directory) / "signing-key.pem"
+        key_path = pathlib.Path(directory) / "signing-key.der"
         input_path = pathlib.Path(directory) / "signing-input"
-        key_path.write_text(pem, encoding="ascii")
+        key_path.write_bytes(pkcs8)
         input_path.write_bytes(signing_input)
         os.chmod(key_path, 0o600)
         os.chmod(input_path, 0o600)
@@ -69,6 +61,8 @@ def _sign(typ: str, claims: dict[str, object]) -> str:
                 "-rawin",
                 "-inkey",
                 str(key_path),
+                "-keyform",
+                "DER",
                 "-in",
                 str(input_path),
             ],

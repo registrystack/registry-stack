@@ -746,7 +746,7 @@ class PortalExampleTests(unittest.TestCase):
                         "Origin": "https://staff.example.test",
                         "X-CSRF-Token": "staff-csrf",
                     },
-                    json={"revision": 4, "idempotencyKey": "route-claim-001"},
+                    json={"revision": 4, "idempotencyKey": "claim1"},
                 )
                 self.assertEqual(claim.json()["revision"], 5)
                 release = await client.post(
@@ -755,7 +755,7 @@ class PortalExampleTests(unittest.TestCase):
                         "Origin": "https://staff.example.test",
                         "X-CSRF-Token": "staff-csrf",
                     },
-                    json={"revision": 5, "idempotencyKey": "route-release-001"},
+                    json={"revision": 5, "idempotencyKey": "release1"},
                 )
                 self.assertEqual(release.json()["revision"], 6)
                 decision = await client.post(
@@ -766,7 +766,7 @@ class PortalExampleTests(unittest.TestCase):
                     },
                     json={
                         "revision": 5,
-                        "idempotencyKey": "route-decision-001",
+                        "idempotencyKey": "decision1",
                         "decision": {"type": "approve", "outcome": "approved"},
                     },
                 )
