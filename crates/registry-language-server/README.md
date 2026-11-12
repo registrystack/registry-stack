@@ -4,9 +4,8 @@
 Language Server Protocol. It provides go to definition, find references, workspace symbols, document
 symbols, completion and hover on the names one document writes and another spells back, and errors
 for missing, duplicate, or ambiguous references. It deliberately leaves syntax, schemas, mapping-key
-completion, and formatting to the editor's existing language servers. The
-[shared editor setup](../../editors/README.md#configure-a-project) configures
-version-matched schemas wherever the product publishes them.
+completion, and formatting to the editor's existing language servers. Product
+schemas and their owning validators remain in the public Registry Stack repository.
 
 ## Document families
 
@@ -83,8 +82,8 @@ symbols, completion, and hover for their modeled local authoring edges.
 For arbitrary Manifest, OID4VCI, and OID4VP configuration filenames, create
 `.registry-stack-editor/project.json` containing `{"product":"manifest","document":"config/metadata.yaml"}`
 or the products `evidence-oid4vci` or `evidence-oid4vp`. The document must be an existing regular `.yaml` or `.yml` file
-inside the project, using a relative path without traversal or symbolic links. The shared
-`python3 editors/configure.py` command writes this marker and configures both editors.
+inside the project, using a relative path without traversal or symbolic links.
+An editor integration may write this marker when configuring a project.
 
 Name scopes follow the owning document contract. A BReg Record field does not complete fields from a
 different Record type, and Manifest fields also retain their dataset and entity scope. References to separately
@@ -149,11 +148,15 @@ of its own, so the editor and `evidencectl check` name the same break.
 cargo run --locked -p registry-language-server
 ```
 
-The same server is also hosted by these adopter CLIs from the same source version:
-
-```console
-evidencectl tooling language-server
-```
+Use `registry-language-server --version` to identify a built binary. The server
+version follows the Registry Stack workspace version.
 
 The server communicates over standard input and output and expects the opened workspace (or a
 nested directory) to be inside a Registry Stack or Evidence authoring project.
+
+For a caller-supplied Workspace v1 snapshot, `registry-language-server --workspace-analysis`
+reads one `id.registrystack.org/formats/platform/workspace-analysis/v1alpha1` JSON request
+from standard input and writes one JSON response. The caller supplies the exact source bytes,
+file digests, workspace binding and declarative facts; this mode does not read source paths
+from disk. Responses distinguish resolved references and impact from incomplete native or
+generated coverage.
