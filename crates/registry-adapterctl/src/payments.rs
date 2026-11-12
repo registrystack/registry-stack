@@ -50,7 +50,7 @@ pub enum PaymentsCommand {
         #[arg(long, value_name = "FILE")]
         provider_pack: Vec<PathBuf>,
     },
-    /// Replay provider mappings without connecting to Mifos or BReg.
+    /// Replay provider mappings offline.
     Fixtures {
         #[command(subcommand)]
         command: PaymentsFixturesCommand,
