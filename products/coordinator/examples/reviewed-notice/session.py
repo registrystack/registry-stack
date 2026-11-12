@@ -294,7 +294,7 @@ def serve(args):
         reader = journey.export(owner, "application-reader", keys)
         sender = journey.export(owner, "case-system", keys)
         fixture.private(keys / "review-completion-token", completion_token)
-        runtime, coordinator_url, coordinator = journey.coordinator_service("reviewed-notice", keys, {
+        runtime, coordinator_url, coordinator = journey.coordinator_service(owner, "reviewed-notice", keys, {
             "applications": {"type": "breg", "baseUrl": journey.urls["breg"],
                 "profile": "follow-up-reader",
                 "authorization": journey.authorization(reader, resource, ["records:get"])},

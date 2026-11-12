@@ -20,9 +20,10 @@ Rust input helper. `--messaging-image` accepts an exact published
 `ghcr.io/registrystack/messaging@sha256:...` digest and runs its runtime and tool
 with Docker host networking and only the owned fixture directory mounted.
 Use the source archive, native tools, unified wheel, and Messaging image from
-one release, starting with v0.44.0. Follow the
+one release. Follow the
 [tutorial](https://docs.registrystack.org/dev/tutorials/review-an-application-and-send-a-notice/)
-to verify and prepare the assets, restart Coordinator, and clean up. The Python projection uses
+to choose a compatible release, verify the assets, restart Coordinator, and clean up.
+The Python projection uses
 pinned RFC 8785 canonicalization over the same three reviewed fields; refusal
 messages contain no field values.
 
