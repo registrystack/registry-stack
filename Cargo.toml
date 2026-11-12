@@ -258,10 +258,6 @@ lapin = { version = "=4.12.3", default-features = false, features = ["tokio", "r
 # Adapter expressions. Version 1.x is the RFC 9535 rewrite; the selector AST
 # is what the singular-query rule of CONCEPT.md 8.11.8 is checked against.
 jsonpath-rust = { version = "1" }
-# Steering pin: pest 2.9's pest_stack_guard 1.0.0 exact-pins psm =0.1.24,
-# which would downgrade psm workspace-wide 0.1.32 to 0.1.24 and drop
-# ar_archive_writer 0.5.3 from the lock (the Render chain reaches psm
-# through stacker and typst-eval). Revisit when upstream relaxes the pin.
 pdf-writer = { version = "0.15.0" }
 pest = { version = "=2.9.5" }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
