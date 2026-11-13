@@ -25944,6 +25944,87 @@
           ]
         },
         {
+          "name": "grants",
+          "invocation": "rstack grants",
+          "about": "Report configured bindings and known profile facts without certifying live grants",
+          "long_about": null,
+          "usage": "rstack grants [OPTIONS] <CONNECTION>",
+          "arguments": [
+            {
+              "display": "<CONNECTION>",
+              "description": "Python service connection file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--facts <FILE>",
+              "description": "Product identity facts file; repeat for each known product",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "dev",
           "invocation": "rstack dev",
           "about": "Run and inspect a local Registry Stack development environment",
