@@ -1443,6 +1443,17 @@ process (draft, declare), several `to` steps in sequence.
   past it, or when no such proof path is declared, they remain spent
   permanently and the 409 carries no `Retry-After`. Recovery never grants
   authority to repeat the mutation.
+- Recovery is bound to the source origin the write reached. The precommit
+  also pins a digest of the configured `baseUrl` of every endpoint the write,
+  status and uncertainty routes reach (credentials are outside it, so a
+  rotation keeps recovery), and every poll, whether a status GET, a bounded
+  wait or a same-key retry's uncertainty check, runs only while the current
+  runtime configuration yields the same digest. A row whose pin differs, or
+  that carries none, is never polled: its status link answers the exact
+  stored 202, a bounded wait returns the committed 202, and a retry answers
+  409 without `Retry-After`, until the accepted expiry or the effect deadline
+  ends it. Restoring the original `baseUrl` lets that work finish. Each held
+  poll logs a value-free warning; it adds no journal event kind.
 - The artifact fence binds recovery authority to one artifact (the digest of
   the project, profile and pack bytes) per `runtime.id`. Only a deployment
   that declares an asynchronous or resumable write activates it: activation

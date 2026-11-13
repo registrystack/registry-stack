@@ -194,6 +194,18 @@ reconstructible in this closed subset. Later reads from the digest-bound,
 resupplied caller record are not supported, though they would not inherently
 depend on stored payloads.
 
+## Change a source under asynchronous writes
+
+An asynchronous write is polled only at the source origin it was sent to
+(`CONCEPT.md` section 9). Rotating a source credential needs no care. Change
+the `baseUrl` of an endpoint that an asynchronous write, status or uncertainty
+route reaches only after that operation's writes have settled: an unfinished
+write is otherwise held and never polled. Its status link answers the stored
+202, a same-key retry answers 409 without `Retry-After`, and the facade logs a
+value-free warning for each held poll. Restore the original `baseUrl` to let
+held writes finish, or let them expire. Let async writes settle before
+upgrading; rows written by an earlier version are quarantined and expire.
+
 ## Operate an SFTP job source
 
 The default-off `job-sftp` host is read-only. Give it a dedicated source

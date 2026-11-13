@@ -27,6 +27,17 @@
   `init-store` once. Items refused this way by an earlier version carry no
   mark: before you edit or rescan one, check BReg or Coordinator for an
   admission of that item.
+- BREAKING: an asynchronous write is polled only at the source origin it was
+  sent to. Before the send, its store row pins the configured `baseUrl` of
+  every endpoint its write, status and uncertainty routes reach. A status GET,
+  a bounded wait and a same-key retry poll only while the runtime
+  configuration still gives those endpoints the same `baseUrl`; rotating a
+  credential changes nothing. After a `baseUrl` change, an unfinished write is
+  held and never polled: its status link answers the stored 202 and a retry
+  answers 409 without `Retry-After`, until the original `baseUrl` is restored
+  or the write expires. Each held poll logs a value-free warning. Let async
+  writes settle before upgrading; rows written by an earlier version are
+  quarantined and expire.
 
 ## 0.46.0 - 2026-11-08
 
