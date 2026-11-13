@@ -3491,8 +3491,7 @@ jobs:
           uv run --with "${REGISTRY_CLIENT_PY_WHEEL}" \
             cargo test --locked -p registry-coordinator \
             --features postgres-test --test external_wait_postgres \
-            installed_python_job_recovers_the_original_command_after_commit \
-            -- --ignored --nocapture
+            -- --include-ignored --nocapture
 
       - name: Retain Linux Python client candidate for runtime acceptance
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

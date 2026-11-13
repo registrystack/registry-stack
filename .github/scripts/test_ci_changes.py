@@ -1473,11 +1473,31 @@ class CiChangesTest(unittest.TestCase):
             ),
             2,
         )
-        self.assertIn(
-            "installed_python_job_recovers_the_original_command_after_commit",
-            acceptance["run"],
+        installed_acceptance = Path(
+            "crates/registry-coordinator/tests/external_wait_postgres.rs"
+        ).read_text(encoding="utf-8")
+        installed_tests = set(
+            re.findall(
+                r'#\[ignore = "[^"]*installed-wheel Python interpreter"\]\s*'
+                r"async fn (installed_python_[a-z0-9_]+)\(",
+                installed_acceptance,
+            )
         )
-        self.assertIn("--ignored", acceptance["run"])
+        self.assertEqual(
+            installed_tests,
+            {
+                "installed_python_encoding_failure_keeps_the_committed_job_recoverable",
+                "installed_python_job_recovers_the_original_command_after_commit",
+                "installed_python_job_survives_process_death_after_commit_and_restart",
+            },
+        )
+        normalized_acceptance = " ".join(
+            acceptance["run"].replace("\\\n", " ").split()
+        )
+        self.assertIn(
+            "--test external_wait_postgres -- --include-ignored --nocapture",
+            normalized_acceptance,
+        )
 
     def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
         outputs = classify(

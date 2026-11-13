@@ -554,6 +554,33 @@ async fn installed_python_job_survives_process_death_after_commit_and_restart() 
 
     let service = PythonService::start_in_schema("none", &schema);
     h.bind_python(&service);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let snapshot_url = format!("{}/test/snapshot", service.base_url);
+    let committed_snapshot: Value = client
+        .get(&snapshot_url)
+        .bearer_auth(PYTHON_ACCEPTANCE_TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(committed_snapshot["jobCount"], 1);
+    let committed_job = &committed_snapshot["jobs"][0];
+    assert_eq!(committed_job["request"], json!({"reference":"case-001"}));
+    assert!(committed_job["key"]
+        .as_str()
+        .is_some_and(|key| !key.is_empty()));
+    let job_id = committed_job["receipt"]["jobId"]
+        .as_str()
+        .expect("the restarted application read the committed receipt")
+        .to_owned();
+
     h.store
         .retry_same(run, h.adapters.binding_digest())
         .await
@@ -567,13 +594,8 @@ async fn installed_python_job_survives_process_death_after_commit_and_restart() 
     assert_eq!(recovered.run.step, "await-terminal");
     assert_eq!(recovered.effects.len(), 1);
     assert_eq!(recovered.waits.len(), 1);
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap();
-    let snapshot: Value = client
-        .get(format!("{}/test/snapshot", service.base_url))
+    let recovered_snapshot: Value = client
+        .get(&snapshot_url)
         .bearer_auth(PYTHON_ACCEPTANCE_TOKEN)
         .send()
         .await
@@ -583,15 +605,10 @@ async fn installed_python_job_survives_process_death_after_commit_and_restart() 
         .json()
         .await
         .unwrap();
-    assert_eq!(snapshot["jobCount"], 1);
     assert_eq!(
-        snapshot["jobs"][0]["request"],
-        json!({"reference":"case-001"})
+        recovered_snapshot, committed_snapshot,
+        "retry-same preserved the original application key, request and receipt"
     );
-    let job_id = snapshot["jobs"][0]["receipt"]["jobId"]
-        .as_str()
-        .unwrap()
-        .to_owned();
 
     for state in ["running", "succeeded"] {
         client
