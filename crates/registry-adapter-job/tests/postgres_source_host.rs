@@ -1479,6 +1479,52 @@ async fn actual_host_reads_null_date_time_uuid_and_numeric_columns_as_canonical_
 }
 
 #[tokio::test]
+async fn actual_host_reads_bounded_jsonb_geometry_and_repeats() {
+    for (expression, expected) in [
+        (
+            r#"'{"type":"Point","coordinates":[100.5,13.75]}'::jsonb"#,
+            json!({"type": "Point", "coordinates": [100.5, 13.75]}),
+        ),
+        (
+            r#"'[{"id":"a","name":"First"},{"id":"b","name":"Second"}]'::jsonb"#,
+            json!([{"id": "a", "name": "First"}, {"id": "b", "name": "Second"}]),
+        ),
+        ("NULL::jsonb", Value::Null),
+    ] {
+        let (output, projected) = typed_note_pass(expression).await;
+        let report: Value =
+            serde_json::from_slice(&output.stdout).expect("the pass report is JSON");
+        assert!(
+            output.status.success(),
+            "JSONB source pass stopped: {:?}",
+            report["stopped"]
+        );
+        assert_eq!(
+            projected,
+            vec![json!({"id": "001", "status": null, "note": expected})]
+        );
+    }
+}
+
+#[tokio::test]
+async fn actual_host_refuses_jsonb_outside_its_byte_and_number_bounds() {
+    for (expression, code) in [
+        (
+            "jsonb_build_object('field', repeat('x', 1024))",
+            "page-fault:upstream.too-large",
+        ),
+        ("'9007199254740993'::jsonb", "page-fault:upstream.malformed"),
+    ] {
+        let (output, projected) = typed_note_pass(expression).await;
+        assert!(!output.status.success());
+        let report: Value =
+            serde_json::from_slice(&output.stdout).expect("the stopped pass report is JSON");
+        assert_eq!(report["stopped"]["code"], code);
+        assert!(projected.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn actual_host_names_the_column_whose_type_it_cannot_read() {
     for expression in ["INTERVAL '1 day'", "ARRAY[1, 2]"] {
         let (output, projected) = typed_note_pass(expression).await;

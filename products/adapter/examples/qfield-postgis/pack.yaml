@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: qfield-sites
+version: "1"
+testedVersions: []
+endpoints:
+  - id: qfield-sites
+    component: postgres
+    authentication:
+      type: none
+    attemptTimeoutMilliseconds: 10000
+    maximumResponseBytes: 1048576
+    queryFile: source/eligible-sites.sql
+    keyColumn: id
+queryFiles:
+  - path: source/eligible-sites.sql
+    digest: sha256:2cd445d0922b461307154e932204de4b333a59c47845761bd4e73b9abef3d3f5
+sourceRoutes:
+  - id: qfield-sites-page
+    scan: finite
+    nextRecovery: key-deduplicated
+    edits: rescan
+    rescanDelaySeconds: 60
+    steps:
+      - to:
+          uri: postgres:qfield-sites
+          parameters:
+            queryParameters: {}
+capabilities: {}

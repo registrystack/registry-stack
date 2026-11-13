@@ -10,6 +10,9 @@ mod job_fixture;
 #[cfg(feature = "job-postgres")]
 #[path = "support/postgres_native_source.rs"]
 mod postgres_native_source;
+#[cfg(feature = "job-postgres")]
+#[path = "support/qfield_native.rs"]
+mod qfield_native;
 
 use std::future::Future;
 use std::pin::Pin;

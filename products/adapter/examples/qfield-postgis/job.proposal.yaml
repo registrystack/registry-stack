@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/job/v1alpha1
+kind: AdapterJob
+job:
+  id: qfield-sites-proposal
+  version: "1"
+source:
+  pack:
+    id: qfield-sites
+    version: "1"
+    digest: sha256:dc3b97330caf3ed2bb8e1341338960edb3da2af495600f3bc5f51f94176b9240
+  route: qfield-sites-page
+destination:
+  type: direct-breg
+  binding: field-site-registry
+  accessProfile: ingestion
+  action: propose-site
+  mode: proposal
+  mapping:
+    file: mappings/register-site.rhai
+    entrypoint: map_proposal
+    digest: sha256:11d6f3224e81febeb7d4fa5662115a6addcef19c2b7ff98dd84f259b412b5790
+  receiptRetentionDays: 7
+projection:
+  digestOf: projection
+  fields: [id, site_name, position, boundary, contacts]
+triggers:
+  - kind: interval
+    delayMilliseconds: 60000
+profile:
+  pageDeadlineMilliseconds: 300000
+  maximumResponseBytes: 1048576
+  maximumPageItems: 10
+  maximumPageBytes: 1048576
+  maximumUpstreamCalls: 8
+  read:
+    maximumFileBytes: 1048576
+    maximumRowBytes: 65536
+    maximumFieldBytes: 32768
+    maximumRowsPerPage: 10

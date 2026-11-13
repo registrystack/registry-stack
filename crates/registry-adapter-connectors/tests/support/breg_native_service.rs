@@ -15,7 +15,8 @@ use std::{
 };
 
 use registry_breg_client::{
-    BaseRegistryClient, BaseRegistryClientConfig, StaticToken, TokenProvider,
+    BRegListRequest, BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig, StaticToken,
+    TokenProvider,
 };
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use registry_platform_testing::{fixtures, TestActorKind, TestAuthorizationServer, TestClient};
@@ -32,19 +33,36 @@ fn binary(variable: &str) -> PathBuf {
     path
 }
 
+fn spatial_bbox_role(runtime_role: &str) -> String {
+    let candidate = format!("{runtime_role}__spatial_bbox");
+    assert!(
+        candidate.len() <= 63,
+        "the fixture spatial role must fit PostgreSQL's identifier bound"
+    );
+    candidate
+}
+
 /// A synthetic issuer whose service actor has the BReg fixture's writer
 /// authority. Cross-crate native tests use the same identity setup as
 /// the connector's own native suite.
 pub async fn issuer(subject: &str) -> TestAuthorizationServer {
-    let (_, public) = fixtures::ed25519_pair();
+    let (_, reader_public) = fixtures::ed25519_pair();
+    let (_, ingestion_public) = fixtures::ed25519_pair();
     TestAuthorizationServer::builder()
         .with_signing_key(generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap())
         .client(
             TestClient::new("application-reader")
-                .with_public_jwk(public)
+                .with_public_jwk(reader_public)
                 .with_resource("urn:example:applications")
                 .with_actor_kind(TestActorKind::Service)
                 .with_service_subject(subject),
+        )
+        .client(
+            TestClient::new("adapter-field-ingestion")
+                .with_public_jwk(ingestion_public)
+                .with_resource("urn:example:applications")
+                .with_actor_kind(TestActorKind::Service)
+                .with_service_subject("adapter-field-ingestion"),
         )
         .start()
         .await
@@ -62,6 +80,19 @@ pub fn token_provider(issuer: &TestAuthorizationServer, subject: &str) -> Arc<dy
         chrono::Utc::now().timestamp() + 3600,
     );
     Arc::new(StaticToken::new(token).expect("the synthetic token is valid"))
+}
+
+/// A token provider for the QField fixture's narrowly admitted ingestion
+/// service. It intentionally differs from the fixture's observer client.
+pub fn field_ingestion_token_provider(issuer: &TestAuthorizationServer) -> Arc<dyn TokenProvider> {
+    let token = issuer.issue_access_token(
+        "adapter-field-ingestion",
+        "adapter-field-ingestion",
+        "urn:example:applications",
+        "registry:write",
+        chrono::Utc::now().timestamp() + 3600,
+    );
+    Arc::new(StaticToken::new(token).expect("the synthetic ingestion token is valid"))
 }
 
 fn operator(binary: &Path, args: &[&std::ffi::OsStr], log: &Path) -> Value {
@@ -105,11 +136,29 @@ pub struct Breg {
     admin_url: String,
     databases: [String; 2],
     roles: [String; 2],
+    spatial_role: Option<String>,
     child: Option<Child>,
 }
 
 impl Breg {
     pub async fn start(issuer: &TestAuthorizationServer) -> Self {
+        Self::start_inner(issuer, None).await
+    }
+
+    /// Start the native BReg fixture with the maintained QField field-site
+    /// registry added. Only this opt-in variant provisions PostGIS.
+    pub async fn start_with_field_site(
+        issuer: &TestAuthorizationServer,
+        field_site_registry: Value,
+    ) -> Self {
+        Self::start_inner(issuer, Some(field_site_registry)).await
+    }
+
+    async fn start_inner(
+        issuer: &TestAuthorizationServer,
+        field_site_registry: Option<Value>,
+    ) -> Self {
+        let field_site = field_site_registry.is_some();
         let ctl = binary("ADAPTER_BREGCTL_BIN");
         let runtime_binary = binary("ADAPTER_BREG_BIN");
         let admin_url =
@@ -119,6 +168,12 @@ impl Breg {
         let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
             .unwrap()
             .keep();
+        let runtime_role = if field_site {
+            format!("adapter_br_{suffix}")
+        } else {
+            format!("adapter_breg_runtime_{suffix}")
+        };
+        let spatial_role = field_site.then(|| spatial_bbox_role(&runtime_role));
         let mut service = Self {
             root,
             base_url: String::new(),
@@ -129,10 +184,8 @@ impl Breg {
                 format!("adapter_breg_test_{suffix}"),
                 format!("adapter_breg_live_{suffix}"),
             ],
-            roles: [
-                format!("adapter_breg_migrate_{suffix}"),
-                format!("adapter_breg_runtime_{suffix}"),
-            ],
+            roles: [format!("adapter_breg_migrate_{suffix}"), runtime_role],
+            spatial_role,
             child: None,
         };
         let password = uuid::Uuid::new_v4().simple().to_string();
@@ -160,6 +213,29 @@ impl Breg {
                 .await
                 .unwrap();
             let database_connection = tokio::spawn(connection);
+            if field_site {
+                let spatial_role = service
+                    .spatial_role
+                    .as_deref()
+                    .expect("the QField fixture has a spatial role");
+                owner
+                    .batch_execute(&format!(
+                        "CREATE SCHEMA IF NOT EXISTS registry_spatial_ext; \
+                         REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC; \
+                         CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext; \
+                         GRANT USAGE ON SCHEMA registry_spatial_ext TO {}, {}; \
+                         DO $breg_spatial$ BEGIN \
+                           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{spatial_role}') THEN \
+                             CREATE ROLE {spatial_role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; \
+                           END IF; \
+                         END $breg_spatial$; \
+                         GRANT {spatial_role} TO {} WITH INHERIT FALSE, SET TRUE, ADMIN FALSE; \
+                         GRANT USAGE ON SCHEMA registry_spatial_ext TO {spatial_role}",
+                        service.roles[0], service.roles[1], service.roles[0]
+                    ))
+                    .await
+                    .expect("the QField BReg fixture provisions PostGIS");
+            }
             owner.batch_execute(&format!(
                 "REVOKE ALL ON DATABASE {database} FROM PUBLIC; GRANT CONNECT, TEMPORARY ON DATABASE {database} TO {}; GRANT CONNECT ON DATABASE {database} TO {}",
                 service.roles[0], service.roles[1]
@@ -218,158 +294,192 @@ impl Breg {
             chrono::Utc::now().timestamp() + 3600,
         );
         private_file(&service.root.join("fixture-token"), token.as_bytes());
-        document(
-            &project.join("registry.yaml"),
-            json!({
-                "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
-                "kind": "BRegProject",
-                "project": {
-                    "id": "adapter-connector-proof",
-                    "canonicalBaseIri": "https://synthetic.example.test/connector-proof",
-                    "version": "1",
-                    "defaultLanguage": "en"
+        let mut registry = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {
+                "id": "adapter-connector-proof",
+                "canonicalBaseIri": "https://synthetic.example.test/connector-proof",
+                "version": "1",
+                "defaultLanguage": "en"
+            },
+            "package": {"sourceRevision": "adapter-native-connector-proof"},
+            "recordTypes": [
+                {
+                    "id": "item",
+                    "primaryDataset": "synthetic-items",
+                    "route": "items",
+                    "mutationMode": "mutable",
+                    "classification": "internal",
+                    "batch": {"maximumItems": 100, "maximumBytes": 65536},
+                    "fields": [
+                        {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
+                        {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
+                    ]
                 },
-                "package": {"sourceRevision": "adapter-native-connector-proof"},
-                "recordTypes": [
-                    {
-                        "id": "item",
-                        "primaryDataset": "synthetic-items",
-                        "route": "items",
-                        "mutationMode": "mutable",
-                        "classification": "internal",
-                        "batch": {"maximumItems": 100, "maximumBytes": 65536},
-                        "fields": [
-                            {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
-                            {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
-                        ]
-                    },
-                    {
-                        "id": "household",
-                        "primaryDataset": "synthetic-items",
-                        "route": "households",
-                        "mutationMode": "mutable",
-                        "classification": "internal",
-                        "fields": [
-                            {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
-                            {"id": "source-submission-id", "apiName": "sourceSubmissionId", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 128, "classification": "internal"},
-                            {"id": "respondent-name", "apiName": "respondentName", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 256, "classification": "internal"},
-                            {"id": "household-size", "apiName": "householdSize", "type": "int64", "required": true, "classification": "internal"}
-                        ],
-                        "selectorProfiles": [
-                            {"id": "by-source-submission", "fields": ["source-submission-id"]}
-                        ]
+                {
+                    "id": "household",
+                    "primaryDataset": "synthetic-items",
+                    "route": "households",
+                    "mutationMode": "mutable",
+                    "classification": "internal",
+                    "fields": [
+                        {"id": "owner", "type": "string", "required": true, "maximumLength": 80, "classification": "internal"},
+                        {"id": "source-submission-id", "apiName": "sourceSubmissionId", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 128, "classification": "internal"},
+                        {"id": "respondent-name", "apiName": "respondentName", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 256, "classification": "internal"},
+                        {"id": "household-size", "apiName": "householdSize", "type": "int64", "required": true, "classification": "internal"}
+                    ],
+                    "selectorProfiles": [
+                        {"id": "by-source-submission", "fields": ["source-submission-id"]}
+                    ]
+                }
+            ],
+            "datasets": [{"id": "synthetic-items"}],
+            "functions": [
+                {
+                    "id": "update-item-plan",
+                    "runtime": "rhai",
+                    "source": "scripts/update-item.rhai",
+                    "entrypoint": "plan",
+                    "abi": "registry.action-plan/v1"
+                },
+                {
+                    "id": "register-household-plan",
+                    "runtime": "rhai",
+                    "source": "scripts/register-household.rhai",
+                    "entrypoint": "plan",
+                    "abi": "registry.action-plan/v1"
+                }
+            ],
+            "actions": [
+                {
+                    "id": "update-item",
+                    "execution": {"mode": "immediate"},
+                    "inputs": [
+                        {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
+                        {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
+                    ],
+                    "plan": {
+                        "type": "function",
+                        "function": "update-item-plan",
+                        "inputs": ["target", "label"],
+                        "writes": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "fields": ["label"]}]
                     }
-                ],
-                "datasets": [{"id": "synthetic-items"}],
-                "functions": [
-                    {
-                        "id": "update-item-plan",
-                        "runtime": "rhai",
-                        "source": "scripts/update-item.rhai",
-                        "entrypoint": "plan",
-                        "abi": "registry.action-plan/v1"
-                    },
-                    {
-                        "id": "register-household-plan",
-                        "runtime": "rhai",
-                        "source": "scripts/register-household.rhai",
-                        "entrypoint": "plan",
-                        "abi": "registry.action-plan/v1"
+                },
+                {
+                    "id": "propose-item",
+                    "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
+                    "inputs": [
+                        {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
+                        {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
+                    ],
+                    "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
+                    "plan": {"type": "fixed", "effects": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "set": {"label": {"fromInput": "label"}}}]}
+                },
+                {
+                    "id": "manual-item",
+                    "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}, "application": {"mode": "manual"}}},
+                    "inputs": [
+                        {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
+                        {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
+                    ],
+                    "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
+                    "plan": {"type": "fixed", "effects": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "set": {"label": {"fromInput": "label"}}}]}
+                },
+                {
+                    "id": "register-household",
+                    "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
+                    "inputs": [
+                        {"id": "source-submission-id", "apiName": "sourceSubmissionId", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 128, "classification": "internal"},
+                        {"id": "respondent-name", "apiName": "respondentName", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 256, "classification": "internal"},
+                        {"id": "household-size", "apiName": "householdSize", "type": "int64", "required": true, "classification": "internal"}
+                    ],
+                    "plan": {
+                        "type": "function",
+                        "function": "register-household-plan",
+                        "inputs": ["source-submission-id", "respondent-name", "household-size"],
+                        "writes": [{"id": "household", "target": {"recordType": "household"}, "operation": "create", "fields": ["owner", "source-submission-id", "respondent-name", "household-size"]}]
                     }
-                ],
-                "actions": [
-                    {
-                        "id": "update-item",
-                        "execution": {"mode": "immediate"},
-                        "inputs": [
-                            {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
-                            {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
-                        ],
-                        "plan": {
-                            "type": "function",
-                            "function": "update-item-plan",
-                            "inputs": ["target", "label"],
-                            "writes": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "fields": ["label"]}]
+                }
+            ],
+            "accessProfiles": [{
+                "id": "writer",
+                "default": true,
+                "principalClaim": "sub",
+                "requiredScopes": ["applications:read"],
+                "actorKind": "service",
+                "requesterClients": ["application-reader"],
+                "permissions": {
+                    "records": [
+                        {
+                            "recordType": "item",
+                            "operations": ["create", "get", "list", "patch", "batch", "revisions", "snapshot"],
+                            "readableFields": ["owner", "label"],
+                            "writableFields": ["owner", "label"],
+                            "revisionAccess": true,
+                            "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]
+                        },
+                        {
+                            "recordType": "household",
+                            "operations": ["create", "get", "list", "lookup"],
+                            "readableFields": ["owner", "source-submission-id", "respondent-name", "household-size"],
+                            "writableFields": ["owner", "source-submission-id", "respondent-name", "household-size"],
+                            "filterableFields": ["source-submission-id"],
+                            "lookups": [{"selector": "by-source-submission", "valueOrigin": "request"}],
+                            "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]
                         }
-                    },
-                    {
-                        "id": "propose-item",
-                        "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
-                        "inputs": [
-                            {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
-                            {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
-                        ],
-                        "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
-                        "plan": {"type": "fixed", "effects": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "set": {"label": {"fromInput": "label"}}}]}
-                    },
-                    {
-                        "id": "manual-item",
-                        "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}, "application": {"mode": "manual"}}},
-                        "inputs": [
-                            {"id": "target", "apiName": "targetId", "type": "reference", "target": "item", "required": true, "classification": "internal"},
-                            {"id": "label", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 80, "classification": "internal"}
-                        ],
-                        "commitGuards": {"targets": [{"input": "target", "revision": "unchanged"}]},
-                        "plan": {"type": "fixed", "effects": [{"id": "item", "target": {"fromInput": "target"}, "operation": "patch", "set": {"label": {"fromInput": "label"}}}]}
-                    },
-                    {
-                        "id": "register-household",
-                        "execution": {"mode": "proposal", "proposal": {"review": {"type": "none"}, "retention": {"mode": "operator-erase"}}},
-                        "inputs": [
-                            {"id": "source-submission-id", "apiName": "sourceSubmissionId", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 128, "classification": "internal"},
-                            {"id": "respondent-name", "apiName": "respondentName", "type": "string", "required": true, "minimumLength": 1, "maximumLength": 256, "classification": "internal"},
-                            {"id": "household-size", "apiName": "householdSize", "type": "int64", "required": true, "classification": "internal"}
-                        ],
-                        "plan": {
-                            "type": "function",
-                            "function": "register-household-plan",
-                            "inputs": ["source-submission-id", "respondent-name", "household-size"],
-                            "writes": [{"id": "household", "target": {"recordType": "household"}, "operation": "create", "fields": ["owner", "source-submission-id", "respondent-name", "household-size"]}]
-                        }
-                    }
-                ],
-                "accessProfiles": [{
-                    "id": "writer",
-                    "default": true,
-                    "principalClaim": "sub",
-                    "requiredScopes": ["applications:read"],
-                    "actorKind": "service",
-                    "requesterClients": ["application-reader"],
-                    "permissions": {
-                        "records": [
-                            {
-                                "recordType": "item",
-                                "operations": ["create", "get", "list", "patch", "batch", "revisions", "snapshot"],
-                                "readableFields": ["owner", "label"],
-                                "writableFields": ["owner", "label"],
-                                "revisionAccess": true,
-                                "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]
-                            },
-                            {
-                                "recordType": "household",
-                                "operations": ["create", "get", "list", "lookup"],
-                                "readableFields": ["owner", "source-submission-id", "respondent-name", "household-size"],
-                                "writableFields": ["owner", "source-submission-id", "respondent-name", "household-size"],
-                                "filterableFields": ["source-submission-id"],
-                                "lookups": [{"selector": "by-source-submission", "valueOrigin": "request"}],
-                                "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]
-                            }
-                        ],
-                        "actions": [
-                            {"action": "update-item", "operations": ["invoke"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}], "results": ["item"]},
-                            {"action": "propose-item", "operations": ["start"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "manual-item", "operations": ["start"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "register-household", "operations": ["start"], "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
-                        ],
-                        "proposals": [
-                            {"action": "propose-item", "operations": ["get", "submit"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "manual-item", "operations": ["get", "submit", "apply"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
-                            {"action": "register-household", "operations": ["get", "submit"], "ownership": "caller", "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
-                        ]
-                    }
-                }]
-            }),
-        );
+                    ],
+                    "actions": [
+                        {"action": "update-item", "operations": ["invoke"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}], "results": ["item"]},
+                        {"action": "propose-item", "operations": ["start"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                        {"action": "manual-item", "operations": ["start"], "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                        {"action": "register-household", "operations": ["start"], "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
+                    ],
+                    "proposals": [
+                        {"action": "propose-item", "operations": ["get", "submit"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                        {"action": "manual-item", "operations": ["get", "submit", "apply"], "ownership": "caller", "targets": [{"recordType": "item", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]},
+                        {"action": "register-household", "operations": ["get", "submit"], "ownership": "caller", "targets": [{"recordType": "household", "rowBoundaries": [{"field": "owner", "claim": "sub", "operator": "equals"}]}]}
+                    ]
+                }
+            }]
+        });
+        if let Some(qfield) = field_site_registry {
+            for record_type in registry["recordTypes"]
+                .as_array_mut()
+                .expect("the native record types are an array")
+            {
+                let owner = record_type["fields"]
+                    .as_array_mut()
+                    .expect("the native fields are an array")
+                    .iter_mut()
+                    .find(|field| field["id"] == "owner")
+                    .expect("the native record type has an owner field");
+                owner["minimumLength"] = json!(1);
+                owner["maximumLength"] = json!(128);
+            }
+            for section in ["datasets", "recordTypes", "actions", "accessProfiles"] {
+                registry[section]
+                    .as_array_mut()
+                    .expect("the native registry section is an array")
+                    .extend(
+                        qfield[section]
+                            .as_array()
+                            .expect("the QField registry section is an array")
+                            .iter()
+                            .cloned(),
+                    );
+            }
+            registry["accessProfiles"][0]["permissions"]["records"]
+                .as_array_mut()
+                .expect("the fixture observer record grants are an array")
+                .push(json!({
+                    "recordType": "field-site",
+                    "operations": ["get", "list"],
+                    "readableFields": ["owner", "source-submission-id", "site-name", "position", "boundary", "contacts"],
+                    "rowBoundaries": "unrestricted"
+                }));
+        }
+        document(&project.join("registry.yaml"), registry);
         private_file(
             &project.join("scripts/update-item.rhai"),
             br#"fn plan(ctx) {
@@ -470,7 +580,7 @@ impl Breg {
                         "accessTokenType": "at+jwt",
                         "scopeClaim": "scope",
                         "scopeSeparator": " ",
-                        "allowedClients": ["application-reader"],
+                        "allowedClients": ["application-reader", "adapter-field-ingestion"],
                         "maximumTokenLifetimeSeconds": 3600,
                         "leewayMilliseconds": 0,
                         "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}
@@ -611,6 +721,38 @@ impl Breg {
         .unwrap()
     }
 
+    /// Read one ingested field site through a fixture-only observer grant.
+    /// The QField ingestion profile itself intentionally has no Record CRUD.
+    pub async fn field_site(
+        &self,
+        issuer: &TestAuthorizationServer,
+        source_submission_id: &str,
+    ) -> Value {
+        let options = BRegRecordOptions::default()
+            .access_profile("writer")
+            .expect("the observer profile is valid");
+        let request = BRegListRequest::default()
+            .options(options)
+            .top(100)
+            .expect("the fixture page bound is valid");
+        let client = self.client(issuer);
+        for _ in 0..100 {
+            let records = client
+                .list_records("field-sites", &request)
+                .await
+                .expect("the ingested field sites are observable");
+            if let Some(record) = records.value.value.items.into_iter().find(|record| {
+                record.domain_data.get("sourceSubmissionId")
+                    == Some(&Value::String(source_submission_id.to_owned()))
+            }) {
+                return serde_json::to_value(record.domain_data)
+                    .expect("the field-site data renders as JSON");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the requested field site did not become visible")
+    }
+
     /// The deployment origin the connector's configuration names.
     pub fn origin(&self) -> String {
         self.base_url.clone()
@@ -659,6 +801,7 @@ impl Drop for Breg {
         let admin_url = self.admin_url.clone();
         let databases = self.databases.clone();
         let roles = self.roles.clone();
+        let spatial_role = self.spatial_role.clone();
         // Cleanup also runs on assertion failure, on a separate runtime
         // because Drop can run inside Tokio. FORCE targets only generated
         // fixture databases.
@@ -678,7 +821,17 @@ impl Drop for Breg {
                             ))
                             .await?;
                     }
+                    if let Some(role) = spatial_role.as_deref() {
+                        admin
+                            .batch_execute(&format!("REVOKE {role} FROM {}", roles[0]))
+                            .await?;
+                    }
                     for role in roles {
+                        admin
+                            .batch_execute(&format!("DROP ROLE IF EXISTS {role}"))
+                            .await?;
+                    }
+                    if let Some(role) = spatial_role {
                         admin
                             .batch_execute(&format!("DROP ROLE IF EXISTS {role}"))
                             .await?;

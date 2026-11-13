@@ -7,7 +7,7 @@ set -euo pipefail
 # postgres-test suites, the item-table edges the in-process tests cannot
 # reach (the lease, the crash replay, the refusal run, the position
 # rules, the no-payload invariant). Without ADAPTER_TEST_DATABASE_URL
-# this script starts its own disposable loopback PostgreSQL 17 container,
+# this script starts its own disposable loopback PostgreSQL 17 with PostGIS,
 # proves it answers queries, and removes it on the way out; with the
 # variable set it uses that server as given. The SFTP CLI acceptance uses
 # the same database. RabbitMQ acceptance always owns disposable broker
@@ -16,8 +16,9 @@ set -euo pipefail
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 cd "$repo_root"
 
-# Same image as the CI postgres services in .github/workflows/ci.yml.
-image='docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675'
+# The QField journey uses PostGIS in its isolated source and registry databases.
+# Use the same pinned PostgreSQL 17 and PostGIS image as the BReg CI suites.
+image='postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6'
 db_user=adapter
 db_password=adapter_test
 db_name=adapter
@@ -66,7 +67,7 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 	printf '%s\n' "Starting $container_name (loopback PostgreSQL 17)." >&2
 	owned_name=$container_name
 	created_container_id=
-	if created_container_id=$(docker run -d --name "$container_name" \
+	if created_container_id=$(docker run -d --platform linux/amd64 --name "$container_name" \
 		-e POSTGRES_USER="$db_user" -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB="$db_name" \
 		-p 127.0.0.1::5432 "$image"); then
 		if [[ ! "$created_container_id" =~ ^[0-9a-f]{64}$ ]]; then
@@ -103,7 +104,7 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 	export ADAPTER_TEST_DATABASE_URL="postgresql://${db_user}:${db_password}@localhost:${port}/${db_name}"
 	printf '%s\n' "The owned PostgreSQL fixture ${container_id:0:12} is serving ${db_name} on localhost:${port}." >&2
 else
-	printf '%s\n' 'Using ADAPTER_TEST_DATABASE_URL from the environment.' >&2
+	printf '%s\n' 'Using ADAPTER_TEST_DATABASE_URL from the environment. The fixture server must provide PostGIS.' >&2
 fi
 
 # This proof owns a separate TLS-only database even when the caller supplied

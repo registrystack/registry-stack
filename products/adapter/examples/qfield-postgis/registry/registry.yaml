@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: qfield-field-sites
+  canonicalBaseIri: https://field-sites.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: QField field sites
+    description: Synthetic field sites received from the QField PostGIS example.
+
+package:
+  sourceRevision: qfield-field-sites-0.1.0
+
+datasets:
+  - id: field-sites
+    display:
+      label: Field sites
+      description: Synthetic sites registered from finalized field submissions.
+
+recordTypes:
+  - id: field-site
+    route: field-sites
+    primaryDataset: field-sites
+    mutationMode: create-only
+    display:
+      label: Field site
+      description: One site registered from one finalized field submission.
+    fields:
+      - {id: owner, type: string, required: true, minimumLength: 1, maximumLength: 128, classification: internal}
+      - {id: source-submission-id, apiName: sourceSubmissionId, type: uuid, required: true, classification: internal}
+      - {id: site-name, apiName: siteName, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: internal}
+      - {id: position, type: crs84-point, precision: 7, required: true, classification: internal}
+      - {id: boundary, type: crs84-polygon, precision: 7, maximumPositions: 500, required: true, classification: internal}
+      - id: contacts
+        type: structured
+        required: true
+        maximumBytes: 8192
+        classification: internal
+        schema:
+          type: array
+          minItems: 2
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name]
+            properties:
+              id:
+                type: string
+                pattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$'
+              name: {type: string, minLength: 1, maxLength: 80}
+    constraints:
+      - {type: unique, fields: [source-submission-id]}
+
+actions:
+  - id: register-site
+    display:
+      label: Register field site
+      description: Immediately create one site from a finalized field submission.
+    execution: {mode: immediate}
+    inputs:
+      - {id: source-submission-id, apiName: sourceSubmissionId, type: uuid, required: true, classification: internal}
+      - {id: site-name, apiName: siteName, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: internal}
+      - {id: position, type: crs84-point, precision: 7, required: true, classification: internal}
+      - {id: boundary, type: crs84-polygon, precision: 7, maximumPositions: 500, required: true, classification: internal}
+      - id: contacts
+        type: structured
+        required: true
+        maximumBytes: 8192
+        classification: internal
+        schema:
+          type: array
+          minItems: 2
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name]
+            properties:
+              id:
+                type: string
+                pattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$'
+              name: {type: string, minLength: 1, maxLength: 80}
+    plan:
+      type: fixed
+      effects:
+        - id: field-site
+          target: {recordType: field-site}
+          operation: create
+          set:
+            owner: {value: adapter-field-ingestion}
+            source-submission-id: {fromInput: source-submission-id}
+            site-name: {fromInput: site-name}
+            position: {fromInput: position}
+            boundary: {fromInput: boundary}
+            contacts: {fromInput: contacts}
+
+  - id: propose-site
+    display:
+      label: Propose field site
+      description: Create one site through a service-owned Proposal with no synthetic external review.
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        retention: {mode: retain}
+    inputs:
+      - {id: source-submission-id, apiName: sourceSubmissionId, type: uuid, required: true, classification: internal}
+      - {id: site-name, apiName: siteName, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: internal}
+      - {id: position, type: crs84-point, precision: 7, required: true, classification: internal}
+      - {id: boundary, type: crs84-polygon, precision: 7, maximumPositions: 500, required: true, classification: internal}
+      - id: contacts
+        type: structured
+        required: true
+        maximumBytes: 8192
+        classification: internal
+        schema:
+          type: array
+          minItems: 2
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, name]
+            properties:
+              id:
+                type: string
+                pattern: '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$'
+              name: {type: string, minLength: 1, maxLength: 80}
+    plan:
+      type: fixed
+      effects:
+        - id: field-site
+          target: {recordType: field-site}
+          operation: create
+          set:
+            owner: {value: adapter-field-ingestion}
+            source-submission-id: {fromInput: source-submission-id}
+            site-name: {fromInput: site-name}
+            position: {fromInput: position}
+            boundary: {fromInput: boundary}
+            contacts: {fromInput: contacts}
+
+accessProfiles:
+  - id: ingestion
+    default: true
+    principalClaim: sub
+    requiredScopes: [registry:write]
+    actorKind: service
+    requesterClients: [adapter-field-ingestion]
+    permissions:
+      actions:
+        - action: register-site
+          operations: [invoke]
+          targets:
+            - recordType: field-site
+              rowBoundaries:
+                - {field: owner, claim: sub, operator: equals}
+          results: [field-site]
+        - action: propose-site
+          operations: [start]
+          targets:
+            - recordType: field-site
+              rowBoundaries:
+                - {field: owner, claim: sub, operator: equals}
+      proposals:
+        - action: propose-site
+          operations: [get, submit]
+          readableInputs: [source-submission-id, site-name, position, boundary, contacts]
+          ownership: caller
+          targets:
+            - recordType: field-site
+              rowBoundaries:
+                - {field: owner, claim: sub, operator: equals}
