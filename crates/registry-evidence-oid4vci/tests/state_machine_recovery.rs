@@ -68,7 +68,7 @@ offers:
   audiences: ["https://wallet.example.org"]
   algorithms: [EdDSA]
   allowedClients: [adopter-front-end]
-  requiredScopes: unrestricted
+  requiredScopes: [oid4vci:offer]
   maximumTokenLifetimeSeconds: 900
 store:
   maximumOffers: 4096

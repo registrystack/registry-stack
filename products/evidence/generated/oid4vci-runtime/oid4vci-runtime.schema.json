@@ -238,7 +238,7 @@
         },
         "allowedClients": {
           "$ref": "#/$defs/IdentifierRestriction",
-          "description": "Client identifiers permitted to create offers, each at most 128 bytes,\nor `unrestricted` for any client the issuer vouched for."
+          "description": "Client identifiers permitted to create offers, each at most 128 bytes,\nor `unrestricted` for any client the issuer vouched for, which loads\nonly with `validationMode: supervised-local-development`."
         },
         "audiences": {
           "description": "The audiences this service answers to, each at most 256 bytes. A token\nissued for anything else is refused.",
@@ -282,7 +282,7 @@
         },
         "requiredScopes": {
           "$ref": "#/$defs/IdentifierRestriction",
-          "description": "Scopes every offer token must carry, each an RFC 6749 scope token of at\nmost 256 bytes, or `unrestricted` for no scope gate. Generated\nconfigurations state `oid4vci:offer`."
+          "description": "Scopes every offer token must carry, each an RFC 6749 scope token of at\nmost 256 bytes, or `unrestricted` for no scope gate, which loads only\nwith `validationMode: supervised-local-development`. Generated\nconfigurations state `oid4vci:offer`."
         }
       },
       "required": [
