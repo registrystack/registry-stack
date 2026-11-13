@@ -428,12 +428,15 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let issuer = Issuer::create(scratch.path()).unwrap();
         let input = browser_input();
+        let mut nonce_bytes = [0_u8; 32];
+        getrandom::fill(&mut nonce_bytes).unwrap();
+        let nonce = URL_SAFE_NO_PAD.encode(nonce_bytes);
         let token = issuer
             .id_token(
                 &input.plan.issuer,
                 "browser-client",
                 "subject-1",
-                "nonce-1",
+                &nonce,
                 clock().unwrap() + 1800,
             )
             .unwrap();
@@ -441,7 +444,7 @@ mod tests {
         assert_eq!(claims["iss"], input.plan.issuer);
         assert_eq!(claims["aud"], "browser-client");
         assert_eq!(claims["sub"], "subject-1");
-        assert_eq!(claims["nonce"], "nonce-1");
+        assert_eq!(claims["nonce"], nonce);
     }
 
     #[test]
@@ -460,12 +463,15 @@ mod tests {
                 near_expiry,
             )
             .unwrap();
+        let mut nonce_bytes = [0_u8; 32];
+        getrandom::fill(&mut nonce_bytes).unwrap();
+        let nonce = URL_SAFE_NO_PAD.encode(nonce_bytes);
         let identity = issuer
             .id_token(
                 &input.plan.issuer,
                 "browser-client",
                 "subject-1",
-                "nonce-1",
+                &nonce,
                 near_expiry,
             )
             .unwrap();
