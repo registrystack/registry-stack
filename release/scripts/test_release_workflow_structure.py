@@ -372,7 +372,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
 class PythonReleaseWheelQualificationWorkflowTest(unittest.TestCase):
     WORKFLOW = "python-release-wheel-qualification.yml"
 
-    def test_activation_is_deliberate_and_the_matrix_is_linux_only(self) -> None:
+    def test_activation_is_deliberate_and_the_matrix_matches_release_targets(self) -> None:
         _, document = workflow(self.WORKFLOW)
         triggers = document[True]
         self.assertIn("workflow_dispatch", triggers)
@@ -409,6 +409,12 @@ class PythonReleaseWheelQualificationWorkflowTest(unittest.TestCase):
                     "napi_platform": "linux-arm64-gnu",
                     "wheel_tag": "cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
                 },
+                {
+                    "runner": "macos-26",
+                    "asset": "macos-arm64",
+                    "napi_platform": "darwin-arm64",
+                    "wheel_tag": "cp311-abi3-macosx_11_0_arm64",
+                },
             ],
         )
 
@@ -443,10 +449,24 @@ class PythonReleaseWheelQualificationWorkflowTest(unittest.TestCase):
         self.assertIn("--python-profile release", build)
         self.assertIn('--maturin "${RUNNER_TEMP}/maturin/bin/maturin"', build)
         self.assertIn('--zig-python "${RUNNER_TEMP}/maturin/bin/python"', build)
+        self.assertIn('[[ "${RUNNER_OS}" == macOS ]] &&', build)
+        self.assertIn("client_major > 0 || client_minor >= 33", build)
+        self.assertIn("export AWS_LC_FIPS_SYS_STATIC=0", build)
+        self.assertIn("export MACOSX_DEPLOYMENT_TARGET=11.0", build)
         self.assertIn("sha256sum", build)
+        self.assertIn("shasum -a 256", build)
+        self.assertNotIn("-maxdepth", build)
         self.assertNotIn("--include-render", build)
 
         smoke = step_run(document, "qualify", "Exercise clean installed-wheel modes")
+        self.assertIn(
+            "unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_INSERT_LIBRARIES",
+            smoke,
+        )
+        self.assertIn('mv -- "${build_root}" "${hidden_build_root}"', smoke)
+        self.assertIn(
+            'trap \'mv -- "${hidden_build_root}" "${build_root}"\' EXIT', smoke
+        )
         self.assertIn("release/scripts/smoke-registry-client-package.py", smoke)
         self.assertIn("release/scripts/smoke-registry-client-service.py", smoke)
         for mode in ("core", "flask", "fastapi", "human-flask", "human-fastapi"):

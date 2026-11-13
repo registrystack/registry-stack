@@ -46,6 +46,10 @@ jobs:
             asset: linux-arm64-glibc
             napi_platform: linux-arm64-gnu
             wheel_tag: cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64
+          - runner: macos-26
+            asset: macos-arm64
+            napi_platform: darwin-arm64
+            wheel_tag: cp311-abi3-macosx_11_0_arm64
     steps:
       - name: Checkout exact qualification source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,6 +80,12 @@ jobs:
             --require-hashes --only-binary :all: \
             --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("crates/registry-stack-client-py/pyproject.toml", "rb"))["project"]["version"])')"
+          IFS=. read -r client_major client_minor _ <<<"${version}"
+          if [[ "${RUNNER_OS}" == macOS ]] &&
+              (( client_major > 0 || client_minor >= 33 )); then
+            export AWS_LC_FIPS_SYS_STATIC=0
+            export MACOSX_DEPLOYMENT_TARGET=11.0
+          fi
           output_dir="${RUNNER_TEMP}/python-release-wheel"
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
@@ -88,14 +98,19 @@ jobs:
             --zig-python "${RUNNER_TEMP}/maturin/bin/python"
           wheel="${output_dir}/registry_stack_client-${version}-${{ matrix.wheel_tag }}.whl"
           test -f "${wheel}"
-          test "$(find "${output_dir}" -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 1
+          wheels=("${output_dir}"/*.whl)
+          test "${#wheels[@]}" -eq 1
           evidence_dir="${RUNNER_TEMP}/python-release-wheel-evidence"
           mkdir -p "${evidence_dir}"
           cp "${wheel}" "${evidence_dir}/"
           wheel_name="$(basename "${wheel}")"
           (
             cd "${evidence_dir}"
-            sha256sum "${wheel_name}" >SHA256SUMS
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum -- "${wheel_name}" >SHA256SUMS
+            else
+              shasum -a 256 -- "${wheel_name}" >SHA256SUMS
+            fi
           )
           {
             printf 'QUALIFICATION_VERSION=%s\n' "${version}"
@@ -107,6 +122,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_INSERT_LIBRARIES
+          if [[ "${RUNNER_OS}" == macOS ]]; then
+            build_root="${CARGO_TARGET_DIR}"
+            hidden_build_root="${build_root}.smoke-hidden"
+            mv -- "${build_root}" "${hidden_build_root}"
+            trap 'mv -- "${hidden_build_root}" "${build_root}"' EXIT
+          fi
           for mode in core flask fastapi human-flask human-fastapi; do
             environment="${RUNNER_TEMP}/client-${mode}"
             uv venv "${environment}"
