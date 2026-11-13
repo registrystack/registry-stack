@@ -59,8 +59,9 @@ Deployment behavior is in the [README](README.md),
   those identifiers.
 - **Task grants.** A grant is bounded: 900 seconds for an immediate grant, at
   most 604800 seconds (seven days) for a `deferred` one. Responsibility
-  changes, release, a changed subject, template deactivation and revocation
-  end a grant, and it cannot be revived by reassigning back. Deferred grants
+  changes, release, a decision on the review task, a changed subject,
+  template deactivation and revocation end a grant, and it cannot be revived
+  by reassigning back. Deferred grants
   cannot carry Evidence bounds (CASEWORK-SEC-18, CASEWORK-SEC-27).
 - **Completion signals.** The completion wake-up carries no result and no
   destination authority. The authenticated result fetch and result feed are
