@@ -46,6 +46,7 @@ import ast
 import importlib.util
 import json
 import re
+import ast as python_ast
 import subprocess
 import sys
 import tomllib
@@ -1245,17 +1246,17 @@ class Lint:
         symbol = str(reference["symbol"])
         if str(reference["file"]).endswith(".py"):
             try:
-                nodes = ast.parse(text).body
+                nodes = python_ast.parse(text).body
             except SyntaxError:
                 self.error(f"{fid}: {label} {reference['file']} does not parse as Python")
                 return None
             names = set()
             for node in nodes:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if isinstance(node, (python_ast.FunctionDef, python_ast.AsyncFunctionDef, python_ast.ClassDef)):
                     names.add(node.name)
-                elif isinstance(node, ast.Assign):
-                    names.update(target.id for target in node.targets if isinstance(target, ast.Name))
-                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                elif isinstance(node, python_ast.Assign):
+                    names.update(target.id for target in node.targets if isinstance(target, python_ast.Name))
+                elif isinstance(node, python_ast.AnnAssign) and isinstance(node.target, python_ast.Name):
                     names.add(node.target.id)
             defined = symbol in names
         else:
@@ -1295,14 +1296,14 @@ class Lint:
         if str(current["checkedBy"]["file"]).endswith(".py"):
             named = str(current["checkedBy"]["symbol"])
             assignments = []
-            for node in ast.parse(text).body:
-                if isinstance(node, ast.Assign) and any(
-                    isinstance(target, ast.Name) and target.id == named for target in node.targets
+            for node in python_ast.parse(text).body:
+                if isinstance(node, python_ast.Assign) and any(
+                    isinstance(target, python_ast.Name) and target.id == named for target in node.targets
                 ):
                     assignments.append(node.value)
-                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == named:
+                elif isinstance(node, python_ast.AnnAssign) and isinstance(node.target, python_ast.Name) and node.target.id == named:
                     assignments.append(node.value)
-            if len(assignments) != 1 or not isinstance(assignments[0], ast.Constant) or not isinstance(assignments[0].value, str):
+            if len(assignments) != 1 or not isinstance(assignments[0], python_ast.Constant) or not isinstance(assignments[0].value, str):
                 self.error(f"{fid}: checkedBy {named} is not a literal current header value")
             elif assignments[0].value not in values:
                 self.error(f"{fid}: checkedBy {named} is not a current header value")
