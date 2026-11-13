@@ -388,6 +388,28 @@ fn source_start_sends_one_json_request_and_binary_set() {
 }
 
 #[test]
+fn source_start_passes_a_built_application_root_to_the_runner() {
+    let tools = SourceTools::new();
+    let database_url = "postgresql://example.invalid/dev-secret";
+    let application_root = tools.project.join("built-application");
+    let output = tools
+        .command()
+        .args(["dev", "start"])
+        .arg(&tools.project)
+        .arg("--application-root")
+        .arg(&application_root)
+        .args(["--database-url", database_url])
+        .env("EXPECTED_DATABASE_URL", database_url)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request(&output)["application_root"],
+        application_root.to_str().unwrap()
+    );
+}
+
+#[test]
 fn dev_actions_encode_the_public_contract_and_launcher_json_format() {
     let tools = SourceTools::new();
     for (arguments, expected) in [

@@ -147,6 +147,43 @@ fn every_helper_failure_prints_the_error_envelope() {
 }
 
 #[test]
+fn declared_application_requires_a_built_root_before_allocating_a_run() {
+    let scratch = tempfile::tempdir().unwrap();
+    project(scratch.path(), "");
+    let plan_file = scratch.path().join("dev.yaml");
+    let plan = fs::read_to_string(&plan_file)
+        .unwrap()
+        .replace("issuer: https://issuer.example.invalid", "issuer: run");
+    fs::write(
+        &plan_file,
+        format!(
+            "{plan}\napplication:\n  client: browser-client\n  callbackPath: /callback\n  healthPath: /health\n  entry: dist/main.js\n  prepare: dist/prepare.js\n  checker: dist/check.js\n  deployment: deployment.json\n  configSchema: example/host-run/v1\n  configEnvironment: HOST_CONFIG\n  prepareVersion: example-prepare 1.0\n"
+        ),
+    )
+    .unwrap();
+    fs::write(scratch.path().join("deployment.json"), "{}").unwrap();
+    let state = scratch.path().join("state");
+    let checked = helper(
+        serde_json::json!({"action":"check", "project":scratch.path(), "deny_warnings":false, "json":true}),
+        &state,
+    );
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(!state.exists());
+    let result = helper(
+        serde_json::json!({"action":"start", "project":scratch.path(), "json":true}),
+        &state,
+    );
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_error_envelope(&report, "domain");
+    assert!(report["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("--application-root"));
+    assert!(!state.exists());
+}
+
+#[test]
 fn a_helper_failure_without_json_prints_one_line_and_the_same_exit_class() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");

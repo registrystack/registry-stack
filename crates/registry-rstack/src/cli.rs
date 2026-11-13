@@ -185,6 +185,9 @@ enum DevCommand {
         /// Project directory containing dev.yaml.
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
+        /// Root of an already-built local application when dev.yaml declares one.
+        #[arg(long, value_name = "DIRECTORY")]
+        application_root: Option<PathBuf>,
         /// TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL.
         #[arg(long, value_name = "URL")]
         database_url: Option<String>,
@@ -245,6 +248,8 @@ enum DevRequest<'a> {
     },
     Start {
         project: &'a std::path::Path,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        application_root: Option<&'a std::path::Path>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ttl: Option<&'a str>,
         json: bool,
@@ -1440,12 +1445,14 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
         ),
         DevCommand::Start {
             project,
+            application_root,
             database_url,
             ttl,
             json,
         } => (
             DevRequest::Start {
                 project,
+                application_root: application_root.as_deref(),
                 ttl: ttl.as_deref(),
                 json: *json || launcher_json,
             },

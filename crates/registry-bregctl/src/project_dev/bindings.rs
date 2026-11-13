@@ -352,7 +352,7 @@ fn client_refs(filename: &str) -> (String, String) {
 
 /// Origin and token endpoint `check` renders with. Nothing listens there: the
 /// product checks refuse a binding's shape, not the address it names.
-const CHECK_ORIGIN: &str = "http://127.0.0.1:1";
+pub(super) const CHECK_ORIGIN: &str = "http://127.0.0.1:1";
 const CHECK_TOKEN_ENDPOINT: &str = "http://127.0.0.1:1/oauth2/token";
 
 /// Writes the binding the plan configures for `product` into `config` as
@@ -874,6 +874,7 @@ mod tests {
                     "producer".to_owned(),
                     TestPerson {
                         subject: "review-producer".to_owned(),
+                        display_name: None,
                         client: "review-producer-client".to_owned(),
                         grants: BTreeMap::from([(
                             Product::Casework,
@@ -886,6 +887,7 @@ mod tests {
                     "context-reader".to_owned(),
                     TestPerson {
                         subject: "context-reader".to_owned(),
+                        display_name: None,
                         client: "context-reader-client".to_owned(),
                         grants: BTreeMap::from([(
                             Product::Breg,
@@ -912,6 +914,7 @@ mod tests {
                 steps: Vec::new(),
             },
             schema_test_people: BTreeMap::new(),
+            application: None,
         }
     }
 
@@ -919,6 +922,8 @@ mod tests {
         RunInput {
             run_id: "0123456789abcdef0123456789abcdef".to_owned(),
             project: PathBuf::from("/tmp/project"),
+            application_root: None,
+            application_node: None,
             plan,
             ttl_seconds: 300,
             schema_people: Vec::new(),

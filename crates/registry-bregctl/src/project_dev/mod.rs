@@ -3,6 +3,7 @@
 //! not link the database, HTTP server, or signing libraries.
 
 mod bindings;
+mod browser;
 mod database;
 pub(crate) mod guard;
 mod issuer;
@@ -21,6 +22,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
+    net::{Ipv4Addr, TcpListener},
     os::unix::{
         fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
         process::CommandExt,
@@ -38,6 +40,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use self::{
+    browser::BrowserServer,
     database::{Database, RecoveryIdentity},
     issuer::Issuer,
     plan::{Plan, Product},
@@ -79,6 +82,7 @@ enum Request {
     },
     Start {
         project: PathBuf,
+        application_root: Option<PathBuf>,
         ttl: Option<String>,
         json: bool,
     },
@@ -115,6 +119,10 @@ impl Request {
 struct RunInput {
     run_id: String,
     project: PathBuf,
+    #[serde(default)]
+    application_root: Option<PathBuf>,
+    #[serde(default)]
+    application_node: Option<PathBuf>,
     plan: Plan,
     ttl_seconds: u64,
     schema_people: Vec<SchemaPerson>,
@@ -212,9 +220,14 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
         line(format!("run directory {directory}"));
     }
     for process in facts["processes"].as_array().into_iter().flatten() {
+        let name = process["product"]
+            .as_str()
+            .map(|name| format!("{name:?}"))
+            .or_else(|| process["application"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "?".to_owned());
         line(format!(
             "process {} pid {} pgid {}",
-            process["product"], process["pid"], process["pgid"]
+            name, process["pid"], process["pgid"]
         ));
     }
     for object in facts["objects"].as_array().into_iter().flatten() {
@@ -380,7 +393,12 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
             deny_warnings,
             ..
         } => return check(&project, deny_warnings, machine, stdout, stderr),
-        Request::Start { project, ttl, .. } => start(&project, ttl.as_deref()),
+        Request::Start {
+            project,
+            application_root,
+            ttl,
+            ..
+        } => start(&project, application_root.as_deref(), ttl.as_deref()),
         Request::Status { run_id, .. } => status(&run_id),
         Request::Token { run_id, person, .. } => token(&run_id, &person),
         Request::Stop {
@@ -499,6 +517,12 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
         for (product, url) in products {
             writeln!(output, "  {product} {}", url.as_str().expect("product URL"))?;
         }
+    }
+    if let Some(issuer) = report["issuer"].as_str() {
+        writeln!(output, "  Issuer {issuer}")?;
+    }
+    if let Some(application) = report["application"].as_str() {
+        writeln!(output, "  Application {application}")?;
     }
     if let Some(result) = report["journey"]["result"].as_str() {
         writeln!(
@@ -632,12 +656,31 @@ fn write_check_report(
     }
 }
 
-fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
+fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> Result<Value> {
     let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
     let project = project
         .canonicalize()
         .context("cannot open the development project directory")?;
     let plan = plan::load(&project)?;
+    ensure!(
+        plan.application.is_some() == application_root.is_some(),
+        "supply --application-root exactly when dev.yaml declares application"
+    );
+    let application_root = application_root
+        .map(|path| {
+            let root = path
+                .canonicalize()
+                .context("cannot open the built application root")?;
+            ensure!(root.is_dir(), "built application root must be a directory");
+            Ok::<_, anyhow::Error>(root)
+        })
+        .transpose()?;
+    let application_node = match (&application_root, &plan.application) {
+        (Some(root), Some(application)) => {
+            Some(products::preflight_application(root, application)?)
+        }
+        _ => None,
+    };
     let schema_people = products::schema_people(&project, &plan, true)?;
     let signals = signals()?;
     let inspection = products::inspect(&project, &plan, &signals)?;
@@ -658,6 +701,8 @@ fn start(project: &Path, ttl: Option<&str>) -> Result<Value> {
     let input = RunInput {
         run_id,
         project,
+        application_root,
+        application_node,
         plan,
         ttl_seconds,
         schema_people,
@@ -792,14 +837,27 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         "worker run directory differs from the allocated run"
     );
     ensure_private(root, false)?;
-    let input = Arc::new(
+    let mut restored =
         read_json::<RunInput>(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)
-            .context("cannot restore the captured development plan")?,
-    );
+            .context("cannot restore the captured development plan")?;
     ensure!(
-        input.run_id == name,
+        restored.run_id == name,
         "captured development plan has a different run ID"
     );
+    let issuer_listener = if restored.plan.application.is_some() {
+        ensure!(
+            restored.plan.issuer == "run",
+            "declared application requires the run issuer"
+        );
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .context("reserve browser issuer loopback listener")
+            .map_err(operational)?;
+        restored.plan.issuer = format!("http://{}", listener.local_addr()?);
+        Some(listener)
+    } else {
+        None
+    };
+    let input = Arc::new(restored);
     let signals = signals()?;
     let mut products = ProductRunner::new(input.clone(), root, &signals)?;
     let lock = OpenOptions::new()
@@ -809,8 +867,12 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         .open(root.join("worker.lock"))?;
     flock(&lock, FlockOperation::LockExclusive)?;
     ensure_private(root, false)?;
+    if issuer_listener.is_some() {
+        write_private(&root.join("input.json"), &capture_input(&input)?)?;
+    }
     let mut database = None;
     let mut expiry = None;
+    let mut browser = None;
     let prepared = catch_startup(|| {
         products.check()?;
         let ca = env::var_os(CA_FILE)
@@ -843,11 +905,31 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         );
         let expires_at = clock()? + input.ttl_seconds;
         expiry = Some(expires_at);
-        let report = json!({
+        let mut application_url = None;
+        if let Some(listener) = issuer_listener {
+            let prepared = products.prepare_application(&urls)?;
+            browser = Some(BrowserServer::start(
+                listener,
+                input.clone(),
+                issuer.clone(),
+                prepared.client,
+                expires_at,
+            )?);
+            application_url = Some(products.start_application(prepared.launch)?);
+            ensure!(
+                clock()? < expires_at,
+                "development run expired during application startup"
+            );
+        }
+        let mut report = json!({
             "schema_version": SCHEMA, "run_id": input.run_id, "status": "ready",
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),
             "journey": journey, "expires_at": expires_at, "logs": root.join("logs"),
         });
+        if let Some(url) = application_url {
+            report["issuer"] = json!(browser.as_ref().expect("application issuer").origin);
+            report["application"] = json!(url);
+        }
         write_private(&root.join(REPORT), &capture_report(&report)?)?;
         Ok::<_, anyhow::Error>(report)
     });
@@ -866,7 +948,11 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                     && !stopping(root, &signals)
                     && !expiry.is_some_and(|at| clock().map_or(true, |now| expired(now, at)))
                 {
-                    if !products.services_alive().unwrap_or(false) {
+                    if !products.services_alive().unwrap_or(false)
+                        || browser
+                            .as_ref()
+                            .is_some_and(|server: &BrowserServer| !server.alive())
+                    {
                         break;
                     }
                     thread::sleep(POLL);
@@ -876,6 +962,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         Err(error) => failure = Some(WorkerReply::failed(&error)),
     }
     let stopped = simple_report(&input.run_id, "stopping");
+    drop(browser.take());
     let mark_stopping = write_private(&root.join(REPORT), &serde_json::to_vec(&stopped)?);
     let mut told_parent = false;
     let mut delays = cleanup_schedule(CLEANUP_CAP);
@@ -1435,6 +1522,24 @@ mod tests {
 
     const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
 
+    #[test]
+    fn human_run_report_names_its_browser_and_application_addresses() {
+        let mut output = Vec::new();
+        emit(
+            &mut output,
+            &json!({
+                "run_id": RUN_ID, "status": "ready",
+                "issuer": "http://127.0.0.1:4200",
+                "application": "http://127.0.0.1:4201"
+            }),
+            false,
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Issuer http://127.0.0.1:4200"), "{text}");
+        assert!(text.contains("Application http://127.0.0.1:4201"), "{text}");
+    }
+
     fn fake_run(root: &Path, products: Value, postgis: bool) {
         let input = json!({
             "run_id": RUN_ID, "project": "/project", "ttl_seconds": 60,
@@ -1531,6 +1636,18 @@ mod tests {
         assert!(
             text.contains(&format!("breg database rstack_{RUN_ID}_breg")),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn recovery_message_names_a_guarded_application() {
+        let facts = json!({"kind": "lost-supervisor", "processes": [
+            {"application": "application", "pid": 4242, "pgid": 4242}
+        ]});
+        let message = recovery_message("run", &facts);
+        assert!(
+            message.contains("process application pid 4242 pgid 4242"),
+            "{message}"
         );
     }
 

@@ -139,6 +139,13 @@ fn expected_json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::
     })
 }
 
+#[cfg(feature = "schema")]
+fn issuer_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [generator.subschema_for::<PlatformUrl>(), {"const": "run"}],
+    })
+}
+
 /// A product the development run can start.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -162,8 +169,8 @@ impl Product {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Plan {
-    /// HTTPS URL, at most 512 characters and without credentials, query or fragment, that the run's tokens name as their issuer.
-    #[cfg_attr(feature = "schema", schemars(with = "PlatformUrl"))]
+    /// HTTPS URL for an existing issuer, or `run` when a declared application uses this run's loopback browser issuer.
+    #[cfg_attr(feature = "schema", schemars(schema_with = "issuer_schema"))]
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
@@ -185,6 +192,38 @@ pub(super) struct Plan {
         schemars(schema_with = "schema_test_people_schema")
     )]
     pub schema_test_people: BTreeMap<String, BTreeMap<String, String>>,
+    /// A built local application this run prepares, starts, checks and stops. Its artifact root is supplied to `rstack dev start`.
+    #[serde(default)]
+    pub application: Option<ApplicationPlan>,
+}
+
+/// A generic Node application and its configuration command. All artifact paths are relative to the supplied built root.
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ApplicationPlan {
+    /// Confidential browser client identifier admitted by the selected product profiles.
+    pub client: String,
+    /// Exact loopback callback path registered with the run issuer.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    pub callback_path: String,
+    /// Local readiness path served by the application.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    pub health_path: String,
+    /// Built application entry, relative to the supplied artifact root.
+    pub entry: PathBuf,
+    /// Built configuration command, invoked with --deployment, --run and --out.
+    pub prepare: PathBuf,
+    /// Built configuration checker, invoked with the generated config path.
+    pub checker: PathBuf,
+    /// Configuration source file, relative to the development project.
+    pub deployment: PathBuf,
+    /// Closed run-input schema name understood by the declared configuration command.
+    pub config_schema: String,
+    /// Environment variable naming the generated host configuration for the child.
+    pub config_environment: String,
+    /// Exact one-line response of the configuration command's --version flag.
+    pub prepare_version: String,
 }
 
 /// One product to start and where its project lives.
@@ -209,6 +248,10 @@ pub(super) struct TestPerson {
     /// Subject claim of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub subject: String,
+    /// Name shown in the synthetic browser sign-in picker; it grants no authority.
+    #[serde(default, rename = "displayName")]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
+    pub display_name: Option<String>,
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
@@ -671,7 +714,7 @@ impl Plan {
 
     fn validate(&self, root: &Path) -> SemanticResult<()> {
         require(
-            ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
+            self.issuer == "run" || ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
                 url.scheme() == "https"
                     && url.host().is_some()
                     && url.username().is_empty()
@@ -681,9 +724,83 @@ impl Plan {
                     && self.issuer.len() <= 512
             }),
             "/issuer",
-            "The issuer must be the project's bounded HTTPS URL without credentials, query, or fragment.",
-            "Set issuer to an HTTPS URL with a host and no credentials, query, or fragment.",
+            "The issuer must be `run` or a bounded HTTPS URL without credentials, query, or fragment.",
+            "Set issuer to `run` for a declared application, or to an HTTPS URL with a host and no credentials, query, or fragment.",
         )?;
+        require(
+            (self.issuer == "run") == self.application.is_some(),
+            "/issuer",
+            "A declared application requires the run issuer, and the run issuer requires an application.",
+            "Declare application with issuer `run`, or remove application and set an HTTPS issuer.",
+        )?;
+        if let Some(application) = &self.application {
+            require(
+                bounded_atom(&application.client),
+                "/application/client",
+                "The browser client must be bounded text without whitespace or control characters.",
+                "Set client to the application's declared OIDC client identifier.",
+            )?;
+            for (field, path) in [
+                ("callbackPath", &application.callback_path),
+                ("healthPath", &application.health_path),
+            ] {
+                require(
+                    path.len() <= 256 && super::products::valid_health_path(path),
+                    &format!("/application/{field}"),
+                    "The path must be a bounded local absolute path without a query or fragment.",
+                    "Use a single-slash path of at most 256 bytes on the application origin.",
+                )?;
+            }
+            for (field, path) in [
+                ("entry", &application.entry),
+                ("prepare", &application.prepare),
+                ("checker", &application.checker),
+                ("deployment", &application.deployment),
+            ] {
+                require(
+                    !path.as_os_str().is_empty()
+                        && path
+                            .components()
+                            .all(|part| matches!(part, Component::Normal(_))),
+                    &format!("/application/{field}"),
+                    "The path must be relative and stay inside its declared root.",
+                    "Use normal relative path components without `.` or `..`.",
+                )?;
+            }
+            require(
+                root.join(&application.deployment)
+                    .canonicalize()
+                    .is_ok_and(|path| path.starts_with(root) && path.is_file()),
+                "/application/deployment",
+                "The deployment file must be inside the development project.",
+                "Provide the declared deployment file in the development project.",
+            )?;
+            require(
+                bounded_atom(&application.config_schema),
+                "/application/configSchema",
+                "The configuration input schema name must be bounded text.",
+                "Set configSchema to the configuration command's schema name.",
+            )?;
+            require(
+                !application.config_environment.is_empty()
+                    && application.config_environment.len() <= 128
+                    && application.config_environment.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+                    && !application.config_environment.starts_with("RSTACK_")
+                    && !application.config_environment.as_bytes()[0].is_ascii_digit(),
+                "/application/configEnvironment",
+                "The configuration environment name must be uppercase and cannot use the runner namespace.",
+                "Set configEnvironment to the application's uppercase configuration-file variable.",
+            )?;
+            require(
+                (1..=128).contains(&application.prepare_version.len())
+                    && !application.prepare_version.chars().any(char::is_control),
+                "/application/prepareVersion",
+                "The configuration command version line must be bounded visible text.",
+                "Set prepareVersion to the exact one-line --version output.",
+            )?;
+        }
         require(
             !self.products.is_empty(),
             "/products",
@@ -731,6 +848,14 @@ impl Plan {
                 format!("Create {manifest} at this project path inside the development project directory."),
             )?;
         }
+        if self.application.is_some() {
+            require(
+                products.contains(&Product::Breg),
+                "/application",
+                "The declared application needs a BReg product.",
+                "Add the BReg product or remove application.",
+            )?;
+        }
         require(
             (1..=32).contains(&self.people.len()),
             "/people",
@@ -751,6 +876,16 @@ impl Plan {
                 "The test person's subject must be bounded text without whitespace or control characters.",
                 "Set subject to at most 256 characters without whitespace or control characters.",
             )?;
+            if let Some(name) = &person.display_name {
+                require(
+                    !name.is_empty()
+                        && name.chars().count() <= 128
+                        && !name.chars().any(char::is_control),
+                    &format!("{field}/displayName"),
+                    "The test person's display name must be 1 to 128 visible characters.",
+                    "Set displayName to short text without control characters.",
+                )?;
+            }
             require(
                 bounded_atom(&person.client),
                 &format!("{field}/client"),
@@ -788,7 +923,9 @@ impl Plan {
                 )?;
                 for claim in grant.claims.keys() {
                     require(
-                        bounded_atom(claim) && !reserved_claim(claim),
+                        bounded_atom(claim)
+                            && !reserved_claim(claim)
+                            && !(self.application.is_some() && claim == "registry_scopes"),
                         &format!("{field}/claims"),
                         "The grant contains a reserved or invalid additional claim name.",
                         "Remove the claim or rename it to bounded text that is not reserved by the token contract.",
@@ -1208,6 +1345,63 @@ mod tests {
 
     fn canonical(root: &tempfile::TempDir) -> PathBuf {
         root.path().canonicalize().unwrap()
+    }
+
+    #[test]
+    fn display_name_is_presentation_only_and_bounded() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["people"]["operator"]["displayName"] = json!("A person");
+        let valid: Plan = serde_json::from_value(value.clone()).unwrap();
+        assert!(valid.validate(&canonical(&root)).is_ok());
+        value["people"]["operator"]["displayName"] = json!("control\ncharacter");
+        let invalid: Plan = serde_json::from_value(value).unwrap();
+        assert!(invalid
+            .validate(&canonical(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("displayName"));
+    }
+
+    #[test]
+    fn run_issuer_requires_a_bounded_declared_application() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        fs::write(root.path().join("deployment.json"), "{}").unwrap();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["issuer"] = json!("run");
+        let without_application: Plan = serde_json::from_value(value.clone()).unwrap();
+        assert!(without_application.validate(&canonical(&root)).is_err());
+        value["application"] = json!({
+            "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
+            "entry": "dist/main.js", "prepare": "dist/prepare.js",
+            "checker": "dist/check.js", "deployment": "deployment.json",
+            "configSchema": "example/host-run/v1", "configEnvironment": "HOST_CONFIG",
+            "prepareVersion": "example-prepare 1.0"
+        });
+        let valid: Plan = serde_json::from_value(value.clone()).unwrap();
+        assert!(valid.validate(&canonical(&root)).is_ok());
+        let mut conflicting = value.clone();
+        conflicting["people"]["operator"]["grants"]["breg"]["claims"]["registry_scopes"] =
+            json!("unreviewed:scope");
+        let conflicting: Plan = serde_json::from_value(conflicting).unwrap();
+        assert!(conflicting
+            .validate(&canonical(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("reserved"));
+        value["application"]["callbackPath"] = json!("//other-host/callback");
+        let invalid: Plan = serde_json::from_value(value).unwrap();
+        assert!(invalid
+            .validate(&canonical(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("callbackPath"));
     }
 
     #[test]

@@ -725,6 +725,8 @@ mod tests {
         RunInput {
             run_id: "0123456789abcdef0123456789abcdef".to_owned(),
             project: PathBuf::from("/tmp/project"),
+            application_root: None,
+            application_node: None,
             plan,
             ttl_seconds: 300,
             schema_people: Vec::new(),
