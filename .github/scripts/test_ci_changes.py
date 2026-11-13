@@ -1410,12 +1410,14 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("COORDINATOR_TEST_DATABASE_URL", proof["env"])
         self.assertIn("COORDINATOR_MESSAGING_TEST_DATABASE_URL", proof["env"])
         self.assertIn("COORDINATOR_SCHEDULING_TEST_DATABASE_URL", proof["env"])
+        self.assertIn("EXTERNAL_JOB_TEST_DATABASE_URL", proof["env"])
         database_urls = (
             proof["env"]["COORDINATOR_TEST_DATABASE_URL"],
             proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"],
             proof["env"]["COORDINATOR_SCHEDULING_TEST_DATABASE_URL"],
+            proof["env"]["EXTERNAL_JOB_TEST_DATABASE_URL"],
         )
-        self.assertEqual(len(set(database_urls)), 3)
+        self.assertEqual(len(set(database_urls)), 4)
         database_preparation = "\n".join(
             step.get("run", "") for step in job["steps"]
         )
@@ -1423,12 +1425,59 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("createdb coordinator_messaging", database_preparation)
         self.assertTrue(database_urls[2].endswith("/coordinator_scheduling"))
         self.assertIn("createdb coordinator_scheduling", database_preparation)
+        self.assertTrue(database_urls[3].endswith("/coordinator_external_job"))
+        self.assertIn("createdb coordinator_external_job", database_preparation)
         script = Path("products/coordinator/scripts/test-postgres.sh").read_text()
         self.assertRegex(script, r"cargo test --locked -p registry-coordinator[^\n]*--lib")
         self.assertIn("--test messaging_integration", script)
         self.assertIn("--test process_restart", script)
         self.assertIn("--test deployment_postgres", script)
         self.assertIn("cargo build --locked -p registry-messaging -p registry-messagingctl", script)
+        self.assertIn("external-job/tests/test_service.py", script)
+        self.assertIn("external-job/tests/test_postgres.py", script)
+        self.assertIn(
+            "uv run --project products/coordinator/examples/external-job", script
+        )
+
+    def test_external_job_routes_postgres_and_installed_wheel_acceptance(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("products/coordinator/examples/external-job/service.py",),
+        )
+        self.assertTrue(outputs["coordinator"])
+        self.assertTrue(outputs["client_bindings"])
+        self.assertFalse(
+            classify(
+                self.workspace,
+                ("products/coordinator/examples/delayed-follow-up/workflow.yaml",),
+            )["client_bindings"]
+        )
+
+        job = self.workflow_jobs["client-bindings"]
+        self.assertIn("postgres", job.get("services", {}))
+        acceptance = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Test installed-wheel Coordinator external job"
+        )
+        self.assertIn("COORDINATOR_TEST_DATABASE_URL", acceptance["env"])
+        self.assertIn("EXTERNAL_JOB_TEST_DATABASE_URL", acceptance["env"])
+        self.assertNotEqual(
+            acceptance["env"]["COORDINATOR_TEST_DATABASE_URL"],
+            acceptance["env"]["EXTERNAL_JOB_TEST_DATABASE_URL"],
+        )
+        self.assertIn("test_acceptance_server.py", acceptance["run"])
+        self.assertEqual(
+            acceptance["run"].count(
+                'uv run --with "${REGISTRY_CLIENT_PY_WHEEL}"'
+            ),
+            2,
+        )
+        self.assertIn(
+            "installed_python_job_recovers_the_original_command_after_commit",
+            acceptance["run"],
+        )
+        self.assertIn("--ignored", acceptance["run"])
 
     def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
         outputs = classify(

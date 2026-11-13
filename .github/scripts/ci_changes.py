@@ -1521,6 +1521,7 @@ def classify(
             "products/platform/examples/python-composition/",
             "products/platform/examples/python-machine-service/",
             "products/platform/examples/python-portal/",
+            "products/coordinator/examples/external-job/",
             "products/coordinator/examples/reviewed-notice/",
         )) for path in changed_paths)
     )

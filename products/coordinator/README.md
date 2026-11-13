@@ -580,11 +580,13 @@ The schema check generates temporary outputs and compares them with the committe
 OpenAPI document. It does not rewrite tracked artifacts; regenerate changed artifacts explicitly
 with their owning generators.
 
-With three dedicated disposable PostgreSQL 17+ databases configured, use
+With four dedicated disposable PostgreSQL 17+ databases configured, use
 `scripts/test-postgres.sh` for the maintained durable-state, encrypted-custody,
 restart, deployment/router, review waits, standalone review, bounded external waits, and
-Messaging and Scheduling integration checks. The three URLs must name distinct databases owned
-by the test identity. That script first builds the independent Messaging and Scheduling services
+Messaging and Scheduling integration checks. The four URLs must name distinct databases owned
+by the test identity. The external-job example runs its Python WSGI and PostgreSQL
+tests in the fourth database before the Rust suites. The script then builds the
+independent Messaging and Scheduling services
 and operator executables, then supplies `COORDINATOR_MESSAGING_BIN`,
 `COORDINATOR_MESSAGINGCTL_BIN`, `COORDINATOR_SCHEDULING_BIN`, and
 `COORDINATOR_SCHEDULINGCTL_BIN` to the tests. The integration fixtures compose through the
@@ -595,6 +597,7 @@ runtimes as test dependencies.
 COORDINATOR_TEST_DATABASE_URL=<owned-loopback-coordinator-database-url> \
 COORDINATOR_MESSAGING_TEST_DATABASE_URL=<owned-loopback-messaging-database-url> \
 COORDINATOR_SCHEDULING_TEST_DATABASE_URL=<owned-loopback-scheduling-database-url> \
+EXTERNAL_JOB_TEST_DATABASE_URL=<owned-loopback-external-job-database-url> \
   products/coordinator/scripts/test-postgres.sh
 ```
 

@@ -1463,8 +1463,14 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.16"
+
       # The suite composes with real Messaging and Scheduling runtimes, which
-      # each need a database of their own beside the Coordinator's.
+      # each need a database of their own beside the Coordinator's. The
+      # application-owned external job keeps its receipt in a fourth database.
       - name: Prepare the product test databases
         env:
           PGHOST: 127.0.0.1
@@ -1474,11 +1480,13 @@ jobs:
         run: |
           createdb coordinator_messaging
           createdb coordinator_scheduling
+          createdb coordinator_external_job
       - name: Verify coordinator restart, fencing, and native product recovery
         env:
           COORDINATOR_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator
           COORDINATOR_MESSAGING_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator_messaging
           COORDINATOR_SCHEDULING_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator_scheduling
+          EXTERNAL_JOB_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator_external_job
         run: products/coordinator/scripts/test-postgres.sh
 
   messaging-smtp:
@@ -3275,6 +3283,20 @@ jobs:
     if: needs.changes.outputs.client_bindings == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: client_bindings
+          POSTGRES_USER: client_bindings
+          POSTGRES_PASSWORD: client_bindings_test
+        options: >-
+          --health-cmd "pg_isready -U client_bindings -d client_bindings"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -3448,6 +3470,29 @@ jobs:
       - name: Test released-client Coordinator example
         working-directory: products/coordinator/examples/reviewed-notice
         run: uv run --locked python -m unittest discover -s tests -v
+
+      - name: Test installed-wheel Coordinator external job
+        working-directory: products/coordinator/examples/external-job
+        shell: bash
+        env:
+          COORDINATOR_TEST_DATABASE_URL: postgresql://client_bindings:client_bindings_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/client_bindings
+          EXTERNAL_JOB_TEST_DATABASE_URL: postgresql://client_bindings:client_bindings_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/client_bindings_external_job
+          EXTERNAL_JOB_PYTHON: python
+          PGHOST: 127.0.0.1
+          PGPORT: ${{ job.services.postgres.ports['5432'] }}
+          PGUSER: client_bindings
+          PGPASSWORD: client_bindings_test
+        run: |
+          set -euo pipefail
+          createdb client_bindings_external_job
+          uv run --with "${REGISTRY_CLIENT_PY_WHEEL}" \
+            python -W error::ResourceWarning -m unittest \
+            tests/test_acceptance_server.py -v
+          uv run --with "${REGISTRY_CLIENT_PY_WHEEL}" \
+            cargo test --locked -p registry-coordinator \
+            --features postgres-test --test external_wait_postgres \
+            installed_python_job_recovers_the_original_command_after_commit \
+            -- --ignored --nocapture
 
       - name: Retain Linux Python client candidate for runtime acceptance
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -5,10 +5,14 @@ set -euo pipefail
 : "${COORDINATOR_TEST_DATABASE_URL:?set the disposable local coordinator database URL}"
 : "${COORDINATOR_MESSAGING_TEST_DATABASE_URL:?set a separate disposable local Messaging database URL}"
 : "${COORDINATOR_SCHEDULING_TEST_DATABASE_URL:?set a separate disposable local Scheduling database URL}"
+: "${EXTERNAL_JOB_TEST_DATABASE_URL:?set a separate disposable external-job database URL}"
 if [[ "$COORDINATOR_TEST_DATABASE_URL" == "$COORDINATOR_MESSAGING_TEST_DATABASE_URL" ||
 	"$COORDINATOR_TEST_DATABASE_URL" == "$COORDINATOR_SCHEDULING_TEST_DATABASE_URL" ||
-	"$COORDINATOR_MESSAGING_TEST_DATABASE_URL" == "$COORDINATOR_SCHEDULING_TEST_DATABASE_URL" ]]; then
-	printf '%s\n' "Coordinator, Messaging, and Scheduling tests require distinct disposable databases." >&2
+	"$COORDINATOR_TEST_DATABASE_URL" == "$EXTERNAL_JOB_TEST_DATABASE_URL" ||
+	"$COORDINATOR_MESSAGING_TEST_DATABASE_URL" == "$COORDINATOR_SCHEDULING_TEST_DATABASE_URL" ||
+	"$COORDINATOR_MESSAGING_TEST_DATABASE_URL" == "$EXTERNAL_JOB_TEST_DATABASE_URL" ||
+	"$COORDINATOR_SCHEDULING_TEST_DATABASE_URL" == "$EXTERNAL_JOB_TEST_DATABASE_URL" ]]; then
+	printf '%s\n' "Coordinator, Messaging, Scheduling, and external-job tests require distinct disposable databases." >&2
 	exit 1
 fi
 
@@ -16,6 +20,10 @@ cd "$(dirname "$0")/../../.."
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
+uv run --project products/coordinator/examples/external-job \
+	python -W error::ResourceWarning -m unittest \
+	products/coordinator/examples/external-job/tests/test_service.py \
+	products/coordinator/examples/external-job/tests/test_postgres.py -v
 # Compose through independently built product executables, never runtime
 # dev-dependencies. Tests refuse missing binaries rather than skipping coverage.
 cargo build --locked -p registry-messaging -p registry-messagingctl \
