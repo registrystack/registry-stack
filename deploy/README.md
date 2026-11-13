@@ -1,14 +1,16 @@
 # Deploy Registry Stack with Helm
 
-Use the Registry Stack chart on Ubuntu 24.04 amd64 with K3s, or give it the same inputs on an existing Kubernetes cluster. The chart runs BReg, Casework, Evidence and a prebuilt App Kit host. Each component is opt-in. Use the same Stack release for the products, tools and clients in one installation.
+Use the Registry Stack chart on Ubuntu 24.04 or 26.04 amd64 with K3s, or give it the same inputs on an existing Kubernetes cluster. The chart runs BReg, Casework, Evidence and a prebuilt App Kit host. Each component is opt-in. Use the same Stack release for the products, tools and clients in one installation.
 
-The deployment commands use Python 3.11 or newer. Ubuntu 24.04 includes Python 3.12.
+The deployment commands use Python 3.11 or newer. Both supported Ubuntu releases provide a suitable Python version.
 
 ## Plan one installation
 
 Choose a namespace and release name, an HTTPS hostname for each public component, an institutional OIDC issuer, and an encrypted backup destination on another system. Start with one BReg registry per release. A partner can deploy additional registries as separate releases with their own names, credentials and storage.
 
 Use PostgreSQL 17 with one database and distinct runtime and migration roles per product. The single-server example runs PostgreSQL on the same server with a retained local volume. Reserve space for database, packages, audits and backup staging. Four cores, 8 GiB RAM and SSD storage are a starting point for a small pilot. Size from the expected records, writes and enabled components before accepting traffic.
+
+The single-server preparation stores retained application volumes below `/var/lib/registry-stack/storage`. When the server has a dedicated data filesystem, mount it there persistently before running `prepare_local.py`; otherwise those volumes use the operating-system filesystem.
 
 | Component | Deployment input |
 | --- | --- |

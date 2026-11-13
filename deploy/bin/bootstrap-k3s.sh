@@ -6,6 +6,21 @@ usage() {
 	printf '       sudo bash %s --join https://private-api-host:6443 /absolute/token-file [private-api-dns-name]\n' "$0"
 }
 
+require_supported_ubuntu() {
+	local distribution="$1"
+	local version="$2"
+
+	if [[ "$distribution" == ubuntu && ("$version" == 24.04 || "$version" == 26.04) ]]; then
+		return 0
+	fi
+	printf 'The fresh-server bootstrap is for Ubuntu 24.04 or 26.04. Use the existing Kubernetes procedure here.\n' >&2
+	return 1
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+	return 0
+fi
+
 mode="${1:-}"
 if [[ "$mode" == "--help" ]]; then
 	usage
@@ -34,13 +49,12 @@ case "$mode" in
 	;;
 esac
 if [[ $EUID != 0 || "$(uname -s)/$(uname -m)" != Linux/x86_64 ]]; then
-	printf 'Run this bootstrap as root on a fresh Ubuntu 24.04 amd64 server.\n' >&2
+	printf 'Run this bootstrap as root on a fresh Ubuntu 24.04 or 26.04 amd64 server.\n' >&2
 	exit 1
 fi
 # shellcheck source=/dev/null
 source /etc/os-release
-if [[ "$ID" != ubuntu || "$VERSION_ID" != 24.04 ]]; then
-	printf 'The fresh-server bootstrap is for Ubuntu 24.04. Use the existing Kubernetes procedure here.\n' >&2
+if ! require_supported_ubuntu "$ID" "$VERSION_ID"; then
 	exit 1
 fi
 
