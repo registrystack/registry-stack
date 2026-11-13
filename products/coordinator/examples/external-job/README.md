@@ -46,10 +46,12 @@ cannot stop an external job. There is no callback contract.
 
 [`service.py`](service.py) is deliberately application code, not a client-library helper. Its
 PostgreSQL `jobs` row contains the command key, canonical request digest, application work,
-stable receipt, and current state. `JobStore.admit` inserts the job and receipt in one database
-transaction. Concurrent duplicates contend on the unique key and return the committed receipt.
-The same key with another request is a conflict and never selects the earlier receipt as if it
-belonged to the changed command.
+stable receipt, current state, stable operation and an opaque digest of the verified machine
+caller. `JobStore.admit` inserts the job and receipt in one database transaction. Concurrent
+duplicates from the same verified caller contend on its caller-operation-key tuple and return the
+committed receipt. The same caller and key with another request is a conflict and never selects
+the earlier receipt as if it belonged to the changed command. Two admitted callers may choose the
+same input key without colliding or receiving each other's receipt.
 
 The commit completes before response encoding. If the process stops, the connection drops, or
 encoding fails after commit, Coordinator sees an uncertain command. Repeating the same command
@@ -63,6 +65,15 @@ reading the job store. `JobApplication` passes only the WSGI `Authorization` val
 missing, malformed, expired or policy-mismatched bearer returns the value-free
 `authentication.refused` response. A verifier outage returns `authentication.unavailable`.
 Neither response reaches application work or observation.
+The admitted context's issuer, resource, subject, client, profile and persona form the opaque
+caller digest. GET applies that same digest to the job lookup, so another admitted caller receives
+the ordinary `job-not-found` response rather than the job's existence or state. The raw identity
+members are not stored in the application table.
+
+An older example table has no caller binding. Startup upgrades it only when it is empty. If rows
+remain, startup fails closed and tells the operator to keep the old service until those jobs are
+terminal, then empty the example table before restarting. It never assigns existing receipts to a
+guessed caller.
 
 Run the local fixture against a dedicated PostgreSQL database:
 
@@ -101,9 +112,10 @@ admission connection. Copy runtime configuration outside the package and follow 
 Offline scenarios prove the accepted, declared-refusal, uncertain, recovery, terminal and timeout
 routes through the pinned Functions. The Python unit test covers machine admission on both HTTP
 routes, no cookie authority, refusal and verifier outage before the store, durable duplicate
-semantics, exact observation, and a post-commit encoding failure. Its PostgreSQL test covers
-concurrent duplicate admission, crash after commit, stable correlation and terminal state. Run it
-only with an explicitly disposable database:
+semantics, caller-separated admission and observation, exact observation, and a post-commit
+encoding failure. Its PostgreSQL test covers concurrent duplicate admission, crash after commit,
+caller separation, stable correlation and terminal state. Run it only with an explicitly
+disposable database:
 
 ```sh
 EXTERNAL_JOB_TEST_DATABASE_URL=postgresql://... \

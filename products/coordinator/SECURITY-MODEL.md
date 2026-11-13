@@ -188,6 +188,15 @@ The `examples/external-job` Python provider protects both admission and status
 routes with a separate service connection's machine verifier before reading its
 application store. Its checked-in Coordinator connection requests an exact
 service resource and scopes; a browser cookie grants neither route authority.
+The application binds the verifier's issuer, resource, subject, client, profile
+and persona into an opaque owner digest. Durable admission is unique by that
+owner, the stable application operation and the Coordinator command key; the
+same input key from another admitted caller cannot recover or conflict with the
+first caller's receipt. Status lookup reapplies the owner digest and returns the
+same `job-not-found` response for a missing job and another caller's job. The
+table stores no raw caller identity. A legacy example table with rows fails
+startup because those rows have no provable caller binding; only an empty table
+is upgraded in place.
 An operator running this example must supply a matching issuer registration,
 service admission policy and assembled Python client. The loopback fixture and
 synthetic request tests do not prove a live issuer or deployed HTTPS boundary.

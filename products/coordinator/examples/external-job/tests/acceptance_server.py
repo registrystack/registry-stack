@@ -117,19 +117,20 @@ class _FaultingStore:
         self._store = store
         self._fault = fault
 
-    def admit(self, key: str, request: dict[str, object]) -> JobReceipt:
+    def admit(self, caller: Any, key: str, request: dict[str, object]) -> JobReceipt:
         if self._fault == "declared-refusal":
             raise ValueError("synthetic declared refusal")
         if self._fault == "process-exit-after-commit":
             return self._store.admit(
+                caller,
                 key,
                 request,
                 after_commit=lambda _receipt: os._exit(POST_COMMIT_EXIT_CODE),
             )
-        return self._store.admit(key, request)
+        return self._store.admit(caller, key, request)
 
-    def status(self, job_id: str) -> str | None:
-        return self._store.status(job_id)
+    def status(self, caller: Any, job_id: str) -> str | None:
+        return self._store.status(caller, job_id)
 
     def transition(self, job_id: str, state: str) -> None:
         self._store.transition(job_id, state)

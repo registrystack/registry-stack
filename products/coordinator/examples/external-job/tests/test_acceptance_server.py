@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr
+from dataclasses import dataclass
 from http.client import RemoteDisconnected
 from io import StringIO
 import json
@@ -19,16 +20,23 @@ sys.path.insert(0, str(TESTS))
 import acceptance_server  # noqa: E402
 
 
+@dataclass(frozen=True)
+class Caller:
+    subject: str
+
+
 class MemoryStore:
     def __init__(self) -> None:
-        self.admissions: dict[str, tuple[dict[str, object], object]] = {}
+        self.admissions: dict[tuple[str, str], tuple[dict[str, object], object]] = {}
         self.states: dict[str, str] = {}
+        self.owners: dict[str, str] = {}
         self.calls = 0
         self.transition_calls = 0
 
-    def admit(self, key, request, *, after_commit=None):
+    def admit(self, caller, key, request, *, after_commit=None):
         self.calls += 1
-        existing = self.admissions.get(key)
+        owner_key = (caller.subject, key)
+        existing = self.admissions.get(owner_key)
         if existing is not None:
             original, receipt = existing
             if original != request:
@@ -37,13 +45,16 @@ class MemoryStore:
             receipt = acceptance_server.JobReceipt(
                 f"00000000-0000-0000-0000-{len(self.admissions) + 1:012d}"
             )
-            self.admissions[key] = (dict(request), receipt)
+            self.admissions[owner_key] = (dict(request), receipt)
             self.states[receipt.job_id] = "queued"
+            self.owners[receipt.job_id] = caller.subject
         if after_commit is not None:
             after_commit(receipt)
         return receipt
 
-    def status(self, job_id):
+    def status(self, caller, job_id):
+        if self.owners.get(job_id) != caller.subject:
+            return None
         return self.states.get(job_id)
 
     def transition(self, job_id, state):
@@ -62,7 +73,7 @@ class MemoryStore:
                 "request": request,
                 "receipt": receipt.as_json(),
             }
-            for key, (request, receipt) in self.admissions.items()
+            for (_, key), (request, receipt) in self.admissions.items()
         ]
 
 
@@ -270,7 +281,11 @@ class AcceptanceServerTests(unittest.TestCase):
     def test_snapshot_refuses_more_than_sixteen_jobs(self):
         store = MemoryStore()
         for index in range(17):
-            store.admit(f"command-{index}", {"reference": f"case-{index}"})
+            store.admit(
+                Caller("coordinator-service"),
+                f"command-{index}",
+                {"reference": f"case-{index}"},
+            )
         server = acceptance_server.AcceptanceServer(store)
         server.start()
         self.addCleanup(server.stop)
