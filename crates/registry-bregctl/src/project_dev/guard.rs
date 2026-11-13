@@ -7,6 +7,7 @@ use rustix::{
     process::{kill_process_group, waitid, Pid, Signal, WaitId, WaitIdOptions},
 };
 use std::{
+    collections::BTreeMap,
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
     io::{self, Read},
@@ -40,6 +41,12 @@ pub(crate) struct Args {
     pid_file: PathBuf,
     #[arg(long)]
     state_file: PathBuf,
+    #[arg(long)]
+    workdir: Option<PathBuf>,
+    #[arg(long)]
+    clean_env: bool,
+    #[arg(long = "env")]
+    environment: Vec<OsString>,
     #[arg(last = true, required = true, num_args = 1..)]
     command: Vec<OsString>,
 }
@@ -60,13 +67,13 @@ fn run_inner(args: Args) -> Result<ExitStatus> {
         .command
         .split_first()
         .context("the process guard command is empty")?;
-    let mut command = process::Command::new(program);
-    command
-        .args(arguments)
-        .env_remove("RSTACK_DEV_DATABASE_URL")
-        .env_remove("RSTACK_PROJECT_DEV_REQUEST")
-        .process_group(0)
-        .stdin(Stdio::null());
+    let command = workload_command(
+        program,
+        arguments,
+        args.workdir.as_deref(),
+        args.clean_env,
+        &args.environment,
+    )?;
     let mut controller = io::stdin();
     supervise(
         &args.lock,
@@ -75,6 +82,49 @@ fn run_inner(args: Args) -> Result<ExitStatus> {
         &mut controller,
         command,
     )
+}
+
+fn workload_command(
+    program: &OsStr,
+    arguments: &[OsString],
+    workdir: Option<&Path>,
+    clean_env: bool,
+    environment: &[OsString],
+) -> Result<process::Command> {
+    let mut command = process::Command::new(program);
+    command.args(arguments);
+    if clean_env {
+        command.env_clear();
+    } else {
+        command
+            .env_remove("RSTACK_DEV_DATABASE_URL")
+            .env_remove("RSTACK_PROJECT_DEV_REQUEST");
+    }
+    if let Some(workdir) = workdir {
+        command.current_dir(workdir);
+    }
+    for assignment in environment {
+        let text = assignment
+            .to_str()
+            .context("invalid guarded environment assignment")?;
+        let (name, value) = text
+            .split_once('=')
+            .context("invalid guarded environment assignment")?;
+        ensure!(
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'),
+            "invalid guarded environment name"
+        );
+        ensure!(
+            name != "RSTACK_DEV_DATABASE_URL" && name != "RSTACK_PROJECT_DEV_REQUEST",
+            "administrator environment cannot reach a guarded workload"
+        );
+        command.env(name, value);
+    }
+    command.process_group(0).stdin(Stdio::null());
+    Ok(command)
 }
 
 /// Take the lock and check the lifetime pipe before spawning. Recovery first
@@ -324,6 +374,26 @@ pub(super) struct Command {
 
 impl Command {
     pub(super) fn new(root: &Path, name: &str, binary: &Path) -> Result<Self> {
+        Self::with_launch(root, name, binary, None, None)
+    }
+
+    pub(super) fn isolated(
+        root: &Path,
+        name: &str,
+        binary: &Path,
+        workdir: &Path,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<Self> {
+        Self::with_launch(root, name, binary, Some(workdir), Some(environment))
+    }
+
+    fn with_launch(
+        root: &Path,
+        name: &str,
+        binary: &Path,
+        workdir: Option<&Path>,
+        environment: Option<&BTreeMap<String, String>>,
+    ) -> Result<Self> {
         let directory = root.join(DIRECTORY);
         match private_directory(&directory) {
             Ok(()) => {}
@@ -355,7 +425,31 @@ impl Command {
             .arg("--pid-file")
             .arg(&pid_file)
             .arg("--state-file")
-            .arg(&state_file)
+            .arg(&state_file);
+        if let Some(workdir) = workdir {
+            command.arg("--workdir").arg(workdir).arg("--clean-env");
+        }
+        if let Some(environment) = environment {
+            for (name, value) in environment {
+                ensure!(
+                    !name.is_empty()
+                        && name.bytes().all(|byte| byte.is_ascii_uppercase()
+                            || byte.is_ascii_digit()
+                            || byte == b'_'),
+                    "invalid guarded environment name"
+                );
+                ensure!(
+                    name != "RSTACK_DEV_DATABASE_URL" && name != "RSTACK_PROJECT_DEV_REQUEST",
+                    "administrator environment cannot reach a guarded workload"
+                );
+                ensure!(
+                    !value.contains('\0') && !value.contains('\n') && !value.contains('\r'),
+                    "invalid guarded environment value"
+                );
+                command.arg("--env").arg(format!("{name}={value}"));
+            }
+        }
+        command
             .arg("--")
             .arg(binary)
             .env_remove("RSTACK_DEV_DATABASE_URL")
@@ -521,6 +615,29 @@ mod tests {
             .open(&path)
             .unwrap();
         path
+    }
+
+    #[test]
+    fn isolated_workload_receives_only_declared_environment_and_directory() {
+        let scratch = tempfile::tempdir().unwrap();
+        let command = workload_command(
+            OsStr::new("/usr/bin/env"),
+            &[],
+            Some(scratch.path()),
+            true,
+            &[OsString::from(
+                "APPLICATION_CONFIG=/private/run/config.json",
+            )],
+        )
+        .unwrap();
+        assert_eq!(command.get_current_dir(), Some(scratch.path()));
+        assert_eq!(
+            command.get_envs().collect::<Vec<_>>(),
+            vec![(
+                OsStr::new("APPLICATION_CONFIG"),
+                Some(OsStr::new("/private/run/config.json"))
+            )]
+        );
     }
 
     #[test]

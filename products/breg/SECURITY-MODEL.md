@@ -501,6 +501,33 @@ PostgreSQL credentials, and a loopback listener. The runtime trusts the
 run's static signing key under the declared issuer name. See
 [Run isolation](../platform/PROJECT-DEV.md#run-isolation).
 
+When a development plan declares a built application, `issuer: run` binds a
+run-unique browser issuer to IPv4 loopback. It accepts one declared confidential
+client and exact loopback callback, requires S256 PKCE, and issues one audience
+and only scopes shared by the request and the selected person's grant for that
+resource. A request with scopes but no overlap is refused. Browser tokens also
+carry `registry_scopes` from that same narrowed grant for the local host;
+authored claims cannot replace it. The person picker
+is synthetic; a browser session reuses the person for a second resource grant,
+while `prompt=login` asks again. Authorization codes are one-use and bounded;
+logout clears only this issuer's session and returns to the registered app
+origin. Browser access and ID tokens expire within 15 minutes and the run's
+expiry. CLI tokens keep their five-minute limit. The product's ordinary
+package profiles and runtime authorization still decide each request.
+
+The operator supplies a trusted, already-built application root and a plan
+whose client ID matches its deployment. The runner does not grant that client
+access in the authored BReg package; the package must explicitly admit it
+where needed. The run holds the browser client credential and optional
+Casework recovery key in owner-only files, passes paths to the declared
+configuration command, and supervises the app as a guarded process group.
+The application receives only its configuration-file environment reference,
+not the PostgreSQL administrator URL. A failed or crashed app ends the run;
+stop closes the issuer and app before database cleanup. A different local
+process can claim the app port between reservation release and child bind; the
+readiness check reports that failure and cleanup retains the run's ownership
+records until it can release them.
+
 ## 5. Reporting
 
 Report vulnerabilities privately as described in [SECURITY.md](../../SECURITY.md).
