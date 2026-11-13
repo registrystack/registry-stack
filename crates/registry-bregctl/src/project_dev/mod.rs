@@ -684,6 +684,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     let schema_people = products::schema_people(&project, &plan, true)?;
     let signals = signals()?;
     let inspection = products::inspect(&project, &plan, &signals)?;
+    plan::validate_application_authority(&plan, &inspection)?;
     ensure!(
         env::var_os(DATABASE_URL).is_some_and(|value| !value.is_empty()),
         "supply --database-url or {DATABASE_URL} for a TLS PostgreSQL development server"
@@ -903,8 +904,6 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             products.services_alive()?,
             "a product exited during the journey"
         );
-        let expires_at = clock()? + input.ttl_seconds;
-        expiry = Some(expires_at);
         let mut application_url = None;
         if let Some(listener) = issuer_listener {
             let prepared = products.prepare_application(&urls)?;
@@ -913,14 +912,14 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 input.clone(),
                 issuer.clone(),
                 prepared.client,
-                expires_at,
             )?);
             application_url = Some(products.start_application(prepared.launch)?);
-            ensure!(
-                clock()? < expires_at,
-                "development run expired during application startup"
-            );
         }
+        let expires_at = clock()? + input.ttl_seconds;
+        if let Some(browser) = &browser {
+            browser.activate(expires_at);
+        }
+        expiry = Some(expires_at);
         let mut report = json!({
             "schema_version": SCHEMA, "run_id": input.run_id, "status": "ready",
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),

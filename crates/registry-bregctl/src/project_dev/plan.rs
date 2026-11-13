@@ -581,6 +581,53 @@ pub(super) fn reserved_claim(claim: &str) -> bool {
     ) || claim.starts_with("registry_grant_")
 }
 
+fn browser_host_claim(claim: &str) -> bool {
+    matches!(claim, "name" | "registry_scopes")
+}
+
+pub(super) fn validate_application_authority(
+    plan: &Plan,
+    inspection: &super::products::ProductInspection,
+) -> SemanticResult<()> {
+    if plan.application.is_none() {
+        return Ok(());
+    }
+    if let Some(authority) = &inspection.breg_authority {
+        if browser_host_claim(&authority.principal) {
+            let index = plan
+                .products
+                .iter()
+                .position(|entry| entry.product == Product::Breg)
+                .expect("an application plan has a BReg product");
+            return refuse(
+                &format!("/products/{index}/project"),
+                "The BReg project selects a principal claim reserved by the browser host.",
+                "Choose `sub`, `registry_principal`, or another principal claim that is neither `name` nor `registry_scopes`.",
+            );
+        }
+    }
+    for (name, person) in &plan.people {
+        let Some(grant) = person.grants.get(&Product::Casework) else {
+            continue;
+        };
+        if inspection
+            .casework_principals
+            .get(&grant.profile)
+            .is_some_and(|principal| browser_host_claim(principal))
+        {
+            return refuse(
+                &format!(
+                    "/people/{}/grants/casework/profile",
+                    registry_platform_yaml::escape_pointer_segment(name)
+                ),
+                "The Casework profile selects a principal claim reserved by the browser host.",
+                "Choose a profile whose principal claim is `sub`, `registry_principal`, or another claim that is neither `name` nor `registry_scopes`.",
+            );
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("dev.yaml {field}: {reason} Next: {remedy}")]
 pub(super) struct SemanticRefusal {
@@ -689,12 +736,17 @@ pub(crate) fn check(root: &Path) -> Result<Report> {
         return Err(refusal_report(&decoded, &refusal).into());
     }
     let terminate = super::signals()?;
-    if let Err(error) = super::products::inspect(root, &decoded.value, &terminate) {
-        return match error.downcast::<SemanticRefusal>() {
-            Ok(refusal) => Err(refusal_report(&decoded, &refusal).into()),
-            Err(error) => Err(error),
-        };
-    }
+    let inspection = match super::products::inspect(root, &decoded.value, &terminate) {
+        Ok(inspection) => inspection,
+        Err(error) => {
+            return match error.downcast::<SemanticRefusal>() {
+                Ok(refusal) => Err(refusal_report(&decoded, &refusal).into()),
+                Err(error) => Err(error),
+            }
+        }
+    };
+    validate_application_authority(&decoded.value, &inspection)
+        .map_err(|refusal| refusal_report(&decoded, &refusal))?;
     Ok(decoded.document.report_with(Vec::new()))
 }
 
@@ -922,10 +974,15 @@ impl Plan {
                     "Remove duplicate or excess scopes, and keep each scope within 256 characters without whitespace or control characters.",
                 )?;
                 for claim in grant.claims.keys() {
+                    if self.application.is_some() && browser_host_claim(claim) {
+                        return refuse(
+                            &format!("{field}/claims"),
+                            "The grant authors a claim reserved by the browser host.",
+                            "Remove `name` and `registry_scopes`; the browser issuer supplies them from the selected identity and narrowed scopes.",
+                        );
+                    }
                     require(
-                        bounded_atom(claim)
-                            && !reserved_claim(claim)
-                            && !(self.application.is_some() && claim == "registry_scopes"),
+                        bounded_atom(claim) && !reserved_claim(claim),
                         &format!("{field}/claims"),
                         "The grant contains a reserved or invalid additional claim name.",
                         "Remove the claim or rename it to bounded text that is not reserved by the token contract.",
@@ -1347,6 +1404,24 @@ mod tests {
         root.path().canonicalize().unwrap()
     }
 
+    fn application_plan() -> (tempfile::TempDir, Plan) {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        fs::write(root.path().join("deployment.json"), "{}").unwrap();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["issuer"] = json!("run");
+        value["application"] = json!({
+            "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
+            "entry": "dist/main.js", "prepare": "dist/prepare.js",
+            "checker": "dist/check.js", "deployment": "deployment.json",
+            "configSchema": "example/host-run/v1", "configEnvironment": "HOST_CONFIG",
+            "prepareVersion": "example-prepare 1.0"
+        });
+        (root, serde_json::from_value(value).unwrap())
+    }
+
     #[test]
     fn display_name_is_presentation_only_and_bounded() {
         let (root, plan) = plan(json!({
@@ -1402,6 +1477,71 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("callbackPath"));
+    }
+
+    #[test]
+    fn application_grants_cannot_author_browser_host_claims() {
+        for claim in ["name", "registry_scopes"] {
+            let (root, plan) = application_plan();
+            let mut value = serde_json::to_value(plan).unwrap();
+            value["people"]["operator"]["grants"]["breg"]["claims"][claim] =
+                json!("authority-value");
+            let plan: Plan = serde_json::from_value(value).unwrap();
+
+            let refusal = plan.validate(&canonical(&root)).unwrap_err();
+            assert_eq!(refusal.field, "/people/operator/grants/breg/claims");
+            assert!(refusal.reason.contains("browser host"));
+        }
+    }
+
+    #[test]
+    fn application_products_cannot_select_browser_host_principal_claims() {
+        for principal in ["name", "registry_scopes"] {
+            let (_, plan) = application_plan();
+            let inspection = super::super::products::ProductInspection {
+                breg_authority: Some(super::super::BregAuthority {
+                    principal: principal.to_owned(),
+                    purpose: false,
+                    requires_postgis: false,
+                    encrypts_fields: false,
+                    named_clients: BTreeSet::new(),
+                }),
+                casework_principals: BTreeMap::new(),
+            };
+
+            let refusal = validate_application_authority(&plan, &inspection).unwrap_err();
+            assert_eq!(refusal.field, "/products/0/project");
+            assert!(refusal.reason.contains("BReg"));
+        }
+
+        for principal in ["name", "registry_scopes"] {
+            let (_, plan) = application_plan();
+            let mut value = serde_json::to_value(plan).unwrap();
+            value["products"].as_array_mut().unwrap().push(json!({
+                "product": "casework", "project": "casework", "audience": "casework-service"
+            }));
+            value["people"]["operator"]["grants"]["casework"] = json!({
+                "profile": "reviewer", "scopes": ["casework.read"]
+            });
+            let plan: Plan = serde_json::from_value(value).unwrap();
+            let inspection = super::super::products::ProductInspection {
+                breg_authority: Some(super::super::BregAuthority {
+                    principal: "registry_principal".to_owned(),
+                    purpose: false,
+                    requires_postgis: false,
+                    encrypts_fields: false,
+                    named_clients: BTreeSet::new(),
+                }),
+                casework_principals: BTreeMap::from([(
+                    "reviewer".to_owned(),
+                    principal.to_owned(),
+                )]),
+            };
+
+            let refusal = validate_application_authority(&plan, &inspection).unwrap_err();
+            assert_eq!(refusal.field, "/people/operator/grants/casework/profile");
+            assert!(refusal.reason.contains("Casework"));
+        }
     }
 
     #[test]

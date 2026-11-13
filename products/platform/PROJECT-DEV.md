@@ -71,6 +71,10 @@ one resource-bound token per product after a confidential authorization-code
 exchange with S256 PKCE. It grants the intersection of the requested scopes and
 the selected person's scopes for that product; a request with no overlap is
 refused. Browser tokens carry the same grant in `scope` and `registry_scopes`.
+In application mode, `name` is presentation-only and `registry_scopes` carries
+the selected person's narrowed host scopes. Do not use either as a BReg or
+Casework principal claim or as an additional authored grant claim; `check` and
+`start` refuse those configurations.
 One browser session can obtain a second product grant for the same person;
 `prompt=login` opens the person picker again. The authored
 BReg and Casework profiles still decide which client and person can use each

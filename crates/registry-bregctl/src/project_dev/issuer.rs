@@ -167,6 +167,24 @@ impl Issuer {
         let forward_context =
             browser_alias.is_none() && product == Product::Casework && person.casework_context;
         let mut claims = grant.claims.clone();
+        if browser_alias.is_some() {
+            let principal = match product {
+                Product::Breg => {
+                    &input
+                        .breg_authority
+                        .as_ref()
+                        .expect("BReg authority")
+                        .principal
+                }
+                Product::Casework => &input.casework_principals[&grant.profile],
+            };
+            ensure!(
+                !matches!(principal.as_str(), "name" | "registry_scopes")
+                    && !claims.contains_key("name")
+                    && !claims.contains_key("registry_scopes"),
+                "browser issuer reserves name for presentation and registry_scopes for host scopes"
+            );
+        }
         let granted: std::collections::BTreeSet<_> = grant.scopes.iter().collect();
         ensure!(
             requested_scopes.iter().all(|scope| granted.contains(scope)),
@@ -196,10 +214,6 @@ impl Issuer {
             }
         }
         if let Some(alias) = browser_alias {
-            ensure!(
-                !claims.contains_key("registry_scopes"),
-                "browser scopes are supplied by the selected grant"
-            );
             claims.insert("registry_principal".to_owned(), json!(person.subject));
             claims.insert("registry_scopes".to_owned(), json!(&scope_value));
             claims.insert(
@@ -341,6 +355,72 @@ mod tests {
             )
             .unwrap();
         assert!(payload(&cli).get("registry_scopes").is_none());
+    }
+
+    #[test]
+    fn browser_host_claims_cannot_be_the_breg_principal() {
+        let scratch = tempfile::tempdir().unwrap();
+        let issuer = Issuer::create(scratch.path()).unwrap();
+        for principal in ["name", "registry_scopes"] {
+            let mut input = browser_input();
+            input.breg_authority.as_mut().unwrap().principal = principal.to_owned();
+            let error = issuer
+                .browser_access_token(
+                    &input,
+                    "person",
+                    Product::Breg,
+                    "browser-client",
+                    &["registry.read".to_owned()],
+                    clock().unwrap() + 1800,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                "browser issuer reserves name for presentation and registry_scopes for host scopes"
+            );
+        }
+    }
+
+    #[test]
+    fn browser_host_claims_cannot_be_the_casework_principal() {
+        let scratch = tempfile::tempdir().unwrap();
+        let issuer = Issuer::create(scratch.path()).unwrap();
+        for principal in ["name", "registry_scopes"] {
+            let mut input = browser_input();
+            input.plan.products.push(plan::ProductPlan {
+                product: Product::Casework,
+                project: ".".into(),
+                audience: "casework-service".to_owned(),
+            });
+            input.plan.people.get_mut("person").unwrap().grants.insert(
+                Product::Casework,
+                plan::Grant {
+                    profile: "viewer".to_owned(),
+                    scopes: vec!["casework.read".to_owned()],
+                    claims: serde_json::Map::new(),
+                },
+            );
+            input
+                .casework_principals
+                .insert("viewer".to_owned(), principal.to_owned());
+
+            let error = issuer
+                .browser_access_token(
+                    &input,
+                    "person",
+                    Product::Casework,
+                    "browser-client",
+                    &["casework.read".to_owned()],
+                    clock().unwrap() + 1800,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                "browser issuer reserves name for presentation and registry_scopes for host scopes"
+            );
+        }
     }
 
     #[test]

@@ -17,7 +17,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::TcpListener,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Arc, Mutex, Weak,
     },
     thread,
@@ -68,7 +68,7 @@ struct BrowserState {
     client: BrowserClient,
     audiences: BTreeMap<String, Product>,
     jwks: Value,
-    expires: u64,
+    expires: Arc<AtomicU64>,
     sessions: Mutex<BTreeMap<String, Session>>,
     pending: Mutex<BTreeMap<String, Pending>>,
     codes: Mutex<BTreeMap<String, Code>>,
@@ -77,6 +77,7 @@ struct BrowserState {
 pub(super) struct BrowserServer {
     pub(super) origin: String,
     alive: Arc<AtomicBool>,
+    expires: Arc<AtomicU64>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
     _issuer: Arc<Issuer>,
@@ -106,12 +107,16 @@ impl BrowserServer {
         self.alive.load(Ordering::Acquire)
     }
 
+    /// Permit browser grants only after the application has become ready.
+    pub(super) fn activate(&self, expires_at: u64) {
+        self.expires.store(expires_at, Ordering::Release);
+    }
+
     pub(super) fn start(
         listener: TcpListener,
         input: Arc<RunInput>,
         issuer: Arc<Issuer>,
         client: BrowserClient,
-        expires: u64,
     ) -> Result<Self> {
         listener.set_nonblocking(true)?;
         ensure!(
@@ -134,6 +139,7 @@ impl BrowserServer {
             .iter()
             .map(|entry| (entry.audience.clone(), entry.product))
             .collect();
+        let expires = Arc::new(AtomicU64::new(0));
         let state = Arc::new(BrowserState {
             cookie_name: cookie_name(&input.run_id),
             input,
@@ -142,7 +148,7 @@ impl BrowserServer {
             client,
             audiences,
             jwks: issuer.public_jwks(),
-            expires,
+            expires: expires.clone(),
             sessions: Mutex::new(BTreeMap::new()),
             pending: Mutex::new(BTreeMap::new()),
             codes: Mutex::new(BTreeMap::new()),
@@ -220,6 +226,7 @@ impl BrowserServer {
         Ok(Self {
             origin,
             alive,
+            expires,
             shutdown: Some(shutdown_tx),
             thread: Some(thread),
             _issuer: issuer,
@@ -300,7 +307,7 @@ async fn authorize(
     let Ok(now) = clock() else {
         return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
     };
-    if now >= state.expires {
+    if now >= state.expires.load(Ordering::Acquire) {
         return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
     }
     if !authorization.fresh {
@@ -388,8 +395,8 @@ async fn select_person(
         Ok(mut pending) => pending.remove(transaction),
         Err(_) => return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable"),
     };
-    let Some(pending) = pending.filter(|pending| pending.expires > now && state.expires > now)
-    else {
+    let expires = state.expires.load(Ordering::Acquire);
+    let Some(pending) = pending.filter(|pending| pending.expires > now && expires > now) else {
         return oauth_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !person_can_use(&state, person, &pending.authorization) {
@@ -412,7 +419,7 @@ async fn select_person(
         session_id.clone(),
         Session {
             person: person.clone(),
-            expires: state.expires,
+            expires,
         },
     );
     drop(sessions);
@@ -535,7 +542,8 @@ async fn token(
         Ok(mut codes) => codes.remove(code),
         Err(_) => return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable"),
     };
-    let Some(issued) = issued.filter(|issued| issued.expires > now && state.expires > now) else {
+    let expires = state.expires.load(Ordering::Acquire);
+    let Some(issued) = issued.filter(|issued| issued.expires > now && expires > now) else {
         return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant");
     };
     if form.get("redirect_uri").map(String::as_str) != Some(issued.authorization.redirect.as_str())
@@ -564,7 +572,7 @@ async fn token(
             issued.authorization.product,
             &state.client.id,
             &scopes,
-            state.expires,
+            expires,
         )
         .await;
     let identity = issuer
@@ -573,13 +581,13 @@ async fn token(
             &state.client.id,
             &person.subject,
             &issued.authorization.nonce,
-            state.expires,
+            expires,
         )
         .await;
     let (Ok(access), Ok(identity)) = (access, identity) else {
         return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
     };
-    let lifetime = BROWSER_TOKEN_LIFETIME_SECONDS.min(state.expires.saturating_sub(now));
+    let lifetime = BROWSER_TOKEN_LIFETIME_SECONDS.min(expires.saturating_sub(now));
     let response = json!({
         "access_token": &*access, "id_token": &*identity, "token_type": "Bearer",
         "expires_in": lifetime,
@@ -1009,7 +1017,6 @@ mod tests {
                 secret: Zeroizing::new("a-secret-longer-than-thirty-two-bytes".to_owned()),
                 redirect_uri: "http://127.0.0.1:4000/callback".to_owned(),
             },
-            clock().unwrap() + 1800,
         )
         .unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1026,6 +1033,10 @@ mod tests {
                 .send().await.unwrap().json().await.unwrap();
             assert!(public_keys["keys"][0].get("d").is_none());
             let verifier = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+            let before_ready = format!("{}/authorize?client_id=app&redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback&response_type=code&code_challenge={}&code_challenge_method=S256&state=state-before-ready&nonce=nonce-before-ready&scope=openid%20registry.read&resource=registry-service", server.origin, pkce_challenge(verifier));
+            let refused = http.get(before_ready).send().await.unwrap();
+            assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+            server.activate(clock().unwrap() + 1800);
             let ineligible_url = format!("{}/authorize?client_id=app&redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback&response_type=code&code_challenge={}&code_challenge_method=S256&state=state-denied&nonce=nonce-denied&scope=openid%20casework.write&resource=casework-service", server.origin, pkce_challenge(verifier));
             for _ in 0..=MAXIMUM_PENDING {
                 let denied = http.get(&ineligible_url).send().await.unwrap();

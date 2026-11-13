@@ -507,7 +507,9 @@ client and exact loopback callback, requires S256 PKCE, and issues one audience
 and only scopes shared by the request and the selected person's grant for that
 resource. A request with scopes but no overlap is refused. Browser tokens also
 carry `registry_scopes` from that same narrowed grant for the local host;
-authored claims cannot replace it. The person picker
+authored claims cannot replace it. Application-mode checks refuse BReg or
+Casework principal claims named `name` or `registry_scopes`, so presentation
+and host-scope claims cannot replace product identity. The person picker
 is synthetic; a browser session reuses the person for a second resource grant,
 while `prompt=login` asks again. Authorization codes are one-use and bounded;
 logout clears only this issuer's session and returns to the registered app
