@@ -698,12 +698,15 @@ pub async fn run_pass(
                 // The row records its refusal before the limit is
                 // evaluated: a pass that stops at the limit still leaves
                 // the refused row its code, and only a rescan retries it.
+                // A refusal of a retry whose first answer was lost keeps
+                // the item possibly admitted.
                 if !options.dry_run {
                     if let Err(error) = store::record_refused(
                         &mut client,
                         job_id,
                         &staged.key,
                         &code,
+                        staged.receipt_uncertain,
                         SystemTime::now(),
                         lease_token,
                         lease_ttl(program),

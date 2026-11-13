@@ -8,14 +8,14 @@
 #[path = "support/job_fixture.rs"]
 mod job_fixture;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
@@ -24,10 +24,10 @@ use registry_adapter_connectors::coordinator_event::{
     CoordinatorEventConnector, CoordinatorEventReceiver,
 };
 use registry_adapter_core::JobIdentity;
-use registry_adapter_engine::job::compile_job;
+use registry_adapter_engine::job::{compile_job, JobProgram};
 use registry_adapter_engine::job_sources::JobRuntimeConfig;
 use registry_adapter_job::destination::{DeliverableItem, HandOffOutcome, JobDestination};
-use registry_adapter_job::pass::{run_pass, PassOptions, StopReason};
+use registry_adapter_job::pass::{run_pass, PassOptions, PassReport, StopReason};
 use registry_adapter_job::runtime_destination::activate_destination;
 use registry_adapter_job::signed_coordinator_event::{
     SignedCoordinatorEventDestination, SignedCoordinatorEventReceiver,
@@ -735,4 +735,586 @@ async fn coordinator_item_and_deployment_failures_never_fall_back() {
         3,
         "each answer ends that item attempt without a fallback mutation"
     );
+}
+
+const REVISED_TARGET: &str = "/v1/events/case-ingestion/revised";
+
+/// One scripted Coordinator answer per signed event.
+#[derive(Clone, Copy)]
+enum Answer {
+    /// The admission committed, but its answer carries no Run.
+    Lost,
+    /// A Coordinator problem answer.
+    Problem(StatusCode, &'static str),
+    /// An admitted Run.
+    Admitted,
+}
+
+/// A Coordinator receiver on both triggers: it verifies each signed event
+/// against the path it arrived on, records that path, and answers from
+/// its script.
+#[derive(Clone)]
+struct ScriptedReceiver {
+    answers: Arc<Mutex<VecDeque<Answer>>>,
+    targets: Arc<Mutex<Vec<String>>>,
+}
+
+impl ScriptedReceiver {
+    fn targets(&self) -> Vec<String> {
+        self.targets.lock().expect("the target lock").clone()
+    }
+}
+
+async fn scripted(
+    State(receiver): State<ScriptedReceiver>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> axum::response::Response {
+    let pairs = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_bytes()))
+        .collect::<Vec<_>>();
+    verify_delivery(
+        SignedDelivery {
+            method: "POST",
+            request_target: uri.path(),
+            headers: pairs,
+            body: &body,
+            key: KEY,
+        },
+        DeliveryFreshness::CallerEnforced,
+    )
+    .expect("the job sent a valid platform signature");
+    receiver
+        .targets
+        .lock()
+        .expect("the target lock")
+        .push(uri.path().to_string());
+    let answer = receiver
+        .answers
+        .lock()
+        .expect("the answer lock")
+        .pop_front()
+        .expect("every signed event has a scripted answer");
+    match answer {
+        Answer::Lost => StatusCode::NO_CONTENT.into_response(),
+        Answer::Problem(status, code) => (
+            status,
+            [("content-type", "application/problem+json")],
+            axum::Json(json!({"code": code, "status": status.as_u16()})),
+        )
+            .into_response(),
+        Answer::Admitted => {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            response.headers_mut().insert(
+                "x-coordinator-run-id",
+                HeaderValue::from_str(&uuid::Uuid::new_v4().to_string())
+                    .expect("a Run UUID header"),
+            );
+            response
+        }
+    }
+}
+
+/// A signed Coordinator destination over a receiver that answers from
+/// `answers`, on a job with or without a revised trigger.
+async fn scripted_destination(
+    revised_trigger: bool,
+    answers: impl IntoIterator<Item = Answer>,
+) -> (ScriptedReceiver, SignedCoordinatorEventDestination) {
+    let receiver = ScriptedReceiver {
+        answers: Arc::new(Mutex::new(answers.into_iter().collect())),
+        targets: Arc::new(Mutex::new(Vec::new())),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the scripted receiver binds");
+    let address = listener.local_addr().expect("the receiver address");
+    let app = Router::new()
+        .route(TARGET, post(scripted))
+        .route(REVISED_TARGET, post(scripted))
+        .with_state(receiver.clone());
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("the scripted receiver serves");
+    });
+    let connector = Arc::new(
+        CoordinatorEventConnector::new(
+            Arc::new(
+                EventDestinationPolicy::new(
+                    "adapter-coordinator-refused-retry",
+                    &format!("http://127.0.0.1:{}/", address.port()),
+                    DestinationProfile::LoopbackDevelopmentHttp,
+                    &[],
+                )
+                .expect("the event policy freezes"),
+            ),
+            SOURCE,
+            KEY.to_vec(),
+            Duration::from_secs(2),
+        )
+        .expect("the signed event connector freezes"),
+    );
+    let revised = revised_trigger.then(|| {
+        SignedCoordinatorEventReceiver::new(
+            CoordinatorEventReceiver::new("case-ingestion", "revised", "case.revised", DATA_SCHEMA)
+                .expect("the revised receiver freezes"),
+            [0x22; 32],
+        )
+    });
+    let destination = SignedCoordinatorEventDestination::new(
+        connector,
+        SignedCoordinatorEventReceiver::new(
+            CoordinatorEventReceiver::new("case-ingestion", "submitted", EVENT_TYPE, DATA_SCHEMA)
+                .expect("the primary receiver freezes"),
+            [0x11; 32],
+        ),
+        revised,
+    );
+    (receiver, destination)
+}
+
+/// Lose the first event's answer, then refuse its retry, through two
+/// real passes: the row ends refused after two events on the primary
+/// trigger.
+async fn lose_then_refuse(
+    pool: &Pool,
+    program: &JobProgram,
+    destination: &SignedCoordinatorEventDestination,
+    receiver: &ScriptedReceiver,
+) {
+    let lost = run_pass(pool, program, destination, PassOptions::default()).await;
+    assert_eq!(
+        lost.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
+        })
+    );
+    let retried = run_pass(pool, program, destination, PassOptions::default()).await;
+    assert_eq!(retried.stopped, None);
+    assert_eq!(retried.items_redelivered, 1);
+    assert_eq!(retried.items_refused, 1);
+    let client = pool.get().await.expect("a pooled client");
+    let refused = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the refused row reads")
+        .expect("the refused row exists");
+    assert_eq!(refused.status, ItemStatus::Refused);
+    assert_eq!(receiver.targets(), vec![TARGET.to_string(); 2]);
+}
+
+/// The refused retry of a lost event, scripted: the lost answer, the
+/// refusal, then one admission for whatever the caller does next, so a
+/// second admission fails the caller's assertions rather than the script.
+fn lost_then_refused() -> [Answer; 3] {
+    [
+        Answer::Lost,
+        Answer::Problem(StatusCode::BAD_REQUEST, "event.invalid"),
+        Answer::Admitted,
+    ]
+}
+
+/// Lose the first event's answer, refuse its retry, then edit the source
+/// item, through real passes over a job with or without a revised
+/// trigger. Returns the edited row and every path the receiver saw.
+async fn edit_after_a_refused_retry_of_a_lost_event(
+    revised_trigger: bool,
+) -> (store::ItemRecord, Vec<String>) {
+    let (receiver, destination) = scripted_destination(revised_trigger, lost_then_refused()).await;
+    let page = |age: &str| {
+        json!({
+            "data": [{"id": "a", "answers": {"age": age}}],
+            "nextCursor": "p2"
+        })
+    };
+    let fixture = job_fixture::JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, page("045")), (200, page("045")), (200, page("046"))],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    lose_then_refuse(&pool, &program, &destination, &receiver).await;
+
+    let edit = run_pass(&pool, &program, &destination, PassOptions::default()).await;
+    assert_eq!(edit.stopped, None);
+    assert_eq!(edit.items_changed, 1);
+    let client = pool.get().await.expect("a pooled client");
+    let edited = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the edited row reads")
+        .expect("the edited row exists");
+    (edited, receiver.targets())
+}
+
+/// A refusal that answers the retry of a lost event says nothing about
+/// whether Coordinator admitted the first one, so without a revised
+/// trigger a later source edit is held for an operator and never sent to
+/// the primary trigger as a second submission.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_retry_of_a_lost_event_holds_a_later_edit_without_a_revised_trigger() {
+    let (edited, targets) = edit_after_a_refused_retry_of_a_lost_event(false).await;
+    assert_eq!(
+        targets.len(),
+        2,
+        "the edit of a possibly admitted item sends no event"
+    );
+    assert_eq!(edited.status, ItemStatus::Held);
+    assert_eq!(edited.code.as_deref(), Some("adapter.job.revised-item"));
+    assert!(edited.admitted_before);
+}
+
+/// With a revised trigger, the same edit is a revision by design: it goes
+/// to the revised trigger, never to the primary one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_retry_of_a_lost_event_sends_a_later_edit_to_the_revised_trigger() {
+    let (edited, targets) = edit_after_a_refused_retry_of_a_lost_event(true).await;
+    assert_eq!(
+        targets,
+        vec![
+            TARGET.to_string(),
+            TARGET.to_string(),
+            REVISED_TARGET.to_string()
+        ],
+        "the edit of a possibly admitted item is a revision"
+    );
+    assert_eq!(edited.status, ItemStatus::Acknowledged);
+    assert!(edited.admitted_before);
+}
+
+/// Lose the first event's answer, refuse its retry, then rescan the
+/// unchanged source item and run one ordinary pass after the rescan,
+/// over a job with or without a revised trigger. Returns both reports,
+/// the row as the rescan left it, and every path the receiver saw.
+async fn rescan_after_a_refused_retry_of_a_lost_event(
+    revised_trigger: bool,
+) -> (PassReport, PassReport, store::ItemRecord, Vec<String>) {
+    let (receiver, destination) = scripted_destination(revised_trigger, lost_then_refused()).await;
+    let page = json!({
+        "data": [{"id": "a", "answers": {"age": "045"}}],
+        "nextCursor": "p2"
+    });
+    let fixture = job_fixture::JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, page); 4],
+        job_fixture::Edits::Rescan(3600),
+    )
+    .await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    lose_then_refuse(&pool, &program, &destination, &receiver).await;
+
+    let rescan = run_pass(
+        &pool,
+        &program,
+        &destination,
+        PassOptions {
+            rescan: true,
+            ..PassOptions::default()
+        },
+    )
+    .await;
+    let client = pool.get().await.expect("a pooled client");
+    let rescanned = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the rescanned row reads")
+        .expect("the rescanned row exists");
+    drop(client);
+    let after = run_pass(&pool, &program, &destination, PassOptions::default()).await;
+    (rescan, after, rescanned, receiver.targets())
+}
+
+/// A rescan retries a refused item under its unchanged digest, but a
+/// refusal that answers the retry of a lost event says nothing about
+/// whether Coordinator admitted the first one. Without a revised trigger
+/// the rescan holds the item for an operator, sends nothing to the
+/// primary trigger, and leaves the job's later passes running.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_of_a_refused_retry_of_a_lost_event_holds_it_without_a_revised_trigger() {
+    let (rescan, after, rescanned, targets) =
+        rescan_after_a_refused_retry_of_a_lost_event(false).await;
+    assert_eq!(
+        (rescan.stopped, rescanned.status, rescanned.code.as_deref()),
+        (None, ItemStatus::Held, Some("adapter.job.revised-item")),
+        "the rescan holds the possibly admitted item instead of stopping the pass"
+    );
+    assert_eq!(rescan.items_held, 1);
+    assert!(rescanned.admitted_before);
+    assert_eq!(after.stopped, None, "the next ordinary pass runs");
+    assert_eq!(after.items_redelivered, 0);
+    assert_eq!(
+        targets,
+        vec![TARGET.to_string(); 2],
+        "the rescan sends no event to the primary trigger"
+    );
+}
+
+/// With a revised trigger, the same rescan is a revision by design: it
+/// goes to the revised trigger, never to the primary one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_of_a_refused_retry_of_a_lost_event_sends_it_to_the_revised_trigger() {
+    let (rescan, after, rescanned, targets) =
+        rescan_after_a_refused_retry_of_a_lost_event(true).await;
+    assert_eq!(rescan.stopped, None);
+    assert_eq!(rescanned.status, ItemStatus::Acknowledged);
+    assert!(rescanned.admitted_before);
+    assert_eq!(after.stopped, None);
+    assert_eq!(after.items_redelivered, 0);
+    assert_eq!(
+        targets,
+        vec![
+            TARGET.to_string(),
+            TARGET.to_string(),
+            REVISED_TARGET.to_string()
+        ],
+        "the rescan of a possibly admitted item is a revision"
+    );
+}
+
+/// Stage a rescan of the refused, possibly admitted item through the store,
+/// then let the lease lapse before anything is sent or recorded: a host
+/// killed between staging and its answer. The row is left `pending` with
+/// nothing sent since it was staged.
+async fn stage_a_rescan_then_die(pool: &Pool) {
+    let mut client = pool.get().await.expect("a pooled client");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    let refused = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the refused row reads")
+        .expect("the refused row exists");
+    assert_eq!(refused.status, ItemStatus::Refused);
+    assert!(
+        refused.admitted_before,
+        "the refused retry of a lost event marks the item"
+    );
+    let staged = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        &refused.last_digest,
+        true,
+        SystemTime::now(),
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the rescan stages")
+    .expect("the rescan retries the refused item");
+    assert!(staged.admitted_before);
+    client
+        .execute(
+            "UPDATE adapter_job_state SET lease_expires = now() - interval '1 second' \
+             WHERE job_id = $1",
+            &[&"case-daily"],
+        )
+        .await
+        .expect("the lease lapses");
+}
+
+/// A host that dies after staging the rescan of a refused, possibly
+/// admitted item leaves the row `pending`. Without a revised trigger the
+/// next pass holds the item, as the rescan would have, and the job's later
+/// items keep moving.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_crash_after_staging_a_rescan_holds_the_item_and_later_items_move() {
+    let (receiver, destination) = scripted_destination(false, lost_then_refused()).await;
+    let page_a = json!({
+        "data": [{"id": "a", "answers": {"age": "045"}}],
+        "nextCursor": "p2"
+    });
+    let page_ab = json!({
+        "data": [
+            {"id": "a", "answers": {"age": "045"}},
+            {"id": "b", "answers": {"age": "050"}}
+        ],
+        "nextCursor": "p2"
+    });
+    let fixture = job_fixture::JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, page_a.clone()), (200, page_a), (200, page_ab)],
+        job_fixture::Edits::Rescan(3600),
+    )
+    .await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    lose_then_refuse(&pool, &program, &destination, &receiver).await;
+    stage_a_rescan_then_die(&pool).await;
+
+    let after = run_pass(&pool, &program, &destination, PassOptions::default()).await;
+    let client = pool.get().await.expect("a pooled client");
+    let held = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the held row reads")
+        .expect("the held row exists");
+    assert_eq!(
+        (after.stopped, held.status, held.code.as_deref()),
+        (None, ItemStatus::Held, Some("adapter.job.revised-item")),
+        "the item the crash left pending is held, and the job does not stop"
+    );
+    assert!(held.admitted_before);
+    assert_eq!(after.items_held, 1);
+    let later = store::inspect_item(&client, "case-daily", "submissions/b")
+        .await
+        .expect("the later row reads")
+        .expect("the later row exists");
+    assert_eq!(later.status, ItemStatus::Acknowledged, "a later item moves");
+    assert_eq!(
+        receiver.targets(),
+        vec![TARGET.to_string(); 3],
+        "the held item sends nothing; only the later item reaches the primary trigger"
+    );
+}
+
+/// The same crash, then a revised trigger added to the job: the next pass
+/// sends the possibly admitted item to the revised trigger. The rescan that
+/// died sent nothing, so its staged row keeps no receiver to fence against.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_crash_after_staging_a_rescan_sends_the_item_to_a_revised_trigger_added_later() {
+    let (receiver, destination) = scripted_destination(
+        false,
+        [
+            Answer::Lost,
+            Answer::Problem(StatusCode::BAD_REQUEST, "event.invalid"),
+        ],
+    )
+    .await;
+    let page = json!({
+        "data": [{"id": "a", "answers": {"age": "045"}}],
+        "nextCursor": "p2"
+    });
+    let fixture = job_fixture::JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, page); 3],
+        job_fixture::Edits::Rescan(3600),
+    )
+    .await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    lose_then_refuse(&pool, &program, &destination, &receiver).await;
+    stage_a_rescan_then_die(&pool).await;
+
+    let (revised_receiver, with_revised) = scripted_destination(true, [Answer::Admitted]).await;
+    let after = run_pass(&pool, &program, &with_revised, PassOptions::default()).await;
+    assert_eq!(
+        after.stopped, None,
+        "the rescan that died froze no receiver for this attempt"
+    );
+    let client = pool.get().await.expect("a pooled client");
+    let revised = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the revised row reads")
+        .expect("the revised row exists");
+    assert_eq!(revised.status, ItemStatus::Acknowledged);
+    assert!(revised.admitted_before);
+    assert_eq!(
+        receiver.targets(),
+        vec![TARGET.to_string(); 2],
+        "the primary trigger sees no third event"
+    );
+    assert_eq!(
+        revised_receiver.targets(),
+        vec![REVISED_TARGET.to_string()],
+        "the possibly admitted item goes to the revised trigger once"
+    );
+}
+
+/// A revised event whose answer is lost, then `destination.revisedReceiver`
+/// removed: the destination has no receiver to repeat that event to, so the
+/// item is held and the job does not stop. Restoring the trigger does not
+/// resend it; the row stays held for an operator to settle under
+/// Coordinator's own authority.
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_then_restoring_a_revised_trigger_with_an_answer_outstanding_holds_the_item() {
+    let (revised_receiver, with_revised) = scripted_destination(
+        true,
+        [
+            Answer::Lost,
+            Answer::Problem(StatusCode::BAD_REQUEST, "event.invalid"),
+            Answer::Lost,
+            Answer::Admitted,
+        ],
+    )
+    .await;
+    let (primary_receiver, without_revised) = scripted_destination(false, [Answer::Admitted]).await;
+    let page = json!({
+        "data": [{"id": "a", "answers": {"age": "045"}}],
+        "nextCursor": "p2"
+    });
+    let fixture = job_fixture::JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, page); 5],
+        job_fixture::Edits::Rescan(3600),
+    )
+    .await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    lose_then_refuse(&pool, &program, &with_revised, &revised_receiver).await;
+
+    let rescan = run_pass(
+        &pool,
+        &program,
+        &with_revised,
+        PassOptions {
+            rescan: true,
+            ..PassOptions::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        rescan.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
+        }),
+        "the revised event's answer is lost"
+    );
+    let sent = vec![
+        TARGET.to_string(),
+        TARGET.to_string(),
+        REVISED_TARGET.to_string(),
+    ];
+    assert_eq!(revised_receiver.targets(), sent);
+
+    let removed = run_pass(&pool, &program, &without_revised, PassOptions::default()).await;
+    let client = pool.get().await.expect("a pooled client");
+    let held = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the held row reads")
+        .expect("the held row exists");
+    drop(client);
+    assert_eq!(
+        (removed.stopped, held.status, held.code.as_deref()),
+        (None, ItemStatus::Held, Some("adapter.job.revised-item")),
+        "without the revised trigger the outstanding revision is held, and the job does not stop"
+    );
+    assert_eq!(removed.items_held, 1);
+    assert!(
+        primary_receiver.targets().is_empty(),
+        "the possibly admitted item never reaches the primary trigger"
+    );
+
+    let restored = run_pass(&pool, &program, &with_revised, PassOptions::default()).await;
+    assert_eq!(restored.stopped, None);
+    assert_eq!(
+        restored.items_redelivered, 0,
+        "restoring the trigger does not resend a held item"
+    );
+    assert_eq!(revised_receiver.targets(), sent);
+    let client = pool.get().await.expect("a pooled client");
+    let still = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the held row reads")
+        .expect("the held row exists");
+    assert_eq!(still.status, ItemStatus::Held);
 }
