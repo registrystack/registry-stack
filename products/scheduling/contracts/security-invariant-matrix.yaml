@@ -142,8 +142,12 @@ invariants:
       One caller reads or pages another caller's appointment, history, or
       listing by guessing an identifier or replaying a cursor.
     enforcementPoint: >-
-      owned_booking on the appointment read and history paths; verified owner
-      predicates on filtered appointment listings; and cursors that are opaque
+      get_appointment, which admits an owner read only to a caller holding the
+      reads scope (DetailAdmission::ReadsScope) and holds a caller admitted
+      through its task grant (DetailAdmission::Grant) to the grant's service,
+      location and current status; owned_booking on the history path; verified
+      owner predicates on filtered appointment listings; and cursors that are
+      opaque
       version 4 UUIDs bound to their listing context, owner, and exact filter
       and expiring
       fifteen minutes out, with ownership re-checked before a cursor is

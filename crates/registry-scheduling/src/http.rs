@@ -51,7 +51,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::{AuthenticationError, SchedulingAuthenticator};
-use crate::service::{Caller, CommitmentAnswer, SchedulingService, ServiceError};
+use crate::service::{Caller, CommitmentAnswer, DetailAdmission, SchedulingService, ServiceError};
 use crate::source_busy::{
     validate_busy_reconciliation_request, BusyReconciliationRequest, BusyRequestError,
     BUSY_SOURCE_APPLY_PATH, BUSY_SOURCE_PREVIEW_PATH,
@@ -505,11 +505,16 @@ async fn get_appointment(
     headers: HeaderMap,
     Path(appointment_id): Path<Uuid>,
 ) -> Result<Json<registry_scheduling_core::AppointmentDocument>, HttpError> {
-    let caller = authenticate_appointment_detail(&state, &headers).await?;
+    let (caller, admission) = authenticate_appointment_detail(&state, &headers).await?;
     Ok(Json(
         state
             .service
-            .get_appointment(&caller, appointment_id, state.service.observed_now())
+            .get_appointment(
+                &caller,
+                admission,
+                appointment_id,
+                state.service.observed_now(),
+            )
             .await?,
     ))
 }
@@ -849,7 +854,7 @@ async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Cal
 async fn authenticate_appointment_detail(
     state: &HttpState,
     headers: &HeaderMap,
-) -> Result<Caller, HttpError> {
+) -> Result<(Caller, DetailAdmission), HttpError> {
     let token =
         bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
     state
