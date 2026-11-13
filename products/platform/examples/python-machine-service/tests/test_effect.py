@@ -429,7 +429,7 @@ class MessageEffectTests(unittest.TestCase):
 
         for code, status in [
             ("operation.not-authorized", 403),
-            ("idempotency.expired", 410),
+            ("receipt.unresolved", 409),
         ]:
             with self.subTest(code=code):
                 self.messaging.receipt_error = FakeMessagingError(
