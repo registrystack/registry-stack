@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use registry_adapter_connectors::breg::{BregConnector, BregConnectorConfig};
 use registry_adapter_connectors::operation::Observable;
+use registry_adapter_connectors::test_support::field_observer_token;
 use registry_adapter_engine::job::compile_job;
 use registry_adapter_engine::job_sources::JobRuntimeConfig;
 use registry_adapter_job::pass::{run_pass, PassOptions, StopReason};
@@ -406,25 +407,32 @@ async fn qfield_postgis_reaches_both_native_breg_action_modes_without_payload_st
         chrono::Utc::now().timestamp() + 3600,
     );
     let http = reqwest::Client::new();
-    for route in ["register-site", "propose-site/proposals"] {
-        let denied = http
-            .post(format!(
-                "{}/v1/actions/{route}?accessProfile=ingestion",
-                service.origin()
-            ))
-            .bearer_auth(&unapproved)
-            .header("idempotency-key", "qfield-unapproved-requester")
-            .json(&json!({"input": {
-                "sourceSubmissionId": IMMEDIATE_SITE,
-                "siteName": IMMEDIATE.name,
-                "position": {"type": "Point", "coordinates": [30, 10]},
-                "boundary": {"type": "Polygon", "coordinates": [[[29, 9], [31, 9], [31, 11], [29, 11], [29, 9]]]},
-                "contacts": IMMEDIATE.contacts.map(|(id, name)| json!({"id": id, "name": name}))
-            }}))
-            .send()
-            .await
-            .expect("the unapproved BReg request receives an answer");
-        assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
+    let observer = field_observer_token(
+        &issuer,
+        "field-intake-reconciliation",
+        "adapter-field-ingestion",
+    );
+    for (token, profile) in [(&unapproved, "ingestion"), (&observer, "reconciliation")] {
+        for route in ["register-site", "propose-site/proposals"] {
+            let denied = http
+                .post(format!(
+                    "{}/v1/actions/{route}?accessProfile={profile}",
+                    service.origin()
+                ))
+                .bearer_auth(token)
+                .header("idempotency-key", "qfield-unapproved-requester")
+                .json(&json!({"input": {
+                    "sourceSubmissionId": IMMEDIATE_SITE,
+                    "siteName": IMMEDIATE.name,
+                    "position": {"type": "Point", "coordinates": [30, 10]},
+                    "boundary": {"type": "Polygon", "coordinates": [[[29, 9], [31, 9], [31, 11], [29, 11], [29, 9]]]},
+                    "contacts": IMMEDIATE.contacts.map(|(id, name)| json!({"id": id, "name": name}))
+                }}))
+                .send()
+                .await
+                .expect("the unauthorized mutation receives an answer");
+            assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
+        }
     }
 
     let immediate_store = super::isolated_store_binding().await;
@@ -450,6 +458,103 @@ async fn qfield_postgis_reaches_both_native_breg_action_modes_without_payload_st
         &field_site(&service, &issuer, IMMEDIATE_SITE).await,
         &IMMEDIATE,
     );
+
+    let lookup_url = format!(
+        "{}/v1/records/field-sites:lookup?accessProfile=reconciliation",
+        service.origin()
+    );
+    let lookup_body = json!({
+        "selector": "by-source-submission",
+        "values": {"sourceSubmissionId": IMMEDIATE_SITE}
+    });
+    let now = chrono::Utc::now().timestamp();
+    let readback = http
+        .post(&lookup_url)
+        .bearer_auth(&observer)
+        .json(&lookup_body)
+        .send()
+        .await
+        .expect("the observer's record lookup answers");
+    assert_eq!(readback.status(), reqwest::StatusCode::OK);
+    let record: Value = readback
+        .json()
+        .await
+        .expect("the readback uses the Record envelope");
+    assert_eq!(
+        record["data"]["domainData"]["sourceSubmissionId"],
+        IMMEDIATE_SITE
+    );
+    let wrong_owner =
+        field_observer_token(&issuer, "field-intake-reconciliation", "another-collection");
+    let wrong_purpose = field_observer_token(&issuer, "another-purpose", "adapter-field-ingestion");
+    let ingestion = issuer.issue_access_token_with_claims(
+        "adapter-field-ingestion",
+        "adapter-field-ingestion",
+        "urn:example:applications",
+        "registry:write registry:reconcile",
+        now + 3600,
+        [
+            (
+                "registry_purpose".to_owned(),
+                json!("field-intake-reconciliation"),
+            ),
+            (
+                "field_collection_owner".to_owned(),
+                json!("adapter-field-ingestion"),
+            ),
+        ]
+        .into(),
+    );
+    for token in [&ingestion, &wrong_owner, &wrong_purpose] {
+        let denied = http
+            .post(&lookup_url)
+            .bearer_auth(token)
+            .json(&lookup_body)
+            .send()
+            .await
+            .expect("the unauthorized lookup receives an answer");
+        assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
+    }
+    let records_url = format!("{}/v1/records/field-sites", service.origin());
+    let record_id = record["data"]["recordIdentifier"]
+        .as_str()
+        .expect("the lookup returns the record identifier");
+    for (url, token) in [
+        (
+            format!("{records_url}?accessProfile=reconciliation"),
+            &observer,
+        ),
+        (
+            format!("{records_url}/{record_id}?accessProfile=reconciliation"),
+            &observer,
+        ),
+        (
+            format!("{records_url}/{record_id}?accessProfile=ingestion"),
+            &ingestion,
+        ),
+    ] {
+        let denied = http
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .expect("the ungranted read receives an answer");
+        assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
+    }
+    let denied = http
+        .post(format!("{}/v1/records/field-sites?accessProfile=reconciliation", service.origin()))
+        .bearer_auth(&observer)
+        .header("idempotency-key", "qfield-observer-direct-write")
+        .json(&json!({"data": {
+            "owner": "adapter-field-ingestion",
+            "sourceSubmissionId": PROPOSAL_SITE,
+            "siteName": PROPOSAL.name,
+            "position": {"type": "Point", "coordinates": [30, 10]},
+            "boundary": {"type": "Polygon", "coordinates": [[[29, 9], [31, 9], [31, 11], [29, 11], [29, 9]]]},
+            "contacts": PROPOSAL.contacts.map(|(id, name)| json!({"id": id, "name": name}))
+        }}))
+        .send().await.expect("the observer direct write attempt receives an answer");
+    assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
 
     let repeated = run_example_job(
         &example,
