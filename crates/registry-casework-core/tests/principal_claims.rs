@@ -116,7 +116,7 @@ fn producers_must_share_a_claim_among_themselves() {
 
 #[test]
 fn the_finding_points_at_the_profile_outside_the_majority_claim() {
-    // `administrator` sorts first, so it is the first profile in file order,
+    // `administrator` sorts first by id, so it is the first profile read,
     // yet it is the only one on `registry_principal`; the other four people
     // profiles share `sub`.
     let mut value = project_value();
@@ -150,9 +150,10 @@ fn the_finding_points_at_the_profile_outside_the_majority_claim() {
 }
 
 #[test]
-fn a_tie_takes_the_first_claim_in_file_order_as_the_reference() {
-    // Six people profiles: three on `principal`, three on `sub`. The first in
-    // file order is `administrator`, so `principal` is the reference.
+fn a_tie_takes_the_claim_of_the_first_profile_by_id_as_the_reference() {
+    // Six people profiles: three on `principal`, three on `sub`. Profiles are
+    // read sorted by id, whatever order the file writes them in; the first by
+    // id is `administrator`, so `principal` is the reference.
     let mut value = project_value();
     value["accessProfiles"]["auditor"] =
         json!({"actsAs":"staff","principalClaim":"sub","requiredScopes":["casework:audit"]});

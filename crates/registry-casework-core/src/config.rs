@@ -1231,7 +1231,8 @@ impl CaseworkProject {
                 .filter(|profile| is_producer(profile) == producers)
                 .collect();
             // The reference is the claim most members use; on a tie, the
-            // claim seen first in file order.
+            // claim of the first member by profile id (profiles are read
+            // sorted by id, not in the order the file writes them).
             let mut counts: Vec<(&str, usize)> = Vec::new();
             for member in &members {
                 match counts

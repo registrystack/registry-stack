@@ -887,9 +887,11 @@ with `evidence.target.trust-profile-unused` at
 | `sourceExtracts` | no | Closed map of at most 64 logical extract names, each a local identifier of the same grammar. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
 
-You own the `sourceAcquisition` budget. The runtime accepts any positive value
-for each of the three members and sets no upper limit, so a typo such as an
-extra zero is accepted and widens what one request may spend on the source.
+You own the `sourceAcquisition` budget. The runtime refuses an
+`acquisitionDeadlineMilliseconds` above 300,000 at load, but accepts any
+positive value for `maximumDataOperations` and `maximumResponseBytes` with no
+upper limit, so a typo such as an extra zero in either is accepted and widens
+what one request may spend on the source.
 Raise a member above its default only for a route that needs it, and keep each
 value near what the heaviest reviewed route uses:
 
