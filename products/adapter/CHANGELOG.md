@@ -5,6 +5,21 @@
 - PostgreSQL jobs can project bounded JSONB values, including the geometry
   and related rows in the [QField PostGIS example](examples/qfield-postgis/README.md).
   Item keys and query parameters keep their existing scalar contract.
+- BREAKING: an ingestion job counts an item as possibly admitted when its
+  BReg or Coordinator answer was lost and the retry was then refused,
+  because that refusal says nothing about the first attempt. A later source
+  edit or `rescan` of the item goes to the job's revised trigger, or is held
+  as `adapter.job.revised-item` on a direct BReg job or a Coordinator job
+  without one. An item whose first attempt never arrived is held the same
+  way: correcting its source record does not deliver it, and no Adapter
+  command releases a held item. A Coordinator item with no revised trigger
+  to select is held instead of stopping the pass as
+  `adapter.job.coordinator-receiver-changed`, and restoring the trigger does
+  not resend it. A `rescan` of a refused item sends it to the receiver
+  selected at that time, so adding a revised trigger after a refusal does
+  not stop the pass. Items refused this way by an earlier version carry no
+  mark: before you edit or rescan one, check BReg or Coordinator for an
+  admission of that item.
 
 ## 0.46.0 - 2026-11-08
 

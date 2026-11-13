@@ -401,6 +401,61 @@ impl JobDestination for IdentifiedDestination {
     }
 }
 
+/// A destination with direct BReg's revision guard (`direct_breg.rs`): an
+/// item marked as possibly admitted freezes no identity and is held as a
+/// revised item without a write; every other hand-off is a BReg write the
+/// script answers.
+#[derive(Clone)]
+struct BregShapedDestination {
+    scripted: ScriptedDestination,
+}
+
+impl BregShapedDestination {
+    fn script(outcomes: Vec<HandOffOutcome>) -> Self {
+        Self {
+            scripted: ScriptedDestination::script(outcomes),
+        }
+    }
+
+    /// The hand-offs that reached BReg as writes.
+    fn writes(&self) -> Vec<DeliverableItem> {
+        self.scripted.delivered()
+    }
+}
+
+impl JobDestination for BregShapedDestination {
+    fn delivery_identity(
+        &self,
+        _job: &JobIdentity,
+        item: &DeliverableItem,
+    ) -> Option<DeliveryIdentity> {
+        if item.admitted_before {
+            return None;
+        }
+        Some(DeliveryIdentity {
+            family: DeliveryFamily::Breg,
+            receiver: [0x11; 32],
+            canonical_body: Ok([0x33; 32]),
+        })
+    }
+
+    fn deliver<'a>(
+        &'a self,
+        job: &'a JobIdentity,
+        item: &'a DeliverableItem,
+    ) -> Pin<Box<dyn Future<Output = HandOffOutcome> + Send + 'a>> {
+        if item.admitted_before {
+            return Box::pin(async move {
+                HandOffOutcome::Held {
+                    code: "adapter.job.revised-item".to_string(),
+                    run_id: item.prior_run_id.clone(),
+                }
+            });
+        }
+        self.scripted.deliver(job, item)
+    }
+}
+
 fn acknowledged(run_id: &str) -> HandOffOutcome {
     HandOffOutcome::Acknowledged {
         run_id: Some(run_id.to_string()),
@@ -1333,6 +1388,182 @@ async fn a_rescan_retries_the_refused_item_and_skips_the_unchanged_ones() {
     );
 }
 
+/// The BReg answers of a lost first write and a refused retry: the first
+/// attempt's answer is lost, so the item stays pending, and the retry of
+/// that same write is refused with a code that proves nothing about the
+/// first attempt.
+fn lost_then_refused_breg_answers() -> Vec<HandOffOutcome> {
+    vec![
+        HandOffOutcome::StopPass {
+            code: "adapter.job.breg-outcome-uncertain".to_string(),
+        },
+        refused("adapter.job.breg-mapping-refused"),
+        acknowledged("run-b"),
+    ]
+}
+
+/// Drive the lost answer and the refused retry through two real passes
+/// and return the number of BReg writes they made.
+async fn lose_then_refuse_the_first_breg_write(
+    pool: &Pool,
+    program: &registry_adapter_engine::job::JobProgram,
+    destination: &BregShapedDestination,
+) -> usize {
+    let lost = run_pass(pool, program, destination, options(20)).await;
+    assert_eq!(
+        lost.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.job.breg-outcome-uncertain".to_string()
+        })
+    );
+    let pending = item(pool, "submissions/a").await.expect("the pending row");
+    assert_eq!(pending.status, ItemStatus::Pending);
+    let retried = run_pass(pool, program, destination, options(20)).await;
+    assert_eq!(retried.stopped, None);
+    assert_eq!(retried.items_redelivered, 1);
+    assert_eq!(retried.items_refused, 1);
+    let refused_row = item(pool, "submissions/a").await.expect("the refused row");
+    assert_eq!(refused_row.status, ItemStatus::Refused);
+    let writes = destination.writes();
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|write| write.key == "submissions/a")
+            .count(),
+        2,
+        "the lost write and its refused retry"
+    );
+    writes.len()
+}
+
+/// A refusal that answers the retry of a write whose answer was lost says
+/// nothing about whether the first write landed, so the refused row stays
+/// possibly admitted: a later source edit is held as a revised item for an
+/// operator and never written to BReg again under a new command key.
+#[tokio::test]
+async fn a_refused_retry_after_a_lost_breg_answer_holds_a_later_edit() {
+    let mut edited = reply_page();
+    edited["data"][0]["answers"]["age"] = json!("046");
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page()), (200, reply_page()), (200, edited)],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let pool = isolated().await.pool;
+    let program = compile(&fixture).await;
+    let mut answers = lost_then_refused_breg_answers();
+    // Answers a write of the edit, so a second registration fails the
+    // assertions below rather than an empty script.
+    answers.push(acknowledged("run-a-written-again"));
+    let destination = BregShapedDestination::script(answers);
+    let writes = lose_then_refuse_the_first_breg_write(&pool, &program, &destination).await;
+
+    let edit = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(edit.stopped, None);
+    assert_eq!(edit.items_changed, 1);
+    assert_eq!(
+        destination.writes().len(),
+        writes,
+        "the edit of a possibly admitted item reaches no BReg write"
+    );
+    assert_eq!(edit.items_held, 1);
+    let held_row = item(&pool, "submissions/a").await.expect("the held row");
+    assert_eq!(held_row.status, ItemStatus::Held);
+    assert_eq!(held_row.code.as_deref(), Some("adapter.job.revised-item"));
+    assert!(held_row.admitted_before);
+    assert_eq!(held_row.sequence, 2);
+}
+
+/// The same lost answer and refused retry, then an explicit rescan with
+/// no source edit: the rescan retries refused rows, but this one may have
+/// been admitted, so it is held as a revised item instead of written again.
+#[tokio::test]
+async fn a_rescan_holds_a_refused_retry_after_a_lost_breg_answer() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page())],
+        job_fixture::Edits::Rescan(3600),
+    )
+    .await;
+    let pool = isolated().await.pool;
+    let program = compile(&fixture).await;
+    let mut answers = lost_then_refused_breg_answers();
+    answers.push(acknowledged("run-a-written-again"));
+    let destination = BregShapedDestination::script(answers);
+    let writes = lose_then_refuse_the_first_breg_write(&pool, &program, &destination).await;
+
+    let rescan = run_pass(
+        &pool,
+        &program,
+        &destination,
+        PassOptions {
+            refusal_limit: 20,
+            rescan: true,
+            dry_run: false,
+        },
+    )
+    .await;
+    assert_eq!(rescan.stopped, None);
+    assert_eq!(rescan.items_redelivered, 1, "the refused row is retried");
+    assert_eq!(
+        destination.writes().len(),
+        writes,
+        "the retry of a possibly admitted item reaches no BReg write"
+    );
+    assert_eq!(rescan.items_held, 1);
+    let held_row = item(&pool, "submissions/a").await.expect("the held row");
+    assert_eq!(held_row.status, ItemStatus::Held);
+    assert_eq!(held_row.code.as_deref(), Some("adapter.job.revised-item"));
+    assert_eq!(held_row.sequence, 1);
+}
+
+/// The control: a refusal of a first write whose answer arrived proves the
+/// write had no effect, so the row is not marked and a later source edit
+/// is written to BReg as before.
+#[tokio::test]
+async fn a_certain_first_breg_refusal_lets_a_later_edit_through() {
+    let mut edited = reply_page();
+    edited["data"][0]["answers"]["age"] = json!("046");
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page()), (200, edited)],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let pool = isolated().await.pool;
+    let program = compile(&fixture).await;
+    let destination = BregShapedDestination::script(vec![
+        refused("adapter.job.breg-mapping-refused"),
+        acknowledged("run-b"),
+        acknowledged("run-a-edited"),
+    ]);
+
+    let first = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(first.stopped, None);
+    assert_eq!(first.items_refused, 1);
+    let refused_row = item(&pool, "submissions/a").await.expect("the refused row");
+    assert_eq!(refused_row.status, ItemStatus::Refused);
+    assert!(
+        !refused_row.admitted_before,
+        "a certain refusal of a first write is not marked"
+    );
+
+    let edit = run_pass(&pool, &program, &destination, options(20)).await;
+    assert_eq!(edit.stopped, None);
+    assert_eq!(edit.items_changed, 1);
+    assert_eq!(edit.items_acknowledged, 1);
+    let writes = destination.writes();
+    assert_eq!(writes.len(), 3, "the edit is written to BReg");
+    let written = writes.last().expect("the edit's write");
+    assert_eq!(written.key, "submissions/a");
+    assert_eq!(written.sequence, 2);
+    assert!(!written.admitted_before);
+    let row = item(&pool, "submissions/a").await.expect("the edited row");
+    assert_eq!(row.status, ItemStatus::Acknowledged);
+    assert_eq!(row.run_id.as_deref(), Some("run-a-edited"));
+}
+
 /// A rescan starts at the first page once, then follows the saved
 /// cursor until the finite end instead of restarting page one on every
 /// bounded pass.
@@ -1827,6 +2058,7 @@ async fn changed_staging_preserves_the_last_accepted_reference_for_recovery() {
         "case-daily",
         "submissions/a",
         "review.unavailable",
+        false,
         now,
         lease.token,
         ttl,
@@ -1875,6 +2107,183 @@ async fn changed_staging_preserves_the_last_accepted_reference_for_recovery() {
         replay.prior_run_id.as_deref(),
         Some("run-a"),
         "the crash retry carries the persisted fallback"
+    );
+}
+
+/// A refusal records whether it answered the retry of a possibly admitted
+/// hand-off, and no refusal clears an item's possibly-admitted mark.
+#[tokio::test]
+async fn a_refusal_sets_the_possibly_admitted_mark_and_never_clears_it() {
+    let pool = isolated().await.pool;
+    let mut client = pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    let now = SystemTime::now();
+    let digest_a = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let digest_b = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let mark =
+        |record: Option<store::ItemRecord>| record.expect("the item row exists").admitted_before;
+
+    // An accepted item whose revision is refused stays possibly admitted
+    // even when the refusal itself is certain.
+    store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest_a,
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("digest A stages")
+    .expect("digest A is new");
+    store::record_acknowledged(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        Some("run-a"),
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("digest A is acknowledged");
+    let revision = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest_b,
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("digest B stages")
+    .expect("digest B changed");
+    assert!(revision.admitted_before);
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        "review.unavailable",
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the revision's refusal records");
+    let accepted_then_refused = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the row reads");
+    assert!(
+        mark(accepted_then_refused),
+        "a certain refusal keeps an existing mark"
+    );
+
+    // A certain refusal of a first hand-off leaves the item unmarked.
+    store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/b",
+        digest_a,
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("item B stages")
+    .expect("item B is new");
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/b",
+        "review.unavailable",
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("item B's refusal records");
+    let certain = store::inspect_item(&client, "case-daily", "submissions/b")
+        .await
+        .expect("the row reads");
+    assert!(!mark(certain), "a certain first refusal is not marked");
+
+    // A refusal that answers the retry of an uncertain hand-off marks the
+    // item, and a later certain refusal of a reviewed retry keeps it.
+    store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/c",
+        digest_a,
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("item C stages")
+    .expect("item C is new");
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/c",
+        "review.unavailable",
+        true,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("item C's uncertain refusal records");
+    let uncertain = store::inspect_item(&client, "case-daily", "submissions/c")
+        .await
+        .expect("the row reads");
+    assert!(mark(uncertain), "an uncertain refusal marks the item");
+    let retry = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/c",
+        digest_a,
+        true,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("item C restages")
+    .expect("the explicit rescan retries item C");
+    assert!(retry.admitted_before, "the retry carries the mark");
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/c",
+        "review.unavailable",
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("item C's certain refusal records");
+    let still_marked = store::inspect_item(&client, "case-daily", "submissions/c")
+        .await
+        .expect("the row reads");
+    assert!(
+        mark(still_marked),
+        "a certain refusal never clears the mark"
     );
 }
 
@@ -1942,6 +2351,7 @@ async fn receiver_identity_and_event_metadata_freeze_per_sequence() {
         "case-daily",
         "submissions/a",
         "event.invalid",
+        false,
         first_time,
         lease.token,
         ttl,
@@ -1993,6 +2403,129 @@ async fn receiver_identity_and_event_metadata_freeze_per_sequence() {
     assert_eq!(changed.sequence, 2);
     assert_eq!(changed.event_time, changed_time);
     assert_eq!(changed.delivery_attempt, 1);
+}
+
+/// A rescan of a refused row clears the receiver and body identities its
+/// refused attempt froze: that attempt was answered, so nothing is in
+/// flight under them. A host that dies after staging the rescan leaves a
+/// pending row with no identity, and the next pass binds the receiver it
+/// selects then. Once bound, the retry is fenced to that receiver again.
+#[tokio::test]
+async fn a_rescan_of_a_refused_row_clears_the_identity_its_refused_attempt_froze() {
+    let pool = isolated().await.pool;
+    let mut client = pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let first = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest,
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the first delivery stages")
+    .expect("the item is new");
+    store::bind_delivery_identity(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        &[0x11; 32],
+        &[0x31; 32],
+        first.delivery_attempt,
+        false,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the first receiver binds");
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        "event.invalid",
+        true,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the refusal records the mark");
+    let rescan = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest,
+        true,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the refused row restages")
+    .expect("the rescan retries it");
+    assert!(rescan.admitted_before, "staging keeps the mark");
+
+    // The rescan's host dies here. The next pass finds the row pending.
+    let retry = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        digest,
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the pending row restages")
+    .expect("the pending row retries");
+    assert!(
+        retry.receipt_uncertain,
+        "the store cannot tell a death before sending from a lost answer"
+    );
+    store::bind_delivery_identity(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        &[0x22; 32],
+        &[0x32; 32],
+        retry.delivery_attempt,
+        false,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("nothing was sent since the rescan staged, so the selected receiver binds");
+    assert!(
+        matches!(
+            store::bind_delivery_identity(
+                &mut client,
+                "case-daily",
+                "submissions/a",
+                &[0x11; 32],
+                &[0x32; 32],
+                retry.delivery_attempt + 1,
+                false,
+                lease.token,
+                ttl,
+            )
+            .await,
+            Err(store::StoreError::ReceiverIdentityChanged)
+        ),
+        "once bound, the retry is fenced to that receiver again"
+    );
 }
 
 #[tokio::test]
@@ -2924,6 +3457,17 @@ async fn inspect_explains_direct_and_coordinator_holds_without_item_values() {
             None,
             "BReg's own authority",
         ),
+        // A revision of an item whose only BReg answers were a lost one
+        // and a refusal: possibly admitted, with no reference to name.
+        (
+            &direct,
+            "adapter.job.revised-item",
+            None,
+            None,
+            "breg",
+            None,
+            "BReg's own authority",
+        ),
         (
             &coordinator,
             "adapter.job.revised-item",
@@ -3181,6 +3725,7 @@ async fn recording_an_answer_for_a_missing_row_refuses() {
         "case-daily",
         "submissions/missing",
         "schema.required",
+        false,
         SystemTime::now(),
         leased.token,
         ttl,
@@ -3269,6 +3814,7 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
             "case-daily",
             "submissions/a",
             "schema.required",
+            false,
             SystemTime::now(),
             stale,
             ttl,

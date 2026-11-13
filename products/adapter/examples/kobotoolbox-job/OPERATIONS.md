@@ -234,6 +234,10 @@ adapter-job rescan <job-file> \
 An ordinary rescan writes the due marker and runs one pass.
 Unchanged items skip by digest, refused items retry, and held items remain held
 while unchanged.
+An item refused on the retry of a lost answer may already be admitted, so the
+rescan does not send it again under a new key: it is held as
+`adapter.job.revised-item`, or sent to `destination.revisedReceiver` when a
+Coordinator job names one.
 
 For a long-running process driven by the job's interval trigger, run:
 
@@ -293,6 +297,11 @@ the same way under `adapter.job.breg-body-changed` (the mapped operation
 differs), `adapter.job.breg-receiver-changed` (another BReg binding, base URL, token
 endpoint, caller, TLS trust profile, access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
 (staged before schema 103); the recoveries are the same.
+Removing `destination.revisedReceiver` from a Coordinator job does not stop: a
+possibly admitted item then has no receiver and is held as
+`adapter.job.revised-item`, even when its revised event was sent and that
+answer lost. Restoring the receiver does not resend a held item, so check
+Coordinator for that Run before you resolve the hold.
 
 A pass that stops as `adapter.job.identity-migration-required` found stored
 items that predate the job's item-identity binding (store schema 103). Confirm

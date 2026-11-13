@@ -2144,11 +2144,15 @@ refused codes and counts, and `rescan` retries refused items on request.
 
 **Changed items.** An item that changes after a first hand-off is
 revised, and a `pending` row counts as possibly accepted, because a lost
-response may hide a real effect. A revised item never becomes a second
-registration: the job either holds it for an operator or, when the job
-names a Coordinator receiver for revisions, sends it there as a `revised`
-event so that a workflow can reach a person. Automatic correction of
-submitted, approved, or applied work is out of scope.
+response may hide a real effect. A refusal that answers the retry of such
+a hand-off says nothing about the first attempt, so that refused row also
+counts as possibly accepted, and a later edit of it or a `rescan` retry of
+it is revised too. A revised item never becomes a second
+registration: the job either holds it for an operator as
+`adapter.job.revised-item` or, when the job names a Coordinator receiver
+for revisions, sends it there as a `revised` event so that a workflow can
+reach a person. A held item has no release command. Automatic correction
+of submitted, approved, or applied work is out of scope.
 
 The pass hands each item to its destination through one seam. The
 destination answers in one of three ways: accepted, with its reference;
@@ -2224,9 +2228,17 @@ The event data has one fixed wrapper: `job: {id, version}`, `key`,
 only when known. Event identity and event time are stable for one item
 sequence; transport time, signature and monotonically increasing delivery
 attempt are renewed for retry. The selected public receiver identity is
-frozen durably before sending. A possibly accepted pending sequence cannot
-be retargeted by configuration changes: the pass stops without advancing
-position, and restoring the original receiver permits recovery.
+frozen durably before sending. A pending sequence with a frozen receiver
+cannot be retargeted by configuration changes: when the selected receiver
+differs, the pass stops as `adapter.job.coordinator-receiver-changed`
+without advancing position, and restoring the original receiver permits
+recovery. A rescan of a refused item clears its frozen receiver, because
+the refusal answered the last attempt; the receiver selected when the item
+is next sent is frozen in its place. A possibly accepted item on a job with
+no revised trigger has no receiver to select: it is held as
+`adapter.job.revised-item` and sent nowhere, even when its revised event
+was sent and that answer was lost, and restoring the revised trigger does
+not resend a held item.
 
 `destination.revisedReceiver` optionally selects a revised-item `trigger`,
 `eventType`, and `dataSchema` inside the same workflow and runtime binding.

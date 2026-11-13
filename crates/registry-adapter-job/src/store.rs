@@ -828,10 +828,20 @@ pub async fn stage_item(
                 .delivery_attempt
                 .checked_add(1)
                 .ok_or(StoreError::DeliveryAttemptExhausted)?;
+            // A rescan of a refused row clears the frozen receiver and body
+            // identities: the refusal answered the latest attempt, and
+            // `admitted_before` carries any earlier attempt that may have
+            // been admitted. A pending row keeps them, because its latest
+            // attempt may still be outstanding under them.
+            let refused = prior.status == ItemStatus::Refused;
             tx.execute(
-                "UPDATE adapter_job_items SET status = 'pending', code = NULL, last_seen = $3 \
+                "UPDATE adapter_job_items SET status = 'pending', code = NULL, last_seen = $3, \
+                 receiver_identity = CASE WHEN $4 THEN NULL ELSE receiver_identity END, \
+                 receiver_identity_known = receiver_identity_known OR $4, \
+                 canonical_body_identity = CASE WHEN $4 THEN NULL ELSE canonical_body_identity END, \
+                 canonical_body_identity_known = canonical_body_identity_known OR $4 \
                  WHERE job_id = $1 AND item_key = $2",
-                &[&job_id, &key, &now],
+                &[&job_id, &key, &now, &refused],
             )
             .await?;
             Some(StagedItem {
@@ -951,9 +961,17 @@ async fn read_prior(
 
 /// Freeze or verify the selected public receiver identity before a signed
 /// delivery leaves the process. The write and lease renewal commit together.
-/// A pending retry can proceed only under exact identity equality. A reviewed
-/// rescan of a known refusal may deliberately bind the currently selected
-/// receiver because the earlier refusal is known to have had no effect.
+/// A pending retry can proceed only under exact identity equality. Staging a
+/// rescan of a refused row clears its stored identities, so the receiver
+/// selected when it is next sent binds, even after a crash between staging
+/// and this call. With `allow_rebind`, which the pass sets only for a rescan
+/// of a refused row, the currently selected identities replace the stored
+/// ones without comparison. The refusal answered the latest attempt, but a
+/// row that carries `admitted_before` may have had an earlier attempt
+/// admitted; this function does not guard that case. The destination does:
+/// for such a row the Coordinator destination selects its revised trigger,
+/// and without one, or on the direct BReg destination, it names no delivery
+/// identity, so nothing binds and the item is held.
 ///
 /// # Errors
 ///
@@ -1061,6 +1079,12 @@ fn missing_item() -> StoreError {
 /// identified, and the pass continues. The lease renewal and the row
 /// write commit together.
 ///
+/// `possibly_admitted` is true when the refusal answered the retry of a
+/// hand-off whose first answer was lost. The refusal proves nothing about
+/// that first attempt, so the row is marked possibly admitted and a later
+/// digest or rescan is a revision, never a second registration. A refusal
+/// never clears an existing mark.
+///
 /// # Errors
 ///
 /// A lost lease, a missing row, or a failed write refuses; the caller
@@ -1071,6 +1095,7 @@ pub async fn record_refused(
     job_id: &str,
     key: &str,
     code: &str,
+    possibly_admitted: bool,
     now: SystemTime,
     token: i64,
     ttl: Duration,
@@ -1080,8 +1105,9 @@ pub async fn record_refused(
     let row = tx
         .execute(
             "UPDATE adapter_job_items SET status = 'refused', code = $3, run_id = NULL, \
-             last_seen = $4 WHERE job_id = $1 AND item_key = $2",
-            &[&job_id, &key, &code, &now],
+             admitted_before = admitted_before OR $5, last_seen = $4 \
+             WHERE job_id = $1 AND item_key = $2",
+            &[&job_id, &key, &code, &now, &possibly_admitted],
         )
         .await?;
     if row != 1 {
