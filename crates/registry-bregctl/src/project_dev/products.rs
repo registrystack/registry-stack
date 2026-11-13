@@ -1045,8 +1045,8 @@ fn logged_tool_result(
 }
 
 /// Exercise the log/result boundary in unit tests without routing a shell
-/// through the Rust test harness as if it were the bregctl binary. The native
-/// lifecycle test covers the real hidden guard dispatch.
+/// through the Rust test harness as if it were the bregctl binary. The
+/// `project_dev` integration test covers the real hidden guard dispatch.
 #[cfg(test)]
 fn run_logged_tool_direct(
     binary: &Path,

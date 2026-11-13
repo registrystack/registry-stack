@@ -259,6 +259,13 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
       "type": "string"
     },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
+    },
     "Expected": {
       "additionalProperties": false,
       "description": "The conditions a response must meet.",
@@ -592,6 +599,11 @@
           "description": "Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters."
         },
         "displayName": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            }
+          ],
           "description": "Name shown in the synthetic browser sign-in picker; it grants no authority.",
           "maxLength": 128,
           "minLength": 1,

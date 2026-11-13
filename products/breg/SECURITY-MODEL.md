@@ -524,8 +524,11 @@ where needed. The run holds the browser client credential and optional
 Casework recovery key in owner-only files, passes paths to the declared
 configuration command, and supervises the app as a guarded process group.
 The application receives only its configuration-file environment reference,
-not the PostgreSQL administrator URL. A failed or crashed app ends the run;
-stop closes the issuer and app before database cleanup. A different local
+not the PostgreSQL administrator URL. While the supervisor remains live, a
+failed or crashed app ends the run; stop closes the issuer and app before
+database cleanup. Abrupt host loss can leave an incomplete guard receipt, in
+which case recovery refuses to claim cleanup and requires verified manual
+release. A different local
 process can claim the app port between reservation release and child bind; the
 readiness check reports that failure and cleanup retains the run's ownership
 records until it can release them.

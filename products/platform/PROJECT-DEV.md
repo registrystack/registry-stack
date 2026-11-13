@@ -65,6 +65,8 @@ built root. The ready report adds `issuer` and `application` URLs. `status`
 repeats them, and `stop`, expiry, or a crashed child stops the issuer and app
 alongside the products. Configuration commands and built hosts are trusted
 local code supplied by the operator; the runner does not fetch or build them.
+A later `start` creates a fresh disposable run and databases; it does not
+restore unfinished application work.
 
 The browser issuer presents only the plan's synthetic test people. It issues
 one resource-bound token per product after a confidential authorization-code
@@ -328,8 +330,12 @@ identifier and maintenance database before dropping any resources. It waits for
 the process guards to finish, then drops the databases and roles and removes
 the run directory. If any step fails, the report gives the reason and the
 resources you can check before retrying.
-For runs from an older development build without recovery metadata, use the
-manual cleanup steps below.
+An abrupt machine restart can stop a guard before it writes its completed
+cleanup receipt. In that case `--recover` refuses to claim the guarded workload
+was reaped, even if the process no longer exists. Verify ownership and finish
+cleanup with the manual steps below. The same manual path applies to runs from
+an older development build without recovery metadata. Recovery releases the
+disposable run; it does not resume its application or pending work.
 
 A successful recovery reports `status` `stopped` and a `recovered` object with
 `stopped_process_groups` and `databases_and_roles`.
@@ -368,7 +374,8 @@ When a journey assertion fails, `start` exits 1 and prints the regular
   failure of the run's supervisor. An interrupted `start` is `domain`.
   `error.message` is the human-readable reason.
 - `run_id` is present when the failure concerns a run that still has
-  resources to release. Use it with `stop --recover`.
+  resources to release. Try `stop --recover`; an incomplete guard receipt
+  requires the verified manual cleanup above.
 - `recovery` accompanies `run_id` when the resources are known. It has `kind`
   (`lost-supervisor` or `cleanup-pending`), `run_directory`, `processes`,
   `objects` or `databases_and_roles`, `field_encryption_key` when the run
