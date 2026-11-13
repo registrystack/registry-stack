@@ -24,16 +24,16 @@ The query is a plain `SELECT` with a root `ORDER BY` and no `LIMIT` or
 without it the pages are not stable.
 
 `keyColumn: id` names the item identity. It must be unique, never `NULL` and
-stable for the life of the row. The whole row is the revision, so a changed row
-registers again and an unchanged row is skipped by key and revision. The
+stable for the life of the row. The whole row is the source revision. The direct job skips an unchanged projection
+and holds a changed projection for review after a possible or acknowledged effect. The
 `registered_on` column is selected but not in the job projection, so it never
 reaches BReg.
 
 Column types map as the type table in
 [`CAMEL-INGESTION-PORTS.md`](../../CAMEL-INGESTION-PORTS.md) says: text, the
 integer and float types, `bool`, `numeric`, `date`, `timestamp`, `timestamptz`,
-`uuid` and `NULL`. Cast anything else in the view. The view casts the `uuid`
-key to text for that reason.
+`uuid`, bounded `jsonb` and `NULL`. Cast anything else in the view. This example
+exposes the key as text. Native `uuid` also works as a scalar key.
 
 ## Rescans
 

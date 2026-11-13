@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: qfield-postgis-example
+  version: "1"
+profile:
+  id: qfield-sites
+  version: "1"
+  digest: sha256:0166ea3a5efa22feef03f07c38a77b8b94749c2c9e868dcb6f5adb98b3a50fc4
+pack:
+  id: qfield-sites
+  version: "1"
+  digest: sha256:dc3b97330caf3ed2bb8e1341338960edb3da2af495600f3bc5f51f94176b9240
+recordTypes: []
+bindings: []

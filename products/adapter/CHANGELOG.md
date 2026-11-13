@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- PostgreSQL jobs can project bounded JSONB values, including the geometry
+  and related rows in the [QField PostGIS example](examples/qfield-postgis/README.md).
+  Item keys and query parameters keep their existing scalar contract.
+
 ## 0.46.0 - 2026-11-08
 
 - A host protocol's verified response can carry one opaque attachment
