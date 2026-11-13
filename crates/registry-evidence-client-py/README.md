@@ -107,7 +107,8 @@ or the `remote` authority variant. The shared exchange parser checks the
 verified context and credential binding before any token request. Exactly one
 of `token` and `authorization` must be present.
 
-Both `token["private_key_jwt"]` and the exchange `client` require `audience`:
+`token["private_key_jwt"]`, the exchange `client` and the `remote` variant's
+`bootstrap` client each require `audience`:
 the authorization server's issuer identifier, exactly as its metadata
 publishes it. It is the client assertion's sole audience (RFC 10070 section
 4) and has no default; the assertion carries `typ: client-authentication+jwt`.

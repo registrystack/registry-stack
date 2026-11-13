@@ -675,7 +675,7 @@ fn next_step_for_stop_text(text: &str) -> Option<&'static str> {
     } else if text.contains(registry_adapter_job::pass::BREG_BODY_CHANGED) {
         Some("A pending BReg delivery was first attempted under a different job.version, mapping or projection. Restore the previous job definition, run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
     } else if text.contains(registry_adapter_job::pass::BREG_RECEIVER_CHANGED) {
-        Some("A pending BReg delivery was first attempted against a different BReg binding, base URL, token endpoint, caller, TLS trust profile, access profile, Action or mode. Restore the original destination configuration and run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
+        Some("A pending BReg delivery was first attempted against a different BReg binding, base URL, token endpoint, caller, client assertion audience, TLS trust profile, access profile, Action or mode. Restore the original destination configuration and run passes until the pending item settles (adapter-job status lists the pending keys), then ship the change.")
     } else if text.contains(registry_adapter_job::pass::PROJECTION_FLAT_DOTTED_NAME) {
         Some("A dotted field in projection.fields (household.size) reads a nested object, but the source row carries it as one flat column of that name. Group the columns into a nested object in the route (a setBody that builds {\"household\": {\"size\": ...}}), or read a source that delivers the nested object, then run the job again. Nothing on the page was delivered.")
     } else if text.contains(PAGE_BYTES_BOUND) {
@@ -1320,6 +1320,7 @@ mod tests {
             "base URL",
             "token endpoint",
             "caller",
+            "client assertion audience",
             "TLS trust profile",
             "access profile",
             "Action",

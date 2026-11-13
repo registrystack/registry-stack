@@ -322,6 +322,7 @@ async fn activate_direct<'a>(
             base_url: base_url.as_str(),
             token_endpoint: token_endpoint.as_str(),
             client_id,
+            client_assertion_audience,
             data_tls_trust_profile: data_tls_trust_profile.as_ref().map(LocalId::as_str),
             access_profile,
             action,

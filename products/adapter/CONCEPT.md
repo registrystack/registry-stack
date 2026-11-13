@@ -2195,8 +2195,9 @@ sends it under keys derived from the item, so a lost response is recovered
 by sending the same request again and BReg replays its receipt. The job
 stores no prepared attempt: a retry re-reads the source, re-maps, and
 resends. The job freezes two public digests durably before the first send:
-the receiver (BReg binding, base URL, token endpoint, caller, TLS trust
-profile, access profile, Action and mode) and the mapped operation. A possibly accepted `pending` sequence whose receiver
+the receiver (BReg binding, base URL, token endpoint, caller, client
+assertion audience, TLS trust profile, access profile, Action and mode) and
+the mapped operation. A possibly accepted `pending` sequence whose receiver
 or mapped operation differs on retry stops the pass before any BReg call,
 with the position unchanged, as `adapter.job.breg-receiver-changed` or
 `adapter.job.breg-body-changed`; restoring the original configuration lets

@@ -579,7 +579,10 @@ fn task_bound_scheduling_requires_non_task_observation_authorization_offline() {
         ("clientId", json!(CANARY)),
         ("resource", json!("urn:example:different-resource")),
         ("tokenEndpoint", json!("https://other-issuer.example/token")),
-        ("clientAssertionAudience", json!("https://other-issuer.example")),
+        (
+            "clientAssertionAudience",
+            json!("https://other-issuer.example"),
+        ),
         ("scopes", json!([])),
     ] {
         let mut document = original.clone();

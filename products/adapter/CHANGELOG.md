@@ -44,7 +44,13 @@
   header `typ: client-authentication+jwt` (RFC 10070 section 4). A configuration
   without it fails to load with a refusal that names the member. Migration:
   set the audience member to the authorization server's issuer identifier,
-  exactly as its metadata publishes it.
+  exactly as its metadata publishes it. The direct BReg receiver identity
+  includes `clientAssertionAudience`, so a direct BReg item still pending
+  from an earlier version stops the pass as `adapter.job.breg-receiver-changed`
+  before any BReg call, with the job position unchanged, and no configuration
+  under this version releases it: run passes with the previous binary until
+  `adapter-job status` lists no pending items before upgrading, or return to
+  the previous binary to settle them.
 
 ## 0.46.0 - 2026-11-08
 

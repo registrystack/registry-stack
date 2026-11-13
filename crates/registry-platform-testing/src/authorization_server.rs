@@ -41,8 +41,10 @@ use crate::{fixtures, oidc_verifier_config, sign_compact_jwt_with_key};
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-/// The header type RFC 10070 section 4 gives a client assertion. This server
-/// accepts only typed assertions, so the suite proves what clients send.
+/// The header type RFC 10070 section 4 gives a client assertion. The RFC does
+/// not require a server to refuse an assertion without it; this server does,
+/// as its stricter local profile, so a passing test proves the client under
+/// test sends the type.
 const CLIENT_ASSERTION_TYP: &str = "client-authentication+jwt";
 const ACCESS_TOKEN_TYP: &str = "at+jwt";
 const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
@@ -1056,8 +1058,11 @@ fn authenticate<'a>(
         .clients
         .get(client_id)
         .ok_or_else(Refusal::invalid_client)?;
-    // RFC 10070 section 4: the issuer identifier is the sole audience, as one
-    // string; the token endpoint and an audience array are refused.
+    // RFC 10070 section 4 requires the issuer identifier as the only audience
+    // and refusal of the token endpoint. Accepting the issuer only as one
+    // string, and so refusing an audience array even when it holds the issuer
+    // alone, is this server's stricter local profile, not an RFC requirement:
+    // a passing test proves the client under test sends exactly that.
     let audience_accepted =
         matches!(claims.get("aud"), Some(Value::String(audience)) if *audience == state.issuer);
     let now = now();

@@ -731,8 +731,9 @@ async fn a_bad_client_assertion_is_refused() {
 }
 
 /// RFC 10070 section 4: a client assertion names the issuer identifier as its
-/// sole audience and carries the explicit type, so the suite proves what the
-/// clients under test send.
+/// only audience, and the token endpoint is refused. The single-string
+/// audience and the explicit type are this server's stricter local profile,
+/// not RFC requirements, so the suite proves what the clients under test send.
 #[tokio::test]
 async fn a_client_assertion_names_only_the_issuer_and_its_type() {
     let fixture = fixture().await;
@@ -751,7 +752,8 @@ async fn a_client_assertion_names_only_the_issuer_and_its_type() {
         ("an untyped header", "JWT", json!(issuer)),
     ];
     for (label, typ, audience) in refused {
-        let client_assertion = assertion_shaped(&fixture.gateway_key, GATEWAY, typ, audience, label);
+        let client_assertion =
+            assertion_shaped(&fixture.gateway_key, GATEWAY, typ, audience, label);
         let (status, body) = post_form(
             server,
             &[
@@ -766,8 +768,13 @@ async fn a_client_assertion_names_only_the_issuer_and_its_type() {
         assert_eq!(body["error"], "invalid_client", "{label}");
     }
 
-    let client_assertion =
-        assertion_shaped(&fixture.gateway_key, GATEWAY, typed, json!(issuer), "issuer");
+    let client_assertion = assertion_shaped(
+        &fixture.gateway_key,
+        GATEWAY,
+        typed,
+        json!(issuer),
+        "issuer",
+    );
     let (status, body) = post_form(
         server,
         &[

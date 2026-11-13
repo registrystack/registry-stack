@@ -300,7 +300,7 @@ change. A changed receiver stops as `adapter.job.coordinator-receiver-changed`
 instead; restoring the original receiver recovers it. A direct BReg job fences
 the same way under `adapter.job.breg-body-changed` (the mapped operation
 differs), `adapter.job.breg-receiver-changed` (another BReg binding, base URL, token
-endpoint, caller, TLS trust profile, access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
+endpoint, caller, client assertion audience, TLS trust profile, access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
 (staged before schema 103); the recoveries are the same.
 Removing `destination.revisedReceiver` from a Coordinator job does not stop: a
 possibly admitted item then has no receiver and is held as

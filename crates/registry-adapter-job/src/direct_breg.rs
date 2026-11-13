@@ -78,9 +78,11 @@ where
 
 /// Public, credential-free configuration covered by the durable receiver
 /// identity. Idempotency receipts are scoped to the authenticated caller, so
-/// the caller and its issuer are part of the receiver; credential references
-/// and material, resolved TLS bytes and timeouts are deliberately excluded.
-/// The digest only establishes exact equality on retry.
+/// the caller and its issuer are part of the receiver: the token endpoint,
+/// the client id and the issuer identifier its client assertions name as
+/// their audience. Credential references and material, resolved TLS bytes
+/// and timeouts are deliberately excluded. The digest only establishes exact
+/// equality on retry.
 pub struct DirectBregReceiverDigestContext<'a> {
     /// The runtime binding id.
     pub binding: &'a str,
@@ -90,6 +92,9 @@ pub struct DirectBregReceiverDigestContext<'a> {
     pub token_endpoint: &'a str,
     /// The authenticated caller's client id.
     pub client_id: &'a str,
+    /// The issuer identifier the caller's client assertions name as their
+    /// audience.
+    pub client_assertion_audience: &'a str,
     /// The private trust profile for the BReg origin, when one is set.
     pub data_tls_trust_profile: Option<&'a str>,
     /// The access profile every call selects under.
@@ -110,6 +115,7 @@ pub fn receiver_identity(context: &DirectBregReceiverDigestContext<'_>) -> [u8; 
         context.base_url,
         context.token_endpoint,
         context.client_id,
+        context.client_assertion_audience,
     ] {
         component(&mut digest, value.as_bytes());
     }
@@ -436,6 +442,7 @@ mod tests {
             base_url: "https://breg.example/institution-a",
             token_endpoint: "https://auth.example/token",
             client_id: "adapter-job",
+            client_assertion_audience: "https://auth.example",
             data_tls_trust_profile: None,
             access_profile: "writer",
             action: "register-household",
@@ -462,6 +469,10 @@ mod tests {
             },
             DirectBregReceiverDigestContext {
                 client_id: "another-job",
+                ..receiver_context()
+            },
+            DirectBregReceiverDigestContext {
+                client_assertion_audience: "https://auth.example/other",
                 ..receiver_context()
             },
             DirectBregReceiverDigestContext {

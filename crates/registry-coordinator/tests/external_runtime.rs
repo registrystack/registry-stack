@@ -183,7 +183,10 @@ fn semantic_binding_digest_survives_secret_rotation_and_set_reordering() {
     }
     for (member, value) in [
         ("clientId", json!("another-reader")),
-        ("clientAssertionAudience", json!("https://another-issuer.example.test")),
+        (
+            "clientAssertionAudience",
+            json!("https://another-issuer.example.test"),
+        ),
     ] {
         let mut changed_principal = original.clone();
         changed_principal["connections"]["office-directory"]["authorization"][member] = value;

@@ -52,13 +52,35 @@ class ConstructionTest(unittest.TestCase):
                                 "ambiguous", authorization=authorization)
 
         # The assertion audience is the authorization server's issuer
-        # identifier and has no default; both credential shapes name it.
+        # identifier and has no default; both credential shapes name it, and
+        # an exchange names each client that omits it by its member path.
         unstated_client = dict(authorization["exchange"]["client"])
         del unstated_client["audience"]
         unstated = {"exchange": {**authorization["exchange"], "client": unstated_client}}
-        with self.assertRaisesRegex(revc.ConfigurationError, "`audience`"):
+        with self.assertRaises(revc.ConfigurationError) as raised:
             revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
                                 authorization=unstated)
+        self.assertIn('authorization["exchange"]["client"]["audience"]', str(raised.exception))
+        remote = {"exchange": {
+            "client": authorization["exchange"]["client"],
+            "context": {**authorization["exchange"]["context"], "issuer": "https://casework.example",
+                        "grant_id": "grant-1"},
+            "remote": {"endpoint": "https://casework.example/v1/task-grants/grant-1/assertion",
+                       "bootstrap": {**authorization["exchange"]["client"], "resource": "urn:casework",
+                                     "scopes": ["casework:grants:assert"]},
+                       "bootstrap_resource": "urn:casework", "bootstrap_scope": "casework:grants:assert"},
+        }}
+        self.assertIsInstance(revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
+                                                  authorization=remote), revc.EvidenceClient)
+        unstated_bootstrap = dict(remote["exchange"]["remote"]["bootstrap"])
+        del unstated_bootstrap["audience"]
+        unstated = {"exchange": {**remote["exchange"],
+                                 "remote": {**remote["exchange"]["remote"], "bootstrap": unstated_bootstrap}}}
+        with self.assertRaises(revc.ConfigurationError) as raised:
+            revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
+                                authorization=unstated)
+        self.assertIn('authorization["exchange"]["remote"]["bootstrap"]["audience"]',
+                      str(raised.exception))
         with self.assertRaisesRegex(revc.ConfigurationError, "`audience`"):
             revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
                                 {"private_key_jwt": {"token_endpoint": "https://issuer.example/token",

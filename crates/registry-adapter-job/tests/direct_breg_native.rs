@@ -18,9 +18,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr as _;
-#[cfg(feature = "job-postgres")]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,8 +31,11 @@ use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use registry_adapter_connectors::breg::{BregConnector, BregConnectorConfig};
 use registry_adapter_connectors::operation::{CommandKey, Observable, Operation, OutcomeCategory};
 use registry_adapter_engine::job::compile_job;
-use registry_adapter_job::destination::{DeliverableItem, HandOffOutcome, JobDestination};
+use registry_adapter_job::destination::{
+    DeliverableItem, DeliveryIdentity, HandOffOutcome, JobDestination,
+};
 use registry_adapter_job::direct_breg::DirectBregMappingRefused;
+use registry_adapter_job::direct_breg::{receiver_identity, DirectBregReceiverDigestContext};
 use registry_adapter_job::direct_breg::{DirectBregDestination, DirectBregOperation};
 use registry_adapter_job::pass::{run_pass, PassOptions, StopReason};
 #[cfg(feature = "job-postgres")]
@@ -513,6 +514,65 @@ impl JobDestination for LoseFirstAnswer {
     }
 }
 
+/// The direct BReg destination with its delivery-identity fence in place,
+/// counting every hand-off that reaches it. When `lose_answers` is set it
+/// discards each accepted answer, so the item stays pending exactly as it
+/// would after a lost BReg answer.
+struct FencedHandOffs {
+    inner: Arc<dyn JobDestination>,
+    lose_answers: bool,
+    hand_offs: AtomicUsize,
+    accepted_reference: Mutex<Option<String>>,
+}
+
+impl FencedHandOffs {
+    fn new(inner: Arc<dyn JobDestination>, lose_answers: bool) -> Self {
+        Self {
+            inner,
+            lose_answers,
+            hand_offs: AtomicUsize::new(0),
+            accepted_reference: Mutex::new(None),
+        }
+    }
+}
+
+impl JobDestination for FencedHandOffs {
+    fn delivery_identity(
+        &self,
+        job: &registry_adapter_core::JobIdentity,
+        item: &DeliverableItem,
+    ) -> Option<DeliveryIdentity> {
+        self.inner.delivery_identity(job, item)
+    }
+
+    fn deliver<'a>(
+        &'a self,
+        job: &'a registry_adapter_core::JobIdentity,
+        item: &'a DeliverableItem,
+    ) -> Pin<Box<dyn Future<Output = HandOffOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            self.hand_offs.fetch_add(1, Ordering::SeqCst);
+            let outcome = self.inner.deliver(job, item).await;
+            if !self.lose_answers {
+                return outcome;
+            }
+            let HandOffOutcome::Acknowledged {
+                run_id: Some(run_id),
+            } = outcome
+            else {
+                panic!("the native hand-off must submit one Proposal: {outcome:?}");
+            };
+            *self
+                .accepted_reference
+                .lock()
+                .expect("the accepted-reference lock") = Some(run_id);
+            HandOffOutcome::StopPass {
+                code: "adapter.test.lost-destination-answer".to_string(),
+            }
+        })
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "runs under the Adapter native connector runner"]
 async fn a_lost_native_proposal_answer_recovers_the_same_proposal_through_the_job_store() {
@@ -604,6 +664,146 @@ async fn a_lost_native_proposal_answer_recovers_the_same_proposal_through_the_jo
         payload_columns, 0,
         "the recovery stored no payload or attempt"
     );
+    service.finish();
+}
+
+/// The client assertion audience belongs to the receiver identity. An item
+/// left pending under one audience is not handed to BReg again when the
+/// runtime restarts under another: the pass stops as `breg-receiver-changed`
+/// before any BReg call, with the item pending and the position unchanged,
+/// and the original audience settles the same Proposal.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "runs under the Adapter native connector runner"]
+async fn a_pending_native_proposal_is_not_retried_under_another_client_assertion_audience() {
+    let issuer = registry_adapter_connectors::test_support::issuer(SUBJECT).await;
+    let service = registry_adapter_connectors::test_support::Breg::start(&issuer).await;
+    let connector = proposal_connector(&service, &issuer).await;
+    let target = create_target(&connector);
+    let fixture = job_fixture::JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(
+            200,
+            json!({
+                "data": [{"id": "a", "answers": {"age": "045"}}],
+                "nextCursor": "p2"
+            }),
+        )],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    let base_url = service.origin();
+    let token_endpoint = issuer.token_endpoint();
+    let issuer_audience = issuer.issuer();
+    let other_audience = format!("{issuer_audience}/other");
+    let destination = |client_assertion_audience: &str, lose_answers: bool| {
+        let receiver = receiver_identity(&DirectBregReceiverDigestContext {
+            binding: "breg-native",
+            base_url: &base_url,
+            token_endpoint: &token_endpoint,
+            client_id: SUBJECT,
+            client_assertion_audience,
+            data_tls_trust_profile: None,
+            access_profile: "writer",
+            action: "manual-item",
+            mode: "proposal",
+        });
+        let target = target.clone();
+        let direct = DirectBregDestination::new(
+            Arc::clone(&connector),
+            move |item: &DeliverableItem| {
+                let label = item
+                    .projected
+                    .get("answers.age")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                Ok::<_, DirectBregMappingRefused>(DirectBregOperation::Proposal {
+                    start_input: json!({"input": {"targetId": target, "label": label}}),
+                    submit_body: json!({}),
+                })
+            },
+            receiver,
+        );
+        FencedHandOffs::new(Arc::new(direct), lose_answers)
+    };
+
+    let original = destination(&issuer_audience, true);
+    let first = run_pass(&pool, &program, &original, PassOptions::default()).await;
+    assert_eq!(
+        first.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.test.lost-destination-answer".to_string()
+        })
+    );
+    assert_eq!(original.hand_offs.load(Ordering::SeqCst), 1);
+    let accepted = original
+        .accepted_reference
+        .lock()
+        .expect("the accepted-reference lock")
+        .clone()
+        .expect("the first Proposal reference");
+    let client = pool.get().await.expect("a pooled client");
+    let pending = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the pending row reads")
+        .expect("the pending row exists");
+    assert_eq!(pending.status, ItemStatus::Pending);
+    assert_eq!(pending.sequence, 1);
+    let position = store::read_state(&client, "case-daily")
+        .await
+        .expect("the state row reads")
+        .unwrap_or_default()
+        .position;
+    drop(client);
+
+    let restarted = destination(&other_audience, false);
+    let refused = run_pass(&pool, &program, &restarted, PassOptions::default()).await;
+    assert_eq!(
+        refused.stopped,
+        Some(StopReason::DestinationStop {
+            code: registry_adapter_job::pass::BREG_RECEIVER_CHANGED.to_string()
+        })
+    );
+    assert_eq!(
+        restarted.hand_offs.load(Ordering::SeqCst),
+        0,
+        "another audience stops the pass before any BReg call"
+    );
+    let client = pool.get().await.expect("a pooled client");
+    let held = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the held row reads")
+        .expect("the held row exists");
+    assert_eq!(held.status, ItemStatus::Pending);
+    assert_eq!(held.sequence, 1);
+    assert!(held.run_id.is_none(), "the refused pass stored no result");
+    let held_position = store::read_state(&client, "case-daily")
+        .await
+        .expect("the state row reads")
+        .unwrap_or_default()
+        .position;
+    assert_eq!(
+        held_position, position,
+        "the refused pass kept the position"
+    );
+    drop(client);
+
+    let restored = destination(&issuer_audience, false);
+    let recovered = run_pass(&pool, &program, &restored, PassOptions::default()).await;
+    assert_eq!(recovered.stopped, None);
+    assert_eq!(recovered.items_redelivered, 1);
+    assert_eq!(recovered.items_acknowledged, 1);
+    assert_eq!(restored.hand_offs.load(Ordering::SeqCst), 1);
+    let client = pool.get().await.expect("a pooled client");
+    let settled = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the settled row reads")
+        .expect("the settled row exists");
+    assert_eq!(settled.status, ItemStatus::Acknowledged);
+    assert_eq!(settled.sequence, 1);
+    assert_eq!(settled.run_id.as_deref(), Some(accepted.as_str()));
     service.finish();
 }
 

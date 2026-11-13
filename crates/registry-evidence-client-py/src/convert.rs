@@ -1027,9 +1027,27 @@ pub fn exchange_from_authorization_json(
         ))
     })?;
     // The shared parser refuses any shape error without naming a member, so
-    // the one member with no default is named here before it runs.
-    if let Some(client) = exchange.get("client").and_then(Value::as_object) {
-        required_string(client, "audience").map_err(ConfigError::Shape)?;
+    // the member with no default, each client's assertion audience, is named
+    // here by its full path before it runs.
+    for (client, member) in [
+        (
+            exchange.get("client"),
+            r#"authorization["exchange"]["client"]["audience"]"#,
+        ),
+        (
+            exchange
+                .get("remote")
+                .and_then(|remote| remote.get("bootstrap")),
+            r#"authorization["exchange"]["remote"]["bootstrap"]["audience"]"#,
+        ),
+    ] {
+        if let Some(client) = client.and_then(Value::as_object) {
+            if !client.get("audience").is_some_and(Value::is_string) {
+                return Err(ConfigError::Shape(ConversionError::new(format!(
+                    "{member} must be a string"
+                ))));
+            }
+        }
     }
     exchange_authorization_from_json(exchange).map_err(ConfigError::from)
 }
@@ -1952,7 +1970,73 @@ mod tests {
         let ConfigError::Shape(shape) = error else {
             panic!("expected a shape error, got {error:?}");
         };
-        assert!(shape.0.contains("`audience`"), "{}", shape.0);
+        assert_eq!(
+            shape.0,
+            r#"authorization["exchange"]["client"]["audience"] must be a string"#
+        );
+    }
+
+    /// Each client in an exchange signs its own client assertion, whose
+    /// audience is the authorization server's issuer identifier with no
+    /// default. The exchange client and a remote bootstrap client are each
+    /// refused by their full member path before the shared parser runs.
+    #[test]
+    fn an_exchange_names_each_client_that_omits_its_assertion_audience() {
+        let key_client = |resource: &str, scope: &str| {
+            serde_json::json!({
+                "token_endpoint": "https://issuer.example/token",
+                "client_id": "agent-client",
+                "client_key": generated_private_jwk_json(),
+                "audience": "https://issuer.example",
+                "resource": resource,
+                "scopes": [scope]
+            })
+        };
+        let remote = serde_json::json!({"exchange": {
+            "client": key_client("urn:registry:evidence", "evidence:invoke"),
+            "context": {
+                "issuer": "https://casework.example",
+                "subject": "agent-1",
+                "audience": "https://issuer.example",
+                "generation": "grant-1",
+                "deadline_seconds": Utc::now().timestamp() + 3600,
+                "grant_id": "grant-1"
+            },
+            "remote": {
+                "endpoint": "https://casework.example/v1/task-grants/grant-1/assertion",
+                "bootstrap": key_client("urn:casework", "casework:grants:assert"),
+                "bootstrap_resource": "urn:casework",
+                "bootstrap_scope": "casework:grants:assert"
+            }
+        }});
+        exchange_from_authorization_json(&remote).expect("the remote exchange converts offline");
+
+        for (holder, member) in [
+            (
+                &["client"][..],
+                r#"authorization["exchange"]["client"]["audience"]"#,
+            ),
+            (
+                &["remote", "bootstrap"][..],
+                r#"authorization["exchange"]["remote"]["bootstrap"]["audience"]"#,
+            ),
+        ] {
+            let mut unstated = remote.clone();
+            let mut client = &mut unstated["exchange"];
+            for step in holder {
+                client = &mut client[*step];
+            }
+            client
+                .as_object_mut()
+                .expect("a client mapping")
+                .remove("audience");
+            let error = exchange_from_authorization_json(&unstated)
+                .expect_err("a client without an assertion audience is refused");
+            let ConfigError::Shape(shape) = error else {
+                panic!("expected a shape error, got {error:?}");
+            };
+            assert_eq!(shape.0, format!("{member} must be a string"));
+        }
     }
 
     /// The scopes the binding reads are a list of strings, and a value of any

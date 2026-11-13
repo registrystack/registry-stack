@@ -742,9 +742,13 @@ async fn issue_token(state: Arc<TokenState>, headers: HeaderMap, body: Bytes) ->
     let Ok(now) = clock() else {
         return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
     };
-    // RFC 10070 section 4: the audience is the issuer identifier alone. It
-    // deserializes only as one string, so an audience array is refused above,
-    // and any other value, this endpoint's own URL included, is refused here.
+    // RFC 10070 section 4 requires the issuer identifier as the only audience
+    // and refusal of the token endpoint, so any other value, this endpoint's
+    // own URL included, is refused here. This dev endpoint accepts the issuer
+    // as one string only: the audience deserializes only as a string, so an
+    // array is refused above. That is a local choice, not an RFC requirement,
+    // and the endpoint does not promise compatibility with independent
+    // clients that send the issuer in an array.
     if claims.iss != client.client_id
         || claims.sub != client.client_id
         || claims.aud != state.audience
@@ -1160,10 +1164,12 @@ mod tests {
     }
 
     /// RFC 10070 section 4: the endpoint takes the issuer identifier as the
-    /// assertion's only audience, as one string, and refuses its own token
-    /// endpoint URL, an audience array and more than one audience. It accepts
-    /// the `client-authentication+jwt` type and, as that section recommends,
-    /// does not refuse an assertion typed `JWT`; any other type is refused.
+    /// assertion's only audience and refuses its own token endpoint URL and
+    /// more than one audience. It accepts the issuer as one string only and
+    /// refuses an audience array, a local choice rather than an RFC
+    /// requirement. It accepts the `client-authentication+jwt` type and, as
+    /// that section recommends, does not refuse an assertion typed `JWT`; any
+    /// other type is refused.
     #[test]
     fn endpoint_takes_the_issuer_as_the_only_audience_and_accepts_both_assertion_types() {
         let root = tempfile::tempdir().unwrap();
