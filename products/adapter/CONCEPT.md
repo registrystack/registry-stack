@@ -2201,7 +2201,10 @@ the mapped operation. A possibly accepted `pending` sequence whose receiver
 or mapped operation differs on retry stops the pass before any BReg call,
 with the position unchanged, as `adapter.job.breg-receiver-changed` or
 `adapter.job.breg-body-changed`; restoring the original configuration lets
-it settle. A pending row staged before the digests were recorded stops as
+it settle. A row left pending by a binary whose receiver digest did not
+include the client assertion audience (0.46.0 and earlier) is the exception:
+no configuration clears it, and it settles only with that binary on the
+pre-upgrade store. A pending row staged before the digests were recorded stops as
 `adapter.job.breg-identity-unrecorded`. If the item itself changed, BReg
 answers `idempotency.key-reused` and the item is held for an operator, which
 is the safe direction. A Proposal uses two command

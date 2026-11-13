@@ -49,8 +49,10 @@
   from an earlier version stops the pass as `adapter.job.breg-receiver-changed`
   before any BReg call, with the job position unchanged, and no configuration
   under this version releases it: run passes with the previous binary until
-  `adapter-job status` lists no pending items before upgrading, or return to
-  the previous binary to settle them.
+  `adapter-job status` lists no pending items, and take a database backup,
+  before upgrading. After `init-store` the store is at schema 104, which the
+  previous binary refuses: restore that backup, settle the items with the
+  previous binary, then upgrade and run `init-store` again.
 
 ## 0.46.0 - 2026-11-08
 
