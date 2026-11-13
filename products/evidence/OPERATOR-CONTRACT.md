@@ -379,7 +379,15 @@ Version one does not implement a searchable, mutable, or federated catalog
 inside Evidence, a registration editor, or a `describe` CLI command. An
 external catalog may index the closed provider advertisement. `/catalog.jsonld`,
 `/health`, `/ready`, `/openapi.json`, public problems, and JWKS never reveal
-requester entitlements, enabled request definitions, or selector profiles.
+requester entitlements or selector profiles. One exception applies to enabled
+request definitions: a request that names `expectedConfigurationRevision` has
+that pin compared with the loaded revision for its requirement before the
+caller is authenticated. A wrong pair is refused `403 evidence.denied` and the
+loaded pair proceeds to authentication, so a caller who already holds a
+candidate requirement and revision pair can confirm it without a token. The
+comparison reveals no unknown digest, entitlement, or record. Treat the
+revision pairs in onboarding material as shareable only with parties who may
+know the requirement exists.
 
 ## Requester authority and purpose
 
@@ -467,8 +475,16 @@ Evidence starts no new credential, source, or release-append
 operation after that deadline. A terminal release append admitted before the
 deadline completes without cancellation, and the exact audited response bytes
 may return after the deadline expires. The deadline is therefore not a hard
-wall-clock response cutoff. A signed source's verified `validUntil` remains an
-independent data-validity bound.
+wall-clock response cutoff. The deadline has a maximum of 300 seconds
+(300000 milliseconds); a larger value is refused at load. The caller's token
+expiry is checked once, when the request is authenticated, and is not checked
+again. A task grant's expiry is checked at authentication and again immediately
+before release: a result that arrives after the grant expired is refused with
+403 and not released, and the audit records `grant-expired`. A token that
+expires mid-request can still release within the acquisition deadline. Use
+short task-token lifetimes, or leave Evidence out of grants for procedures
+that need immediate withdrawal of the caller's token. A signed source's verified
+`validUntil` remains an independent data-validity bound.
 
 ## Response formats
 

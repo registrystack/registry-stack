@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- BREAKING: `acquisitionDeadlineMilliseconds` has a maximum of 300000 (300
+  seconds) in the authored target
+  (`sourceAcquisition.acquisitionDeadlineMilliseconds`) and in the runtime
+  configuration file. A longer deadline fails to load with a range error that
+  names the field and the maximum; nothing is clamped. Migration: write a value
+  of at most 300000.
+- BREAKING: Evidence refuses to release an acquisition result after the caller's
+  task grant has expired, even when the acquisition deadline has not passed. The
+  caller receives `403 evidence.denied` and the audit records a failure with
+  safe error category `grant-expired`. Migration: issue grants that outlast the
+  source round trip and signing.
+- BREAKING: `offers.allowedClients: unrestricted` and
+  `offers.requiredScopes: unrestricted` are refused with
+  `evidence.oid4vci.offer-gate-unrestricted` unless `validationMode` is
+  `supervised-local-development`. This supersedes the 0.46.0 migration advice to
+  write `requiredScopes: unrestricted` where the member was absent: that
+  configuration no longer loads outside local development. Migration: list the
+  clients that may request an offer and the scopes they must hold.
+
 ## 0.46.0 - 2026-11-08
 
 - Experimental public certificate check. An assertion definition may declare

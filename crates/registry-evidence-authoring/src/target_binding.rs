@@ -373,13 +373,18 @@ pub struct TargetConnection {
     pub allowed_private_cidrs: Vec<String>,
 }
 
+/// The longest source acquisition deadline a target may configure. An
+/// acquisition under a task grant is also bounded by the grant's own expiry;
+/// this ceiling bounds every other acquisition and the in-flight window.
+pub const MAX_ACQUISITION_DEADLINE_MILLISECONDS: u64 = 300_000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TargetSourceAcquisition {
     pub maximum_data_operations: BoundedU64<1, { u64::MAX }>,
     #[serde(rename = "acquisitionDeadlineMilliseconds")]
-    pub deadline_milliseconds: BoundedU64<1, { u64::MAX }>,
+    pub deadline_milliseconds: BoundedU64<1, MAX_ACQUISITION_DEADLINE_MILLISECONDS>,
     pub maximum_response_bytes: BoundedU64<1, { u64::MAX }>,
 }
 
@@ -990,6 +995,27 @@ mod tests {
             }))
             .is_err(),
             "the ambiguous generic deadline spelling is not an authored alias"
+        );
+    }
+
+    #[test]
+    fn source_acquisition_deadline_has_an_upper_bound() {
+        let limits = |deadline: u64| {
+            serde_json::from_value::<TargetSourceAcquisition>(serde_json::json!({
+                "maximumDataOperations": 9,
+                "acquisitionDeadlineMilliseconds": deadline,
+                "maximumResponseBytes": 2_097_152
+            }))
+        };
+        limits(MAX_ACQUISITION_DEADLINE_MILLISECONDS)
+            .expect("the ceiling itself is a valid deadline");
+        let error = limits(MAX_ACQUISITION_DEADLINE_MILLISECONDS + 1)
+            .expect_err("a deadline above the ceiling is refused at load");
+        assert!(
+            error
+                .to_string()
+                .contains(&MAX_ACQUISITION_DEADLINE_MILLISECONDS.to_string()),
+            "the refusal names the maximum: {error}"
         );
     }
 

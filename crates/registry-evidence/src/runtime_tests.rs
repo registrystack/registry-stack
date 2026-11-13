@@ -3743,6 +3743,133 @@ async fn singular_release_does_not_begin_after_its_acquisition_deadline() {
     assert!(audit.contains("\"safeErrorCategory\":\"acquisition-budget\""));
 }
 
+/// A parent-relationship runtime whose signing step takes `signing_delay`,
+/// under an acquisition deadline far longer than any grant used here.
+async fn parent_runtime_with_slow_signing(
+    prepared: &PreparedAcceptance,
+    signing_delay: Duration,
+) -> EvidenceRuntime {
+    set_source_acquisition_deadline(&prepared.runtime_path, 20_000);
+    let mut runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("runtime initializes");
+    let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("test signing key parses");
+    let provider: Arc<dyn SigningProvider> = Arc::new(DelayedAfterSelfTestSigner {
+        delegate: LocalJwkSigner::new(private).expect("local signer builds"),
+        calls: AtomicUsize::new(0),
+        delay: signing_delay,
+    });
+    let signer = EvidenceSigner::initialize(provider, EVIDENCE_KEY_ID)
+        .await
+        .expect("signer passes its immediate startup self-test");
+    runtime.replace_signer_for_test(signer);
+    runtime
+}
+
+fn parent_grant_token_expiring_in(seconds: i64) -> String {
+    let mut claims = parent_grant_claims();
+    claims["registry_grant_exp"] = json!(Utc::now().timestamp() + seconds);
+    access_token(Some(claims))
+}
+
+#[tokio::test]
+async fn release_admission_needs_both_the_acquisition_deadline_and_the_grant_ahead() {
+    let now = tokio::time::Instant::now();
+    let ahead = now + Duration::from_secs(60);
+    let behind = now - Duration::from_millis(1);
+
+    crate::runtime::release_admission(ahead, None)
+        .expect("no grant leaves the acquisition deadline alone");
+    crate::runtime::release_admission(ahead, Some(ahead)).expect("both ahead admits release");
+    let expired_grant =
+        crate::runtime::release_admission(ahead, Some(behind)).expect_err("grant expired");
+    assert_eq!(expired_grant.problem(), ProblemCode::NotAuthorized);
+    assert_eq!(expired_grant.category(), "grant-expired");
+    let expired_budget =
+        crate::runtime::release_admission(behind, Some(ahead)).expect_err("budget spent");
+    assert_eq!(expired_budget.problem(), ProblemCode::DependencyUnavailable);
+    assert_eq!(expired_budget.category(), "acquisition-budget");
+}
+
+#[tokio::test]
+async fn singular_release_does_not_begin_after_the_task_grant_expired() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let runtime = parent_runtime_with_slow_signing(&prepared, Duration::from_millis(7_000)).await;
+    mount_parent_source(
+        &prepared.server,
+        parent_source_response(vec![PARENT_REFERENCE]),
+    )
+    .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-grant-expired-before-release",
+            &parent_grant_token_expiring_in(5),
+            &parent_request(),
+        )
+        .await
+        .expect_err("a result that outlives its grant is not released");
+    assert_eq!(
+        error.problem(),
+        ProblemCode::NotAuthorized,
+        "the caller sees what an expired grant yields"
+    );
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 1);
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert!(audit.contains("\"safeErrorCategory\":\"grant-expired\""));
+}
+
+#[tokio::test]
+async fn batch_release_does_not_begin_after_the_task_grant_expired() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let runtime = parent_runtime_with_slow_signing(&prepared, Duration::from_millis(7_000)).await;
+    mount_parent_source(
+        &prepared.server,
+        parent_source_response(vec![PARENT_REFERENCE]),
+    )
+    .await;
+
+    let error = runtime
+        .evaluate_request_batch(
+            "operation-batch-grant-expired-before-release",
+            &parent_grant_token_expiring_in(5),
+            &request_batch_from_request(&parent_request(), 1),
+        )
+        .await
+        .expect_err("a batch that outlives its grant is not released");
+    assert_eq!(error.problem(), ProblemCode::NotAuthorized);
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert!(audit.contains("\"safeErrorCategory\":\"grant-expired\""));
+}
+
+#[tokio::test]
+async fn singular_release_inside_the_task_grant_lifetime_is_released() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let runtime = parent_runtime_with_slow_signing(&prepared, Duration::from_millis(500)).await;
+    mount_parent_source(
+        &prepared.server,
+        parent_source_response(vec![PARENT_REFERENCE]),
+    )
+    .await;
+
+    runtime
+        .evaluate(
+            "operation-grant-live-at-release",
+            &parent_grant_token_expiring_in(60),
+            &parent_request(),
+        )
+        .await
+        .expect("a result inside the grant lifetime is released");
+
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 1);
+}
+
 #[tokio::test]
 async fn singular_unavailable_result_needs_no_source_facts_or_disclosure_release() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
