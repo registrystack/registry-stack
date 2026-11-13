@@ -298,7 +298,11 @@ products.
 admitted under its key: a source edit after a hand-off that was accepted or
 whose answer was lost, or a `rescan` of an item refused on the retry of a lost
 answer. A Coordinator job that names a receiver for revisions sends such an
-item there as a `revised` event instead of holding it. Removing that receiver
+item there as a `revised` event instead of holding it. Once that revised event
+may have been admitted (its answer was lost and its retry refused), a `rescan`
+sends it only to the same receiver with the same body; a changed receiver or
+body stops the pass as `adapter.job.coordinator-receiver-changed` or
+`adapter.job.coordinator-body-changed` before any request. Removing that receiver
 holds every such item, including one whose revised event was sent and whose
 answer was lost; restoring the receiver does not resend a held item, so check
 Coordinator for that Run before you resolve the hold.

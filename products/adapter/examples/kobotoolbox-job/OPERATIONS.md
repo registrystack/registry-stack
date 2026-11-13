@@ -238,6 +238,11 @@ An item refused on the retry of a lost answer may already be admitted, so the
 rescan does not send it again under a new key: it is held as
 `adapter.job.revised-item`, or sent to `destination.revisedReceiver` when a
 Coordinator job names one.
+An item whose revised event may already be admitted is sent only to the same
+revised receiver with the same body. A changed receiver or body stops the
+rescan as `adapter.job.coordinator-receiver-changed` or
+`adapter.job.coordinator-body-changed` before any request; restoring the
+previous receiver and job definition lets the item settle.
 
 For a long-running process driven by the job's interval trigger, run:
 

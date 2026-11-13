@@ -30,7 +30,8 @@ use registry_adapter_job::destination::{DeliverableItem, HandOffOutcome, JobDest
 use registry_adapter_job::pass::{run_pass, PassOptions, PassReport, StopReason};
 use registry_adapter_job::runtime_destination::activate_destination;
 use registry_adapter_job::signed_coordinator_event::{
-    SignedCoordinatorEventDestination, SignedCoordinatorEventReceiver,
+    receiver_identity, CoordinatorReceiverDigestContext, SignedCoordinatorEventDestination,
+    SignedCoordinatorEventReceiver,
 };
 use registry_adapter_job::store::{self, ItemStatus};
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -1317,4 +1318,459 @@ async fn removing_then_restoring_a_revised_trigger_with_an_answer_outstanding_ho
         .expect("the held row reads")
         .expect("the held row exists");
     assert_eq!(still.status, ItemStatus::Held);
+}
+
+const REVISED_TYPE: &str = "case.revised";
+const REVISION_BINDING: &str = "adapter-coordinator-revision";
+
+/// One Coordinator deployment's admissions, keyed the way Coordinator keys
+/// an event trigger admission: event source, event id and trigger name. A
+/// repeated key answers with the Run its first admission started.
+type Admissions = Arc<Mutex<BTreeMap<(String, String, String), String>>>;
+
+/// A Coordinator receiver on the primary and every revised trigger of the
+/// `case-ingestion` workflow. It verifies each signed event against the
+/// path it arrived on, records the trigger and event id, admits the event
+/// into its deployment's [`Admissions`] unless the scripted answer is a
+/// problem, and answers from its script.
+#[derive(Clone)]
+struct AdmittingReceiver {
+    admissions: Admissions,
+    answers: Arc<Mutex<VecDeque<Answer>>>,
+    requests: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl AdmittingReceiver {
+    /// Every trigger and event id this receiver was sent, in order.
+    fn requests(&self) -> Vec<(String, String)> {
+        self.requests.lock().expect("the request lock").clone()
+    }
+
+    /// The Runs this receiver's deployment admitted for `event_id`, on any
+    /// trigger.
+    fn runs_for(&self, event_id: &str) -> Vec<String> {
+        self.admissions
+            .lock()
+            .expect("the admission lock")
+            .iter()
+            .filter(|((_, id, _), _)| id == event_id)
+            .map(|(_, run)| run.clone())
+            .collect()
+    }
+}
+
+async fn admitting(
+    State(receiver): State<AdmittingReceiver>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> axum::response::Response {
+    let pairs = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_bytes()))
+        .collect::<Vec<_>>();
+    verify_delivery(
+        SignedDelivery {
+            method: "POST",
+            request_target: uri.path(),
+            headers: pairs,
+            body: &body,
+            key: KEY,
+        },
+        DeliveryFreshness::CallerEnforced,
+    )
+    .expect("the job sent a valid platform signature");
+    let envelope = HookEnvelope::from_canonical_bytes(&body, &EnvelopeLimits::default())
+        .expect("the job sent a canonical hook envelope");
+    let trigger = uri
+        .path()
+        .rsplit('/')
+        .next()
+        .expect("the path names a trigger")
+        .to_string();
+    receiver
+        .requests
+        .lock()
+        .expect("the request lock")
+        .push((trigger.clone(), envelope.id.clone()));
+    let answer = receiver
+        .answers
+        .lock()
+        .expect("the answer lock")
+        .pop_front()
+        .expect("every signed event has a scripted answer");
+    let admit = || {
+        receiver
+            .admissions
+            .lock()
+            .expect("the admission lock")
+            .entry((
+                envelope.source.clone(),
+                envelope.id.clone(),
+                trigger.clone(),
+            ))
+            .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone()
+    };
+    match answer {
+        Answer::Problem(status, code) => (
+            status,
+            [("content-type", "application/problem+json")],
+            axum::Json(json!({"code": code, "status": status.as_u16()})),
+        )
+            .into_response(),
+        Answer::Lost => {
+            admit();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Answer::Admitted => {
+            let run = admit();
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            response.headers_mut().insert(
+                "x-coordinator-run-id",
+                HeaderValue::from_str(&run).expect("a Run UUID header"),
+            );
+            response
+        }
+    }
+}
+
+/// Start an [`AdmittingReceiver`] on its own loopback address over the
+/// deployment `admissions`. Returns the receiver and its base URL.
+async fn start_admitting_receiver(
+    admissions: &Admissions,
+    answers: impl IntoIterator<Item = Answer>,
+) -> (AdmittingReceiver, String) {
+    let receiver = AdmittingReceiver {
+        admissions: Arc::clone(admissions),
+        answers: Arc::new(Mutex::new(answers.into_iter().collect())),
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the admitting receiver binds");
+    let address = listener.local_addr().expect("the receiver address");
+    let app = Router::new()
+        .route("/v1/events/case-ingestion/{trigger}", post(admitting))
+        .with_state(receiver.clone());
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("the admitting receiver serves");
+    });
+    (receiver, format!("http://127.0.0.1:{}/", address.port()))
+}
+
+/// A signed Coordinator destination at `base_url` whose revised receiver is
+/// the trigger `revised`. Each receiver carries the identity the runtime
+/// derives from its binding, authority and trigger contract.
+fn revision_destination(base_url: &str, revised: &str) -> SignedCoordinatorEventDestination {
+    let receiver = |trigger: &str, event_type: &str| {
+        SignedCoordinatorEventReceiver::new(
+            CoordinatorEventReceiver::new("case-ingestion", trigger, event_type, DATA_SCHEMA)
+                .expect("the receiver freezes"),
+            receiver_identity(&CoordinatorReceiverDigestContext {
+                binding: REVISION_BINDING,
+                base_url,
+                tls_trust_profile: None,
+                workflow: "case-ingestion",
+                trigger,
+                source: SOURCE,
+                event_type,
+                data_schema: DATA_SCHEMA,
+            }),
+        )
+    };
+    let connector = Arc::new(
+        CoordinatorEventConnector::new(
+            Arc::new(
+                EventDestinationPolicy::new(
+                    REVISION_BINDING,
+                    base_url,
+                    DestinationProfile::LoopbackDevelopmentHttp,
+                    &[],
+                )
+                .expect("the event policy freezes"),
+            ),
+            SOURCE,
+            KEY.to_vec(),
+            Duration::from_secs(2),
+        )
+        .expect("the signed event connector freezes"),
+    );
+    SignedCoordinatorEventDestination::new(
+        connector,
+        receiver("submitted", EVENT_TYPE),
+        Some(receiver(revised, REVISED_TYPE)),
+    )
+}
+
+/// A job whose item `submissions/a` is registered on the first pass and
+/// edited on every later one.
+async fn registered_then_edited() -> job_fixture::JobFixture {
+    let page = |age: &str| {
+        (
+            200,
+            json!({
+                "data": [{"id": "a", "answers": {"age": age}}],
+                "nextCursor": "p2"
+            }),
+        )
+    };
+    let mut replies = vec![page("045")];
+    replies.extend(std::iter::repeat_n(page("046"), 6));
+    job_fixture::JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        replies,
+        job_fixture::Edits::Rescan(3600),
+    )
+    .await
+}
+
+/// Register the item, edit it, lose the revised event's answer, then
+/// refuse that event's retry, through real passes over `destination`.
+/// Returns the revised event's id, which Coordinator admitted once.
+async fn lose_then_refuse_a_revision(
+    pool: &Pool,
+    program: &JobProgram,
+    destination: &SignedCoordinatorEventDestination,
+    receiver: &AdmittingReceiver,
+) -> String {
+    let registered = run_pass(pool, program, destination, PassOptions::default()).await;
+    assert_eq!(registered.stopped, None);
+    assert_eq!(registered.items_acknowledged, 1);
+    let lost = run_pass(pool, program, destination, PassOptions::default()).await;
+    assert_eq!(
+        lost.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.job.coordinator.event.outcome-uncertain".to_string()
+        })
+    );
+    let retried = run_pass(pool, program, destination, PassOptions::default()).await;
+    assert_eq!(retried.stopped, None);
+    assert_eq!(retried.items_redelivered, 1);
+    assert_eq!(retried.items_refused, 1);
+    let client = pool.get().await.expect("a pooled client");
+    let refused = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the refused row reads")
+        .expect("the refused row exists");
+    assert_eq!(refused.status, ItemStatus::Refused);
+    assert!(refused.admitted_before);
+    let requests = receiver.requests();
+    let triggers = requests
+        .iter()
+        .map(|(trigger, _)| trigger.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(triggers, vec!["submitted", "revised", "revised"]);
+    let revision = requests[1].1.clone();
+    assert_eq!(
+        requests[2].1, revision,
+        "the retry repeats the revised event"
+    );
+    assert_eq!(
+        receiver.runs_for(&revision).len(),
+        1,
+        "the revised event whose answer was lost was admitted"
+    );
+    revision
+}
+
+fn rescan() -> PassOptions {
+    PassOptions {
+        rescan: true,
+        ..PassOptions::default()
+    }
+}
+
+/// A revised event that may have been admitted fixes the receiver its
+/// sequence can reach: after its retry is refused, a rescan under a
+/// changed revised trigger stops before anything is sent, so Coordinator
+/// never admits the same revision under a second trigger. Restoring the
+/// revised trigger lets the item settle on the Run already admitted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_after_a_refused_retry_of_a_lost_revision_never_sends_it_to_a_changed_revised_trigger(
+) {
+    let admissions = Admissions::default();
+    let (receiver, base_url) = start_admitting_receiver(
+        &admissions,
+        [
+            Answer::Admitted,
+            Answer::Lost,
+            Answer::Problem(StatusCode::BAD_REQUEST, "event.invalid"),
+            Answer::Admitted,
+        ],
+    )
+    .await;
+    let revised = revision_destination(&base_url, "revised");
+    let amended = revision_destination(&base_url, "amended");
+    let fixture = registered_then_edited().await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    let revision = lose_then_refuse_a_revision(&pool, &program, &revised, &receiver).await;
+    let admitted = receiver.runs_for(&revision);
+
+    let changed = run_pass(&pool, &program, &amended, rescan()).await;
+    assert_eq!(
+        receiver.runs_for(&revision),
+        admitted,
+        "Coordinator admits the revision once"
+    );
+    assert_eq!(
+        receiver.requests().len(),
+        3,
+        "nothing reaches the changed revised trigger"
+    );
+    assert_eq!(
+        changed.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.job.coordinator-receiver-changed".to_string()
+        })
+    );
+
+    let restored = run_pass(&pool, &program, &revised, PassOptions::default()).await;
+    assert_eq!(restored.stopped, None);
+    assert_eq!(restored.items_redelivered, 1);
+    assert_eq!(restored.items_acknowledged, 1);
+    assert_eq!(receiver.runs_for(&revision), admitted);
+    let client = pool.get().await.expect("a pooled client");
+    let settled = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the settled row reads")
+        .expect("the settled row exists");
+    assert_eq!(settled.status, ItemStatus::Acknowledged);
+    assert_eq!(settled.run_id.as_ref(), admitted.first());
+}
+
+/// The same fix holds for the Coordinator authority: after the refused
+/// retry of a lost revision, a rescan under a destination at another base
+/// URL stops before anything reaches it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_after_a_refused_retry_of_a_lost_revision_never_sends_it_to_a_changed_authority() {
+    let (receiver, base_url) = start_admitting_receiver(
+        &Admissions::default(),
+        [
+            Answer::Admitted,
+            Answer::Lost,
+            Answer::Problem(StatusCode::BAD_REQUEST, "event.invalid"),
+        ],
+    )
+    .await;
+    let (moved, moved_url) =
+        start_admitting_receiver(&Admissions::default(), [Answer::Admitted]).await;
+    let fixture = registered_then_edited().await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    lose_then_refuse_a_revision(
+        &pool,
+        &program,
+        &revision_destination(&base_url, "revised"),
+        &receiver,
+    )
+    .await;
+
+    let changed = run_pass(
+        &pool,
+        &program,
+        &revision_destination(&moved_url, "revised"),
+        rescan(),
+    )
+    .await;
+    assert!(
+        moved.requests().is_empty(),
+        "nothing reaches the other Coordinator authority"
+    );
+    assert_eq!(receiver.requests().len(), 3);
+    assert_eq!(
+        changed.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.job.coordinator-receiver-changed".to_string()
+        })
+    );
+}
+
+/// The same fix holds for the event body: after the refused retry of a
+/// lost revision, a rescan under a changed job version stops before the
+/// changed body is sent, and restoring the version lets the item settle on
+/// the Run already admitted.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_after_a_refused_retry_of_a_lost_revision_never_sends_a_changed_body() {
+    let (receiver, base_url) = start_admitting_receiver(
+        &Admissions::default(),
+        [
+            Answer::Admitted,
+            Answer::Lost,
+            Answer::Problem(StatusCode::BAD_REQUEST, "event.invalid"),
+            Answer::Admitted,
+        ],
+    )
+    .await;
+    let revised = revision_destination(&base_url, "revised");
+    let fixture = registered_then_edited().await;
+    let mut program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    let revision = lose_then_refuse_a_revision(&pool, &program, &revised, &receiver).await;
+    let admitted = receiver.runs_for(&revision);
+
+    let original_version = program.job.job.version.clone();
+    program.job.job.version = "2".to_string();
+    let changed = run_pass(&pool, &program, &revised, rescan()).await;
+    assert_eq!(receiver.requests().len(), 3, "the changed body is not sent");
+    assert_eq!(
+        changed.stopped,
+        Some(StopReason::DestinationStop {
+            code: "adapter.job.coordinator-body-changed".to_string()
+        })
+    );
+
+    program.job.job.version = original_version;
+    let restored = run_pass(&pool, &program, &revised, PassOptions::default()).await;
+    assert_eq!(restored.stopped, None);
+    assert_eq!(restored.items_acknowledged, 1);
+    assert_eq!(receiver.runs_for(&revision), admitted);
+}
+
+/// With the receiver, authority and body unchanged, a rescan after the
+/// refused retry of a lost revision sends the same revised event again,
+/// and the item settles on the Run Coordinator already admitted for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rescan_after_a_refused_retry_of_a_lost_revision_settles_on_the_unchanged_receiver() {
+    let (receiver, base_url) = start_admitting_receiver(
+        &Admissions::default(),
+        [
+            Answer::Admitted,
+            Answer::Lost,
+            Answer::Problem(StatusCode::BAD_REQUEST, "event.invalid"),
+            Answer::Admitted,
+        ],
+    )
+    .await;
+    let revised = revision_destination(&base_url, "revised");
+    let fixture = registered_then_edited().await;
+    let program =
+        compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
+    let pool = isolated_store().await;
+    let revision = lose_then_refuse_a_revision(&pool, &program, &revised, &receiver).await;
+    let admitted = receiver.runs_for(&revision);
+
+    let unchanged = run_pass(&pool, &program, &revised, rescan()).await;
+    assert_eq!(unchanged.stopped, None);
+    assert_eq!(unchanged.items_redelivered, 1);
+    assert_eq!(unchanged.items_acknowledged, 1);
+    assert_eq!(
+        receiver.requests().last(),
+        Some(&("revised".to_string(), revision.clone()))
+    );
+    assert_eq!(receiver.requests().len(), 4);
+    assert_eq!(receiver.runs_for(&revision), admitted);
+    let client = pool.get().await.expect("a pooled client");
+    let settled = store::inspect_item(&client, "case-daily", "submissions/a")
+        .await
+        .expect("the settled row reads")
+        .expect("the settled row exists");
+    assert_eq!(settled.status, ItemStatus::Acknowledged);
+    assert_eq!(settled.run_id.as_ref(), admitted.first());
 }
