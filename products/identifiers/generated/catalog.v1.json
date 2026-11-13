@@ -4996,7 +4996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/project-dev.v1alpha1.schema.json",
-        "sha256": "30a0fcc71d24875309ae9cd96f41305add32ad69e89dcc9b4cbd1622478eeb43",
+        "sha256": "322104aa1a14a18d6fcd301869a0c7710d02f0056600e47aac852e800afc42ac",
         "mediaType": "application/schema+json"
       }
     },

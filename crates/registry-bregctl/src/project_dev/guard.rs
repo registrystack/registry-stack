@@ -31,6 +31,8 @@ pub(super) const DIRECTORY: &str = "guards";
 const START_WAIT: Duration = Duration::from_secs(5);
 const LAUNCHING: &[u8] = b"launching\n";
 const COMPLETE: &[u8] = b"complete\n";
+#[cfg(test)]
+const TEST_GUARD_LAUNCH: &str = "RSTACK_TEST_PROJECT_DEV_GUARD_LAUNCH";
 static NEXT_GUARD: AtomicU64 = AtomicU64::new(0);
 
 #[derive(clap::Args, Debug)]
@@ -370,6 +372,21 @@ pub(super) struct Command {
     command: process::Command,
     pid_file: PathBuf,
     state_file: PathBuf,
+    #[cfg(test)]
+    test_launch: TestLaunch,
+}
+
+#[cfg(test)]
+#[derive(serde::Deserialize, serde::Serialize)]
+struct TestLaunch {
+    lock: PathBuf,
+    pid_file: PathBuf,
+    state_file: PathBuf,
+    workdir: Option<PathBuf>,
+    clean_env: bool,
+    environment: BTreeMap<String, String>,
+    program: PathBuf,
+    arguments: Vec<String>,
 }
 
 impl Command {
@@ -418,14 +435,21 @@ impl Command {
         let pid_file = directory.join(format!("{stem}.pid"));
         let state_file = directory.join(format!("{stem}.state"));
         let mut command = process::Command::new(std::env::current_exe()?);
+        #[cfg(not(test))]
         command
             .arg("project-dev-guard")
             .arg("--lock")
-            .arg(lock)
+            .arg(&lock)
             .arg("--pid-file")
             .arg(&pid_file)
             .arg("--state-file")
             .arg(&state_file);
+        #[cfg(test)]
+        command
+            .arg("project_dev::guard::tests::guard_process_entry")
+            .arg("--exact")
+            .arg("--nocapture");
+        #[cfg(not(test))]
         if let Some(workdir) = workdir {
             command.arg("--workdir").arg(workdir).arg("--clean-env");
         }
@@ -446,12 +470,13 @@ impl Command {
                     !value.contains('\0') && !value.contains('\n') && !value.contains('\r'),
                     "invalid guarded environment value"
                 );
+                #[cfg(not(test))]
                 command.arg("--env").arg(format!("{name}={value}"));
             }
         }
+        #[cfg(not(test))]
+        command.arg("--").arg(binary);
         command
-            .arg("--")
-            .arg(binary)
             .env_remove("RSTACK_DEV_DATABASE_URL")
             .env_remove("RSTACK_PROJECT_DEV_REQUEST")
             .process_group(0)
@@ -462,11 +487,31 @@ impl Command {
             command,
             pid_file,
             state_file,
+            #[cfg(test)]
+            test_launch: TestLaunch {
+                lock,
+                pid_file: directory.join(format!("{stem}.pid")),
+                state_file: directory.join(format!("{stem}.state")),
+                workdir: workdir.map(Path::to_path_buf),
+                clean_env: workdir.is_some(),
+                environment: environment.cloned().unwrap_or_default(),
+                program: binary.to_path_buf(),
+                arguments: Vec::new(),
+            },
         })
     }
 
     pub(super) fn arg(&mut self, argument: impl AsRef<OsStr>) -> &mut Self {
+        #[cfg(not(test))]
         self.command.arg(argument);
+        #[cfg(test)]
+        self.test_launch.arguments.push(
+            argument
+                .as_ref()
+                .to_str()
+                .expect("test guarded argument must be UTF-8")
+                .to_owned(),
+        );
         self
     }
 
@@ -475,7 +520,12 @@ impl Command {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        #[cfg(not(test))]
         self.command.args(arguments);
+        #[cfg(test)]
+        for argument in arguments {
+            self.arg(argument);
+        }
         self
     }
 
@@ -490,6 +540,9 @@ impl Command {
     }
 
     pub(super) fn spawn(&mut self) -> Result<Child> {
+        #[cfg(test)]
+        self.command
+            .env(TEST_GUARD_LAUNCH, serde_json::to_string(&self.test_launch)?);
         let mut guard = self.command.spawn().context("cannot start process guard")?;
         let controller = guard
             .stdin
@@ -615,6 +668,42 @@ mod tests {
             .open(&path)
             .unwrap();
         path
+    }
+
+    /// Test-only re-entry for `Command`: the Rust unit-test executable stands
+    /// in for the bregctl binary while this function runs the real guard loop.
+    #[test]
+    fn guard_process_entry() {
+        let Some(encoded) = std::env::var_os(TEST_GUARD_LAUNCH) else {
+            return;
+        };
+        let launch: TestLaunch = serde_json::from_slice(encoded.as_encoded_bytes()).unwrap();
+        let assignments: Vec<_> = launch
+            .environment
+            .iter()
+            .map(|(name, value)| OsString::from(format!("{name}={value}")))
+            .collect();
+        let command = workload_command(
+            launch.program.as_os_str(),
+            &launch
+                .arguments
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>(),
+            launch.workdir.as_deref(),
+            launch.clean_env,
+            &assignments,
+        )
+        .unwrap();
+        let mut controller = io::stdin();
+        supervise(
+            &launch.lock,
+            &launch.pid_file,
+            &launch.state_file,
+            &mut controller,
+            command,
+        )
+        .unwrap();
     }
 
     #[test]

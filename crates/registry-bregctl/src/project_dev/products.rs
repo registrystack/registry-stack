@@ -130,16 +130,27 @@ pub(super) fn application_file(root: &Path, relative: &Path) -> Result<PathBuf> 
 }
 
 pub(super) fn preflight_application(root: &Path, plan: &ApplicationPlan) -> Result<PathBuf> {
+    preflight_application_with(root, plan, || {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+            .map(|directory| directory.join("node"))
+            .find(|path| path.is_file())
+            .context("Node 24 is required to start the declared application")?
+            .canonicalize()
+            .map_err(Into::into)
+    })
+}
+
+fn preflight_application_with(
+    root: &Path,
+    plan: &ApplicationPlan,
+    node: impl FnOnce() -> Result<PathBuf>,
+) -> Result<PathBuf> {
     for relative in [&plan.entry, &plan.prepare, &plan.checker] {
         application_file(root, relative)?;
     }
-    let node = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .map(|directory| directory.join("node"))
-        .find(|path| path.is_file())
-        .context("Node 24 is required to start the declared application")?
-        .canonicalize()?;
+    let node = node()?;
     let node_version = bounded_version(&node, None)?;
     ensure!(
         node_version.starts_with("v24."),
@@ -151,6 +162,15 @@ pub(super) fn preflight_application(root: &Path, plan: &ApplicationPlan) -> Resu
         "application configuration command version differs from dev.yaml"
     );
     Ok(node)
+}
+
+#[cfg(test)]
+fn preflight_application_with_node(
+    root: &Path,
+    plan: &ApplicationPlan,
+    node: &Path,
+) -> Result<PathBuf> {
+    preflight_application_with(root, plan, || Ok(node.canonicalize()?))
 }
 
 fn bounded_version(node: &Path, script: Option<&Path>) -> Result<String> {
@@ -2814,6 +2834,199 @@ mod tests {
         )
         .unwrap();
         assert!(application_file(root.path(), Path::new("linked.js")).is_err());
+    }
+
+    #[test]
+    fn application_preflight_checks_node_and_exact_prepare_version() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["entry.js", "prepare.js", "check.js"] {
+            fs::write(root.path().join(name), "fixture").unwrap();
+        }
+        let node = root.path().join("node");
+        fs::write(
+            &node,
+            "#!/usr/bin/env bash\nset -euo pipefail\nif [[ $1 == --version ]]; then\n  printf 'v24.11.0\\n'\nelse\n  printf 'fixture-prepare 1.0\\n'\nfi\n",
+        )
+        .unwrap();
+        fs::set_permissions(&node, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut plan: ApplicationPlan = serde_json::from_value(json!({
+            "client": "browser-client", "callbackPath": "/callback",
+            "healthPath": "/health", "entry": "entry.js", "prepare": "prepare.js",
+            "checker": "check.js", "deployment": "deployment.json",
+            "configSchema": "fixture/run/v1", "configEnvironment": "FIXTURE_CONFIG",
+            "prepareVersion": "fixture-prepare 1.0"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            preflight_application_with_node(root.path(), &plan, &node).unwrap(),
+            node.canonicalize().unwrap()
+        );
+        plan.prepare_version = "fixture-prepare 2.0".to_owned();
+        let error = preflight_application_with_node(root.path(), &plan, &node).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "application configuration command version differs from dev.yaml"
+        );
+    }
+
+    const APPLICATION_FIXTURE_PORT: &str = "APPLICATION_FIXTURE_PORT";
+    const APPLICATION_FIXTURE_EXIT: &str = "APPLICATION_FIXTURE_EXIT";
+    const APPLICATION_FIXTURE_IGNORE_TERM: &str = "APPLICATION_FIXTURE_IGNORE_TERM";
+
+    /// The guarded child used by `a_guarded_application_exit_stops_restarts_and_reaps`.
+    /// An ordinary unit-test run has no fixture environment and returns at once.
+    #[test]
+    fn guarded_application_fixture() {
+        let Some(port) = std::env::var_os(APPLICATION_FIXTURE_PORT) else {
+            return;
+        };
+        let term_received = Arc::new(AtomicBool::new(false));
+        if std::env::var_os(APPLICATION_FIXTURE_IGNORE_TERM).is_some() {
+            signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_received))
+                .unwrap();
+        }
+        let exit = PathBuf::from(std::env::var_os(APPLICATION_FIXTURE_EXIT).unwrap());
+        let listener = TcpListener::bind((
+            Ipv4Addr::LOCALHOST,
+            port.to_string_lossy().parse::<u16>().unwrap(),
+        ))
+        .unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            request.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        use std::io::Write as _;
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        while !exit.exists() {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn application_fixture_launch(
+        root: &Path,
+        exit: &Path,
+        ignore_term: bool,
+    ) -> (ApplicationLaunch, u16) {
+        let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        let mut environment = BTreeMap::from([
+            (APPLICATION_FIXTURE_PORT.to_owned(), port.to_string()),
+            (
+                APPLICATION_FIXTURE_EXIT.to_owned(),
+                exit.to_string_lossy().into_owned(),
+            ),
+        ]);
+        if ignore_term {
+            environment.insert(APPLICATION_FIXTURE_IGNORE_TERM.to_owned(), "1".to_owned());
+        }
+        for name in ["DYLD_FALLBACK_LIBRARY_PATH", "LD_LIBRARY_PATH"] {
+            if let Ok(value) = std::env::var(name) {
+                environment.insert(name.to_owned(), value);
+            }
+        }
+        (
+            ApplicationLaunch {
+                program: std::env::current_exe().unwrap(),
+                arguments: vec![
+                    "project_dev::products::tests::guarded_application_fixture".into(),
+                    "--exact".into(),
+                    "--nocapture".into(),
+                ],
+                workdir: root.to_path_buf(),
+                environment,
+                reservation,
+                health_path: "/health".to_owned(),
+            },
+            port,
+        )
+    }
+
+    #[test]
+    fn a_guarded_application_exit_stops_restarts_and_reaps() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let terminate = AtomicBool::new(false);
+        let mut runner =
+            ProductRunner::new(Arc::new(breg_input(false)), &root, &terminate).unwrap();
+        let first_exit = root.join("application-exit-first");
+        let (first_launch, first_port) = application_fixture_launch(&root, &first_exit, false);
+
+        let origin = runner.start_application(first_launch).unwrap();
+        assert_eq!(origin, format!("http://127.0.0.1:{first_port}"));
+        assert!(runner.services_alive().unwrap());
+
+        fs::write(&first_exit, "stop").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runner.services_alive().unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "the guarded application did not exit"
+            );
+            thread::sleep(POLL);
+        }
+
+        runner.stop().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(root.join("processes.json")).unwrap())
+                .unwrap(),
+            json!([])
+        );
+        assert!(guard::incomplete_launches(&root).unwrap().is_empty());
+        let first_states: Vec<_> = fs::read_dir(root.join(guard::DIRECTORY))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "state")
+            })
+            .collect();
+        assert_eq!(first_states.len(), 1, "{first_states:?}");
+        assert_eq!(fs::read(&first_states[0]).unwrap(), b"complete\n");
+
+        let second_exit = root.join("application-exit-second");
+        let (second_launch, second_port) = application_fixture_launch(&root, &second_exit, true);
+        let origin = runner.start_application(second_launch).unwrap();
+        assert_eq!(origin, format!("http://127.0.0.1:{second_port}"));
+        assert!(runner.services_alive().unwrap());
+
+        let stop_started = Instant::now();
+        runner.stop().unwrap();
+        let stop_elapsed = stop_started.elapsed();
+        assert!(
+            stop_elapsed >= Duration::from_secs(2) && stop_elapsed < Duration::from_secs(10),
+            "TERM-ignoring application stop took {stop_elapsed:?}"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(root.join("processes.json")).unwrap())
+                .unwrap(),
+            json!([])
+        );
+        assert!(guard::incomplete_launches(&root).unwrap().is_empty());
+        let states: Vec<_> = fs::read_dir(root.join(guard::DIRECTORY))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "state")
+            })
+            .collect();
+        assert_eq!(states.len(), 2, "{states:?}");
+        assert!(
+            states
+                .iter()
+                .all(|state| fs::read(state).unwrap() == b"complete\n"),
+            "{states:?}"
+        );
     }
 
     #[test]
