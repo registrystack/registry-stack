@@ -2232,13 +2232,18 @@ frozen durably before sending. A pending sequence with a frozen receiver
 cannot be retargeted by configuration changes: when the selected receiver
 differs, the pass stops as `adapter.job.coordinator-receiver-changed`
 without advancing position, and restoring the original receiver permits
-recovery. A rescan of a refused item clears its frozen receiver, because
-the refusal answered the last attempt; the receiver selected when the item
-is next sent is frozen in its place. A possibly accepted item on a job with
-no revised trigger has no receiver to select: it is held as
-`adapter.job.revised-item` and sent nowhere, even when its revised event
-was sent and that answer was lost, and restoring the revised trigger does
-not resend a held item.
+recovery. A rescan of an item whose refusal answered its last attempt
+clears its frozen receiver; the receiver selected when the item is next
+sent is frozen in its place. A refused item whose revised event may have
+been admitted (that event's answer was lost and its retry was refused) keeps
+the sequence's frozen receiver and body: a rescan sends it only to that
+receiver with that body, and a changed receiver or body stops the pass as
+`adapter.job.coordinator-receiver-changed` or
+`adapter.job.coordinator-body-changed` before any request. A possibly
+accepted item on a job with no revised trigger has no receiver to select:
+it is held as `adapter.job.revised-item` and sent nowhere, even when its
+revised event was sent and that answer was lost, and restoring the revised
+trigger does not resend a held item.
 
 `destination.revisedReceiver` optionally selects a revised-item `trigger`,
 `eventType`, and `dataSchema` inside the same workflow and runtime binding.
