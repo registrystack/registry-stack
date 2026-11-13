@@ -127,11 +127,12 @@ EXTERNAL_JOB_TEST_DATABASE_URL=postgresql://... \
 `crates/registry-coordinator/tests/external_wait_postgres.rs` drives the maintained project through
 the real external command and GET adapters, durable Coordinator store and worker. It covers
 accepted and declared-refused admission, unusable post-effect responses, same-command recovery,
-restart, correlation, pending/success/declared job failure, observation exhaustion, timeout,
-cancellation and deadline. A skipped database test is not evidence for either durable store.
+command-side rate limiting, restart, correlation, pending/success/declared job failure,
+observation exhaustion, timeout, cancellation and deadline. A skipped database test is not
+evidence for either durable store.
 
-An opt-in test in that target composes the Coordinator worker with the actual Python example
-application and its separate PostgreSQL store. It requires the assembled Python wheel to be
+Three opt-in tests in that target compose the Coordinator worker with the actual Python example
+application and its separate PostgreSQL store. They require the assembled Python wheel to be
 installed in the selected interpreter:
 
 ```sh
@@ -139,11 +140,18 @@ COORDINATOR_TEST_DATABASE_URL=<disposable-coordinator-database> \
 EXTERNAL_JOB_TEST_DATABASE_URL=<separate-disposable-job-database> \
 EXTERNAL_JOB_PYTHON=<installed-wheel-python> \
   cargo test --locked -p registry-coordinator --features postgres-test \
-  --test external_wait_postgres installed_python_job_recovers_the_original_command_after_commit \
-  -- --ignored
+  --test external_wait_postgres installed_python_ -- --include-ignored
 ```
 
-The test-only loopback host uses synthetic machine admission. It asserts that a malformed
-response after application commit leaves Coordinator uncertain, then `retry-same` reuses the
-original saved command and receipt before observing terminal success. It does not prove live
-issuer token exchange or institutional deployment.
+The test-only loopback host uses synthetic machine admission. The tests assert that malformed
+response bytes and an actual response-encoding failure after application commit leave Coordinator
+uncertain with its pinned recovery operation, then `retry-same` reuses the original saved command
+and receipt. A third test lets the Python process exit after commit, asserts its exit status,
+starts a fresh process over the same application schema, and reaches terminal success without a
+second job. They do not prove live issuer token exchange or institutional deployment.
+
+The Python reference application has no rate-limiting policy or 429 response path. The PostgreSQL
+target proves that Coordinator treats a configured upstream 429 as known not processed and retries
+the frozen command without recording an unknown effect. Proving that the reference application
+itself emits 429 only before admission remains open until its application-level rate-limiting
+policy is defined.

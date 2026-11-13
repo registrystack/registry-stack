@@ -4,10 +4,11 @@
 #![cfg(feature = "postgres-test")]
 
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     process::{Child, Command, Stdio},
     sync::{mpsc, Arc},
-    time::Duration,
+    thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -31,18 +32,24 @@ const PYTHON_ACCEPTANCE_TOKEN: &str = "external-job-acceptance-token";
 
 struct PythonService {
     child: Child,
+    stderr_reader: Option<JoinHandle<String>>,
+    reaped: bool,
     base_url: String,
 }
 
 impl PythonService {
     fn start(fault: &str) -> Self {
+        let schema = format!("external_job_{}", Uuid::new_v4().simple());
+        Self::start_in_schema(fault, &schema)
+    }
+
+    fn start_in_schema(fault: &str, schema: &str) -> Self {
         let python = std::env::var("EXTERNAL_JOB_PYTHON")
             .expect("EXTERNAL_JOB_PYTHON must name the installed-wheel Python interpreter");
         let database = std::env::var("EXTERNAL_JOB_TEST_DATABASE_URL")
             .expect("EXTERNAL_JOB_TEST_DATABASE_URL must name a separate disposable database");
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/coordinator/examples/external-job/tests/acceptance_server.py");
-        let schema = format!("external_job_{}", Uuid::new_v4().simple());
         let child = Command::new(python)
             .arg(script)
             .arg("--fault")
@@ -51,13 +58,23 @@ impl PythonService {
             .arg(schema)
             .env("EXTERNAL_JOB_DATABASE_URL", database)
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("start the installed-wheel Python acceptance host");
         let mut service = Self {
             child,
+            stderr_reader: None,
+            reaped: false,
             base_url: String::new(),
         };
+        let mut stderr = service.child.stderr.take().unwrap();
+        service.stderr_reader = Some(std::thread::spawn(move || {
+            let mut output = String::new();
+            stderr
+                .read_to_string(&mut output)
+                .expect("read Python acceptance stderr");
+            output
+        }));
         let stdout = service.child.stdout.take().unwrap();
         let (sender, receiver) = mpsc::channel();
         let reader = std::thread::spawn(move || {
@@ -77,14 +94,59 @@ impl PythonService {
             .to_owned();
         service
     }
-}
 
-impl Drop for PythonService {
-    fn drop(&mut self) {
+    fn wait_for_exit(&mut self, expected_code: i32) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self.child.try_wait().expect("read Python acceptance exit") {
+                Some(status) => {
+                    assert_eq!(status.code(), Some(expected_code));
+                    self.reaped = true;
+                    return;
+                }
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                None => panic!("Python acceptance host did not exit within 10 seconds"),
+            }
+        }
+    }
+
+    fn take_stderr(&mut self) -> String {
+        assert!(self.reaped, "reap the Python acceptance host first");
+        self.stderr_reader
+            .take()
+            .expect("Python acceptance stderr is available")
+            .join()
+            .expect("Python acceptance stderr reader exited")
+    }
+
+    fn stop_and_take_stderr(&mut self) -> String {
         let _ = self.child.kill();
         self.child
             .wait()
             .expect("reap the Python acceptance host after the journey");
+        self.reaped = true;
+        self.take_stderr()
+    }
+}
+
+impl Drop for PythonService {
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = self.child.kill();
+            self.child
+                .wait()
+                .expect("reap the Python acceptance host after the journey");
+            self.reaped = true;
+        }
+        if self.stderr_reader.is_some() {
+            let stderr = self.take_stderr();
+            assert!(
+                stderr.is_empty(),
+                "Python acceptance host wrote unexpected stderr"
+            );
+        }
     }
 }
 
@@ -283,6 +345,34 @@ impl Harness {
         Worker::new(self.store.clone(), self.adapters.clone())
     }
 
+    fn bind_python(&mut self, service: &PythonService) {
+        let mut config: ExternalHttpConfig = serde_json::from_value(json!({
+            "baseUrl":service.base_url,
+            "paths":["jobs/status"],
+            "queryParameters":["id"],
+            "commandPath":"jobs",
+            "responseSchema":{"type":"object"}
+        }))
+        .unwrap();
+        config.authorization = Some(
+            serde_json::from_value(json!({
+                "tokenEndpoint":"http://127.0.0.1:9999/token",
+                "clientId":"coordinator-external-job",
+                "signingKeyRef":"secret:file/external-job-client-jwk",
+                "resource":"urn:example:external-job",
+                "scopes":["external-job:admit","external-job:observe"]
+            }))
+            .unwrap(),
+        );
+        self.adapters = Arc::new(ExternalAdapter(
+            ExternalHttpConnection::new(
+                &config,
+                Some(Arc::new(StaticToken::new(PYTHON_ACCEPTANCE_TOKEN).unwrap())),
+            )
+            .unwrap(),
+        ));
+    }
+
     async fn begin_wait(&self) -> Uuid {
         self.admitted("running").await;
         let run = self.start().await;
@@ -430,6 +520,238 @@ async fn installed_python_job_recovers_the_original_command_after_commit() {
         Some(json!({"state":"complete","result":{"jobId":job_id}}))
     );
     assert!(terminal.waits.is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires separate disposable Coordinator and external-job databases plus an installed-wheel Python interpreter"]
+async fn installed_python_job_survives_process_death_after_commit_and_restart() {
+    let schema = format!("external_job_{}", Uuid::new_v4().simple());
+    let mut service = PythonService::start_in_schema("process-exit-after-commit", &schema);
+    let mut h = Harness::new().await;
+    h.bind_python(&service);
+
+    let run = h.start().await;
+    h.drain(&h.worker()).await;
+    let held = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(held.run.state, "attention");
+    assert!(held.run.uncertain);
+    assert_eq!(
+        serde_json::to_value(&held.effects[0]).unwrap()["state"],
+        "unknown"
+    );
+    assert!(held.recovery.retry_allowed);
+    assert_eq!(
+        held.recovery.operation,
+        Some(Operation::ExternalCommand.identity())
+    );
+    service.wait_for_exit(86);
+    assert!(service.take_stderr().is_empty());
+    drop(service);
+
+    let service = PythonService::start_in_schema("none", &schema);
+    h.bind_python(&service);
+    h.store
+        .retry_same(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    h.drain(&h.worker()).await;
+    let recovered = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(recovered.run.step, "await-terminal");
+    assert_eq!(recovered.effects.len(), 1);
+    assert_eq!(recovered.waits.len(), 1);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let snapshot: Value = client
+        .get(format!("{}/test/snapshot", service.base_url))
+        .bearer_auth(PYTHON_ACCEPTANCE_TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(snapshot["jobCount"], 1);
+    assert_eq!(
+        snapshot["jobs"][0]["request"],
+        json!({"reference":"case-001"})
+    );
+    let job_id = snapshot["jobs"][0]["receipt"]["jobId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    for state in ["running", "succeeded"] {
+        client
+            .post(format!("{}/test/transition", service.base_url))
+            .bearer_auth(PYTHON_ACCEPTANCE_TOKEN)
+            .json(&json!({"jobId":job_id,"state":state}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    h.advance().await;
+    h.drain(&h.worker()).await;
+    let terminal = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(terminal.run.state, "finished");
+    assert_eq!(terminal.run.outcome.as_deref(), Some("job-result"));
+    assert_eq!(
+        terminal.run.output,
+        Some(json!({"state":"complete","result":{"jobId":job_id}}))
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires separate disposable Coordinator and external-job databases plus an installed-wheel Python interpreter"]
+async fn installed_python_encoding_failure_keeps_the_committed_job_recoverable() {
+    let mut service = PythonService::start("encoding-error-after-commit");
+    let mut h = Harness::new().await;
+    h.bind_python(&service);
+
+    let run = h.start().await;
+    h.drain(&h.worker()).await;
+    let held = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(held.run.state, "attention");
+    assert!(held.run.uncertain);
+    assert_eq!(
+        serde_json::to_value(&held.effects[0]).unwrap()["state"],
+        "unknown"
+    );
+    assert!(held.recovery.retry_allowed);
+    assert_eq!(
+        held.recovery.operation,
+        Some(Operation::ExternalCommand.identity())
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let snapshot_url = format!("{}/test/snapshot", service.base_url);
+    let first_snapshot: Value = client
+        .get(&snapshot_url)
+        .bearer_auth(PYTHON_ACCEPTANCE_TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first_snapshot["jobCount"], 1);
+
+    h.store
+        .retry_same(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    h.drain(&h.worker()).await;
+    let recovered = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(recovered.run.step, "await-terminal");
+    assert_eq!(recovered.effects.len(), 1);
+    assert_eq!(recovered.waits.len(), 1);
+    let recovered_snapshot: Value = client
+        .get(&snapshot_url)
+        .bearer_auth(PYTHON_ACCEPTANCE_TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recovered_snapshot, first_snapshot);
+    let stderr = service.stop_and_take_stderr();
+    assert!(stderr.contains("UnicodeError: synthetic response encoding failure"));
+}
+
+#[tokio::test]
+async fn command_rate_limit_retries_without_claiming_an_unknown_effect() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path("/jobs"))
+        .and(header_exists("idempotency-key"))
+        .and(body_json(json!({"reference":"case-001"})))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "1"))
+        .expect(1)
+        .mount(&h.server)
+        .await;
+
+    let run = h.start().await;
+    h.drain(&h.worker()).await;
+    let rate_limited = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(rate_limited.run.state, "running");
+    assert!(!rate_limited.run.uncertain);
+    assert!(rate_limited.effects.is_empty());
+    assert!(!rate_limited.recovery.retry_allowed);
+    assert_eq!(
+        rate_limited.recovery.operation,
+        Some(Operation::ExternalCommand.identity())
+    );
+    let first_requests = h.server.received_requests().await.unwrap();
+    assert_eq!(first_requests.len(), 1);
+    let first_key = first_requests[0].headers["idempotency-key"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    // Replace the 429 responder before the scheduled retry, so this attempt
+    // must reach a distinct accepted response.
+    h.admitted("running").await;
+    h.advance().await;
+    h.drain(&h.worker()).await;
+    let accepted = h
+        .store
+        .inspect(run, h.adapters.binding_digest())
+        .await
+        .unwrap();
+    assert_eq!(accepted.run.step, "await-terminal");
+    assert!(!accepted.run.uncertain);
+    assert_eq!(accepted.effects.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&accepted.effects[0]).unwrap()["state"],
+        "accepted"
+    );
+    let retried_requests = h.server.received_requests().await.unwrap();
+    let retried_post = retried_requests
+        .iter()
+        .find(|request| request.method.as_str() == "POST")
+        .unwrap();
+    assert_eq!(
+        retried_post.headers["idempotency-key"].to_str().unwrap(),
+        first_key
+    );
 }
 
 #[tokio::test]
