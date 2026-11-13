@@ -1109,7 +1109,7 @@
       "properties": {
         "acquisitionDeadlineMilliseconds": {
           "format": "uint64",
-          "maximum": 18446744073709551615,
+          "maximum": 300000,
           "minimum": 1,
           "type": "integer"
         },

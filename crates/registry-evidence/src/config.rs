@@ -2504,12 +2504,23 @@ impl Default for SourceAcquisitionConfig {
     }
 }
 
+/// Upper bound on the configured acquisition deadline, equal to the authored
+/// target's ceiling.
+const MAX_ACQUISITION_DEADLINE_MILLISECONDS: u64 = 300_000;
+
 impl SourceAcquisitionConfig {
     fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
     pub fn limits(self) -> Result<registry_adapter_engine::evidence::EvidenceLimits, ConfigError> {
+        if self.deadline_milliseconds > MAX_ACQUISITION_DEADLINE_MILLISECONDS {
+            // The number below is `MAX_ACQUISITION_DEADLINE_MILLISECONDS`; a
+            // test pins it to the authoring ceiling too.
+            return Err(ConfigError::Invalid(
+                "sourceAcquisition.acquisitionDeadlineMilliseconds is above the maximum of 300000",
+            ));
+        }
         let maximum_response_bytes = usize::try_from(self.maximum_response_bytes)
             .map_err(|_| ConfigError::Invalid("source acquisition response bound is too large"))?;
         registry_adapter_engine::evidence::EvidenceLimits::try_new(
@@ -6563,6 +6574,37 @@ mod tests {
         ] {
             assert!(invalid.limits().is_err());
         }
+    }
+
+    #[test]
+    fn source_acquisition_deadline_stops_at_the_authoring_ceiling() {
+        assert_eq!(
+            MAX_ACQUISITION_DEADLINE_MILLISECONDS,
+            registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS
+        );
+        let defaults = SourceAcquisitionConfig::default();
+        let at_ceiling = SourceAcquisitionConfig {
+            deadline_milliseconds:
+                registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS,
+            ..defaults
+        };
+        at_ceiling.limits().expect("the ceiling itself loads");
+
+        let above = SourceAcquisitionConfig {
+            deadline_milliseconds:
+                registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS + 1,
+            ..defaults
+        };
+        let error = above
+            .limits()
+            .expect_err("a deadline above the ceiling is refused at load");
+        assert!(
+            error.to_string().contains(
+                &registry_evidence_authoring::target::MAX_ACQUISITION_DEADLINE_MILLISECONDS
+                    .to_string()
+            ),
+            "the refusal names the maximum: {error}"
+        );
     }
 
     #[test]
