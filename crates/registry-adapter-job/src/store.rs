@@ -25,13 +25,17 @@ use tokio_postgres::Socket;
 
 /// Every schema version, in the order it is applied. Each later
 /// migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 4] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
     (100, include_str!("store/migrations/0100_job_items.sql")),
     (101, include_str!("store/migrations/0101_rescan_active.sql")),
     (102, include_str!("store/migrations/0102_held_items.sql")),
     (
         103,
         include_str!("store/migrations/0103_coordinator_delivery_identity.sql"),
+    ),
+    (
+        104,
+        include_str!("store/migrations/0104_revision_possibly_admitted.sql"),
     ),
 ];
 
@@ -666,12 +670,29 @@ pub(crate) struct PriorRow {
     pub prior_run_id: Option<String>,
     /// Whether an earlier digest's receipt may have been lost.
     pub admitted_before: bool,
+    /// Whether a revised event of the current sequence may have been
+    /// admitted under the stored receiver and body identities.
+    pub revision_possibly_admitted: bool,
     /// The persisted event identity time for this item key.
     pub first_seen: SystemTime,
     /// The frozen signed-event time for the current sequence.
     pub event_time: SystemTime,
     /// The latest delivery attempt persisted for the current sequence.
     pub delivery_attempt: i64,
+}
+
+impl PriorRow {
+    /// Whether a re-delivery of this row may repeat an event that was
+    /// admitted under the stored identities: a pending row, whose latest
+    /// attempt may still be outstanding, or a refused row whose refusal
+    /// did not answer a revised event that may have been admitted.
+    fn redelivery_fenced(&self) -> bool {
+        match self.status {
+            ItemStatus::Pending => true,
+            ItemStatus::Refused => self.revision_possibly_admitted,
+            ItemStatus::Acknowledged | ItemStatus::Held => false,
+        }
+    }
 }
 
 /// The pass's decision for one item against its stored row: a new item
@@ -716,8 +737,11 @@ pub struct StagedItem {
     /// The positive delivery attempt for this sequence. A same-sequence
     /// re-delivery advances it only after receiver identity agrees.
     pub delivery_attempt: i64,
-    /// Whether this is a retry of a pending hand-off whose receipt may have
-    /// been lost. Only this state is governed by BReg's receipt horizon.
+    /// Whether this is a retry of a hand-off whose receipt may have been
+    /// lost: a pending row, or a refused row whose revised event may have
+    /// been admitted. Such a retry binds only the stored receiver and body
+    /// identities, and its refusal keeps the item possibly admitted. Only
+    /// this state is governed by BReg's receipt horizon.
     pub receipt_uncertain: bool,
     /// How the staged delivery classifies in the report.
     pub classification: StagedClassification,
@@ -799,7 +823,8 @@ pub async fn stage_item(
                      code = NULL, run_id = NULL, prior_run_id = COALESCE(run_id, prior_run_id), \
                      admitted_before = $4, last_seen = $5, event_time = $5, \
                      delivery_attempt = 1, receiver_identity = NULL, receiver_identity_known = true, \
-                     canonical_body_identity = NULL, canonical_body_identity_known = true \
+                     canonical_body_identity = NULL, canonical_body_identity_known = true, \
+                     revision_possibly_admitted = false \
                      WHERE job_id = $1 AND item_key = $2",
                     &[&job_id, &key, &digest, &admitted_before, &now],
                 )
@@ -829,11 +854,13 @@ pub async fn stage_item(
                 .checked_add(1)
                 .ok_or(StoreError::DeliveryAttemptExhausted)?;
             // A rescan of a refused row clears the frozen receiver and body
-            // identities: the refusal answered the latest attempt, and
+            // identities when the refusal answered the latest attempt and
             // `admitted_before` carries any earlier attempt that may have
-            // been admitted. A pending row keeps them, because its latest
-            // attempt may still be outstanding under them.
-            let refused = prior.status == ItemStatus::Refused;
+            // been admitted. A fenced row keeps them: a pending row's latest
+            // attempt may still be outstanding under them, and a revised
+            // event that may have been admitted fixes them for its sequence.
+            let fenced = prior.redelivery_fenced();
+            let clear = !fenced;
             tx.execute(
                 "UPDATE adapter_job_items SET status = 'pending', code = NULL, last_seen = $3, \
                  receiver_identity = CASE WHEN $4 THEN NULL ELSE receiver_identity END, \
@@ -841,7 +868,7 @@ pub async fn stage_item(
                  canonical_body_identity = CASE WHEN $4 THEN NULL ELSE canonical_body_identity END, \
                  canonical_body_identity_known = canonical_body_identity_known OR $4 \
                  WHERE job_id = $1 AND item_key = $2",
-                &[&job_id, &key, &now, &refused],
+                &[&job_id, &key, &now, &clear],
             )
             .await?;
             Some(StagedItem {
@@ -853,7 +880,7 @@ pub async fn stage_item(
                 first_seen: prior.first_seen,
                 event_time: prior.event_time,
                 delivery_attempt,
-                receipt_uncertain: prior.status == ItemStatus::Pending,
+                receipt_uncertain: fenced,
                 classification: StagedClassification::Redelivered,
             })
         }
@@ -921,7 +948,7 @@ pub async fn peek_item(
                 .delivery_attempt
                 .checked_add(1)
                 .ok_or(StoreError::DeliveryAttemptExhausted)?,
-            receipt_uncertain: prior.status == ItemStatus::Pending,
+            receipt_uncertain: prior.redelivery_fenced(),
             classification: StagedClassification::Redelivered,
         }),
         // A changed digest or re-delivery implies a prior row; the
@@ -938,11 +965,11 @@ async fn read_prior(
 ) -> Result<Option<PriorRow>, StoreError> {
     let query = if for_update {
         "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before, first_seen, \
-         event_time, delivery_attempt \
+         event_time, delivery_attempt, revision_possibly_admitted \
          FROM adapter_job_items WHERE job_id = $1 AND item_key = $2 FOR UPDATE"
     } else {
         "SELECT last_digest, sequence, status, run_id, prior_run_id, admitted_before, first_seen, \
-         event_time, delivery_attempt \
+         event_time, delivery_attempt, revision_possibly_admitted \
          FROM adapter_job_items WHERE job_id = $1 AND item_key = $2"
     };
     let row = client.query_opt(query, &[&job_id, &key]).await?;
@@ -953,6 +980,7 @@ async fn read_prior(
         run_id: row.get(3),
         prior_run_id: row.get(4),
         admitted_before: row.get(5),
+        revision_possibly_admitted: row.get(9),
         first_seen: row.get(6),
         event_time: row.get(7),
         delivery_attempt: row.get(8),
@@ -961,17 +989,20 @@ async fn read_prior(
 
 /// Freeze or verify the selected public receiver identity before a signed
 /// delivery leaves the process. The write and lease renewal commit together.
-/// A pending retry can proceed only under exact identity equality. Staging a
-/// rescan of a refused row clears its stored identities, so the receiver
-/// selected when it is next sent binds, even after a crash between staging
-/// and this call. With `allow_rebind`, which the pass sets only for a rescan
-/// of a refused row, the currently selected identities replace the stored
-/// ones without comparison. The refusal answered the latest attempt, but a
-/// row that carries `admitted_before` may have had an earlier attempt
-/// admitted; this function does not guard that case. The destination does:
-/// for such a row the Coordinator destination selects its revised trigger,
-/// and without one, or on the direct BReg destination, it names no delivery
-/// identity, so nothing binds and the item is held.
+/// A retry whose receipt may have been lost proceeds only under exact
+/// identity equality: a pending retry, and a rescan of a refused row whose
+/// revised event may have been admitted, whose stored identities staging
+/// keeps. Staging any other rescan of a refused row clears its stored
+/// identities, so the receiver selected when it is next sent binds, even
+/// after a crash between staging and this call. With `allow_rebind`, which
+/// the pass sets only for such a rescan, the currently selected identities
+/// replace the stored ones without comparison. That refusal answered the
+/// latest attempt, but a row that carries `admitted_before` may have had an
+/// earlier first registration admitted; this function does not guard that
+/// case. The destination does: for such a row the Coordinator destination
+/// selects its revised trigger, and without one, or on the direct BReg
+/// destination, it names no delivery identity, so nothing binds and the
+/// item is held.
 ///
 /// # Errors
 ///
@@ -1082,8 +1113,11 @@ fn missing_item() -> StoreError {
 /// `possibly_admitted` is true when the refusal answered the retry of a
 /// hand-off whose first answer was lost. The refusal proves nothing about
 /// that first attempt, so the row is marked possibly admitted and a later
-/// digest or rescan is a revision, never a second registration. A refusal
-/// never clears an existing mark.
+/// digest or rescan is a revision, never a second registration. When that
+/// attempt was itself a revision (the row already carried
+/// `admitted_before`), the row also records that the revised event may
+/// have been admitted, which keeps the sequence's receiver and body
+/// identities frozen across a rescan. A refusal never clears either mark.
 ///
 /// # Errors
 ///
@@ -1105,7 +1139,9 @@ pub async fn record_refused(
     let row = tx
         .execute(
             "UPDATE adapter_job_items SET status = 'refused', code = $3, run_id = NULL, \
-             admitted_before = admitted_before OR $5, last_seen = $4 \
+             admitted_before = admitted_before OR $5, \
+             revision_possibly_admitted = revision_possibly_admitted OR ($5 AND admitted_before), \
+             last_seen = $4 \
              WHERE job_id = $1 AND item_key = $2",
             &[&job_id, &key, &code, &now, &possibly_admitted],
         )

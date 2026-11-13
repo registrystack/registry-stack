@@ -555,6 +555,7 @@ async fn the_item_table_holds_no_column_that_can_carry_a_payload() {
         ("prior_run_id", "text"),
         ("receiver_identity", "bytea"),
         ("receiver_identity_known", "boolean"),
+        ("revision_possibly_admitted", "boolean"),
         ("run_id", "text"),
         ("sequence", "bigint"),
         ("status", "text"),
@@ -2528,6 +2529,154 @@ async fn a_rescan_of_a_refused_row_clears_the_identity_its_refused_attempt_froze
     );
 }
 
+/// A revised event whose answer was lost may have been admitted under the
+/// receiver and body identities its sequence froze. A refusal of its retry
+/// does not answer that event, so a rescan keeps both identities and stages
+/// a fenced retry: only the same receiver and body bind, through any later
+/// refusal. A changed digest starts a sequence with nothing frozen.
+#[tokio::test]
+async fn a_rescan_of_a_refused_retry_of_a_lost_revision_keeps_its_identities_frozen() {
+    let pool = isolated().await.pool;
+    let mut client = pool.get().await.expect("a pooled client");
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let digest_a = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let digest_b = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let digest_c = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let stage = |digest: &'static str, retry_refused: bool| {
+        let pool = pool.clone();
+        async move {
+            let mut client = pool.get().await.expect("a pooled client");
+            store::stage_item(
+                &mut client,
+                "case-daily",
+                "submissions/a",
+                digest,
+                retry_refused,
+                now,
+                lease.token,
+                ttl,
+            )
+            .await
+            .expect("the item stages")
+            .expect("the item delivers")
+        }
+    };
+    let bind = |receiver: [u8; 32], body: [u8; 32], attempt: i64, allow_rebind: bool| {
+        let pool = pool.clone();
+        async move {
+            let mut client = pool.get().await.expect("a pooled client");
+            store::bind_delivery_identity(
+                &mut client,
+                "case-daily",
+                "submissions/a",
+                &receiver,
+                &body,
+                attempt,
+                allow_rebind,
+                lease.token,
+                ttl,
+            )
+            .await
+        }
+    };
+
+    let registered = stage(digest_a, false).await;
+    bind([0x11; 32], [0x31; 32], registered.delivery_attempt, false)
+        .await
+        .expect("the primary receiver binds");
+    store::record_acknowledged(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        Some("run-a"),
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the registration is acknowledged");
+
+    // The revised event's answer is lost, and its retry is refused.
+    let revision = stage(digest_b, false).await;
+    assert!(revision.admitted_before, "the edit is a revision");
+    bind([0x22; 32], [0x32; 32], revision.delivery_attempt, false)
+        .await
+        .expect("the revised receiver binds");
+    let retry = stage(digest_b, false).await;
+    assert!(retry.receipt_uncertain);
+    bind([0x22; 32], [0x32; 32], retry.delivery_attempt, false)
+        .await
+        .expect("the retry binds the same identities");
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        "event.invalid",
+        retry.receipt_uncertain,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the refusal records");
+
+    let preview = store::peek_item(&client, "case-daily", "submissions/a", digest_b, true, now)
+        .await
+        .expect("the preview reads")
+        .expect("the preview retries the refused item");
+    let rescan = stage(digest_b, true).await;
+    assert!(
+        preview.receipt_uncertain && rescan.receipt_uncertain,
+        "the rescan is a fenced retry, and the preview agrees"
+    );
+    assert!(matches!(
+        bind([0x33; 32], [0x32; 32], rescan.delivery_attempt, false).await,
+        Err(store::StoreError::ReceiverIdentityChanged)
+    ));
+    assert!(matches!(
+        bind([0x22; 32], [0x33; 32], rescan.delivery_attempt, false).await,
+        Err(store::StoreError::CanonicalBodyIdentityChanged)
+    ));
+    bind([0x22; 32], [0x32; 32], rescan.delivery_attempt, false)
+        .await
+        .expect("the same receiver and body bind");
+
+    // A certain refusal of the fenced retry keeps the identities frozen.
+    store::record_refused(
+        &mut client,
+        "case-daily",
+        "submissions/a",
+        "event.invalid",
+        false,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the second refusal records");
+    let again = stage(digest_b, true).await;
+    assert!(again.receipt_uncertain);
+    assert!(matches!(
+        bind([0x33; 32], [0x32; 32], again.delivery_attempt, false).await,
+        Err(store::StoreError::ReceiverIdentityChanged)
+    ));
+
+    // A changed digest is a new sequence and a new event: nothing is frozen.
+    let edited = stage(digest_c, false).await;
+    assert!(!edited.receipt_uncertain);
+    bind([0x33; 32], [0x34; 32], edited.delivery_attempt, false)
+        .await
+        .expect("a new sequence binds the receiver selected for it");
+}
+
 #[tokio::test]
 async fn a_delivery_attempt_at_i64_max_stops_without_wrapping_or_mutating_the_row() {
     let pool = isolated().await.pool;
@@ -2900,6 +3049,141 @@ async fn migration_keeps_a_legacy_pending_receiver_identity_unknown() {
     ));
 }
 
+/// Install the last schema that predates the possibly admitted revision
+/// mark, for the migration test proving a refused revision stays fenced.
+async fn install_schema_103(pool: &Pool) {
+    install_schema_102(pool).await;
+    let client = pool.get().await.expect("a pooled client");
+    client
+        .batch_execute(include_str!(
+            "../src/store/migrations/0103_coordinator_delivery_identity.sql"
+        ))
+        .await
+        .expect("apply maintained schema version 103");
+    client
+        .execute(
+            "INSERT INTO adapter_job_schema_migrations(version, applied_at) VALUES (103, now())",
+            &[],
+        )
+        .await
+        .expect("record maintained schema version 103");
+}
+
+/// A refused revision written before store schema 104 cannot say whether its
+/// refusal answered a revised event whose answer was lost, so the migration
+/// keeps the receiver and body identities it froze: its rescan binds only
+/// those. A refused first registration, a refused revision that froze no
+/// receiver, and a pending revision carry no mark.
+#[tokio::test]
+async fn migration_keeps_a_legacy_refused_revision_fenced_to_its_frozen_receiver() {
+    let isolated = unmigrated().await;
+    install_schema_103(&isolated.pool).await;
+    let mut client = isolated.pool.get().await.expect("a pooled client");
+    let now = SystemTime::now();
+    let digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let legacy: [(&str, &str, bool, Option<Vec<u8>>); 4] = [
+        (
+            "submissions/revision",
+            "refused",
+            true,
+            Some(vec![0x22; 32]),
+        ),
+        (
+            "submissions/registration",
+            "refused",
+            false,
+            Some(vec![0x11; 32]),
+        ),
+        ("submissions/unbound", "refused", true, None),
+        ("submissions/pending", "pending", true, Some(vec![0x22; 32])),
+    ];
+    for (key, status, admitted_before, receiver) in &legacy {
+        let body = receiver.as_ref().map(|_| vec![0x32_u8; 32]);
+        client
+            .execute(
+                "INSERT INTO adapter_job_items \
+                 (job_id, item_key, last_digest, sequence, status, admitted_before, \
+                  first_seen, last_seen, event_time, delivery_attempt, \
+                  receiver_identity, receiver_identity_known, \
+                  canonical_body_identity, canonical_body_identity_known) \
+                 VALUES ('case-daily', $1, $2, 2, $3, $4, $5, $5, $5, 2, $6, true, $7, true)",
+                &[key, &digest, status, admitted_before, &now, receiver, &body],
+            )
+            .await
+            .expect("the legacy row inserts");
+    }
+    store::migrate(&client)
+        .await
+        .expect("schema 104 migrates the legacy rows");
+    let marked: Vec<String> = client
+        .query(
+            "SELECT item_key FROM adapter_job_items \
+             WHERE revision_possibly_admitted ORDER BY item_key",
+            &[],
+        )
+        .await
+        .expect("the mark reads")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(
+        marked,
+        vec!["submissions/revision".to_string()],
+        "only the refused revision that froze a receiver is marked"
+    );
+
+    store::ensure_state(&client, "case-daily")
+        .await
+        .expect("the state row exists");
+    let ttl = Duration::from_secs(60);
+    let lease = store::take_lease(&client, "case-daily", ttl)
+        .await
+        .expect("the lease answers")
+        .expect("the lease grants");
+    let rescan = store::stage_item(
+        &mut client,
+        "case-daily",
+        "submissions/revision",
+        digest,
+        true,
+        now,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the item stages")
+    .expect("the rescan retries the refused item");
+    assert!(rescan.receipt_uncertain, "the rescan is a fenced retry");
+    assert!(matches!(
+        store::bind_delivery_identity(
+            &mut client,
+            "case-daily",
+            "submissions/revision",
+            &[0x33; 32],
+            &[0x32; 32],
+            rescan.delivery_attempt,
+            false,
+            lease.token,
+            ttl,
+        )
+        .await,
+        Err(store::StoreError::ReceiverIdentityChanged)
+    ));
+    store::bind_delivery_identity(
+        &mut client,
+        "case-daily",
+        "submissions/revision",
+        &[0x22; 32],
+        &[0x32; 32],
+        rescan.delivery_attempt,
+        false,
+        lease.token,
+        ttl,
+    )
+    .await
+    .expect("the frozen receiver and body bind");
+}
+
 /// A refused query names its SQLSTATE, so an operator can tell a missing
 /// grant from a dropped connection without the driver's prose.
 #[tokio::test]
@@ -2958,7 +3242,10 @@ async fn a_failed_migration_records_no_version_and_retries_whole() {
     store::migrate(&client)
         .await
         .expect("the retried migration applies whole");
-    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
+    assert_eq!(
+        applied_versions(&client).await,
+        vec![100, 101, 102, 103, 104]
+    );
 }
 
 /// The fixture's operator arguments for one command over the binary.
@@ -3065,7 +3352,7 @@ async fn init_store_bootstraps_only_the_store_from_the_runtime_reference() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("init-store prints JSON");
     assert_eq!(report["ok"], true);
-    assert_eq!(report["schemaVersion"], 103);
+    assert_eq!(report["schemaVersion"], 104);
     assert_eq!(
         report
             .as_object()
@@ -3076,7 +3363,10 @@ async fn init_store_bootstraps_only_the_store_from_the_runtime_reference() {
     );
 
     let client = isolated.pool.get().await.expect("a pooled client");
-    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
+    assert_eq!(
+        applied_versions(&client).await,
+        vec![100, 101, 102, 103, 104]
+    );
     drop(client);
     for table in [
         "adapter_job_schema_migrations",
@@ -3147,7 +3437,10 @@ async fn init_store_repeats_unchanged_and_advances_a_supported_schema() {
         String::from_utf8_lossy(&upgraded.stderr)
     );
     let client = older.pool.get().await.expect("a pooled client");
-    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
+    assert_eq!(
+        applied_versions(&client).await,
+        vec![100, 101, 102, 103, 104]
+    );
     store::schema_current(&client)
         .await
         .expect("the upgraded schema is current");
@@ -3252,7 +3545,10 @@ async fn initialized_fresh_store_supports_status_inspect_and_dry_run_without_wri
     assert_eq!(table_rows(&isolated.pool, "adapter_job_state").await, 0);
     assert_eq!(table_rows(&isolated.pool, "adapter_job_items").await, 0);
     let client = isolated.pool.get().await.expect("a pooled client");
-    assert_eq!(applied_versions(&client).await, vec![100, 101, 102, 103]);
+    assert_eq!(
+        applied_versions(&client).await,
+        vec![100, 101, 102, 103, 104]
+    );
 }
 
 /// Status is a read: it reports a job with no state row and writes none.
@@ -3626,7 +3922,7 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     let client = isolated.pool.get().await.expect("a pooled client");
     client
-        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 103")
+        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 104")
         .await
         .expect("the version row deletes");
     let output = run_job(&isolated.url, job_args("pass", &fixture, &["--dry-run"])).await;
@@ -3641,7 +3937,7 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102],
+        vec![100, 101, 102, 103],
         "the dry run applied nothing"
     );
 }

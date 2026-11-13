@@ -17,7 +17,14 @@
   `adapter.job.coordinator-receiver-changed`, and restoring the trigger does
   not resend it. A `rescan` of a refused item sends it to the receiver
   selected at that time, so adding a revised trigger after a refusal does
-  not stop the pass. Items refused this way by an earlier version carry no
+  not stop the pass. A refused item whose revised event may have been
+  admitted is the exception: a `rescan` sends that event only to the same
+  revised receiver with the same body, and a changed revised trigger,
+  binding, `job.version` or projection stops the pass as
+  `adapter.job.coordinator-receiver-changed` or
+  `adapter.job.coordinator-body-changed` before any request. Store schema
+  104 treats every refused revised event already in the store this way; run
+  `init-store` once. Items refused this way by an earlier version carry no
   mark: before you edit or rescan one, check BReg or Coordinator for an
   admission of that item.
 
