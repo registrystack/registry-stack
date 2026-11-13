@@ -362,12 +362,13 @@ pub struct OfferAuthorizationConfig {
     pub audiences: Vec<String>,
     pub algorithms: Vec<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers. Unrestricted accepts any
-    /// client the issuer vouched for, which is the usual single-adopter
-    /// deployment.
+    /// client the issuer vouched for and loads only in supervised local
+    /// development.
     pub allowed_clients: Restriction,
     /// Scopes every offer token must carry, checked against the verified
-    /// token's scope set. Unrestricted applies no scope gate; generated
-    /// configurations state `oid4vci:offer`.
+    /// token's scope set. Unrestricted applies no scope gate and loads only in
+    /// supervised local development; generated configurations state
+    /// `oid4vci:offer`.
     pub required_scopes: Restriction,
     pub maximum_token_lifetime_seconds: u64,
 }
@@ -814,7 +815,7 @@ impl<'de> Deserialize<'de> for UnrestrictedKeyword {
         } else {
             Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
-                "Write unrestricted to admit any value, or list the admitted values.",
+                "List the admitted values; unrestricted is accepted only with validationMode: supervised-local-development.",
             )
             .into_error())
         }
@@ -850,7 +851,7 @@ impl<'de> Deserialize<'de> for ListedIdentifiers {
         if items.is_empty() {
             return Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
-                "Write unrestricted to admit any value, or list the admitted values.",
+                "List the admitted values; unrestricted is accepted only with validationMode: supervised-local-development.",
             )
             .into_error());
         }
@@ -948,10 +949,12 @@ pub struct OffersDocument {
     )]
     pub algorithms: UniqueList<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers, each at most 128 bytes,
-    /// or `unrestricted` for any client the issuer vouched for.
+    /// or `unrestricted` for any client the issuer vouched for, which loads
+    /// only with `validationMode: supervised-local-development`.
     pub allowed_clients: IdentifierRestriction,
     /// Scopes every offer token must carry, each an RFC 6749 scope token of at
-    /// most 256 bytes, or `unrestricted` for no scope gate. Generated
+    /// most 256 bytes, or `unrestricted` for no scope gate, which loads only
+    /// with `validationMode: supervised-local-development`. Generated
     /// configurations state `oid4vci:offer`.
     pub required_scopes: IdentifierRestriction,
     /// The longest lifetime an offer token may carry, in seconds.
@@ -1119,6 +1122,7 @@ impl DeliveryDocument {
         self.audit_findings(&mut findings);
         self.token_client.findings(&mut findings);
         self.offers.findings(&mut findings);
+        self.offer_gate_findings(&mut findings);
         if self.store.nonce_lifetime_seconds.get() > self.store.access_token_lifetime_seconds.get()
         {
             // A nonce that remains valid after the access token window can
@@ -1233,6 +1237,38 @@ impl DeliveryDocument {
                     )
                     .reading(TRANSPORT_READS),
                 );
+            }
+        }
+    }
+
+    /// An unrestricted gate admits every client or scope the offer-token
+    /// issuer vouches for, and the subject of an offer comes from the request,
+    /// so only the supervised local development profile may state one.
+    fn offer_gate_findings(&self, findings: &mut Vec<Finding>) {
+        if self.validation_mode == ValidationMode::SupervisedLocalDevelopment {
+            return;
+        }
+        for (pointer, message, action, restriction) in [
+            (
+                "/offers/allowedClients",
+                "offers.allowedClients is unrestricted, which only validationMode: supervised-local-development accepts",
+                "List the clients that may create offers, for example allowedClients: [back-office-issuer], or set validationMode: supervised-local-development for a supervised local run.",
+                &self.offers.allowed_clients,
+            ),
+            (
+                "/offers/requiredScopes",
+                "offers.requiredScopes is unrestricted, which only validationMode: supervised-local-development accepts",
+                "List the scopes an offer token must carry, for example requiredScopes: [oid4vci:offer], or set validationMode: supervised-local-development for a supervised local run.",
+                &self.offers.required_scopes,
+            ),
+        ] {
+            if matches!(restriction, IdentifierRestriction::Unrestricted(_)) {
+                findings.push(Finding::error(
+                    "evidence.oid4vci.offer-gate-unrestricted",
+                    pointer,
+                    message,
+                    action,
+                ));
             }
         }
     }
@@ -1506,7 +1542,7 @@ impl OffersDocument {
                         "evidence.oid4vci.wildcard-spelled-item",
                         format!("{list}/{index}"),
                         "this item is compared as a literal value and admits nothing else",
-                        "Write unrestricted in place of the list to admit any value, or remove the item.",
+                        "Remove the item and list the real client or scope names.",
                     ));
                 }
             }
@@ -2385,19 +2421,51 @@ store:
         ] {
             assert_eq!(refused(&VALID.replace(removed, "")), ["config.missing-key"]);
         }
-        let text = VALID
-            .replace(
+        let unrestricted = |text: &str| {
+            text.replace(
                 "  allowedClients: [adopter-front-end]",
                 "  allowedClients: unrestricted",
             )
             .replace(
                 "  requiredScopes: [oid4vci:offer]",
                 "  requiredScopes: unrestricted",
-            );
-        let config = load_from(&text).expect("unrestricted gates load");
+            )
+        };
+        let text = unrestricted(&supervised());
+        let config = load_from(&text).expect("unrestricted gates load in supervised development");
         assert_eq!(config.offers.allowed_clients, Restriction::Unrestricted);
         assert_eq!(config.offers.required_scopes, Restriction::Unrestricted);
         assert!(config.offers.allowed_clients.items().is_empty());
+    }
+
+    /// An unrestricted gate admits every client or scope the issuer vouches
+    /// for, so only the supervised local development profile may state one.
+    #[test]
+    fn unrestricted_offer_gates_are_refused_outside_supervised_development() {
+        for (from, to, pointer) in [
+            (
+                "  allowedClients: [adopter-front-end]",
+                "  allowedClients: unrestricted",
+                "/offers/allowedClients",
+            ),
+            (
+                "  requiredScopes: [oid4vci:offer]",
+                "  requiredScopes: unrestricted",
+                "/offers/requiredScopes",
+            ),
+        ] {
+            let text = VALID.replace(from, to);
+            let error = load_from(&text).expect_err("a strict configuration refuses unrestricted");
+            let diagnostic = error
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "evidence.oid4vci.offer-gate-unrestricted")
+                .unwrap_or_else(|| panic!("no unrestricted finding for {pointer}"));
+            assert_eq!(diagnostic.path, pointer);
+            assert!(diagnostic
+                .suggested_action
+                .contains("supervised-local-development"));
+        }
     }
 
     #[test]

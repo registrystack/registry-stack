@@ -1966,7 +1966,7 @@ mod tests {
              audit:\n  destination: file\n  path: {root}/audit.jsonl\n  hashKeyRef: secret:file/audit-hash-key\n\
              evidence:\n  baseUrl: https://evidence.example.org\n\
              tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyRef: secret:file/delivery-client.jwk.json\n\
-             offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n  allowedClients: unrestricted\n  requiredScopes: unrestricted\n",
+             offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n  allowedClients: [adopter-front-end]\n  requiredScopes: [oid4vci:offer]\n",
             root = directory.display(),
         );
         fs::write(&path, text).expect("write the configuration document");
@@ -3094,6 +3094,10 @@ mod tests {
             config.offers.algorithms = vec![AccessTokenAlgorithm::ES256];
             config.offers.issuer = issuer_url.clone();
             config.offers.jwks_uri = format!("{issuer_url}/jwks");
+            // The authorizer below runs in supervised local development, the
+            // one profile that admits unrestricted offer gates.
+            config.offers.allowed_clients = crate::config::Restriction::Unrestricted;
+            config.offers.required_scopes = crate::config::Restriction::Unrestricted;
             let mut names = ClaimNames::default();
             if renamed {
                 names.grant_id = "task_id".into();

@@ -338,8 +338,8 @@ offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
   audiences: ["https://wallet.example.org"]
-  allowedClients: unrestricted
-  requiredScopes: unrestricted
+  allowedClients: [adopter-front-end]
+  requiredScopes: [oid4vci:offer]
 "#,
     )
     .expect("write fixture deployment");
