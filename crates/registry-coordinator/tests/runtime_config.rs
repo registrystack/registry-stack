@@ -579,6 +579,7 @@ fn task_bound_scheduling_requires_non_task_observation_authorization_offline() {
         ("clientId", json!(CANARY)),
         ("resource", json!("urn:example:different-resource")),
         ("tokenEndpoint", json!("https://other-issuer.example/token")),
+        ("clientAssertionAudience", json!("https://other-issuer.example")),
         ("scopes", json!([])),
     ] {
         let mut document = original.clone();
@@ -646,6 +647,48 @@ fn ignored_observation_authority_is_refused_for_other_connection_modes() {
     load(RUNTIME).unwrap();
 }
 
+/// RFC 10070 section 4: a client assertion names the authorization server's
+/// issuer identifier as its audience. Every connection credential states that
+/// identifier, and a credential without one is refused when the configuration
+/// is read.
+#[test]
+fn every_connection_credential_states_its_client_assertion_audience() {
+    #[cfg(feature = "schema")]
+    let schema: Value =
+        serde_json::from_str(&registry_coordinator::runtime::runtime_schema().unwrap()).unwrap();
+    #[cfg(feature = "schema")]
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    for (text, connection, member) in [
+        (RUNTIME, "applications", "authorization"),
+        (RUNTIME, "notices", "authorization"),
+        (SCHEDULING_RUNTIME, "bookings", "authorization"),
+        (SCHEDULING_RUNTIME, "bookings", "observationAuthorization"),
+    ] {
+        let field = format!("/connections/{connection}/{member}");
+        let mut document: Value = yaml_value(text).unwrap();
+        #[cfg(feature = "schema")]
+        assert!(validator.is_valid(&document), "{field}");
+        document["connections"][connection][member]
+            .as_object_mut()
+            .unwrap()
+            .remove("clientAssertionAudience")
+            .expect("the example states the audience");
+        let error = refused(&serde_norway::to_string(&document).unwrap());
+        assert_eq!(error.code, "config.missing-key", "{field}");
+        assert_eq!(error.field.as_deref(), Some(field.as_str()));
+        assert!(
+            error.message.contains("clientAssertionAudience"),
+            "{}",
+            error.message
+        );
+        #[cfg(feature = "schema")]
+        assert!(!validator.is_valid(&document), "{field}");
+    }
+}
+
 #[test]
 fn binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority() {
     let mut config = load(RUNTIME).unwrap();
@@ -671,25 +714,24 @@ fn binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority(
     let audience = config.connections["applications"]
         .authorization()
         .unwrap()
-        .token_endpoint
-        .as_str()
-        .to_owned();
+        .client_assertion_audience
+        .clone();
     config
         .connections
         .get_mut("applications")
         .unwrap()
         .authorization_mut()
         .unwrap()
-        .client_assertion_audience = Some(audience);
-    assert_eq!(digest, config.binding_digest().unwrap());
-    config
-        .connections
-        .get_mut("applications")
-        .unwrap()
-        .authorization_mut()
-        .unwrap()
-        .client_assertion_audience = Some("http://127.0.0.1:8090".into());
+        .client_assertion_audience = "https://another-issuer.example.org".into();
     assert_ne!(digest, config.binding_digest().unwrap());
+    config
+        .connections
+        .get_mut("applications")
+        .unwrap()
+        .authorization_mut()
+        .unwrap()
+        .client_assertion_audience = audience;
+    assert_eq!(digest, config.binding_digest().unwrap());
     config
         .connections
         .get_mut("applications")
@@ -1755,6 +1797,7 @@ fn with_review_connection() -> Value {
         "producer": "coordinator",
         "authorization": {
             "tokenEndpoint": "http://127.0.0.1:8090/token",
+            "clientAssertionAudience": "http://127.0.0.1:8090",
             "clientId": "coordinator-producer",
             "signingKeyRef": "secret:file/client-key",
             "resource": "urn:example:casework",

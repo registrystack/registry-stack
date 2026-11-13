@@ -14289,6 +14289,7 @@ mod tests {
                         .unwrap()
                         .remove("credentialPlacement");
                     credential["clientAssertionKeyRef"] = "secret:env/ASSERTION_KEY".into();
+                    credential["clientAssertionAudience"] = "https://token.example.invalid".into();
                 }
                 binding.credential = Some(serde_json::from_value(credential).unwrap());
                 let runtime = runtime_builder(vec![binding]);

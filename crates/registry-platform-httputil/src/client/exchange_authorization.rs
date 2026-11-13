@@ -525,7 +525,7 @@ impl ExchangeAuthorization {
         client_id: &str,
         token_endpoint: &Url,
         issuer: &str,
-        assertion_audience: Option<&str>,
+        assertion_audience: &str,
         resource: &str,
         scopes: &[String],
     ) -> bool {
@@ -938,6 +938,7 @@ mod tests {
                 "portal-client",
                 key(),
             )
+            .with_audience("https://issuer.example")
             .with_resource(resource)
             .with_scopes(scopes.iter().copied()),
         )
@@ -1004,7 +1005,7 @@ mod tests {
         let matches = |client_id: &str,
                        endpoint: &Url,
                        issuer: &str,
-                       audience: Option<&str>,
+                       audience: &str,
                        resource: &str,
                        scopes: &[String]| {
             authorization
@@ -1016,7 +1017,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            None,
+            "https://issuer.example",
             "urn:registry:evidence",
             &scopes,
         ));
@@ -1024,7 +1025,7 @@ mod tests {
             "other-client",
             &token_endpoint,
             "https://issuer.example",
-            None,
+            "https://issuer.example",
             "urn:registry:evidence",
             &scopes
         ));
@@ -1032,7 +1033,7 @@ mod tests {
             "portal-client",
             &other_endpoint,
             "https://issuer.example",
-            None,
+            "https://issuer.example",
             "urn:registry:evidence",
             &scopes
         ));
@@ -1040,7 +1041,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://other.example",
-            None,
+            "https://issuer.example",
             "urn:registry:evidence",
             &scopes
         ));
@@ -1048,7 +1049,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            Some("https://other.example/token"),
+            "https://other.example",
             "urn:registry:evidence",
             &scopes
         ));
@@ -1056,7 +1057,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            None,
+            "https://issuer.example",
             "urn:registry:other",
             &scopes
         ));
@@ -1064,7 +1065,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            None,
+            "https://issuer.example",
             "urn:registry:evidence",
             &["other:scope".to_owned()]
         ));
@@ -1084,6 +1085,7 @@ mod tests {
                     "portal-client",
                     key(),
                 )
+                .with_audience("https://issuer.example")
                 .with_resource("urn:registry:evidence")
                 .with_scopes(["evidence:invoke"]),
             )
@@ -1103,7 +1105,7 @@ mod tests {
                     "portal-client",
                     &Url::parse(spelling).unwrap(),
                     "https://issuer.example",
-                    None,
+                    "https://issuer.example",
                     "urn:registry:evidence",
                     &scopes,
                 ),
@@ -1114,7 +1116,7 @@ mod tests {
             "portal-client",
             &Url::parse("https://issuer.example/other").unwrap(),
             "https://issuer.example",
-            None,
+            "https://issuer.example",
             "urn:registry:evidence",
             &scopes,
         ));
@@ -1305,7 +1307,7 @@ mod tests {
                 "portal-client",
                 &token_endpoint,
                 "https://issuer.example",
-                None,
+                "https://issuer.example",
                 "urn:registry:evidence",
                 scopes,
             )
@@ -1628,11 +1630,10 @@ mod tests {
 
     fn unscoped(server: &MockServer, client_id: &str) -> PrivateKeyJwt {
         let endpoint = format!("{}/token", server.uri()).parse().unwrap();
-        PrivateKeyJwt::new(super::super::private_key_jwt::PrivateKeyJwtConfig::new(
-            endpoint,
-            client_id,
-            key(),
-        ))
+        PrivateKeyJwt::new(
+            super::super::private_key_jwt::PrivateKeyJwtConfig::new(endpoint, client_id, key())
+                .with_audience("https://issuer.example"),
+        )
         .unwrap()
     }
 

@@ -170,8 +170,8 @@ instead match Casework's requester profile and producer subject.
 
 The dev issuer generates the client's assertion key. `bregctl` copies its
 client ID and key into owner-only runtime secret files and emits a
-`privateKeyJwt` authority credential with the dev issuer token endpoint,
-assertion audience, resource, and declared scopes. BReg acquires and refreshes
+`privateKeyJwt` authority credential with the dev issuer token endpoint, the
+dev issuer identifier as assertion audience, resource, and declared scopes. BReg acquires and refreshes
 short-lived Casework tokens for each outbound exchange. No token or private key
 appears in `dev-clients.yaml`, runtime YAML, reports, or logs. An unmapped client
 uses the session's generated default BReg audience, which supports an App Kit
@@ -530,8 +530,11 @@ evidenceProviders:
       scopes: [evidence:invoke]
 ```
 
-The provider URL and token endpoint use numeric loopback HTTP. Provision the
-client at the issuer with precisely that resource and scope. The session copies
+The provider URL and token endpoint use numeric loopback HTTP.
+`assertionAudience` is required: the issuer identifier, exactly as its metadata
+publishes it, which the client assertion carries as its only audience
+(RFC 10070 section 4). Provision the client at the issuer with precisely that
+resource and scope. The session copies
 the referenced key and JWKS ([secret references](#secret-references)) to its
 private state; it gives the runtime secret references. The ordinary BREG
 credential provider refreshes expired service tokens. `tokenRef` is an

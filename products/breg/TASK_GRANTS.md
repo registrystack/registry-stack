@@ -152,9 +152,10 @@ Register this client for client credentials with the exact Casework resource and
 its status scope. Register the same client in Casework's status
 client mapping for this BReg resource. BReg supplies its configured OIDC audience
 as that resource; neither a caller nor the grant chooses an outbound endpoint.
-`clientAssertionAudience` is required and must exactly match the audience the
-identity provider accepts for the signed client assertion. Stock ThunderID uses
-its issuer URL. The private JWK must include its registered key identifier.
+`clientAssertionAudience` is required: the identity provider's issuer
+identifier, exactly as its metadata publishes it, which the signed client
+assertion carries as its only audience (RFC 10070 section 4). Stock ThunderID
+uses its issuer URL. The private JWK must include its registered key identifier.
 `caBundleRef` can refer to a private CA PEM bundle for both outbound connections.
 Production endpoints use HTTPS; loopback HTTP is available for local development.
 

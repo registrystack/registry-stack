@@ -22,6 +22,7 @@ connections:
     profile: workflow-actions
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: coordinator-agent
       signingKeyRef: secret:file/reader-jwk
       resource: urn:example:applications
@@ -31,6 +32,7 @@ connections:
     baseUrl: https://messaging.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: coordinator-notices
       signingKeyRef: secret:file/notices-jwk
       resource: urn:example:messaging

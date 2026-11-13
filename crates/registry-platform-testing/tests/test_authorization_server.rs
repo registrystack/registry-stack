@@ -221,8 +221,25 @@ async fn citizen_token(server: &TestAuthorizationServer) -> String {
 /// A client assertion signed by hand, for the requests `PrivateKeyJwt`
 /// deliberately cannot make.
 fn assertion(key: &PrivateJwk, client_id: &str, audience: &str, jti: &str) -> String {
+    assertion_shaped(
+        key,
+        client_id,
+        "client-authentication+jwt",
+        json!(audience),
+        jti,
+    )
+}
+
+/// A client assertion with the given header `typ` and `aud` claim value.
+fn assertion_shaped(
+    key: &PrivateJwk,
+    client_id: &str,
+    typ: &str,
+    audience: Value,
+    jti: &str,
+) -> String {
     let now = now_unix_seconds();
-    let header = json!({"alg": key.algorithm().unwrap().jwa_name(), "kid": key.kid, "typ": "JWT"});
+    let header = json!({"alg": key.algorithm().unwrap().jwa_name(), "kid": key.kid, "typ": typ});
     let claims = json!({"iss": client_id, "sub": client_id, "aud": audience,
         "iat": now, "exp": now + 60, "jti": jti});
     let input = format!(
@@ -245,7 +262,8 @@ fn provider(
         server.token_endpoint().parse().unwrap(),
         client_id,
         key.clone(),
-    );
+    )
+    .with_audience(server.issuer());
     if let Some(resource) = resource {
         config = config.with_resource(resource);
     }
@@ -437,12 +455,7 @@ async fn supplied_es256_signing_key_is_used_by_http_issuance_metadata_and_verifi
     assert_eq!(header_of(&token)["alg"], "ES256");
     assert_eq!(header_of(&token)["kid"], expected_kid);
     verified(&server, REGISTRY_AUDIENCE, &token).await;
-    let assertion = assertion(
-        &client_key,
-        GATEWAY,
-        &server.token_endpoint(),
-        "es256-exchange",
-    );
+    let assertion = assertion(&client_key, GATEWAY, &server.issuer(), "es256-exchange");
     let (status, exchanged) = post_form(
         &server,
         &[
@@ -665,7 +678,7 @@ async fn a_bad_client_assertion_is_refused() {
         })
     ));
 
-    let token_endpoint = server.token_endpoint();
+    let issuer = server.issuer();
     let cases = [
         // Addressed to another server.
         assertion(
@@ -675,12 +688,7 @@ async fn a_bad_client_assertion_is_refused() {
             "jti-1",
         ),
         // Naming another client than the one it authenticates.
-        assertion(
-            &fixture.gateway_key,
-            OTHER_SERVICE,
-            &token_endpoint,
-            "jti-2",
-        ),
+        assertion(&fixture.gateway_key, OTHER_SERVICE, &issuer, "jti-2"),
         // Not a JWT at all.
         "not-a-jwt".to_owned(),
     ];
@@ -700,7 +708,7 @@ async fn a_bad_client_assertion_is_refused() {
     }
 
     // A good assertion is accepted once; its replay is refused.
-    let good = assertion(&fixture.gateway_key, GATEWAY, &token_endpoint, "jti-once");
+    let good = assertion(&fixture.gateway_key, GATEWAY, &issuer, "jti-once");
     let form = [
         ("grant_type", "client_credentials"),
         ("client_id", GATEWAY),
@@ -720,6 +728,57 @@ async fn a_bad_client_assertion_is_refused() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "invalid_client");
+}
+
+/// RFC 10070 section 4: a client assertion names the issuer identifier as its
+/// sole audience and carries the explicit type, so the suite proves what the
+/// clients under test send.
+#[tokio::test]
+async fn a_client_assertion_names_only_the_issuer_and_its_type() {
+    let fixture = fixture().await;
+    let server = &fixture.server;
+    let issuer = server.issuer();
+    let token_endpoint = server.token_endpoint();
+    let typed = "client-authentication+jwt";
+    let refused = [
+        ("the token endpoint", typed, json!(token_endpoint)),
+        ("the issuer in an array", typed, json!([issuer])),
+        (
+            "the issuer among other audiences",
+            typed,
+            json!([issuer, token_endpoint]),
+        ),
+        ("an untyped header", "JWT", json!(issuer)),
+    ];
+    for (label, typ, audience) in refused {
+        let client_assertion = assertion_shaped(&fixture.gateway_key, GATEWAY, typ, audience, label);
+        let (status, body) = post_form(
+            server,
+            &[
+                ("grant_type", "client_credentials"),
+                ("client_id", GATEWAY),
+                ("client_assertion_type", JWT_BEARER),
+                ("client_assertion", &client_assertion),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{label}");
+        assert_eq!(body["error"], "invalid_client", "{label}");
+    }
+
+    let client_assertion =
+        assertion_shaped(&fixture.gateway_key, GATEWAY, typed, json!(issuer), "issuer");
+    let (status, body) = post_form(
+        server,
+        &[
+            ("grant_type", "client_credentials"),
+            ("client_id", GATEWAY),
+            ("client_assertion_type", JWT_BEARER),
+            ("client_assertion", &client_assertion),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]
@@ -804,12 +863,7 @@ async fn a_resource_the_client_may_not_address_is_refused() {
             ("client_assertion_type", JWT_BEARER),
             (
                 "client_assertion",
-                &assertion(
-                    &fixture.gateway_key,
-                    GATEWAY,
-                    &server.token_endpoint(),
-                    "jti-r",
-                ),
+                &assertion(&fixture.gateway_key, GATEWAY, &server.issuer(), "jti-r"),
             ),
             ("resource", OTHER_AUDIENCE),
         ],
@@ -834,12 +888,7 @@ async fn a_resource_the_client_may_not_address_is_refused() {
             ("client_assertion_type", JWT_BEARER),
             (
                 "client_assertion",
-                &assertion(
-                    &fixture.gateway_key,
-                    GATEWAY,
-                    &server.token_endpoint(),
-                    "jti-x",
-                ),
+                &assertion(&fixture.gateway_key, GATEWAY, &server.issuer(), "jti-x"),
             ),
             ("subject_token", &citizen),
             ("subject_token_type", ACCESS_TOKEN_URN),
@@ -1261,12 +1310,7 @@ async fn an_expired_or_foreign_subject_token_is_refused() {
                 ("client_assertion_type", JWT_BEARER),
                 (
                     "client_assertion",
-                    &assertion(
-                        &fixture.gateway_key,
-                        GATEWAY,
-                        &server.token_endpoint(),
-                        label,
-                    ),
+                    &assertion(&fixture.gateway_key, GATEWAY, &server.issuer(), label),
                 ),
                 ("subject_token", &subject),
                 ("subject_token_type", ACCESS_TOKEN_URN),
@@ -1292,7 +1336,7 @@ async fn an_actor_token_must_be_the_exchanging_clients_own_and_typed() {
             .unwrap(),
     );
     let own = bearer_text(&gateway_actor(&fixture).bearer_token().await.unwrap());
-    let endpoint = server.token_endpoint();
+    let issuer = server.issuer();
     let cases: [(&str, &str, Option<&str>, &str); 3] = [
         (
             "another client's actor",
@@ -1309,7 +1353,7 @@ async fn an_actor_token_must_be_the_exchanging_clients_own_and_typed() {
         ),
     ];
     for (label, actor, actor_type, error) in cases {
-        let client_assertion = assertion(&fixture.gateway_key, GATEWAY, &endpoint, label);
+        let client_assertion = assertion(&fixture.gateway_key, GATEWAY, &issuer, label);
         let mut form = vec![
             ("grant_type", TOKEN_EXCHANGE),
             ("client_id", GATEWAY),
@@ -1342,12 +1386,7 @@ async fn a_scope_beyond_the_subject_token_is_refused() {
             ("client_assertion_type", JWT_BEARER),
             (
                 "client_assertion",
-                &assertion(
-                    &fixture.gateway_key,
-                    GATEWAY,
-                    &server.token_endpoint(),
-                    "jti-s",
-                ),
+                &assertion(&fixture.gateway_key, GATEWAY, &server.issuer(), "jti-s"),
             ),
             ("subject_token", &citizen),
             ("subject_token_type", ACCESS_TOKEN_URN),

@@ -46,6 +46,7 @@ destinations:
     type: direct-breg
     baseUrl: https://breg.example.invalid
     tokenEndpoint: https://identity.example.invalid/oauth2/token
+    clientAssertionAudience: https://identity.example.invalid
     clientId: adapter-kobo-ingestion
     privateKeyRef: secret:env/BREG_PRIVATE_KEY
     scopes: [registry:write]

@@ -452,10 +452,8 @@
               ]
             },
             "clientAssertionAudience": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "description": "The authorization server's issuer identifier, the client\nassertion's sole audience (RFC 10070 section 4). It has no default.",
+              "type": "string"
             },
             "clientAssertionKeyRef": {
               "$ref": "#/$defs/SecretReference"
@@ -494,6 +492,7 @@
             "tokenEndpoint",
             "clientIdRef",
             "clientAssertionKeyRef",
+            "clientAssertionAudience",
             "maximumCacheSeconds"
           ],
           "type": "object"

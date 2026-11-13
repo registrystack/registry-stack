@@ -69,11 +69,11 @@ export interface PrivateKeyJwtConfig {
   clientId: string
   clientKey: PrivateJwk
   /**
-   * The audience of the client assertion (who checks the client's
-   * authentication). Defaults to the token endpoint URL. This is not the
-   * `resource` of the token request.
+   * The authorization server's issuer identifier, exactly as its metadata
+   * publishes it. The client assertion names it as its only audience
+   * (RFC 10070 section 4). This is not the `resource` of the token request.
    */
-  audience?: string
+  audience: string
   /**
    * The RFC 8707 resource indicator the token is requested for: the resource
    * server's registered identifier, not a URL to fetch.

@@ -105,10 +105,12 @@ pub struct ProfileCreateArgs {
     #[arg(long)]
     expected_provider: Option<String>,
 
-    /// Audience of the client assertion presented at the token endpoint, when
-    /// the issuer expects one other than the token endpoint URL (ThunderID
-    /// v1.0.1 expects the issuer string). This is not the token request's
-    /// resource.
+    /// Required. Audience of the client assertion presented at the token
+    /// endpoint: the authorization server's issuer identifier, exactly as its
+    /// metadata publishes it (RFC 10070 section 4). It has no default. This is
+    /// not the token request's resource.
+    // Optional to the parser so its absence is refused by name below, not
+    // by the uniform usage failure.
     #[arg(long, value_name = "AUDIENCE")]
     client_assertion_audience: Option<String>,
 
@@ -153,19 +155,17 @@ pub(crate) struct ClientProfile {
     pub(crate) verification: VerificationProfile,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) expected: Option<ExpectedProfile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) oauth: Option<ClientOauthProfile>,
+    pub(crate) oauth: ClientOauthProfile,
 }
 
 /// The token-request parameters a profile fixes ahead of discovery. The
-/// members are independent: a deployment may state only the assertion
-/// audience, or only the resource, and unstated members keep their
-/// discovery-driven defaults.
-#[derive(Debug, Clone, Default, Serialize)]
+/// assertion audience is required and has no default; the resource and the
+/// scopes are independent of it, and an unstated one keeps its
+/// discovery-driven default.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ClientOauthProfile {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) client_assertion_audience: Option<String>,
+    pub(crate) client_assertion_audience: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) resource: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,15 +276,22 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
     let expected =
         (expected.audience.is_some() || expected.issuer.is_some() || expected.provider.is_some())
             .then_some(expected);
+    let Some(client_assertion_audience) = args.client_assertion_audience else {
+        bail!(
+            "--client-assertion-audience is required: the authorization server's issuer identifier, exactly as its metadata publishes it (RFC 10070 section 4)"
+        );
+    };
     let oauth = {
         let oauth = ClientOauthProfile {
-            client_assertion_audience: args.client_assertion_audience,
+            client_assertion_audience,
             resource: args.resource,
             scopes: (!args.scopes.is_empty()).then_some(args.scopes),
         };
-        if let Some(audience) = oauth.client_assertion_audience.as_deref() {
-            validate_bounded_identifier(audience, 512, "client assertion audience")?;
-        }
+        validate_bounded_identifier(
+            &oauth.client_assertion_audience,
+            512,
+            "client assertion audience",
+        )?;
         if let Some(resource) = oauth.resource.as_deref() {
             validate_bounded_identifier(resource, 2048, "resource indicator")?;
             let parsed =
@@ -322,10 +329,7 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
                 bail!("a requested scope may not repeat");
             }
         }
-        (oauth.client_assertion_audience.is_some()
-            || oauth.resource.is_some()
-            || oauth.scopes.is_some())
-        .then_some(oauth)
+        oauth
     };
     let profile = ClientProfile {
         api_version: EVIDENCE_CLIENT_PROFILE_API_VERSION.to_owned(),

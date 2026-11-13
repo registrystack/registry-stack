@@ -90,8 +90,12 @@ algorithm override. It remains an in-memory test issuer, not an operator issuer.
 - `/token` accepts `authorization_code` (one-time codes, PKCE verified),
   `client_credentials`, and RFC 8693 token exchange. Confidential clients
   authenticate with `private_key_jwt` (EdDSA, ES256, ES384, RS256, or RS384,
-  selected by `kid`, each assertion `jti` accepted once); public clients send
-  only `client_id` and may use only the authorization-code grant.
+  selected by `kid`, each assertion `jti` accepted once). Per RFC 10070
+  section 4, an assertion names the server's issuer identifier as its only
+  `aud`, as one string, and carries the header `typ: client-authentication+jwt`;
+  this server refuses the token endpoint as audience, an audience array and an
+  untyped assertion, so a passing test proves what the client sends. Public
+  clients send only `client_id` and may use only the authorization-code grant.
 - A token exchange takes an access-token subject this server issued and has
   not expired, an optional actor token that must be the exchanging client's
   own `client_credentials` token, and exactly one `resource` the client is

@@ -2556,6 +2556,8 @@ mod tests {
                 "reporting",
                 "--private-key-file",
                 "client-private-jwk",
+                "--client-assertion-audience",
+                "https://issuer.example.test",
                 "--output",
                 "client-profile.json",
             ],

@@ -102,7 +102,7 @@ impl TaskGrantStatusRegistry {
                     .parse()
                     .map_err(|_| TaskGrantError::Configuration)?,
                 config.client_id.as_str(),
-                Some(&config.client_assertion_audience),
+                config.client_assertion_audience.as_str(),
             )
             .map_err(|_| TaskGrantError::Configuration)?;
         }

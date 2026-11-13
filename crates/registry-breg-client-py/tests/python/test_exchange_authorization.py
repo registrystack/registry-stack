@@ -90,8 +90,34 @@ class ExchangeAuthorizationTests(unittest.TestCase):
         self.thread.join()
 
     def key_client(self, resource, scopes):
-        return {"token_endpoint":f"{self.origin}/token", "client_id":"agent-client", "client_key":KEY,
-                "resource":resource, "scopes":scopes}
+        return {"token_endpoint":f"{self.origin}/token", "audience":self.origin, "client_id":"agent-client",
+                "client_key":KEY, "resource":resource, "scopes":scopes}
+
+    def test_exchange_clients_state_their_client_assertion_audience(self):
+        # RFC 10070 section 4: the client assertion names the authorization
+        # server's issuer identifier as its audience, so each client states it.
+        first_party = {"client":self.key_client("urn:records", ["records:get"]),
+            "context":{"issuer":"https://portal.example", "subject":"person-1", "audience":"https://issuer.example",
+                       "generation":"verified-person-1", "deadline_seconds":self.deadline},
+            "first_party":{"key":KEY, "attributes":{"registry_actor_kind":"human"}}}
+        remote = {"client":self.key_client("urn:records", ["records:get"]),
+            "context":{"issuer":"https://casework.example", "subject":"agent-1", "audience":"https://issuer.example",
+                       "generation":"grant-1", "deadline_seconds":self.deadline, "grant_id":GRANT},
+            "remote":{"endpoint":f"{self.origin}/v1/task-grants/{GRANT}/assertion",
+                      "bootstrap":self.key_client("urn:casework", ["casework:grants:assert"]),
+                      "bootstrap_resource":"urn:casework", "bootstrap_scope":"casework:grants:assert"}}
+        BaseRegistryClient(self.origin, authorization={"exchange":first_party})
+        BaseRegistryClient(self.origin, authorization={"exchange":remote})
+        client = {name: value for name, value in first_party["client"].items() if name != "audience"}
+        bootstrap = {name: value for name, value in remote["remote"]["bootstrap"].items() if name != "audience"}
+        for changed in ({**first_party, "client":client},
+                        {**first_party, "client":{**client, "audience":None}},
+                        {**remote, "remote":{**remote["remote"], "bootstrap":bootstrap}}):
+            with self.subTest(exchange=changed), self.assertRaises(BaseRegistryClientError) as raised:
+                BaseRegistryClient(self.origin, authorization={"exchange":changed})
+            self.assertEqual(raised.exception.kind, "configuration")
+            self.assertIn("audience", str(raised.exception))
+        self.assertEqual(self.forms, [])
 
     def test_remote_provider_uses_fresh_casework_assertion_and_refuses_revocation(self):
         self.expected_token = "Bearer task-token"

@@ -102,7 +102,7 @@ pub struct AddConnectionArgs {
     /// Optional RFC 8707 resource indicator for the requested token.
     #[arg(long, requires = "private_key_jwt")]
     pub resource: Option<String>,
-    /// Optional assertion audience; defaults to the token endpoint.
+    /// Client assertion audience: the authorization server's issuer identifier.
     #[arg(long, requires = "private_key_jwt")]
     pub assertion_audience: Option<String>,
 }
@@ -207,9 +207,8 @@ enum SavedAuth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         /// Optional RFC 8707 resource identifier.
         resource: Option<ExternalId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        /// Optional private_key_jwt audience; the token endpoint is the default.
-        assertion_audience: Option<ExternalId>,
+        /// Client assertion audience: the authorization server's issuer identifier.
+        assertion_audience: ExternalId,
     },
 }
 
@@ -242,10 +241,9 @@ impl Serialize for SavedAuth {
                 resource,
                 assertion_audience,
             } => {
-                let mut count = 4;
+                let mut count = 5;
                 count += usize::from(!scopes.is_empty());
                 count += usize::from(resource.is_some());
-                count += usize::from(assertion_audience.is_some());
                 let mut map = serializer.serialize_map(Some(count))?;
                 map.serialize_entry("type", "private-key-jwt")?;
                 map.serialize_entry("tokenEndpoint", token_endpoint)?;
@@ -257,9 +255,7 @@ impl Serialize for SavedAuth {
                 if let Some(resource) = resource {
                     map.serialize_entry("resource", resource)?;
                 }
-                if let Some(audience) = assertion_audience {
-                    map.serialize_entry("assertionAudience", audience)?;
-                }
+                map.serialize_entry("assertionAudience", assertion_audience)?;
                 map.end()
             }
         }
@@ -574,9 +570,9 @@ fn saved_auth(
         if args.private_key_file.is_none() {
             args.private_key_file = Some(PathBuf::from(prompt("Private JWK file: ")?));
         }
-        prompt_optional_missing(
+        prompt_missing(
             &mut args.assertion_audience,
-            "Assertion audience (optional; blank uses token endpoint): ",
+            "Assertion audience (the authorization server's issuer identifier): ",
         )?;
         prompt_optional_missing(&mut args.resource, "OAuth resource indicator (optional): ")?;
         if args.scope.is_empty() {
@@ -591,6 +587,12 @@ fn saved_auth(
     let client_id = args
         .client_id
         .ok_or_else(|| ApiError::Usage("--private-key-jwt requires --client-id".to_owned()))?;
+    let assertion_audience = args.assertion_audience.ok_or_else(|| {
+        ApiError::Usage(
+            "--private-key-jwt requires --assertion-audience, the authorization server's issuer identifier"
+                .to_owned(),
+        )
+    })?;
     let private_key_ref = file_reference(
         secret_providers,
         &args.private_key_file.ok_or_else(|| {
@@ -616,14 +618,11 @@ fn saved_auth(
         .resource
         .map(|value| external_id(value, "--resource"))
         .transpose()?;
-    let assertion_audience = args
-        .assertion_audience
-        .map(|value| external_id(value, "--assertion-audience"))
-        .transpose()?;
+    let assertion_audience = external_id(assertion_audience, "--assertion-audience")?;
     PrivateKeyJwtConfig::check_identity(
         &token_endpoint.to_url(),
         client_id.as_str(),
-        assertion_audience.as_ref().map(ExternalId::as_str),
+        assertion_audience.as_str(),
     )
     .map_err(|_| ApiError::Usage("the private_key_jwt identity settings are invalid".to_owned()))?;
     validate_oauth_request(&scopes, resource.as_ref()).map_err(ApiError::Usage)?;
@@ -734,15 +733,13 @@ fn materialize(_store: &Store, saved: &SavedConnection) -> Result<LocalConnectio
             );
             let key = PrivateJwk::parse(json.as_str()).map_err(|_| ApiError::Credential)?;
             let endpoint = token_endpoint.to_url();
-            let mut config = PrivateKeyJwtConfig::new(endpoint, client_id.as_str(), key);
+            let mut config = PrivateKeyJwtConfig::new(endpoint, client_id.as_str(), key)
+                .with_audience(assertion_audience.as_str());
             if !scopes.is_empty() {
                 config = config.with_scopes(scopes.iter().map(|scope| scope.as_str().to_owned()));
             }
             if let Some(resource) = resource {
                 config = config.with_resource(resource.as_str());
-            }
-            if let Some(audience) = assertion_audience {
-                config = config.with_audience(audience.as_str());
             }
             if let Some(pem) = &trusted_root_certificates {
                 config = config.with_trusted_root_certificates(pem.clone());
@@ -988,7 +985,7 @@ fn validate_store(store: Store) -> Result<Store, ApiError> {
                 PrivateKeyJwtConfig::check_identity(
                     &token_endpoint.to_url(),
                     client_id.as_str(),
-                    assertion_audience.as_ref().map(ExternalId::as_str),
+                    assertion_audience.as_str(),
                 )
                 .map_err(|_| {
                     ApiError::Configuration("saved private_key_jwt settings are invalid".to_owned())
@@ -1209,6 +1206,35 @@ mod tests {
             .diagnostics()
             .iter()
             .any(|diagnostic| diagnostic.code.as_str() == "config.unknown-key"));
+    }
+
+    /// The assertion audience is the authorization server's issuer
+    /// identifier and has no default, so a saved private_key_jwt connection
+    /// that does not state it is refused when the file is read.
+    #[test]
+    fn a_saved_private_key_jwt_connection_requires_the_assertion_audience() {
+        let connection = |audience: &str| {
+            format!(
+                "apiVersion: {CONNECTIONS_API_VERSION}\nkind: {CONNECTIONS_KIND}\nconnections:\n  - product: breg\n    name: renewable\n    baseUrl: https://registry.example.test/api\n    auth:\n      type: private-key-jwt\n      tokenEndpoint: https://issuer.example.test/token\n      clientId: registry-cli-test\n      privateKeyRef: secret:file/client-key\n{audience}"
+            )
+        };
+        let error = Reader::new("connections.yaml")
+            .decode::<Store>(connection("").as_bytes(), &Expect::one(&FORMAT))
+            .expect_err("a connection without an assertion audience is refused");
+        assert!(
+            error
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.missing-key"
+                    && diagnostic.message.contains("assertionAudience")),
+            "{error}"
+        );
+        Reader::new("connections.yaml")
+            .decode::<Store>(
+                connection("      assertionAudience: https://issuer.example.test\n").as_bytes(),
+                &Expect::one(&FORMAT),
+            )
+            .expect("a connection stating the issuer identifier is read");
     }
 
     #[test]

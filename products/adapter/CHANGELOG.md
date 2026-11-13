@@ -38,6 +38,13 @@
   or the write expires. Each held poll logs a value-free warning. Let async
   writes settle before upgrading; rows written by an earlier version are
   quarantined and expire.
+- BREAKING: an `oauth2-private-key-jwt` runtime credential and an adapter job's
+  `direct-breg` destination require `clientAssertionAudience`, with no
+  default. The client assertion carries it as its only audience and has the
+  header `typ: client-authentication+jwt` (RFC 10070 section 4). A configuration
+  without it fails to load with a refusal that names the member. Migration:
+  set the audience member to the authorization server's issuer identifier,
+  exactly as its metadata publishes it.
 
 ## 0.46.0 - 2026-11-08
 

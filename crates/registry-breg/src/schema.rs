@@ -1523,9 +1523,18 @@ mod tests {
         let private_key_jwt = serde_json::json!({
             "tokenEndpoint": "https://issuer.example/token",
             "clientId": "action-client",
-            "privateKeyRef": "secret:file/action-key"
+            "privateKeyRef": "secret:file/action-key",
+            "assertionAudience": "https://issuer.example"
         });
+        // RFC 10070 section 4: the client assertion names the issuer
+        // identifier as its audience, so a private-key JWT binding states it.
+        let mut without_audience = private_key_jwt.clone();
+        without_audience
+            .as_object_mut()
+            .unwrap()
+            .remove("assertionAudience");
         for (token, jwt, expected) in [
+            (None, Some(without_audience), false),
             (None, None, false),
             (Some(Value::Null), Some(Value::Null), false),
             (Some(serde_json::json!("secret:file/token")), None, true),

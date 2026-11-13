@@ -20,6 +20,22 @@
   write `requiredScopes: unrestricted` where the member was absent: that
   configuration no longer loads outside local development. Migration: list the
   clients that may request an offer and the scopes they must hold.
+- BREAKING: every private_key_jwt client identity states its client assertion
+  audience, with no default: `clientAssertionAudience` on an
+  `oauth2-private-key-jwt` source credential in the runtime configuration and
+  the bundle, and on an `oauth2-private-key-jwt` connection in the authored
+  target, `oauth.clientAssertionAudience` in an Evidence client profile,
+  `audience` in the Node and Python client's `privateKeyJwt` and exchange
+  `client` objects, and `tokenClient.clientAssertionAudience` in the wallet
+  delivery (`evidence-oid4vci`) configuration. The client assertion carries it
+  as its only audience and has the header `typ: client-authentication+jwt`
+  (RFC 10070 section 4). A configuration, target, bundle or profile without it fails to
+  load, and a Node or Python client without it is refused when it is
+  constructed. `evidencectl client profile create` requires
+  `--client-assertion-audience`, and `evidencectl source add` refuses a source
+  handoff without `clientAssertionAudience`. Migration: set the audience member
+  to the authorization server's issuer identifier, exactly as its metadata
+  publishes it.
 
 ## 0.46.0 - 2026-11-08
 

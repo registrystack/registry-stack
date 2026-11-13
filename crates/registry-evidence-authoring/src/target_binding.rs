@@ -466,8 +466,9 @@ pub enum TargetConnectionAuthentication {
         token_endpoint: String,
         client_id_ref: SecretReference,
         client_assertion_key_ref: SecretReference,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_assertion_audience: Option<String>,
+        /// The authorization server's issuer identifier, the client
+        /// assertion's sole audience (RFC 10070 section 4). It has no default.
+        client_assertion_audience: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -945,6 +946,21 @@ mod tests {
         );
         assert_eq!(runtime["endpoints"][0]["maximumResponseBytes"], 1_048_576);
         assert!(runtime["endpoints"][0].get("authentication").is_none());
+    }
+
+    /// The client assertion audience is the authorization server's issuer
+    /// identifier (RFC 10070 section 4) and has no default, so a private-key
+    /// JWT connection that does not state it is refused where it is read.
+    #[test]
+    fn a_private_key_jwt_connection_requires_the_client_assertion_audience() {
+        let error = serde_json::from_str::<TargetConnection>(
+            r#"{"endpoints":{"records":{"origin":"https://source.invalid/api","authentication":{"type":"oauth2-private-key-jwt","tokenEndpoint":"https://issuer.invalid/token","clientIdRef":"secret:file/client-id","clientAssertionKeyRef":"secret:file/client-key","maximumCacheSeconds":60}}}}"#,
+        )
+        .expect_err("a private-key JWT connection without an assertion audience was accepted");
+        assert!(
+            error.to_string().contains("clientAssertionAudience"),
+            "{error}"
+        );
     }
 
     #[test]

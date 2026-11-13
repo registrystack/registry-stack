@@ -94,7 +94,7 @@ fn assertion(double: &UpstreamDouble) -> RuntimeCredential {
         token_endpoint: Url::new(double.url("/token")).expect("token endpoint"),
         client_id_ref: secret("OAUTH_ROUTE_ASSERTION_ID"),
         client_assertion_key_ref: secret("OAUTH_ROUTE_ASSERTION_KEY"),
-        client_assertion_audience: None,
+        client_assertion_audience: double.url(""),
         scope: None,
         audience: None,
         resource: None,

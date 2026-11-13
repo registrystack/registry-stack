@@ -440,12 +440,14 @@ integrations:
       tokenEndpoint: http://127.0.0.1:8093/oauth2/token
       clientIdRef: secret:file/reader-id
       clientAssertionKeyRef: secret:file/reader-key
+      clientAssertionAudience: http://127.0.0.1:8093
     source_main:
       baseUrl: http://127.0.0.1:8081
       statusProfile: review-status
       tokenEndpoint: http://127.0.0.1:8093/oauth2/token
       clientIdRef: secret:file/other-id
       clientAssertionKeyRef: secret:file/other-key
+      clientAssertionAudience: http://127.0.0.1:8093
   secretFiles:
     signing-key: /tmp/signing-key
     signing_key: /tmp/other-key
@@ -542,6 +544,7 @@ integrations:
       tokenEndpoint: http://127.0.0.1:8093/oauth2/token
       clientIdRef: secret:file/reader-id
       clientAssertionKeyRef: secret:file/reader-key
+      clientAssertionAudience: http://127.0.0.1:8093
   secretFiles:
     shared_id: /tmp/signing-key
 "#
@@ -596,7 +599,7 @@ fn integrations_read_identifiers_and_urls_through_shared_types() {
         structured[0].1,
         "/integrations/serviceClients/0/claims/tenant"
     );
-    let timeout = refused(integrations("  contextProviders:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      statusProfile: review-status\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/reader-id\n      clientAssertionKeyRef: secret:file/reader-key\n      requestTimeoutMilliseconds: 5000\n").as_bytes());
+    let timeout = refused(integrations("  contextProviders:\n    source:\n      baseUrl: http://127.0.0.1:8080\n      statusProfile: review-status\n      tokenEndpoint: http://127.0.0.1:8093/oauth2/token\n      clientIdRef: secret:file/reader-id\n      clientAssertionKeyRef: secret:file/reader-key\n      clientAssertionAudience: http://127.0.0.1:8093\n      requestTimeoutMilliseconds: 5000\n").as_bytes());
     assert_eq!(
         timeout,
         expected(&[(
@@ -3960,7 +3963,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provi
         .context_providers
         .get_mut("deployment")
         .unwrap()
-        .client_assertion_audience = Some("https://other.example".into());
+        .client_assertion_audience = "https://other.example".into();
     assert!(wrong.validate_session(&state, &policy).is_err());
     let mut wrong = integrations.clone();
     wrong.service_clients[1].scopes.push("records:get".into());
@@ -5056,7 +5059,7 @@ fn provider_connections_are_optional_and_use_declared_deployment_references() {
     let mut integrations: integrations::Integrations =
         serde_json::from_value(json!({"resource":"urn:casework:dev"})).unwrap();
     integrations.validate(&clients, &policy).unwrap();
-    let binding = json!({"baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status","tokenEndpoint":"http://127.0.0.1:8801/oauth2/token","clientIdRef":"secret:file/provider-id","clientAssertionKeyRef":"secret:file/provider-key"});
+    let binding = json!({"baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status","tokenEndpoint":"http://127.0.0.1:8801/oauth2/token","clientIdRef":"secret:file/provider-id","clientAssertionKeyRef":"secret:file/provider-key","clientAssertionAudience":"http://127.0.0.1:8801"});
     integrations.context_providers.insert(
         "source".into(),
         serde_json::from_value(binding.clone()).unwrap(),
@@ -5105,7 +5108,8 @@ fn task_context_provider_connection_requires_the_exact_distinct_authored_profile
             "baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status",
             "tokenEndpoint":"http://127.0.0.1:8801/oauth2/token",
             "clientIdRef":"secret:file/provider-id",
-            "clientAssertionKeyRef":"secret:file/provider-key"
+            "clientAssertionKeyRef":"secret:file/provider-key",
+            "clientAssertionAudience":"http://127.0.0.1:8801"
         });
         if let Some(profile) = task_profile {
             value["taskGrantProfile"] = json!(profile);

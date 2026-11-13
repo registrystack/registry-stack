@@ -48,7 +48,7 @@ bindings:
         tokenEndpoint: http://127.0.0.1:8111/token
         clientId: citizen-gateway
         privateKeyRef: secret:env/MCP_EXCHANGE_PRIVATE_KEY
-        assertionAudience: http://127.0.0.1:8111/token
+        assertionAudience: http://127.0.0.1:8111
       service:
         name: Citizen details
         description: Read the citizen's own registry details.

@@ -426,10 +426,11 @@ pub(crate) fn private_key_jwt(
             .map_err(|_| ConversionError::new("the private-key JWT client key is invalid"))?,
     )
     .map_err(|_| ConversionError::new("the private-key JWT client key is invalid"))?;
-    let mut config = PrivateKeyJwtConfig::new(token_endpoint, client_id, key);
-    if let Some(value) = optional_string(value, "audience", WHAT)? {
-        config = config.with_audience(value);
-    }
+    // RFC 10070 section 4: the client assertion names the authorization
+    // server's issuer identifier as its only audience.
+    let audience = required_string(value, "audience", WHAT)?;
+    let mut config =
+        PrivateKeyJwtConfig::new(token_endpoint, client_id, key).with_audience(audience);
     if let Some(value) = optional_string(value, "resource", WHAT)? {
         config = config.with_resource(value);
     }
@@ -457,6 +458,26 @@ pub(crate) fn private_key_jwt(
     PrivateKeyJwt::new(config).map_err(ConfigError::Token)
 }
 
+/// Each exchange key client names the authorization server's issuer identifier
+/// as its client assertion's only audience (RFC 10070 section 4). The shared
+/// parser refuses a shape error without naming a member, so the one member
+/// with no default is named here before it runs.
+fn require_exchange_client_audiences(exchange: &Value) -> Result<(), ConversionError> {
+    const CLIENT: &str = "authorization[\"exchange\"][\"client\"]";
+    const BOOTSTRAP: &str = "authorization[\"exchange\"][\"remote\"][\"bootstrap\"]";
+    if let Some(client) = exchange.get("client").and_then(Value::as_object) {
+        required_string(client, "audience", CLIENT)?;
+    }
+    if let Some(bootstrap) = exchange
+        .get("remote")
+        .and_then(|remote| remote.get("bootstrap"))
+        .and_then(Value::as_object)
+    {
+        required_string(bootstrap, "audience", BOOTSTRAP)?;
+    }
+    Ok(())
+}
+
 fn authorization_provider(
     value: &Value,
     roots: Option<Vec<u8>>,
@@ -476,6 +497,7 @@ fn authorization_provider(
                 return Ok(Some(Arc::new(private_key_jwt(value, roots)?)));
             }
             if let Some(value) = value.get("exchange") {
+                require_exchange_client_audiences(value)?;
                 return Ok(Some(Arc::new(
                     exchange_authorization_from_json(value).map_err(ConfigError::Token)?,
                 )));

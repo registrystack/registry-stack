@@ -761,8 +761,9 @@ pub fn batch_spec_from_json(value: &Value) -> Result<EvidenceRequestBatchSpec, C
 }
 
 /// `token["private_key_jwt"]`'s own shape mirrors [`PrivateKeyJwtConfig`]'s
-/// builder surface: one required endpoint, client identifier, and signing
-/// key, plus the optional knobs the Rust type exposes for its own outbound
+/// builder surface: one required endpoint, client identifier, signing key,
+/// and assertion audience (the authorization server's issuer identifier),
+/// plus the optional knobs the Rust type exposes for its own outbound
 /// exchange with the token endpoint.
 ///
 /// Deliberately absent: a nested `trusted_root_certificates`. The top-level
@@ -798,10 +799,9 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
         )))
     })?;
 
-    let mut config = PrivateKeyJwtConfig::new(token_endpoint, client_id, client_key);
-    if let Some(audience) = optional_string(object, "audience").map_err(ConfigError::Shape)? {
-        config = config.with_audience(audience);
-    }
+    let audience = required_string(object, "audience").map_err(ConfigError::Shape)?;
+    let mut config =
+        PrivateKeyJwtConfig::new(token_endpoint, client_id, client_key).with_audience(audience);
     if let Some(resource) = optional_string(object, "resource").map_err(ConfigError::Shape)? {
         config = config.with_resource(resource);
     }
@@ -1026,6 +1026,11 @@ pub fn exchange_from_authorization_json(
             "`authorization` must carry exactly one `exchange`",
         ))
     })?;
+    // The shared parser refuses any shape error without naming a member, so
+    // the one member with no default is named here before it runs.
+    if let Some(client) = exchange.get("client").and_then(Value::as_object) {
+        required_string(client, "audience").map_err(ConfigError::Shape)?;
+    }
     exchange_authorization_from_json(exchange).map_err(ConfigError::from)
 }
 
@@ -1842,6 +1847,37 @@ mod tests {
         .expect("the configuration is well-shaped");
     }
 
+    /// The assertion audience is the authorization server's issuer
+    /// identifier and has no default, so a provider that does not state it
+    /// is refused before any request, with a message naming the member.
+    #[test]
+    fn a_private_key_jwt_token_without_an_audience_is_a_shape_error_naming_it() {
+        let token = serde_json::json!({
+            "private_key_jwt": {
+                "token_endpoint": "https://issuer.example/token",
+                "client_id": "test-client",
+                "client_key": generated_private_jwk_json(),
+            }
+        });
+        let error = config_from_parts(
+            "https://evidence.example/",
+            &serde_json::json!({ "keys": [] }),
+            Vec::new(),
+            &token,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("a provider without an assertion audience is refused");
+        let ConfigError::Shape(shape) = error else {
+            panic!("expected a shape error, got {error:?}");
+        };
+        assert!(shape.0.contains("`audience`"), "{}", shape.0);
+    }
+
     #[test]
     fn config_from_parts_accepts_exchange_and_rejects_ambiguous_credentials() {
         let authorization = serde_json::json!({"exchange": {
@@ -1849,6 +1885,7 @@ mod tests {
                 "token_endpoint": "https://issuer.example/token",
                 "client_id": "test-client",
                 "client_key": generated_private_jwk_json(),
+                "audience": "https://issuer.example",
                 "resource": "urn:registry:evidence",
                 "scopes": ["evidence:invoke"]
             },
@@ -1892,6 +1929,30 @@ mod tests {
             ),
             Err(ConfigError::Shape(_))
         ));
+
+        let mut unstated = authorization.clone();
+        unstated["exchange"]["client"]
+            .as_object_mut()
+            .unwrap()
+            .remove("audience");
+        let error = config_from_parts_with_authorization(
+            "https://evidence.example/",
+            &serde_json::json!({"keys": []}),
+            Vec::new(),
+            &token,
+            Some(&unstated),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("an exchange client without an assertion audience is refused");
+        let ConfigError::Shape(shape) = error else {
+            panic!("expected a shape error, got {error:?}");
+        };
+        assert!(shape.0.contains("`audience`"), "{}", shape.0);
     }
 
     /// The scopes the binding reads are a list of strings, and a value of any
@@ -1908,6 +1969,7 @@ mod tests {
                     "token_endpoint": "https://issuer.example/token",
                     "client_id": "test-client",
                     "client_key": generated_private_jwk_json(),
+                    "audience": "https://issuer.example",
                     "scopes": scopes,
                 }
             });
@@ -1940,6 +2002,7 @@ mod tests {
                 "token_endpoint": "https://issuer.example/token",
                 "client_id": "test-client",
                 "client_key": generated_es256_private_jwk_json(),
+                "audience": "https://issuer.example",
             }
         });
         config_from_parts(
@@ -2000,6 +2063,7 @@ mod tests {
                 "token_endpoint": "https://issuer.example/token",
                 "client_id": "test-client",
                 "client_key": { "kty": "not-a-real-key-type" },
+                "audience": "https://issuer.example",
             }
         });
         let error = config_from_parts(
@@ -2299,6 +2363,7 @@ mod tests {
                     "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                     "d": CANARY,
                 },
+                "audience": "https://issuer.example",
             }
         });
         let error = config_from_parts(

@@ -22,6 +22,22 @@
   whose principal claim is `sub` and whose purpose claim is the contextual
   purpose claim; otherwise issue the exchanged token with the profile's
   principal and purpose claims.
+- BREAKING: a private-key JWT client assertion names the authorization
+  server's issuer identifier as its only audience and has the header
+  `typ: client-authentication+jwt` (RFC 10070 section 4); the audience has no
+  default. The runtime configuration requires
+  `evidenceProviders.<id>.privateKeyJwt.assertionAudience`, the BReg MCP
+  gateway runtime configuration requires `assertionAudience` on its token
+  exchange, and a configuration without either fails to load.
+  The Node.js and Python clients require `audience` in `privateKeyJwt`
+  (`private_key_jwt`), the exchange `client` and the remote `bootstrap`, and
+  refuse a configuration without it at construction with kind `configuration`.
+  Migration: set the audience member to the authorization server's issuer
+  identifier, exactly as its metadata publishes it.
+- The `bregctl project-dev` token endpoint accepts a client assertion typed
+  `client-authentication+jwt` or `JWT` whose only audience is its issuer
+  identifier, as one string. It refuses any other type, its token endpoint URL
+  as the audience, and an audience array.
 
 - `bregctl project-dev` runs BReg projects, including spatial projects, from a
   `breg/project-dev` v1alpha1 plan. It is an alpha format and may change.

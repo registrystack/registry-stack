@@ -546,6 +546,7 @@ fn provisioning_reports_the_bundle_and_runtime_secret_union_once() {
                 "tokenEndpoint":"https://issuer.invalid/oauth2/token",
                 "clientIdRef":"secret:file/source-client-id",
                 "clientAssertionKeyRef":"secret:file/source-client-assertion-key",
+                "clientAssertionAudience":"https://issuer.invalid",
                 "maximumCacheSeconds":60
             });
             target["connections"]["registry-http"]["endpoints"]["registry-http"]["mtlsIdentity"] = json!({

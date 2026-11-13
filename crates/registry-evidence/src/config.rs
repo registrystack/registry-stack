@@ -6544,9 +6544,18 @@ mod tests {
         serde_json::json!({
             "type":"oauth2-private-key-jwt",
             "tokenEndpoint":"https://issuer.invalid/token",
+            "clientAssertionAudience":"https://issuer.invalid",
             "clientIdRef":"secret:env/CLIENT_ID",
             "clientAssertionKeyRef":"secret:env/CLIENT_ASSERTION_KEY",
             "maximumCacheSeconds":60
+        })
+    }
+
+    fn current_private_key_policy() -> serde_json::Value {
+        serde_json::json!({
+            "type":"oauth2-private-key-jwt",
+            "tokenEndpoint":"https://issuer.invalid/token",
+            "clientAssertionAudience":"https://issuer.invalid"
         })
     }
 
@@ -9279,10 +9288,7 @@ mod tests {
             .filter(|value| {
                 let mut credential = current_private_key_credential();
                 credential["tokenEndpoint"] = serde_json::json!(value);
-                let mut policy = serde_json::json!({
-                    "type":"oauth2-private-key-jwt",
-                    "tokenEndpoint":"https://issuer.invalid/token"
-                });
+                let mut policy = current_private_key_policy();
                 policy["tokenEndpoint"] = serde_json::json!(value);
                 current_adapter_contract_accepts(
                     "https://source.invalid",
@@ -9556,6 +9562,10 @@ mod tests {
                 if let Some(key_ref) = key_ref {
                     authentication["clientAssertionKeyRef"] = serde_json::json!(key_ref);
                 }
+                if written == ASSERTION {
+                    authentication["clientAssertionAudience"] =
+                        serde_json::json!("https://source.invalid");
+                }
                 let accepted = written == accepting;
                 let label = format!("{written:?}/{secret_ref:?}/{placement:?}/{key_ref:?}");
 
@@ -9631,12 +9641,12 @@ mod tests {
         }
     }
 
-    /// RFC 7523 section 3 asks only that the audience identify the
-    /// authorization server and leaves the exact string to out-of-band
-    /// agreement, so this is an opaque identifier rather than a URL. It is
-    /// bounded like the sibling `audience` and validated by the same rule.
+    /// RFC 10070 section 4 makes the audience the authorization server's
+    /// issuer identifier, compared by Simple String Comparison, so the value
+    /// is carried exactly as written and has no default. It is bounded like
+    /// the sibling `audience` and validated by the same rule.
     #[test]
-    fn the_client_assertion_audience_is_a_bounded_optional_string() {
+    fn the_client_assertion_audience_is_a_bounded_required_string() {
         for (audience, accepted) in [
             (Some("https://issuer.invalid/"), true),
             // An issuer identifier that shares no origin with the token
@@ -9651,20 +9661,25 @@ mod tests {
             // credential error names nothing the operator can act on.
             (Some("   "), false),
             (Some("a".repeat(513).as_str()), false),
-            (None, true),
+            (None, false),
         ] {
             let mut authentication = current_private_key_credential();
-            if let Some(audience) = audience {
-                authentication["clientAssertionAudience"] = serde_json::json!(audience);
+            let mut policy = current_private_key_policy();
+            match audience {
+                Some(audience) => {
+                    authentication["clientAssertionAudience"] = serde_json::json!(audience);
+                    policy["clientAssertionAudience"] = serde_json::json!(audience);
+                }
+                None => {
+                    for document in [&mut authentication, &mut policy] {
+                        document
+                            .as_object_mut()
+                            .expect("the fixture is an object")
+                            .remove("clientAssertionAudience");
+                    }
+                }
             }
             let label = audience.map(str::len);
-            let mut policy = serde_json::json!({
-                "type":"oauth2-private-key-jwt",
-                "tokenEndpoint":"https://issuer.invalid/token"
-            });
-            if let Some(audience) = audience {
-                policy["clientAssertionAudience"] = serde_json::json!(audience);
-            }
             assert_eq!(
                 current_adapter_contract_accepts(
                     "https://source.invalid",
@@ -10991,6 +11006,7 @@ outboundTls:
         credential:
           type: oauth2-private-key-jwt
           tokenEndpoint: https://identity.invalid/token
+          clientAssertionAudience: https://identity.invalid
           clientIdRef: secret:env/SOURCE_CLIENT_ID
           clientAssertionKeyRef: secret:env/SOURCE_CLIENT_KEY
           maximumCacheSeconds: 60

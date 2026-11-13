@@ -1945,7 +1945,7 @@ mod tests {
                         format!("secret:env/{key_env}"),
                     )
                     .expect("key reference"),
-                    client_assertion_audience: None,
+                    client_assertion_audience: "https://tokens.example.invalid".to_owned(),
                     scope: None,
                     audience: None,
                     resource: None,

@@ -62,6 +62,7 @@ tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyRef: secret:file/unused-delivery-client.jwk.json
+  clientAssertionAudience: https://mint.example.org
 offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json

@@ -629,7 +629,6 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
     refuse_null_fields(
         object,
         &[
-            "audience",
             "resource",
             "scopes",
             "assertionLifetimeSeconds",
@@ -671,15 +670,15 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
             .map_err(|_| binding_error("configuration", "clientKey is invalid"))?,
     )
     .map_err(|_| binding_error("configuration", "clientKey is invalid"))?;
-    let mut config = PrivateKeyJwtConfig::new(endpoint, client_id, key);
-    if let Some(value) = optional_string(
+    // RFC 10070 section 4: the client assertion names the authorization
+    // server's issuer identifier as its only audience.
+    let audience = required_string(
         object,
         "audience",
         "configuration",
-        "authorization.privateKeyJwt.audience must be a string",
-    )? {
-        config = config.with_audience(value);
-    }
+        "authorization.privateKeyJwt.audience must be the authorization server's issuer identifier",
+    )?;
+    let mut config = PrivateKeyJwtConfig::new(endpoint, client_id, key).with_audience(audience);
     if let Some(value) = optional_string(
         object,
         "resource",
@@ -815,7 +814,6 @@ fn validate_exchange_client(value: &Value, what: &'static str) -> Result<()> {
     refuse_null_fields(
         object,
         &[
-            "audience",
             "assertionLifetimeSeconds",
             "refreshMarginSeconds",
             "attemptTimeoutMilliseconds",
@@ -825,6 +823,14 @@ fn validate_exchange_client(value: &Value, what: &'static str) -> Result<()> {
         ],
         "configuration",
         "exchange client options must be omitted instead of null",
+    )?;
+    // RFC 10070 section 4: the client assertion names the authorization
+    // server's issuer identifier as its only audience.
+    required_string(
+        object,
+        "audience",
+        "configuration",
+        "exchange client audience must be the authorization server's issuer identifier",
     )?;
     optional_i64(
         object,

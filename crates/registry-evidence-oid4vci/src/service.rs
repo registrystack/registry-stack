@@ -1965,7 +1965,7 @@ mod tests {
              secretProviders:\n  file:\n    root: {root}\n\
              audit:\n  destination: file\n  path: {root}/audit.jsonl\n  hashKeyRef: secret:file/audit-hash-key\n\
              evidence:\n  baseUrl: https://evidence.example.org\n\
-             tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyRef: secret:file/delivery-client.jwk.json\n\
+             tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyRef: secret:file/delivery-client.jwk.json\n  clientAssertionAudience: https://mint.example.org\n\
              offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n  allowedClients: [adopter-front-end]\n  requiredScopes: [oid4vci:offer]\n",
             root = directory.display(),
         );

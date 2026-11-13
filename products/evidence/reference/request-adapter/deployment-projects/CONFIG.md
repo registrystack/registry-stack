@@ -540,7 +540,7 @@ sourceConnections:
         authentication:
           type: oauth2-private-key-jwt
           tokenEndpoint: https://identity.gov.example/token
-          clientAssertionAudience: https://identity.gov.example/client-auth
+          clientAssertionAudience: https://identity.gov.example
           audience: https://registry.gov.example
           resource: https://registry.gov.example
 ```
@@ -634,11 +634,12 @@ credential:
   maximumCacheSeconds: 300
 ```
 
-`oauth2-private-key-jwt` follows the same split. Its policy may additionally
-pin `clientAssertionAudience`; its runtime credential supplies `clientIdRef`
-and `clientAssertionKeyRef`. Omission uses the exact token endpoint as the
-assertion audience. State another audience only when the authorization server
-expects a different exact identifier, such as an issuer behind a proxy.
+`oauth2-private-key-jwt` follows the same split. Its policy additionally pins
+the required `clientAssertionAudience`: the authorization server's issuer
+identifier, exactly as its metadata publishes it, which the client assertion
+carries as its only audience (RFC 10070 section 4). It has no default. Its
+runtime credential supplies `clientIdRef`, `clientAssertionKeyRef`, and the
+same `clientAssertionAudience`.
 
 OAuth `credentialPlacement` is `basic-header` or `form-body`. Client secrets
 never travel in a query string. `audience` is a token-request parameter, while
@@ -812,7 +813,7 @@ sourceConnections:
           tokenEndpoint: https://identity.gov.example/token
           clientIdRef: secret:file/workload-client-id
           clientAssertionKeyRef: secret:file/workload-client-key
-          clientAssertionAudience: https://identity.gov.example/client-auth
+          clientAssertionAudience: https://identity.gov.example
           audience: https://registry.gov.example
           resource: https://registry.gov.example
           maximumCacheSeconds: 60

@@ -16,6 +16,7 @@ connections:
     profile: workflow-actions
     authorization:
       tokenEndpoint: https://identity.example.test/token
+      clientAssertionAudience: https://identity.example.test
       clientId: application-agent
       signingKeyRef: secret:file/client-key
       resource: urn:example:applications

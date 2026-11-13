@@ -32,6 +32,19 @@
   preparation failures, invalid protocol answers and uncertain outcomes
   remain operational failures. In a scenario, one `retryable` reply with such
   a category takes the edge, as the runtime does once retries are exhausted.
+- BREAKING: every connection `authorization` and `observationAuthorization`
+  in `runtime.yaml` requires `clientAssertionAudience`, with no default. The
+  client assertion carries it as its only audience and has the header
+  `typ: client-authentication+jwt` (RFC 10070 section 4). A configuration
+  without it fails to load with `config.missing-key` naming the member, and an
+  `observationAuthorization` states the same audience as its primary
+  `authorization`. The audience is part of each connection's binding, so a
+  Run admitted without it no longer matches: finish live Runs on the earlier
+  release before upgrading. `coordinatorctl deployment-status` with the
+  upgraded configuration reports `live-binding-conflict` while one remains,
+  and `coordinator --recovery-only` inspects it with admissions and dispatch
+  disabled. Migration: set the audience member to the authorization server's
+  issuer identifier, exactly as its metadata publishes it.
 
 ## 0.46.0 - 2026-11-08
 

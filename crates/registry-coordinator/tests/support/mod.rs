@@ -66,7 +66,7 @@ pub fn config(
     );
     let authorization = |client: &str, resource: &str, scope: &str| AuthorizationConfig {
         token_endpoint: Url::parse(&issuer.token_endpoint()).unwrap(),
-        client_assertion_audience: None,
+        client_assertion_audience: issuer.issuer(),
         task_authority: None,
         client_id: client.to_owned(),
         signing_key_ref: SecretReference::parse("secret:file/client-key").unwrap(),

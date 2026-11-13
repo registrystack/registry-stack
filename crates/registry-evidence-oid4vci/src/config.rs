@@ -302,22 +302,13 @@ pub struct TokenClientConfig {
     /// The caller's own private JWK, as a secret reference. Resolved when the
     /// outbound client is built, never logged and never rendered.
     pub private_key_ref: SecretReference,
-    /// The value the endpoint expects as the client assertion `aud`. Defaults
-    /// to the token endpoint, which is the usual registration.
-    pub client_assertion_audience: Option<String>,
+    /// The authorization server's issuer identifier: the client assertion's
+    /// sole audience.
+    pub client_assertion_audience: String,
     /// The fixed RFC 8707 resource identifier of the Evidence API.
     pub resource: Option<String>,
     /// The exact scopes requested from the issuer for Evidence access.
     pub scopes: Option<Vec<String>>,
-}
-
-impl TokenClientConfig {
-    #[must_use]
-    pub fn client_assertion_audience(&self) -> &str {
-        self.client_assertion_audience
-            .as_deref()
-            .unwrap_or(&self.token_endpoint)
-    }
 }
 
 /// Which values a gate admits: any value, or exactly the listed ones.
@@ -737,10 +728,9 @@ pub struct TokenClientDocument {
     /// `secretProviders.file.root` or `secret:env/<NAME>`. Resolved when the
     /// outbound client is built, never logged and never rendered.
     pub private_key_ref: SecretReference,
-    /// The value the endpoint expects as the client assertion `aud`. Absent
-    /// means the token endpoint, which is the usual registration.
-    #[serde(default)]
-    pub client_assertion_audience: Option<Url>,
+    /// The authorization server's issuer identifier, exactly as its metadata
+    /// publishes it: the client assertion's sole audience. It has no default.
+    pub client_assertion_audience: Url,
     /// The fixed RFC 8707 resource identifier of the Evidence API: an
     /// absolute URI with no fragment or user information.
     #[serde(default)]
@@ -1143,19 +1133,19 @@ impl DeliveryDocument {
 
     /// The origins this service calls, each with the member that states it.
     fn called_origins(&self) -> Vec<(&'static str, &Url)> {
-        let mut origins = vec![
+        vec![
             ("/evidence/baseUrl", &self.evidence.base_url),
             (
                 "/tokenClient/tokenEndpoint",
                 &self.token_client.token_endpoint,
             ),
-        ];
-        if let Some(audience) = &self.token_client.client_assertion_audience {
-            origins.push(("/tokenClient/clientAssertionAudience", audience));
-        }
-        origins.push(("/offers/issuer", &self.offers.issuer));
-        origins.push(("/offers/jwksUri", &self.offers.jwks_uri));
-        origins
+            (
+                "/tokenClient/clientAssertionAudience",
+                &self.token_client.client_assertion_audience,
+            ),
+            ("/offers/issuer", &self.offers.issuer),
+            ("/offers/jwksUri", &self.offers.jwks_uri),
+        ]
     }
 
     fn transport_findings(&self, findings: &mut Vec<Finding>) {
@@ -1386,7 +1376,7 @@ impl DeliveryDocument {
                 client_assertion_audience: self
                     .token_client
                     .client_assertion_audience
-                    .map(Url::into_string),
+                    .into_string(),
                 resource: self.token_client.resource.map(ExternalId::into_string),
                 scopes: self.token_client.scopes.map(|scopes| {
                     scopes
@@ -1845,6 +1835,7 @@ tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyRef: secret:file/delivery-client.jwk.json
+  clientAssertionAudience: https://mint.example.org
 offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
@@ -2092,22 +2083,28 @@ store:
         assert!(load_from(&with("  unknownLimit: 1\n")).is_err());
     }
 
+    /// The assertion audience is the authorization server's issuer identifier
+    /// as the operator writes it; nothing stands in for it when it is absent.
     #[test]
-    fn the_client_assertion_audience_defaults_to_the_token_endpoint() {
-        let config = load_from(VALID).expect("the configuration loads");
-        assert_eq!(
-            config.token_client.client_assertion_audience(),
-            "https://mint.example.org/token"
+    fn the_client_assertion_audience_is_required_with_no_default() {
+        let without = VALID.replace("  clientAssertionAudience: https://mint.example.org\n", "");
+        assert_ne!(without, VALID, "the reference states an assertion audience");
+        let error = load_from(&without)
+            .expect_err("a token client without an assertion audience is refused");
+        assert!(
+            error.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "config.missing-key"
+                    && diagnostic.path.starts_with("/tokenClient")
+                    && diagnostic.message.contains("clientAssertionAudience")
+            }),
+            "expected a missing clientAssertionAudience: {:?}",
+            error.diagnostics()
         );
 
-        let text = VALID.replace(
-            "clientId: evidence-oid4vci",
-            "clientId: evidence-oid4vci\n  clientAssertionAudience: https://mint.example.org/other",
-        );
-        let config = load_from(&text).expect("the configuration loads");
+        let config = load_from(VALID).expect("the configuration loads");
         assert_eq!(
-            config.token_client.client_assertion_audience(),
-            "https://mint.example.org/other"
+            config.token_client.client_assertion_audience,
+            "https://mint.example.org"
         );
     }
 
@@ -2660,7 +2657,7 @@ store:
             .source
             .as_ref()
             .expect("the finding is positioned");
-        assert_eq!(source.line, Some(30));
+        assert_eq!(source.line, Some(31));
     }
 
     #[test]

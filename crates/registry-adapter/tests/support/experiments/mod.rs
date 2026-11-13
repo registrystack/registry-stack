@@ -634,8 +634,9 @@ fn endpoint_yaml(scenario: Scenario, upstream: &Upstream) -> String {
             .collect(),
         Scenario::RestMutualTls | Scenario::SecondProfile => {
             let token_endpoint = upstream.url("/oauth/token");
+            let issuer = upstream.url("");
             format!(
-                "  - endpoint: registry\n    baseUrl: {}\n    credential:\n      type: oauth2-private-key-jwt\n      tokenEndpoint: {token_endpoint}\n      clientIdRef: secret:env/EXPERIMENT_OAUTH_CLIENT_ID\n      clientAssertionKeyRef: secret:env/EXPERIMENT_ASSERTION_JWK\n      clientAssertionAudience: {token_endpoint}\n      scope: households.read\n      maximumCacheSeconds: 300\n    tlsTrustProfile: experiment-ca\n    mtlsIdentity:\n      certificateRef: secret:env/EXPERIMENT_MTLS_CERTIFICATE\n      keyRef: secret:env/EXPERIMENT_MTLS_KEY\n",
+                "  - endpoint: registry\n    baseUrl: {}\n    credential:\n      type: oauth2-private-key-jwt\n      tokenEndpoint: {token_endpoint}\n      clientIdRef: secret:env/EXPERIMENT_OAUTH_CLIENT_ID\n      clientAssertionKeyRef: secret:env/EXPERIMENT_ASSERTION_JWK\n      clientAssertionAudience: {issuer}\n      scope: households.read\n      maximumCacheSeconds: 300\n    tlsTrustProfile: experiment-ca\n    mtlsIdentity:\n      certificateRef: secret:env/EXPERIMENT_MTLS_CERTIFICATE\n      keyRef: secret:env/EXPERIMENT_MTLS_KEY\n",
                 upstream.url(scenario.base_path())
             )
         }
@@ -754,8 +755,12 @@ pub fn assert_transcript(scenario: Scenario, fixture: &Fixture, upstream: &Upstr
                 serde_json::from_str(ASSERTION_JWK).expect("the assertion JWK parses");
             let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
             validation.set_issuer(&[OAUTH_CLIENT_ID]);
-            let token_endpoint = upstream.url("/oauth/token");
-            validation.set_audience(&[token_endpoint.as_str()]);
+            // RFC 10070 section 4: the assertion names the authorization
+            // server's issuer identifier as its audience and is typed.
+            let issuer = upstream.url("");
+            validation.set_audience(&[issuer.as_str()]);
+            let header = jsonwebtoken::decode_header(assertion).expect("the assertion header");
+            assert_eq!(header.typ.as_deref(), Some("client-authentication+jwt"));
             let claims = jsonwebtoken::decode::<Value>(
                 assertion,
                 &jsonwebtoken::DecodingKey::from_jwk(&jwk)
@@ -766,7 +771,7 @@ pub fn assert_transcript(scenario: Scenario, fixture: &Fixture, upstream: &Upstr
             .claims;
             assert_eq!(claims["iss"], OAUTH_CLIENT_ID);
             assert_eq!(claims["sub"], OAUTH_CLIENT_ID);
-            assert_eq!(claims["aud"], token_endpoint);
+            assert_eq!(claims["aud"], issuer);
             assert!(
                 claims["exp"].as_u64().expect("assertion expiry")
                     > claims["iat"].as_u64().expect("assertion issued-at")

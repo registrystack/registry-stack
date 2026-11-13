@@ -334,6 +334,7 @@ tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyRef: secret:file/unused-in-wired-test.jwk
+  clientAssertionAudience: https://mint.example.org
 offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
@@ -718,6 +719,7 @@ tokenClient:
   tokenEndpoint: {SUPPORT_ORIGIN}/token
   clientId: evidence-oid4vci-tutorial
   privateKeyRef: secret:env/{CLIENT_KEY_VARIABLE}
+  clientAssertionAudience: {SUPPORT_ORIGIN}
 offers:
   issuer: {SUPPORT_ORIGIN}
   jwksUri: {SUPPORT_ORIGIN}/.well-known/jwks.json

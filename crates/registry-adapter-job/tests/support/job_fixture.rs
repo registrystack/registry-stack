@@ -466,6 +466,9 @@ fn direct_breg_runtime_yaml(
                 "tokenEndpoint": token_endpoint,
                 "clientId": "application-reader",
                 "privateKeyRef": "secret:env/BREG_CLIENT_KEY",
+                "clientAssertionAudience": token_endpoint
+                    .strip_suffix("/token")
+                    .expect("the test issuer serves its token endpoint at /token"),
                 "scopes": ["applications:read"],
                 "resource": "urn:example:applications",
                 "attemptTimeoutMilliseconds": 3000

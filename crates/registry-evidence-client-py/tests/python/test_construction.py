@@ -37,7 +37,8 @@ class ConstructionTest(unittest.TestCase):
         }
         authorization = {"exchange": {
             "client": {"token_endpoint": "https://issuer.example/token", "client_id": "staff-client",
-                       "client_key": key, "resource": "urn:registry:evidence", "scopes": ["evidence:invoke"]},
+                       "client_key": key, "audience": "https://issuer.example",
+                       "resource": "urn:registry:evidence", "scopes": ["evidence:invoke"]},
             "context": {"issuer": "https://portal.example", "subject": "staff-1",
                         "audience": "https://issuer.example", "generation": "verified-1",
                         "deadline_seconds": int(time.time()) + 300},
@@ -49,6 +50,24 @@ class ConstructionTest(unittest.TestCase):
         with self.assertRaises(revc.ConfigurationError):
             revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
                                 "ambiguous", authorization=authorization)
+
+        # The assertion audience is the authorization server's issuer
+        # identifier and has no default; both credential shapes name it.
+        unstated_client = dict(authorization["exchange"]["client"])
+        del unstated_client["audience"]
+        unstated = {"exchange": {**authorization["exchange"], "client": unstated_client}}
+        with self.assertRaisesRegex(revc.ConfigurationError, "`audience`"):
+            revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
+                                authorization=unstated)
+        with self.assertRaisesRegex(revc.ConfigurationError, "`audience`"):
+            revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
+                                {"private_key_jwt": {"token_endpoint": "https://issuer.example/token",
+                                                     "client_id": "staff-client", "client_key": key}})
+        direct = revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
+                                     {"private_key_jwt": {"token_endpoint": "https://issuer.example/token",
+                                                          "client_id": "staff-client", "client_key": key,
+                                                          "audience": "https://issuer.example"}})
+        self.assertIsInstance(direct, revc.EvidenceClient)
 
     def test_a_non_https_non_loopback_base_url_is_refused(self):
         with self.assertRaises(revc.ConfigurationError) as raised:

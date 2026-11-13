@@ -51,8 +51,8 @@ stops at the first `external-unavailable` answer.
 The connection has no `authorization` block. It is a public read, and the
 Coordinator never sends the caller's token to the directory. To call a
 protected directory, add an ordinary service `authorization` with
-`tokenEndpoint`, `clientId`, `signingKeyRef`, `resource` and `scopes`;
-`taskAuthority` is not accepted here. Each attempt uses the defaults of 2000
+`tokenEndpoint`, `clientAssertionAudience`, `clientId`, `signingKeyRef`,
+`resource` and `scopes`; `taskAuthority` is not accepted here. Each attempt uses the defaults of 2000
 milliseconds and 65,536 response bytes, which `attemptTimeoutMilliseconds` and
 `maximumResponseBytes` may lower.
 

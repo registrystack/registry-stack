@@ -230,7 +230,7 @@
       "properties": {
         "assertionAudience": {
           "$ref": "#/$defs/ExternalId",
-          "description": "The client-assertion audience, when the authorization server expects\none other than its token endpoint. Omitted, the assertion names the\ntoken endpoint."
+          "description": "The authorization server's issuer identifier, exactly as its metadata\npublishes it: the client assertion's sole audience. It has no default."
         },
         "clientId": {
           "$ref": "#/$defs/ExternalId",
@@ -248,7 +248,8 @@
       "required": [
         "tokenEndpoint",
         "clientId",
-        "privateKeyRef"
+        "privateKeyRef",
+        "assertionAudience"
       ],
       "type": "object"
     },

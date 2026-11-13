@@ -553,7 +553,7 @@ $defs:
           assumedLifetimeSeconds: {type: integer, minimum: 1, maximum: 86400}
       - type: object
         additionalProperties: false
-        required: [type, tokenEndpoint, clientIdRef, clientAssertionKeyRef, maximumCacheSeconds]
+        required: [type, tokenEndpoint, clientIdRef, clientAssertionKeyRef, clientAssertionAudience, maximumCacheSeconds]
         properties:
           type: {const: oauth2-private-key-jwt}
           tokenEndpoint: {$ref: '#/$defs/Url'}

@@ -185,6 +185,7 @@ impl Fixture {
                     "profile":"synthetic-reader",
                     "authorization":{
                         "tokenEndpoint":"http://127.0.0.1:9/token",
+                        "clientAssertionAudience":"http://127.0.0.1:9",
                         "clientId":"synthetic-client",
                         "signingKeyRef":"secret:file/client-key",
                         "resource":"urn:example:synthetic-registry",

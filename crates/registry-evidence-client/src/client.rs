@@ -383,10 +383,7 @@ impl EvidenceClient {
     ) -> Result<Self, EvidenceClientError> {
         profile.validate()?;
         if matches!(&authorization, ProgressiveAuthorization::Exchange(_))
-            && !profile
-                .oauth
-                .as_ref()
-                .is_some_and(|oauth| oauth.resource.is_some() && oauth.scopes.is_some())
+            && !(profile.oauth.resource.is_some() && profile.oauth.scopes.is_some())
         {
             return Err(EvidenceClientError::configuration(
                 "an exchange-backed profile must pin OAuth resource and scopes",
@@ -714,11 +711,7 @@ impl EvidenceClient {
             .map_err(|_| metadata_protocol_failure())?;
         validate_metadata_url(&token_endpoint, &state.profile.trust)?;
         if let ProgressiveAuthorization::Exchange(exchange) = &state.authorization {
-            let oauth = state.profile.oauth.as_ref().ok_or_else(|| {
-                EvidenceClientError::configuration(
-                    "an exchange-backed profile must pin OAuth resource and scopes",
-                )
-            })?;
+            let oauth = &state.profile.oauth;
             let resource = oauth.resource.as_deref().ok_or_else(|| {
                 EvidenceClientError::configuration(
                     "an exchange-backed profile must pin OAuth resource and scopes",
@@ -736,7 +729,7 @@ impl EvidenceClient {
                 &state.profile.client_id,
                 &token_endpoint,
                 &authorization.value.issuer,
-                oauth.client_assertion_audience.as_deref(),
+                &oauth.client_assertion_audience,
                 resource,
                 scopes,
             ) {
@@ -788,24 +781,21 @@ impl EvidenceClient {
         } else {
             match &state.authorization {
                 ProgressiveAuthorization::PrivateKey(private_key) => {
+                    // Profile-owned request parameters never come from the
+                    // catalog or an untrusted caller request.
+                    let oauth = &state.profile.oauth;
                     let mut config = PrivateKeyJwtConfig::new(
                         token_endpoint,
                         state.profile.client_id.clone(),
                         private_key.as_ref().clone(),
                     )
-                    .with_fetch_url_policy(fetch_policy);
-                    if let Some(oauth) = &state.profile.oauth {
-                        // Profile-owned request parameters never come from
-                        // the catalog or an untrusted caller request.
-                        if let Some(audience) = &oauth.client_assertion_audience {
-                            config = config.with_audience(audience.clone());
-                        }
-                        if let Some(resource) = &oauth.resource {
-                            config = config.with_resource(resource.clone());
-                        }
-                        if let Some(scopes) = &oauth.scopes {
-                            config = config.with_scopes(scopes.iter().cloned());
-                        }
+                    .with_fetch_url_policy(fetch_policy)
+                    .with_audience(oauth.client_assertion_audience.clone());
+                    if let Some(resource) = &oauth.resource {
+                        config = config.with_resource(resource.clone());
+                    }
+                    if let Some(scopes) = &oauth.scopes {
+                        config = config.with_scopes(scopes.iter().cloned());
                     }
                     Arc::new(PrivateKeyJwt::new(config)?) as Arc<dyn TokenProvider>
                 }
@@ -3755,7 +3745,8 @@ mod tests {
                     "type": "environment",
                     "variable": "UNUSED_PROGRESSIVE_TEST_KEY"
                 },
-                "trust": {"type": "local-loopback-discovery"}
+                "trust": {"type": "local-loopback-discovery"},
+                "oauth": {"clientAssertionAudience": server.uri()}
             })
             .to_string()
             .as_bytes(),

@@ -345,6 +345,7 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     invalid_renewable.private_key_jwt = true;
     invalid_renewable.token_endpoint = Some("https://issuer.example.test/token".to_owned());
     invalid_renewable.client_id = Some("registry-cli-test".to_owned());
+    invalid_renewable.assertion_audience = Some("https://issuer.example.test".to_owned());
     invalid_renewable.private_key_file = Some(invalid_key);
     let error = run_connection("breg", ConnectionCommand::Add(Box::new(invalid_renewable)))
         .expect_err("connection add must preflight the private key file");
@@ -531,6 +532,16 @@ fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt
     renewable.token_endpoint = Some(format!("{token_endpoint}/token"));
     renewable.client_id = Some("registry-cli-test".to_owned());
     renewable.private_key_file = Some(private_key);
+    // The assertion audience is the authorization server's issuer identifier
+    // and has no default.
+    let error = run_connection("breg", ConnectionCommand::Add(Box::new(renewable.clone())))
+        .expect_err("a private_key_jwt connection without an assertion audience is refused");
+    assert_eq!(error.exit_code(), 2);
+    assert!(
+        error.to_string().contains("--assertion-audience"),
+        "{error}"
+    );
+    renewable.assertion_audience = Some(token_endpoint.clone());
     run_connection("breg", ConnectionCommand::Add(Box::new(renewable))).unwrap();
 
     let mut call = api_args("v1/status", temporary.path().join("failure.out"));

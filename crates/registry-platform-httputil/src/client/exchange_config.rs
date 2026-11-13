@@ -34,7 +34,9 @@ struct KeyClient {
     client_id: String,
     #[serde(alias = "client_key")]
     client_key: Value,
-    audience: Option<String>,
+    /// The authorization server's issuer identifier, the sole audience RFC
+    /// 10070 section 4 allows a client assertion.
+    audience: String,
     resource: String,
     scopes: Vec<String>,
     #[serde(alias = "assertion_lifetime_seconds")]
@@ -65,11 +67,9 @@ impl KeyClient {
         let endpoint = Url::parse(&self.token_endpoint).map_err(|_| malformed())?;
         let key = PrivateJwk::parse(&self.client_key.to_string()).map_err(|_| malformed())?;
         let mut config = PrivateKeyJwtConfig::new(endpoint, self.client_id, key)
+            .with_audience(self.audience)
             .with_resource(self.resource)
             .with_scopes(self.scopes);
-        if let Some(value) = self.audience {
-            config = config.with_audience(value);
-        }
         if let Some(value) = self.assertion_lifetime_seconds {
             config = config.with_assertion_lifetime_seconds(value);
         }
@@ -246,12 +246,34 @@ mod tests {
     use super::{KeyClient, Remote};
     use serde_json::json;
 
+    /// RFC 10070 section 4 makes the issuer identifier the sole audience of a
+    /// client assertion, so a key client states it and a handoff without it is
+    /// refused where it is read.
+    #[test]
+    fn a_key_client_states_its_assertion_audience() {
+        let authored = json!({
+            "tokenEndpoint": "https://issuer.example.invalid/token",
+            "clientId": "client",
+            "clientKey": {},
+            "resource": "urn:registry:resource",
+            "scopes": []
+        });
+        let error = serde_json::from_value::<KeyClient>(authored)
+            .err()
+            .expect("a key client without an audience is refused");
+        assert!(
+            error.to_string().contains("missing field `audience`"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn nested_exchange_timeouts_use_the_attempt_name_in_both_binding_languages() {
         let base = json!({
             "tokenEndpoint": "https://issuer.example.invalid/token",
             "clientId": "client",
             "clientKey": {},
+            "audience": "https://issuer.example.invalid",
             "resource": "urn:registry:resource",
             "scopes": []
         });

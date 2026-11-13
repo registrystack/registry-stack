@@ -848,7 +848,7 @@ async fn configured_cli_child_crash_reloads_credential_reference_and_recovers_th
     );
     assert_eq!(
         refused.stderr,
-        b"adapter-job: adapter.job.breg-credential-refused: no bearer credential BReg accepts was obtained; check `destinations.breg-test` tokenEndpoint, clientId, privateKeyRef, scopes and resource, and that BReg trusts the issuer\n",
+        b"adapter-job: adapter.job.breg-credential-refused: no bearer credential BReg accepts was obtained; check `destinations.breg-test` tokenEndpoint, clientAssertionAudience, clientId, privateKeyRef, scopes and resource, and that BReg trusts the issuer\n",
         "the unregistered key fails at the exact authenticated metadata boundary"
     );
     assert_eq!(

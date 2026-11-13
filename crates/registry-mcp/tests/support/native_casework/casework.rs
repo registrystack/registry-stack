@@ -142,10 +142,12 @@ impl Casework {
                 "audit":{"path":audit_path,"hashKeyRef":"secret:file/audit-key"},
                 "contextProviders":{"facility-registry":{
                     "baseUrl":breg_origin.as_str(),"statusProfile":"casework-review-status","tokenEndpoint":issuer.token_endpoint(),
+                    "clientAssertionAudience":issuer.issuer(),
                     "resource":BREG_AUDIENCE,"scopes":["registry:proposal:review-status"],
                     "clientIdRef":"secret:file/status-client-id","clientAssertionKeyRef":"secret:file/status-client-key",
                     "delegatedDisplayExchange":{
-                        "tokenEndpoint":issuer.token_endpoint(),"clientIdRef":"secret:file/source-client-id","clientAssertionKeyRef":"secret:file/source-client-key",
+                        "tokenEndpoint":issuer.token_endpoint(),"clientAssertionAudience":issuer.issuer(),
+                        "clientIdRef":"secret:file/source-client-id","clientAssertionKeyRef":"secret:file/source-client-key",
                         "resource":BREG_AUDIENCE,"scopes":["registry:proposal:review"],"generation":"native-staff-proof"
                     }
                 }}

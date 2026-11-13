@@ -6,5 +6,8 @@
   "privateKey": {
     "type": "environment",
     "variable": "EVIDENCE_CLIENT_KEY"
+  },
+  "oauth": {
+    "clientAssertionAudience": "https://identity.example.org"
   }
 }

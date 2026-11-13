@@ -88,15 +88,8 @@
           "additionalProperties": false,
           "properties": {
             "assertionAudience": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ExternalId"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Optional private_key_jwt audience; the token endpoint is the default."
+              "$ref": "#/$defs/ExternalId",
+              "description": "Client assertion audience: the authorization server's issuer identifier."
             },
             "clientId": {
               "$ref": "#/$defs/ExternalId",
@@ -137,7 +130,8 @@
             "type",
             "tokenEndpoint",
             "clientId",
-            "privateKeyRef"
+            "privateKeyRef",
+            "assertionAudience"
           ],
           "type": "object"
         }

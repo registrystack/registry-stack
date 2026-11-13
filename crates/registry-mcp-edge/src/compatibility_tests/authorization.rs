@@ -52,7 +52,7 @@ async fn fixture() -> Fixture {
         token_endpoint: Url::parse(&server.token_endpoint()).expect("token endpoint"),
         client_id: GATEWAY.to_owned(),
         private_key: key.clone(),
-        assertion_audience: None,
+        assertion_audience: server.issuer(),
         gateway_resource: RESOURCE.to_owned(),
         downstream_resource: AUDIENCE.to_owned(),
         downstream_scopes: vec![SCOPE.to_owned()],
@@ -173,11 +173,14 @@ async fn an_expired_citizen_token_is_refused_before_any_exchange() {
 #[tokio::test]
 async fn an_actor_that_is_not_the_gateway_is_refused() {
     let fixture = fixture().await;
-    let foreign = PrivateKeyJwt::new(PrivateKeyJwtConfig::new(
-        Url::parse(&fixture.server.token_endpoint()).expect("URL"),
-        "another-service",
-        fixture.other_key.clone(),
-    ))
+    let foreign = PrivateKeyJwt::new(
+        PrivateKeyJwtConfig::new(
+            Url::parse(&fixture.server.token_endpoint()).expect("URL"),
+            "another-service",
+            fixture.other_key.clone(),
+        )
+        .with_audience(fixture.server.issuer()),
+    )
     .expect("foreign actor");
     assert!(matches!(
         fixture

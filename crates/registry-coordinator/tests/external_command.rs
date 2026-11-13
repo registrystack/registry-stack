@@ -53,6 +53,7 @@ fn config(base: &str) -> ExternalHttpConfig {
 fn authorization() -> registry_coordinator::runtime::AuthorizationConfig {
     serde_json::from_value(json!({
         "tokenEndpoint":"http://127.0.0.1:9999/token", "clientId":"bill-issuer",
+        "clientAssertionAudience":"http://127.0.0.1:9999",
         "signingKeyRef":"secret:file/bill-issuer", "resource":"https://payments.example.test",
         "scopes":["bills.create"]
     }))

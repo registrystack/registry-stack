@@ -41,6 +41,10 @@ use super::{
 };
 
 const ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+/// The header type RFC 10070 section 4 gives a client assertion. The endpoint
+/// also accepts the generic `JWT` type, because that section recommends
+/// against refusing an assertion that is not explicitly typed.
+const CLIENT_ASSERTION_TYP: &str = "client-authentication+jwt";
 const FORM_LIMIT: usize = 16 * 1024;
 const ASSERTION_LIMIT: usize = 12 * 1024;
 const ASSERTION_LIFETIME_SECONDS: u64 = 300;
@@ -718,7 +722,10 @@ async fn issue_token(state: Arc<TokenState>, headers: HeaderMap, body: Bytes) ->
         return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
     };
     if parsed.header().len() != 3
-        || parsed.header().get("typ").and_then(Value::as_str) != Some("JWT")
+        || !matches!(
+            parsed.header().get("typ").and_then(Value::as_str),
+            Some(CLIENT_ASSERTION_TYP | "JWT")
+        )
         || parsed.header().get("alg").and_then(Value::as_str) != Some("ES256")
     {
         return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
@@ -735,6 +742,9 @@ async fn issue_token(state: Arc<TokenState>, headers: HeaderMap, body: Bytes) ->
     let Ok(now) = clock() else {
         return oauth_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
     };
+    // RFC 10070 section 4: the audience is the issuer identifier alone. It
+    // deserializes only as one string, so an audience array is refused above,
+    // and any other value, this endpoint's own URL included, is refused here.
     if claims.iss != client.client_id
         || claims.sub != client.client_id
         || claims.aud != state.audience
@@ -1115,6 +1125,25 @@ mod tests {
         issued_at: u64,
         jti: &str,
     ) -> String {
+        sign_typed_assertion(
+            key,
+            CLIENT_ASSERTION_TYP,
+            client,
+            json!(audience),
+            issued_at,
+            jti,
+        )
+        .await
+    }
+
+    async fn sign_typed_assertion(
+        key: &PrivateJwk,
+        typ: &str,
+        client: &str,
+        audience: Value,
+        issued_at: u64,
+        jti: &str,
+    ) -> String {
         let signer = LocalJwkSigner::new(key.clone()).unwrap();
         let claims = serde_json::to_vec(&json!({
             "iss": client, "sub": client, "aud": audience,
@@ -1122,12 +1151,95 @@ mod tests {
         }))
         .unwrap();
         sign_compact_jws(
-            Map::from_iter([("typ".to_owned(), Value::String("JWT".to_owned()))]),
+            Map::from_iter([("typ".to_owned(), Value::String(typ.to_owned()))]),
             &claims,
             &signer,
         )
         .await
         .unwrap()
+    }
+
+    /// RFC 10070 section 4: the endpoint takes the issuer identifier as the
+    /// assertion's only audience, as one string, and refuses its own token
+    /// endpoint URL, an audience array and more than one audience. It accepts
+    /// the `client-authentication+jwt` type and, as that section recommends,
+    /// does not refuse an assertion typed `JWT`; any other type is refused.
+    #[test]
+    fn endpoint_takes_the_issuer_as_the_only_audience_and_accepts_both_assertion_types() {
+        let root = tempfile::tempdir().unwrap();
+        let input = Arc::new(input(plan()));
+        let issuer = Arc::new(Issuer::create(root.path()).unwrap());
+        let origins = BTreeMap::from([
+            (Product::Breg, "http://127.0.0.1:31001".to_owned()),
+            (Product::Casework, "http://127.0.0.1:31002".to_owned()),
+        ]);
+        let runtime =
+            RuntimeBindings::prepare(root.path(), input.clone(), issuer, &origins).unwrap();
+        let endpoint = runtime.server.as_ref().unwrap().endpoint.clone();
+        let encoded =
+            Zeroizing::new(std::fs::read(root.path().join("casework-context-client-key")).unwrap());
+        let key = PrivateJwk::parse(std::str::from_utf8(&encoded).unwrap()).unwrap();
+        let now = clock().unwrap();
+        let request_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let issuer_id = input.plan.issuer.clone();
+        for (case, typ, audience, status) in [
+            (
+                "explicit-type",
+                CLIENT_ASSERTION_TYP,
+                json!(issuer_id),
+                StatusCode::OK,
+            ),
+            ("generic-type", "JWT", json!(issuer_id), StatusCode::OK),
+            (
+                "other-type",
+                "at+jwt",
+                json!(issuer_id),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "token-endpoint",
+                CLIENT_ASSERTION_TYP,
+                json!(endpoint),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "issuer-in-an-array",
+                CLIENT_ASSERTION_TYP,
+                json!([issuer_id]),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "two-audiences",
+                CLIENT_ASSERTION_TYP,
+                json!([issuer_id, endpoint]),
+                StatusCode::UNAUTHORIZED,
+            ),
+        ] {
+            let assertion = request_runtime.block_on(sign_typed_assertion(
+                &key,
+                typ,
+                "context-reader-client",
+                audience,
+                now,
+                case,
+            ));
+            let form = [
+                ("grant_type", "client_credentials"),
+                ("client_id", "context-reader-client"),
+                ("client_assertion_type", ASSERTION_TYPE),
+                ("client_assertion", assertion.as_str()),
+                ("resource", "urn:dev:breg"),
+                ("scope", "registry:proposal:review-status"),
+            ];
+            let response = request_runtime
+                .block_on(client.post(&endpoint).form(&form).send())
+                .unwrap();
+            assert_eq!(response.status(), status, "{case}");
+        }
     }
 
     #[test]

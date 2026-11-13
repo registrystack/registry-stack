@@ -42,6 +42,7 @@ fn connection(config: &ExternalHttpConfig) -> ExternalHttpConnection {
 fn authorization() -> registry_coordinator::runtime::AuthorizationConfig {
     serde_json::from_value(json!({
         "tokenEndpoint":"http://127.0.0.1:9999/token", "clientId":"directory-reader",
+        "clientAssertionAudience":"http://127.0.0.1:9999",
         "signingKeyRef":"secret:file/directory-reader", "resource":"https://directory.example.test",
         "scopes":["directory.read"]
     }))

@@ -80,13 +80,15 @@ pub struct AuthorizationConfig {
         schemars(with = "registry_platform_yaml::ExternalId")
     )]
     pub client_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(deserialize_with = "optional_external")]
+    /// The authorization server's issuer identifier, exactly as its metadata
+    /// publishes it. The client assertion names it as its only audience
+    /// (RFC 10070 section 4).
+    #[serde(deserialize_with = "external")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::ExternalId>")
+        schemars(with = "registry_platform_yaml::ExternalId")
     )]
-    pub client_assertion_audience: Option<String>,
+    pub client_assertion_audience: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_authority: Option<TaskAuthorityConfig>,
     pub signing_key_ref: SecretReference,
@@ -125,11 +127,7 @@ impl AuthorizationConfig {
             errors.push(config_error(&format!("{field}.resource"),
                     "declare one bounded absolute resource URI without credentials, whitespace or fragment"));
         }
-        if self
-            .client_assertion_audience
-            .as_ref()
-            .is_some_and(|audience| !valid_resource_uri(audience))
-        {
+        if !valid_resource_uri(&self.client_assertion_audience) {
             errors.push(config_error(
                 &format!("{field}.clientAssertionAudience"),
                 "declare the issuer's bounded absolute client assertion audience URI",
@@ -700,7 +698,7 @@ impl RuntimeConfig {
             {
                 errors.push(config_error(
                     &format!("{field}.observationAuthorization"),
-                    "configure ordinary receipt-read scopes with the primary token endpoint, client and resource, and no taskAuthority; recovery must remain available after the original grant expires",
+                    "configure ordinary receipt-read scopes with the primary token endpoint, client assertion audience, client and resource, and no taskAuthority; recovery must remain available after the original grant expires",
                 ));
             }
             if let Some(observation) = &binding.observation_authorization {
@@ -712,17 +710,14 @@ impl RuntimeConfig {
                 }
                 let primary = &binding.authorization;
                 if observation.token_endpoint != primary.token_endpoint
+                    || observation.client_assertion_audience != primary.client_assertion_audience
                     || observation.client_id != primary.client_id
                     || observation.resource != primary.resource
                     || observation.task_authority.is_some()
-                    || observation
-                        .client_assertion_audience
-                        .as_ref()
-                        .is_some_and(|a| !valid_resource_uri(a))
                     || observation.signing_key_ref.provider() != SecretProvider::File
                 {
                     errors.push(config_error(&format!("{field}.observationAuthorization"),
-                        "use the primary endpoint, client and resource, bounded observation scopes and no taskAuthority"));
+                        "use the primary endpoint, client assertion audience, client and resource, bounded observation scopes and no taskAuthority"));
                 }
                 validate_requested_scopes(&observation.scopes)
                     .map_err(|error| {
@@ -992,11 +987,6 @@ impl RuntimeConfig {
                     .and_then(serde_json::Value::as_object_mut)
                 {
                     auth.remove("signingKeyRef");
-                    if !auth.contains_key("clientAssertionAudience") {
-                        if let Some(endpoint) = auth.get("tokenEndpoint").cloned() {
-                            auth.insert("clientAssertionAudience".into(), endpoint);
-                        }
-                    }
                     if let Some(scopes) = auth
                         .get_mut("scopes")
                         .and_then(serde_json::Value::as_array_mut)
@@ -1025,8 +1015,8 @@ impl RuntimeConfig {
             scopes.sort();
             let mut identity = json!({"product":binding.product,"baseUrl":binding.base_url,
                 "clientId":auth.client_id,"tokenEndpoint":auth.token_endpoint,
-                "clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),
-                "resource":auth.resource,"scopes":scopes,"profile":binding.profile,"taskAuthority":auth.task_authority,"observationAuthorization":binding.observation_authorization.as_ref().map(|auth| json!({"tokenEndpoint":auth.token_endpoint,"clientId":auth.client_id,"resource":auth.resource,"clientAssertionAudience":auth.client_assertion_audience.as_deref().unwrap_or(auth.token_endpoint.as_str()),"scopes":({let mut s=auth.scopes.clone();s.sort();s})})),"abi":"coordinator-adapters/v1"});
+                "clientAssertionAudience":auth.client_assertion_audience,
+                "resource":auth.resource,"scopes":scopes,"profile":binding.profile,"taskAuthority":auth.task_authority,"observationAuthorization":binding.observation_authorization.as_ref().map(|auth| json!({"tokenEndpoint":auth.token_endpoint,"clientId":auth.client_id,"resource":auth.resource,"clientAssertionAudience":auth.client_assertion_audience,"scopes":({let mut s=auth.scopes.clone();s.sort();s})})),"abi":"coordinator-adapters/v1"});
             // Casework binds every submission to its producer. The completion
             // settings only decide how a waiting run is woken, so changing them
             // never strands an admitted run.
@@ -1355,11 +1345,6 @@ fn stand_in(pointer: &str) -> &'static str {
 pub(crate) fn external<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
     registry_platform_yaml::ExternalId::deserialize(d)
         .map(registry_platform_yaml::ExternalId::into_string)
-}
-pub(crate) fn optional_external<'de, D: Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<Option<String>, D::Error> {
-    external(d).map(Some)
 }
 fn local<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
     registry_platform_yaml::LocalId::deserialize(d)

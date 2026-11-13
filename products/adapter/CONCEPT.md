@@ -1585,6 +1585,12 @@ Rules:
   in the runtime config, never derived from a response. Token requests are
   engine sends outside `maximumUpstreamCalls`, bounded separately: at most
   two per endpoint per exchange.
+- The `oauth2-private-key-jwt` assertion carries `clientAssertionAudience`
+  as its only audience and has the header `typ: client-authentication+jwt`
+  (RFC 10070 section 4). The member is required and has no default: it is
+  the authorization server's issuer identifier, exactly as its metadata
+  publishes it, and a runtime credential without it is refused when the
+  configuration is read.
 - The token request goes through the endpoint's own outbound client: the
   same trust profile, as in Evidence, and the same mTLS identity (Evidence
   has no client identity; this half is the adapter's own rule).
