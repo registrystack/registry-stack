@@ -75,6 +75,79 @@ Set these variables before starting the process:
 - `MESSAGE_EFFECT_AUDIT_KEY_HEX` is a secret, independently generated 32-byte audit key encoded as 64 hexadecimal characters; inject it at process start through the operator's secret manager, without writing it into the connection or fixture.
 - `MESSAGE_EFFECT_TARGETS` is a JSON object mapping checked workload-authority fingerprints to a named Messaging binding, or to `null` for the default.
 
+The connection must declare two separate authorities. The `bindings` entry is
+the service's outbound Messaging workload identity. The top-level `admission`
+entry is the exact inbound Coordinator identity allowed to call protected
+routes. An outbound-only connection remains valid for scripts that do not
+admit callers, but it is not a machine-service configuration for either web
+factory.
+
+This closed synthetic example names every required field. Its example domains,
+client registrations and key reference are not a live deployment. Replace
+them with one issuer's registered Coordinator client and this service's
+separately registered Messaging workload client. Keep the inbound resource,
+client, profile, scopes and claims aligned with the token the Coordinator is
+actually issued.
+
+<!-- machine-service-connection-example:start -->
+
+```json
+{
+  "apiVersion": "id.registrystack.org/formats/platform/python-connection/v1alpha1",
+  "kind": "PlatformPythonConnection",
+  "service": "renewal-notice-service",
+  "audience": "service",
+  "secretProviders": {
+    "file": {
+      "root": "/run/secrets/renewal-service"
+    }
+  },
+  "bindings": [
+    {
+      "name": "approval-notices",
+      "product": "messaging",
+      "url": "https://messaging.example.org/",
+      "default": true,
+      "credential": {
+        "type": "private-key-jwt",
+        "issuer": "https://identity.example.org/",
+        "subject": "renewal-notice-service",
+        "tokenEndpoint": "https://identity.example.org/oauth/token",
+        "clientId": "renewal-notice-messaging",
+        "profile": "service-sender",
+        "clientKeyRef": "secret:file/messaging-client.jwk",
+        "resource": "urn:example:messaging",
+        "scopes": [
+          "messaging:send"
+        ],
+        "claims": {
+          "registry_actor_kind": "service"
+        }
+      }
+    }
+  ],
+  "admission": {
+    "issuer": "https://identity.example.org/",
+    "resource": "urn:example:renewal-notice-service",
+    "clientId": "renewal-notice-coordinator",
+    "profile": "coordinator-invoker",
+    "requiredScopes": [
+      "renewal-notices:invoke"
+    ],
+    "requiredClaims": {
+      "registry_actor_kind": "service"
+    },
+    "algorithm": "RS256",
+    "accessTokenType": "at+jwt",
+    "maximumAccessTokenLifetimeSeconds": 300,
+    "jwksUri": "https://identity.example.org/.well-known/jwks.json",
+    "clockSkewSeconds": 60
+  }
+}
+```
+
+<!-- machine-service-connection-example:end -->
+
 For example:
 
 ```sh

@@ -126,6 +126,208 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("ruff==0.14.3", dev)
 
 
+class RealConnectionFactoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.prior_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name == "registry_client" or name.startswith("registry_client.")
+        }
+        for name in self.prior_modules:
+            sys.modules.pop(name, None)
+
+        package = types.ModuleType("registry_client")
+        package.__path__ = [str(CLIENT_SOURCE)]
+        sys.modules["registry_client"] = package
+
+        yaml_module = types.ModuleType("registry_client.yaml")
+
+        class ConfigReadError(ValueError):
+            def __init__(self, message, *, diagnostics=None):
+                super().__init__(message)
+                self.diagnostics = diagnostics or ()
+
+        def read_document(contents, *, file, api_version, kind):
+            del file
+
+            def unique_members(pairs):
+                value = {}
+                for name, member in pairs:
+                    if name in value:
+                        raise ConfigReadError("duplicate mapping key")
+                    value[name] = member
+                return value
+
+            try:
+                value = json.loads(contents, object_pairs_hook=unique_members)
+            except (UnicodeError, json.JSONDecodeError):
+                raise ConfigReadError("invalid connection document") from None
+            if value.get("apiVersion") != api_version or value.get("kind") != kind:
+                raise ConfigReadError("wrong connection envelope")
+            return value
+
+        yaml_module.ConfigReadError = ConfigReadError
+        yaml_module.read_document = read_document
+        sys.modules["registry_client.yaml"] = yaml_module
+
+        oidc_module = types.ModuleType("registry_client.oidc")
+
+        class VerificationFailure(ValueError):
+            kind = "verification"
+
+        class AccessTokenVerifier:
+            instances = []
+            results = {}
+
+            def __init__(self, *args, **options):
+                self.args = args
+                self.options = options
+                self.__class__.instances.append(self)
+
+            def verify(self, token):
+                result = self.__class__.results.get(token)
+                if result is None:
+                    raise VerificationFailure("synthetic token refused")
+                return result
+
+        oidc_module.AccessTokenVerifier = AccessTokenVerifier
+        sys.modules["registry_client.oidc"] = oidc_module
+
+        self.connection = importlib.import_module("registry_client.connection")
+        package.connect = self.connection.connect
+        package.flask_adapter = importlib.import_module("registry_client.flask_adapter")
+        self.AccessTokenVerifier = AccessTokenVerifier
+        self.addCleanup(self.restore_modules)
+
+    def restore_modules(self) -> None:
+        for name in tuple(sys.modules):
+            if name == "registry_client" or name.startswith("registry_client."):
+                sys.modules.pop(name, None)
+        sys.modules.update(self.prior_modules)
+
+    def documented_connection(self) -> dict[str, object]:
+        readme = (EXAMPLE / "README.md").read_text(encoding="utf-8")
+        section = readme.split("<!-- machine-service-connection-example:start -->", 1)[
+            1
+        ].split("<!-- machine-service-connection-example:end -->", 1)[0]
+        source = section.split("```json", 1)[1].split("```", 1)[0]
+        return json.loads(source)
+
+    def verified(self, admission, *, scopes=None, claims=None):
+        return types.SimpleNamespace(
+            kind="access",
+            issuer=admission["issuer"],
+            audiences=(admission["resource"],),
+            subject="synthetic-coordinator-run",
+            client_id=admission["clientId"],
+            scopes=tuple(scopes or admission["requiredScopes"]),
+            claims=dict(claims or admission["requiredClaims"]),
+        )
+
+    def test_documented_connection_reaches_real_machine_admission(self) -> None:
+        document = self.documented_connection()
+        secrets = self.root / "secrets"
+        secrets.mkdir(mode=0o700)
+        document["secretProviders"]["file"]["root"] = str(secrets)
+        connection_path = self.root / "connection.json"
+
+        outbound_only = json.loads(json.dumps(document))
+        outbound_only.pop("admission")
+        connection_path.write_text(json.dumps(outbound_only), encoding="utf-8")
+        script_stack = self.connection.connect(path=connection_path)
+        self.assertEqual(script_stack.authority("messaging").product, "messaging")
+        with self.assertRaisesRegex(
+            self.connection.ConnectionError,
+            "machine admission is not configured",
+        ):
+            script_stack.admit({"authorization": ["Bearer admitted"]})
+
+        connection_path.write_text(json.dumps(document), encoding="utf-8")
+
+        admission = document["admission"]
+        self.AccessTokenVerifier.results = {
+            "admitted": self.verified(admission),
+            "wrong-scope": self.verified(admission, scopes=("other:invoke",)),
+            "wrong-claim": self.verified(
+                admission,
+                claims={"registry_actor_kind": "person"},
+            ),
+        }
+        stack = self.connection.connect(path=connection_path)
+        fingerprint = stack.authority("messaging").fingerprint
+        context = stack.admit({"authorization": ["Bearer admitted"]})
+        self.assertEqual(context.client_id, admission["clientId"])
+        self.assertEqual(context.profile, admission["profile"])
+        self.assertEqual(context.issuer, admission["issuer"])
+        self.assertEqual(context.resource, admission["resource"])
+        settings = {
+            "REGISTRY_STACK_CONNECTION": str(connection_path),
+            "MESSAGE_EFFECT_DATABASE": str(self.root / "effects.sqlite3"),
+            "MESSAGE_EFFECT_SERVICE_NAMESPACE": "urn:example:service:renewal-notices",
+            "MESSAGE_EFFECT_TARGETS": json.dumps({fingerprint: None}),
+            "MESSAGE_EFFECT_AUDIT_KEY_HEX": "a" * 64,
+        }
+
+        with patch.dict(os.environ, settings, clear=True):
+            app = create_app_from_environment()
+        app.testing = True
+        client = app.test_client()
+        refused = client.post(
+            "/v1/message-effects",
+            json={"key": "command-1", "noticeId": "notice-1"},
+            headers={"Authorization": "Bearer wrong-scope"},
+        )
+        wrong_claim = client.post(
+            "/v1/message-effects",
+            json={"key": "command-1", "noticeId": "notice-1"},
+            headers={"Authorization": "Bearer wrong-claim"},
+        )
+        admitted = client.post(
+            "/v1/message-effects",
+            json={"key": "command-1", "noticeId": "notice-1"},
+            headers={"Authorization": "Bearer admitted"},
+        )
+
+        self.assertEqual(refused.status_code, 401)
+        self.assertEqual(refused.json, {"code": "authentication.refused"})
+        self.assertEqual(wrong_claim.status_code, 401)
+        self.assertEqual(wrong_claim.json, {"code": "authentication.refused"})
+        self.assertEqual(admitted.status_code, 422)
+        self.assertEqual(
+            admitted.json,
+            {"state": "refused", "code": "notice-not-found"},
+        )
+        self.assertEqual(len(self.AccessTokenVerifier.instances), 2)
+        for verifier in self.AccessTokenVerifier.instances:
+            self.assertEqual(
+                verifier.args,
+                (
+                    admission["issuer"],
+                    admission["resource"],
+                    admission["clientId"],
+                ),
+            )
+            self.assertEqual(verifier.options["algorithm"], admission["algorithm"])
+            self.assertEqual(
+                verifier.options["access_token_type"], admission["accessTokenType"]
+            )
+            self.assertEqual(
+                verifier.options["maximum_access_token_lifetime_seconds"],
+                admission["maximumAccessTokenLifetimeSeconds"],
+            )
+            self.assertEqual(
+                verifier.options["claim_names"],
+                tuple(admission["requiredClaims"]),
+            )
+            self.assertEqual(verifier.options["jwks_uri"], admission["jwksUri"])
+            self.assertEqual(
+                verifier.options["clock_skew_seconds"], admission["clockSkewSeconds"]
+            )
+
+
 class MachineServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
