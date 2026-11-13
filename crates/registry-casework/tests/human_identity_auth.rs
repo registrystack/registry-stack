@@ -232,14 +232,48 @@ async fn delegated_or_grant_bearing_tokens_are_refused_for_officer_profiles_only
     idp.stop().await;
 }
 
-#[tokio::test]
-async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
-    let idp = MockIdp::start().await;
-
-    let mut overlapping = project();
-    let mut alternate = profile("staff-by-employee", "casework:staff", CaseworkActsAs::Staff);
+#[test]
+fn human_profiles_naming_different_principal_claims_are_refused_at_load() {
+    // One issuer, one person, one principal: a second human profile that reads
+    // the principal from another claim would let one person hold two seats.
+    let mut mixed = project();
+    let mut alternate = profile(
+        "staff-by-employee",
+        "casework:staff-by-employee",
+        CaseworkActsAs::Staff,
+    );
     alternate.principal_claim = "employee_id".to_owned();
-    overlapping.access_profiles.push(alternate);
+    mixed.access_profiles.push(alternate);
+    let findings = mixed
+        .findings()
+        .into_iter()
+        .map(|finding| (finding.code, finding.pointer))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        findings,
+        [(
+            "casework.access-profile.mixed-principal-claims",
+            "/accessProfiles/staff-by-employee/principalClaim".to_owned()
+        )]
+    );
+
+    let mut one_claim = project();
+    one_claim.access_profiles.push(profile(
+        "staff-by-employee",
+        "casework:staff-by-employee",
+        CaseworkActsAs::Staff,
+    ));
+    assert_eq!(one_claim.check(), Ok(()));
+}
+
+#[test]
+fn same_role_profiles_require_distinct_scopes() {
+    let mut overlapping = project();
+    overlapping.access_profiles.push(profile(
+        "staff-by-employee",
+        "casework:staff",
+        CaseworkActsAs::Staff,
+    ));
     let findings = overlapping
         .findings()
         .into_iter()
@@ -258,48 +292,43 @@ async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
             ),
         ]
     );
+}
 
-    let mut separated = project();
-    let mut alternate = profile(
+#[tokio::test]
+async fn same_role_profiles_on_one_principal_claim_are_selected_by_their_own_scope() {
+    let idp = MockIdp::start().await;
+    let mut two_staff = project();
+    two_staff.access_profiles.push(profile(
         "staff-by-employee",
         "casework:staff-by-employee",
         CaseworkActsAs::Staff,
+    ));
+    assert_eq!(two_staff.check(), Ok(()));
+    let authenticator = authenticator_for_project_with_human_identity(
+        &idp,
+        &two_staff,
+        HumanIdentityConfig::default(),
     );
-    alternate.principal_claim = "employee_id".to_owned();
-    separated.access_profiles.push(alternate);
-    assert_eq!(separated.check(), Ok(()));
-    let authenticator = authenticator_for_project(&idp, &separated);
 
-    let original_scope = idp.mint_token(json!({
-        "aud": AUDIENCE,
-        "registry_principal": QUEUE_MEMBER_PRINCIPAL,
-        "employee_id": "employee-123",
-        "scope": "casework:staff",
-        "registry_actor_kind": "human"
-    }));
     assert_eq!(
         authenticator
-            .authenticate(&original_scope, "staff-by-employee")
+            .authenticate(
+                &token(&idp, "casework:staff", Some(json!("human"))),
+                "staff-by-employee"
+            )
             .await
-            .expect_err("one valid claim cannot replace the alternate profile's scope"),
+            .expect_err("the scope of one staff profile cannot select the other"),
         AuthenticationError::Profile
     );
-
-    let alternate_scope = idp.mint_token(json!({
-        "aud": AUDIENCE,
-        "registry_principal": QUEUE_MEMBER_PRINCIPAL,
-        "employee_id": "employee-123",
-        "scope": "casework:staff-by-employee",
-        "registry_actor_kind": "human"
-    }));
-    let actor = authenticator
-        .authenticate(&alternate_scope, "staff-by-employee")
+    let selected = authenticator
+        .authenticate(
+            &token(&idp, "casework:staff-by-employee", Some(json!("human"))),
+            "staff-by-employee",
+        )
         .await
-        .expect("the independently scoped alternate principal is accepted");
-    assert_eq!(actor.principal.subject, "employee-123");
-    assert_eq!(actor.profile_id, "staff-by-employee");
-    assert_eq!(actor.role, CaseworkActsAs::Staff);
-
+        .expect("the profile's own scope selects it");
+    assert_eq!(selected.profile_id, "staff-by-employee");
+    assert_eq!(selected.role, CaseworkActsAs::Staff);
     idp.stop().await;
 }
 
@@ -312,10 +341,6 @@ fn authenticator_with_human_identity(
     human_identity: HumanIdentityConfig,
 ) -> CaseworkAuthenticator {
     authenticator_for_project_with_human_identity(idp, &project(), human_identity)
-}
-
-fn authenticator_for_project(idp: &MockIdp, project: &CaseworkProject) -> CaseworkAuthenticator {
-    authenticator_for_project_with_human_identity(idp, project, HumanIdentityConfig::default())
 }
 
 fn authenticator_for_project_with_human_identity(
