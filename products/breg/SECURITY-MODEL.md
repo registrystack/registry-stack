@@ -180,6 +180,13 @@ For the invariants to hold, a deployment must do the following.
     hint grants no right to read a root or disclose a source value.
     Verify signed webhook deliveries before forwarding their selectors.
     See [managed refresh](external-projection-storage.md#schedule-refresh-and-inspect-coverage).
+21. **Issue task-grant tokens for at most 900 seconds.** BReg refuses a
+    token that carries a task grant without `iat`, with `exp - iat` over
+    900 seconds, or with `iat` later than its clock plus
+    `leewayMilliseconds`, whatever `maximumTokenLifetimeSeconds` allows other
+    tokens (BREG-SEC-209). Keep the exchange issuer's task-token lifetime at
+    or under that bound and its clock within the leeway; Casework's exchange
+    step documents 300 seconds ([task grants](TASK_GRANTS.md)).
 
 The refresh path extends BREG-SEC-204 through 207. The
 `managed_refresh_resumes_sweeps_and_rereads_only_the_notified_subject`
@@ -466,6 +473,19 @@ mitigation, and related matrix IDs.
 - **Mitigation:** declare `actorKind: human` or `actorKind: service` on every
   profile that holds `publish`.
 - **Related:** BREG-SEC-168.
+
+### BREG-RES-23 A revoked task grant keeps reading until its token expires
+
+- **Condition:** Casework revokes a task grant, or the task ends, while the
+  agent still holds a token carrying it.
+- **Consequence:** reads under the grant (Records, read paths, revisions,
+  history and statistics) check no live Casework status, so they continue
+  until the token or the grant deadline passes, whichever comes first. A token
+  carrying a grant is issued for at most 900 seconds (BREG-SEC-209). Governed
+  mutations check live status on every attempt and stop at once.
+- **Mitigation:** keep task-grant tokens short at the exchange issuer;
+  Casework refuses new assertions for a revoked grant, so no new token follows.
+- **Related:** BREG-SEC-209, BREG-SEC-169.
 
 ## 4. Development tooling
 

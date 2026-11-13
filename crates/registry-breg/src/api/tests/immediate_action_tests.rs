@@ -139,7 +139,7 @@ async fn task_granted_invoke_uses_exact_action_scope_and_frozen_subjects() {
         "registry_actor_kind":"agent","registry_purpose":"case-management","scope":"case.rename",
         "registry_grant_id":"00000000-0000-4000-8000-0000000000bb","registry_approver":"h:approver",
         "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
-        "registry_grant_resource":audience,"registry_grant_exp":now+600,
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,"exp":now+900,
         "registry_grant_bounds":{"type":"breg","permissions":[{"collection":"action:rename-case","operations":["invoke"]}]},
         "identity":{"grantRegion":"north"},"grantRegion":"south"});
     let claims = auth
@@ -331,7 +331,7 @@ async fn proposal_task_scopes_and_standing_agent_draft_and_context_permissions_a
     let token = json!({"aud":audience,"sub":"citizen","azp":"agent-client","registry_principal":"citizen","registry_actor_kind":"agent",
         "registry_purpose":"case-management","scope":"case.rename","registry_grant_id":"00000000-0000-4000-8000-0000000000bb",
         "registry_approver":"h:approver","registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
-        "registry_grant_resource":audience,"registry_grant_exp":now+600,"identity":{"grantRegion":"north"},
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,"exp":now+900,"identity":{"grantRegion":"north"},
         "registry_grant_bounds":{"type":"breg","permissions":[{"collection":"action:propose-rename","operations":["start"]}]}});
     let start = auth
         .authenticate(&idp.mint_token(token.clone()))
@@ -683,6 +683,7 @@ async fn signed_task_token_cannot_discover_or_invoke_an_ordinary_immediate_actio
         "registry_grant_client": "agent-client",
         "registry_grant_resource": audience,
         "registry_grant_exp": now + 600,
+        "exp": now + 900,
         "registry_grant_bounds": {"type":"breg","permissions":[{"collection":"cases","operations":["get"]}]},
         "identity": {"tenant": "tenant-a"},
         "scope": "case.rename"
@@ -1652,7 +1653,7 @@ async fn task_record_reads_intersect_profile_with_composed_proposal_scope() {
         "registry_actor_kind":"agent","registry_purpose":"case-management","scope":"case.read",
         "registry_grant_id":"00000000-0000-4000-8000-0000000000bc","registry_approver":"h:approver",
         "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
-        "registry_grant_resource":audience,"registry_grant_exp":now+600,
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,"exp":now+900,
         "registry_grant_bounds":{"type":"breg","permissions":[
             {"collection":"cases","operations":["get","list"]},
             {"collection":"proposal:00000000-0000-4000-8000-0000000000bd","operations":["get","edit","list"]}]},
@@ -1699,6 +1700,312 @@ async fn task_record_reads_intersect_profile_with_composed_proposal_scope() {
     wrong["registry_grant_source_issuer"] = json!("https://other.example");
     let claims = auth.authenticate(&idp.mint_token(wrong)).await.unwrap();
     assert!(task_grant_binding(profile, &claims).is_err());
+}
+
+/// The Proposal the fixture token's review-context bound names.
+const BOUND_GRANT_PROPOSAL_ID: Uuid = Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_00d1);
+
+/// One task profile per task-grant admission site (Record reads, immediate
+/// Invoke, Proposal Start, Proposal review-record read), each accepting two
+/// purposes. The request purpose is read from a claim other than the grant's
+/// contextual purpose claim, as the claim mapping allows, so one verified
+/// token can carry a grant for one principal or purpose and a request for
+/// another.
+struct BoundGrantFixture {
+    registry: Arc<CompiledRegistry>,
+    auth: RegistryAuthenticator,
+    idp: MockIdp,
+    token: Value,
+}
+
+impl BoundGrantFixture {
+    async fn start() -> Self {
+        let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
+        let mut proposed = project.actions[0].clone();
+        proposed.id = "propose-rename".into();
+        proposed.execution = serde_json::from_value(json!({"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"},
+            "reviewContext":{"id":"rename-context","fields":{
+                "currentLabel":{"type":"record","input":"case-ref","field":"label"},
+                "proposedLabel":{"type":"input","input":"case-label"}}}}})).unwrap();
+        project.actions.push(proposed);
+        let task = json!({"principalClaim":"registry_principal","actorKind":"agent","requesterClients":["agent-client"],
+            "requiredScopes":["case.rename"],"requiredPurposes":["case-management","case-audit"],
+            "taskGrant":{"sourceIssuer":"https://casework.example"}});
+        let region = json!([{"field":"region","claim":"grantRegion","operator":"equals"}]);
+        for (id, permissions) in [
+            (
+                "task-reader",
+                json!({"records":[{"recordType":"case","operations":["get"],
+                "readableFields":["label","region"],"rowBoundaries":region}]}),
+            ),
+            (
+                "task-invoker",
+                json!({"actions":[{"action":"rename-case","operations":["invoke"],
+                "targets":[{"recordType":"case","rowBoundaries":region}],"results":["renamed"]}]}),
+            ),
+            (
+                "task-proposer",
+                json!({"actions":[{"action":"propose-rename","operations":["start"],
+                "targets":[{"recordType":"case","rowBoundaries":region}]}]}),
+            ),
+            (
+                "task-reviewer",
+                json!({"records":[{"recordType":"case","operations":["get"],
+                "readableFields":["label"],"rowBoundaries":region}],
+                "proposals":[{"action":"propose-rename","operations":["get-review-context"],
+                "readableContextFields":["currentLabel","proposedLabel"],
+                "targets":[{"recordType":"case","rowBoundaries":region}]}]}),
+            ),
+        ] {
+            let mut profile = task.clone();
+            profile["id"] = json!(id);
+            profile["permissions"] = permissions;
+            project
+                .access_profiles
+                .push(serde_json::from_value(profile).unwrap());
+        }
+        let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+        Self::with_registry(registry).await
+    }
+
+    /// The task token and authenticator for any registry whose task profiles
+    /// read `registry_principal` and accept the `case-management` purpose.
+    async fn with_registry(registry: Arc<CompiledRegistry>) -> Self {
+        let idp = MockIdp::start().await;
+        let audience = "urn:example:breg";
+        let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.into()]);
+        verifier.allowed_clients = vec!["agent-client".into()];
+        let auth = RegistryAuthenticator::new(
+            &registry,
+            verifier,
+            Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                idp.jwks_uri(),
+                JwksFetcherConfig::defaults(),
+                FetchUrlPolicy::dev(),
+            )),
+            AuthorityClaimConfig::new("registry_principal", Some("request_purpose".into())),
+        )
+        .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token = json!({"aud":audience,"sub":"citizen","azp":"agent-client","registry_principal":"citizen",
+            "registry_actor_kind":"agent","registry_purpose":"case-management","request_purpose":"case-management",
+            "scope":"case.rename","exp":now+900,"registry_grant_id":"00000000-0000-4000-8000-0000000000be",
+            "registry_approver":"h:approver","registry_grant_source_issuer":"https://casework.example",
+            "registry_grant_client":"agent-client","registry_grant_resource":audience,"registry_grant_exp":now+600,
+            "registry_grant_bounds":{"type":"breg","permissions":[
+                {"collection":"cases","operations":["get"]},
+                {"collection":"action:rename-case","operations":["invoke"]},
+                {"collection":"action:propose-rename","operations":["start"]},
+                {"collection":format!("proposal:{BOUND_GRANT_PROPOSAL_ID}"),"operations":["get-review-context"]}]},
+            "identity":{"grantRegion":"north"}});
+        Self {
+            registry,
+            auth,
+            idp,
+            token,
+        }
+    }
+
+    /// The matching token, then the grant naming another principal, then the
+    /// grant naming another purpose the profile also allows. Each verifies.
+    async fn variants(&self) -> [VerifiedRequestClaims; 3] {
+        let mut other_principal = self.token.clone();
+        other_principal["registry_principal"] = json!("someone-else");
+        let mut other_purpose = self.token.clone();
+        other_purpose["registry_purpose"] = json!("case-audit");
+        let mut verified = Vec::new();
+        for token in [self.token.clone(), other_principal, other_purpose] {
+            verified.push(
+                self.auth
+                    .authenticate(&self.idp.mint_token(token))
+                    .await
+                    .unwrap(),
+            );
+        }
+        verified.try_into().unwrap()
+    }
+}
+
+#[tokio::test]
+async fn task_record_reads_bind_the_grant_to_the_request_principal_and_purpose() {
+    let fixture = BoundGrantFixture::start().await;
+    let [matched, other_principal, other_purpose] = fixture.variants().await;
+    let service = service_for(fixture.registry.clone(), true);
+    let profile = &fixture.registry.entities()["case"].access_profiles["task-reader"];
+    let route = fixture
+        .registry
+        .routes()
+        .routes
+        .iter()
+        .find(|route| route.entity_id == "case" && route.operation == Operation::Get)
+        .unwrap();
+    let options = QueryOptions::parse(Some("accessProfile=task-reader"), false).unwrap();
+    assert!(matches!(task_grant_binding(profile, &matched), Ok(Some(_))));
+    assert!(authorize_route(&service, route, &matched, &options).is_some());
+    for (case, claims) in [("principal", &other_principal), ("purpose", &other_purpose)] {
+        assert!(
+            task_grant_binding(profile, claims).is_err(),
+            "a grant for another {case} is not bound to this request"
+        );
+        assert!(
+            authorize_route(&service, route, claims, &options).is_none(),
+            "a grant for another {case} cannot read the record"
+        );
+    }
+}
+
+#[tokio::test]
+async fn task_granted_invoke_binds_the_grant_to_the_request_principal_and_purpose() {
+    let fixture = BoundGrantFixture::start().await;
+    let [matched, other_principal, other_purpose] = fixture.variants().await;
+    let service = service_for(fixture.registry.clone(), true);
+    let route = fixture
+        .registry
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.action_id == "rename-case" && route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let options = QueryOptions::parse(Some("accessProfile=task-invoker"), false).unwrap();
+    assert!(authorize_action(&service, route, &matched, &options).is_some());
+    for (case, claims) in [("principal", &other_principal), ("purpose", &other_purpose)] {
+        assert!(
+            authorize_action(&service, route, claims, &options).is_none(),
+            "a grant for another {case} cannot invoke the Action"
+        );
+    }
+}
+
+#[tokio::test]
+async fn task_granted_proposal_start_binds_the_grant_to_the_request_principal_and_purpose() {
+    use crate::postgres::ProposalAuthorityOperation;
+    let fixture = BoundGrantFixture::start().await;
+    let [matched, other_principal, other_purpose] = fixture.variants().await;
+    let action = fixture
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "propose-rename")
+        .unwrap();
+    let admit = |claims: &VerifiedRequestClaims| {
+        super::super::proposals::authorize(
+            &fixture.registry,
+            action,
+            claims,
+            Some("task-proposer"),
+            ProposalAuthorityOperation::Start,
+            None,
+        )
+    };
+    assert!(admit(&matched).is_some_and(|authority| authority.task_grant.is_some()));
+    for (case, claims) in [("principal", &other_principal), ("purpose", &other_purpose)] {
+        assert!(
+            admit(claims).is_none(),
+            "a grant for another {case} cannot start a Proposal"
+        );
+    }
+}
+
+/// The review-record read binds the grant to each Record profile it reads,
+/// independently of the Proposal admission that precedes it. `None` here is
+/// answered with the concealed `404` the record route gives.
+#[tokio::test]
+async fn task_review_record_reads_bind_the_grant_to_the_request_principal_and_purpose() {
+    use crate::{model::ProposalOperation, postgres::ProposalAuthorityOperation};
+    let fixture = BoundGrantFixture::start().await;
+    let [matched, other_principal, other_purpose] = fixture.variants().await;
+    let action = fixture
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "propose-rename")
+        .unwrap();
+    let operation = ProposalOperation::GetReviewContext;
+    let admit = |claims: &VerifiedRequestClaims| {
+        super::super::proposals::authorize(
+            &fixture.registry,
+            action,
+            claims,
+            Some("task-reviewer"),
+            ProposalAuthorityOperation::Lifecycle(operation),
+            Some(BOUND_GRANT_PROPOSAL_ID),
+        )
+    };
+    let authority = admit(&matched).expect("the matching grant opens the review context");
+    let records = |claims: &VerifiedRequestClaims| {
+        super::super::proposals::review_record_authorities(
+            &fixture.registry,
+            action,
+            claims,
+            &authority,
+            operation,
+            None,
+        )
+    };
+    for (case, claims) in [("principal", &other_principal), ("purpose", &other_purpose)] {
+        assert!(
+            records(claims).is_none(),
+            "a grant for another {case} cannot read the review record"
+        );
+        assert!(
+            admit(claims).is_none(),
+            "a grant for another {case} cannot open the review context"
+        );
+    }
+    assert!(records(&matched).is_some_and(|records| records["case"].context.task_grant().is_some()));
+}
+
+/// Release reads bind the grant to the dataset profile. Dispatch answers
+/// `ProfileAdmission` with the concealed `404` the record route gives for the
+/// same reason.
+#[tokio::test]
+async fn task_statistics_reads_bind_the_grant_to_the_request_principal_and_purpose() {
+    use super::super::statistics::{authorize_with_reason, Kind};
+    use crate::audit::ReadRefusalReason;
+    let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"task-statistics","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://statistics.example.test","timezone":"UTC"},
+        "datasets":[{"id":"records"}],
+        "recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"mutable",
+            "fields":[{"id":"active","type":"boolean","required":true,"classification":"internal"},
+                {"id":"occurred-on","type":"date","required":true,"classification":"internal"}]}],
+        "accessProfiles":[
+            {"id":"publisher","principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":{
+                "records":[{"recordType":"record","operations":["list"],"rowBoundaries":"unrestricted","allowCount":true,
+                    "readableFields":["active","occurred-on"],"filterableFields":["active","occurred-on"]}],
+                "datasets":[{"dataset":"counts","operations":["publish","read-releases"]}]}},
+            {"id":"task-reader","principalClaim":"registry_principal","actorKind":"agent",
+                "requesterClients":["agent-client"],"requiredScopes":["statistics:read"],
+                "requiredPurposes":["case-management","case-audit"],
+                "taskGrant":{"sourceIssuer":"https://casework.example"},
+                "permissions":{"datasets":[{"dataset":"counts","operations":["read-releases"]}]}}],
+        "statisticalDatasets":[{"id":"counts","unit":"record","population":"active eq true",
+            "period":{"type":"flow","field":"occurred-on","granularity":"month","firstPeriod":"2025-01"},
+            "dimensions":["active"],"disclosure":{"minimumCount":5,"roundingBase":5}}]});
+    let project =
+        crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let mut fixture = BoundGrantFixture::with_registry(registry).await;
+    fixture.token["scope"] = json!("statistics:read");
+    let [matched, other_principal, other_purpose] = fixture.variants().await;
+    let service = service_for(fixture.registry.clone(), false);
+    let dataset = &fixture.registry.statistical_datasets()["counts"];
+    let read = |claims: &VerifiedRequestClaims| {
+        authorize_with_reason(&service, dataset, Kind::Series, claims, Some("task-reader"))
+    };
+    for (case, claims) in [("principal", &other_principal), ("purpose", &other_purpose)] {
+        assert_eq!(
+            read(claims).err(),
+            Some(ReadRefusalReason::ProfileAdmission),
+            "a grant for another {case} cannot read released statistics"
+        );
+    }
+    assert!(read(&matched).is_ok_and(|context| context.task_grant().is_some()));
 }
 
 #[test]

@@ -12,8 +12,24 @@ grant cannot acquire an operation or target the profile does not grant.
 The authored access profile selects `actorKind: agent`, exact
 `requesterClients`, `requiredPurposes`, and a `taskGrant` containing the exact
 `sourceIssuer`. The token must match that profile, BReg's configured audience,
-and the compiled collection and operation bounds. A task token cannot fall back
-to a standing access profile. Ordinary profiles retain their own authority.
+and the compiled collection and operation bounds. The grant must name the
+request's own principal, the value of the configured principal claim, and its
+own purpose, the value of the configured purpose claim; Record reads, read
+paths, statistics, Actions and Proposals refuse a grant that names another. The
+exchanged token therefore carries the claims the profile names: when
+`authorityClaims.principal` is `registry_principal`, BReg compares the grant
+with that claim, not with `sub`. A
+task token cannot fall back to a standing access profile. Ordinary profiles
+retain their own authority.
+
+A token that carries a task grant must carry `iat` and be issued for at most
+900 seconds (`exp - iat`), whatever the deployment's ordinary
+`authentication.oidc.maximumTokenLifetimeSeconds`. BReg refuses a longer one at authentication even in
+its last minutes. It also refuses a task-grant token whose `iat` is later than
+BReg's clock plus `authentication.oidc.leewayMilliseconds`, the leeway already
+applied to `exp` and `nbf`, so the issued lifetime bounds how long BReg honours
+the token. Reads check no live Casework status, so this bound, with the
+grant deadline, is what ends reading after Casework revokes a grant.
 A `taskGrant` is authored only in project `accessProfiles`; a module cannot
 contribute a task-grant profile, and the compiler refuses one with
 `breg.access-profile.task-grant-module-forbidden`.

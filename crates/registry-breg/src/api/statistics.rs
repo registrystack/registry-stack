@@ -42,7 +42,7 @@ fn statistics_work_deadline(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Kind {
+pub(super) enum Kind {
     Live,
     List,
     Series,
@@ -136,7 +136,7 @@ fn authorize(
     authorize_with_reason(service, dataset, kind, claims, selected).ok()
 }
 
-fn authorize_with_reason(
+pub(super) fn authorize_with_reason(
     service: &HttpService,
     dataset: &CompiledStatisticalDataset,
     kind: Kind,
@@ -204,19 +204,6 @@ fn authorize_with_reason(
     )
     .with_audit_context(claims)
     .with_recipients(claims))
-}
-
-/// Extract only the selector needed for admission. Full validation follows
-/// authorization, so malformed options cannot reveal an inaccessible dataset.
-fn admission_profile(raw: Option<&str>) -> Option<String> {
-    let raw = raw.filter(|raw| raw.len() <= MAX_RAW_QUERY_BYTES)?;
-    raw.split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find_map(|(name, value)| {
-            (percent_decode(name).ok().as_deref() == Some("accessProfile"))
-                .then(|| percent_decode(value).ok())
-                .flatten()
-        })
 }
 
 #[derive(Default)]
