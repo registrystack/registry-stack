@@ -110,6 +110,16 @@ fn schema_test_people_schema(generator: &mut schemars::SchemaGenerator) -> schem
 }
 
 #[cfg(feature = "schema")]
+fn display_name_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "allOf": [generator.subschema_for::<registry_platform_yaml::DisplayText>()],
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+    })
+}
+
+#[cfg(feature = "schema")]
 fn claims_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "type": "object",
@@ -249,8 +259,12 @@ pub(super) struct TestPerson {
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub subject: String,
     /// Name shown in the synthetic browser sign-in picker; it grants no authority.
-    #[serde(default, rename = "displayName")]
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
+    #[serde(
+        default,
+        rename = "displayName",
+        deserialize_with = "registry_platform_yaml::optional_display_text"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "display_name_schema"))]
     pub display_name: Option<String>,
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
@@ -1439,6 +1453,64 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("displayName"));
+    }
+
+    #[test]
+    fn display_name_refuses_bidi_override_and_isolate_controls() {
+        let (_, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let valid = serde_json::to_value(plan).unwrap();
+        for display_name in ["unsafe\u{202e}name", "unsafe\u{2066}name"] {
+            let mut value = valid.clone();
+            value["people"]["operator"]["displayName"] = json!(display_name);
+            assert!(
+                serde_json::from_value::<Plan>(value).is_err(),
+                "display name {display_name:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn display_name_schema_matches_display_text_and_length_bounds() {
+        let documents = crate::tool_schema::documents().unwrap();
+        let document: Value =
+            serde_json::from_str(&documents["project-dev.v1alpha1.schema.json"]).unwrap();
+        let schema = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&document)
+            .unwrap();
+        let valid = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
+            "kind": "BRegProjectDev",
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "breg", "project": ".", "audience": "registry"}],
+            "people": {"operator": {
+                "subject": "operator", "client": "operator-client",
+                "grants": {"breg": {"profile": "operator", "scopes": []}}
+            }},
+            "journey": {"id": "smoke", "steps": [{
+                "id": "read", "product": "breg", "as": "operator",
+                "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+            }]}
+        });
+        for display_name in [
+            "unsafe\u{202e}name".to_owned(),
+            "unsafe\u{2066}name".to_owned(),
+            String::new(),
+            "x".repeat(129),
+        ] {
+            let mut value = valid.clone();
+            value["people"]["operator"]["displayName"] = json!(display_name);
+            assert!(!schema.is_valid(&value), "display name {display_name:?}");
+        }
+        for display_name in ["Visible name".to_owned(), "é".repeat(128)] {
+            let mut value = valid.clone();
+            value["people"]["operator"]["displayName"] = json!(display_name);
+            assert!(schema.is_valid(&value), "display name {display_name:?}");
+        }
     }
 
     #[test]
