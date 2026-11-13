@@ -54,6 +54,8 @@ recordTypes:
               name: {type: string, minLength: 1, maxLength: 80}
     constraints:
       - {type: unique, fields: [source-submission-id]}
+    selectorProfiles:
+      - {id: by-source-submission, fields: [source-submission-id]}
 
 actions:
   - id: register-site
@@ -177,3 +179,18 @@ accessProfiles:
             - recordType: field-site
               rowBoundaries:
                 - {field: owner, claim: sub, operator: equals}
+  - id: reconciliation
+    principalClaim: sub
+    requiredScopes: [registry:reconcile]
+    requiredPurposes: [field-intake-reconciliation]
+    actorKind: service
+    requesterClients: [field-site-observer]
+    permissions:
+      records:
+        - recordType: field-site
+          operations: [lookup]
+          readableFields: [owner, source-submission-id, site-name, position, boundary, contacts]
+          lookups:
+            - {selector: by-source-submission, valueOrigin: request}
+          rowBoundaries:
+            - {field: owner, claim: field_collection_owner, operator: equals}

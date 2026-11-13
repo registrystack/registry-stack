@@ -36,6 +36,32 @@ Provision a separate BReg database for the project and follow the normal package
 The polygon requires the administrator to provision PostGIS in the BReg database.
 [BReg package activation](../../../../../docs/site/src/content/docs/operate/breg-changes.mdx) and [spatial database requirements](../../../../breg/SPATIAL-QUERIES.md#database-and-upgrades).
 
+## Look up an applied record
+
+The `reconciliation` profile grants a lookup of one Record by its source submission UUID.
+Register a separate `field-site-observer` service client at the issuer and add that client to the runtime's `authentication.oidc.allowedClients` alongside the ingestion client.
+Map `authentication.authorityClaims.purpose` to `registry_purpose`.
+The observer's credential carries the `registry:reconcile` scope, the `field-intake-reconciliation` purpose, and a direct `field_collection_owner` claim issued by the institution.
+For this example that owner is `adapter-field-ingestion`, the value written by both Plans.
+The issuer controls the owner claim. The lookup request supplies only the submission UUID.
+
+Use a short-lived observer token for the BReg audience.
+Put the `Authorization: Bearer <token>` header in an owner-only file through your credential workflow.
+Replace the URL and sample UUID with your BReg origin and the UUID in the source collection.
+
+```sh
+curl --fail-with-body --silent --show-error \
+  --header @/path/to/observer-auth-header \
+  --header 'Content-Type: application/json' \
+  --data '{"selector":"by-source-submission","values":{"sourceSubmissionId":"44444444-4444-4444-8444-444444444444"}}' \
+  'https://breg.example.invalid/v1/records/field-sites:lookup?accessProfile=reconciliation'
+```
+
+A successful response contains the BReg Record identity and the accepted field values.
+Use the submission UUID from the source when a response was lost.
+Treat a 404 as unresolved. An unapplied Proposal can still exist, and the lookup conceals rows outside the observer's owner boundary.
+The submitting service can inspect its own Proposal using the reference retained by the job.
+
 ## Offline checks
 
 Run from the Registry Stack repository root with a `bregctl` built from this
@@ -63,14 +89,14 @@ bregctl test products/adapter/examples/qfield-postgis/registry \
   --output /absolute/path/to/receipt.json
 ```
 
-The journey describes the distinct Invoke and Start/Submit routes.
+The journey describes the distinct Invoke and Start/Submit routes and the owner-scoped lookup.
 The compiled access contract fixes the requester allowlist, scope, actor kind,
 ownership and row boundary.
 
 The maintained Adapter native acceptance executes both jobs against the real
 PostGIS projection and BReg. It checks requester refusal on both mutation routes,
 recovers the original Proposal after a lost response and reads both resulting
-Records through BReg:
+Records through the shipped observer profile:
 
 ```sh
 cargo test --locked -p registry-adapter-job \

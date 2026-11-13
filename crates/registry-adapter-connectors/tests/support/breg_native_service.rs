@@ -15,8 +15,8 @@ use std::{
 };
 
 use registry_breg_client::{
-    BRegListRequest, BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig, StaticToken,
-    TokenProvider,
+    BRegLookupRequest, BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig,
+    StaticToken, TokenProvider,
 };
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use registry_platform_testing::{fixtures, TestActorKind, TestAuthorizationServer, TestClient};
@@ -48,6 +48,7 @@ fn spatial_bbox_role(runtime_role: &str) -> String {
 pub async fn issuer(subject: &str) -> TestAuthorizationServer {
     let (_, reader_public) = fixtures::ed25519_pair();
     let (_, ingestion_public) = fixtures::ed25519_pair();
+    let (_, observer_public) = fixtures::ed25519_pair();
     TestAuthorizationServer::builder()
         .with_signing_key(generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap())
         .client(
@@ -63,6 +64,13 @@ pub async fn issuer(subject: &str) -> TestAuthorizationServer {
                 .with_resource("urn:example:applications")
                 .with_actor_kind(TestActorKind::Service)
                 .with_service_subject("adapter-field-ingestion"),
+        )
+        .client(
+            TestClient::new("field-site-observer")
+                .with_public_jwk(observer_public)
+                .with_resource("urn:example:applications")
+                .with_actor_kind(TestActorKind::Service)
+                .with_service_subject("field-site-observer"),
         )
         .start()
         .await
@@ -93,6 +101,26 @@ pub fn field_ingestion_token_provider(issuer: &TestAuthorizationServer) -> Arc<d
         chrono::Utc::now().timestamp() + 3600,
     );
     Arc::new(StaticToken::new(token).expect("the synthetic ingestion token is valid"))
+}
+
+/// Mint an observer token with the specified purpose and collection owner.
+pub fn field_observer_token(
+    issuer: &TestAuthorizationServer,
+    purpose: &str,
+    owner: &str,
+) -> String {
+    issuer.issue_access_token_with_claims(
+        "field-site-observer",
+        "field-site-observer",
+        "urn:example:applications",
+        "registry:reconcile",
+        chrono::Utc::now().timestamp() + 3600,
+        [
+            ("registry_purpose".to_owned(), json!(purpose)),
+            ("field_collection_owner".to_owned(), json!(owner)),
+        ]
+        .into(),
+    )
 }
 
 fn operator(binary: &Path, args: &[&std::ffi::OsStr], log: &Path) -> Value {
@@ -469,15 +497,6 @@ impl Breg {
                             .cloned(),
                     );
             }
-            registry["accessProfiles"][0]["permissions"]["records"]
-                .as_array_mut()
-                .expect("the fixture observer record grants are an array")
-                .push(json!({
-                    "recordType": "field-site",
-                    "operations": ["get", "list"],
-                    "readableFields": ["owner", "source-submission-id", "site-name", "position", "boundary", "contacts"],
-                    "rowBoundaries": "unrestricted"
-                }));
         }
         document(&project.join("registry.yaml"), registry);
         private_file(
@@ -580,12 +599,20 @@ impl Breg {
                         "accessTokenType": "at+jwt",
                         "scopeClaim": "scope",
                         "scopeSeparator": " ",
-                        "allowedClients": ["application-reader", "adapter-field-ingestion"],
+                        "allowedClients": if field_site {
+                            &["application-reader", "adapter-field-ingestion", "field-site-observer"][..]
+                        } else {
+                            &["application-reader"][..]
+                        },
                         "maximumTokenLifetimeSeconds": 3600,
                         "leewayMilliseconds": 0,
                         "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}
                     },
-                    "authorityClaims": {"principal": "sub"}
+                    "authorityClaims": if field_site {
+                        json!({"principal": "sub", "purpose": "registry_purpose"})
+                    } else {
+                        json!({"principal": "sub"})
+                    }
                 },
                 "audit": {
                     "hashKeyRef": "secret:file/audit-key",
@@ -721,32 +748,41 @@ impl Breg {
         .unwrap()
     }
 
-    /// Read one ingested field site through a fixture-only observer grant.
-    /// The QField ingestion profile itself intentionally has no Record CRUD.
+    /// Read one ingested field site through the example's reconciliation grant.
     pub async fn field_site(
         &self,
         issuer: &TestAuthorizationServer,
         source_submission_id: &str,
     ) -> Value {
         let options = BRegRecordOptions::default()
-            .access_profile("writer")
+            .access_profile("reconciliation")
             .expect("the observer profile is valid");
-        let request = BRegListRequest::default()
+        let request = BRegLookupRequest::new("by-source-submission")
+            .expect("the selector is valid")
             .options(options)
-            .top(100)
-            .expect("the fixture page bound is valid");
-        let client = self.client(issuer);
+            .value("sourceSubmissionId", json!(source_submission_id))
+            .expect("the source identifier is valid");
+        let token = field_observer_token(
+            issuer,
+            "field-intake-reconciliation",
+            "adapter-field-ingestion",
+        );
+        let client = BaseRegistryClient::new(
+            BaseRegistryClientConfig::new(self.base_url.parse().unwrap())
+                .with_token_provider(Arc::new(StaticToken::new(token).unwrap())),
+        )
+        .expect("the field-site observer client starts");
         for _ in 0..100 {
-            let records = client
-                .list_records("field-sites", &request)
-                .await
-                .expect("the ingested field sites are observable");
-            if let Some(record) = records.value.value.items.into_iter().find(|record| {
-                record.domain_data.get("sourceSubmissionId")
-                    == Some(&Value::String(source_submission_id.to_owned()))
-            }) {
-                return serde_json::to_value(record.domain_data)
-                    .expect("the field-site data renders as JSON");
+            match client.lookup_record("field-sites", &request).await {
+                Ok(record) => {
+                    return serde_json::to_value(record.value.data.domain_data)
+                        .expect("the field-site data renders as JSON");
+                }
+                Err(registry_breg_client::BaseRegistryClientError::Problem {
+                    code: registry_breg_client::BRegProblemCode::LookupUnresolved,
+                    ..
+                }) => {}
+                Err(error) => panic!("field-site lookup failed: {error}"),
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }

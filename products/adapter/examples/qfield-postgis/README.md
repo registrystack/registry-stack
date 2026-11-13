@@ -64,7 +64,8 @@ cargo run --locked -p registry-adapter-job --features job-postgres,direct-breg -
   --profile "$example/profile.yaml" --project "$example/project.yaml"
 ```
 
-Inspect the job result, then read the record or Proposal through the authorized BReg API.
+Inspect the job result, then use the [reconciliation lookup](registry/README.md#look-up-an-applied-record) to read the resulting record by source submission UUID.
+For the Proposal job, the submitting service can also read the Proposal's current state using its retained reference.
 For a continuous deployment, use the interval trigger with the same bindings.
 [Job operation and recovery instructions](../kobotoolbox-job/OPERATIONS.md).
 
@@ -81,7 +82,9 @@ An edit that removes eligibility is visible in the source status.
 Deleting the source row or clearing readiness has no BReg effect.
 
 If a destination response is lost, keep the original source row readable while the job retries the same command.
-When the source has changed or the receipt window has expired, reconcile against the authoritative BReg result before taking another action.
+When the source has changed or the receipt window has expired, use the reconciliation lookup and the available Proposal status before deciding what to do.
+A missing Record can mean the Proposal is still pending or that the observer lacks authority.
+Keep an uncertain item held while the institution establishes its outcome.
 The source retains the collection data and BReg retains the accepted inputs and effects.
 Transport completion, Adapter intake and Proposal application have separate status.
 

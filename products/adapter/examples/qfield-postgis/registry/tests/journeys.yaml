@@ -30,6 +30,41 @@ journeys:
         expect: {outcome: success, status: 200}
         captureResults: {field-site: immediate-site}
 
+      - id: reconcile-immediate-registration
+        recordType: field-site
+        accessProfile: reconciliation
+        claims:
+          principal: field-site-observer
+          scopes: [registry:reconcile]
+          purpose: field-intake-reconciliation
+          actorKind: service
+          requesterClient: field-site-observer
+          directClaims: {field_collection_owner: adapter-field-ingestion}
+        request:
+          type: lookup
+          selector: by-source-submission
+          values: {sourceSubmissionId: 44444444-4444-4444-8444-444444444444}
+        expect:
+          outcome: success
+          status: 200
+          fields: {sourceSubmissionId: 44444444-4444-4444-8444-444444444444}
+
+      - id: conceal-registration-outside-owner
+        recordType: field-site
+        accessProfile: reconciliation
+        claims:
+          principal: field-site-observer
+          scopes: [registry:reconcile]
+          purpose: field-intake-reconciliation
+          actorKind: service
+          requesterClient: field-site-observer
+          directClaims: {field_collection_owner: another-collection}
+        request:
+          type: lookup
+          selector: by-source-submission
+          values: {sourceSubmissionId: 44444444-4444-4444-8444-444444444444}
+        expect: {outcome: refusal, status: 404, problemCode: lookup.unresolved}
+
       - id: start-proposal
         action: propose-site
         accessProfile: ingestion
