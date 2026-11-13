@@ -1,0 +1,197 @@
+name: Qualify release-profile Python wheel
+run-name: Qualify release-profile Python wheel at ${{ github.event.pull_request.head.sha || github.sha }}
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - release/1.0
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-release-wheel-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  qualify:
+    name: Release-profile Python wheel (${{ matrix.asset }})
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:python-release-wheel')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      RUSTUP_TOOLCHAIN: "1.95.0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/python-release-wheel-qualification
+      AWS_LC_FIPS_SYS_STATIC: "1"
+      QUALIFICATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: linux-amd64-glibc
+            napi_platform: linux-x64-gnu
+            wheel_tag: cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64
+          - runner: ubuntu-24.04-arm
+            asset: linux-arm64-glibc
+            napi_platform: linux-arm64-gnu
+            wheel_tag: cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64
+    steps:
+      - name: Checkout exact qualification source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.QUALIFICATION_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Go for the AWS-LC-FIPS source build
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.2
+          cache: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.11.16"
+
+      - name: Build release-profile unified wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 --profile minimal
+          uv venv "${RUNNER_TEMP}/maturin"
+          uv pip install --python "${RUNNER_TEMP}/maturin/bin/python" \
+            --require-hashes --only-binary :all: \
+            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("crates/registry-stack-client-py/pyproject.toml", "rb"))["project"]["version"])')"
+          output_dir="${RUNNER_TEMP}/python-release-wheel"
+          python3 release/scripts/assemble-registry-client-packages.py \
+            --artifacts python \
+            --napi-platform "${{ matrix.napi_platform }}" \
+            --version "${version}" \
+            --python-profile release \
+            --output-dir "${output_dir}" \
+            --work-dir "${RUNNER_TEMP}/python-release-wheel-assembly" \
+            --maturin "${RUNNER_TEMP}/maturin/bin/maturin" \
+            --zig-python "${RUNNER_TEMP}/maturin/bin/python"
+          wheel="${output_dir}/registry_stack_client-${version}-${{ matrix.wheel_tag }}.whl"
+          test -f "${wheel}"
+          test "$(find "${output_dir}" -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 1
+          evidence_dir="${RUNNER_TEMP}/python-release-wheel-evidence"
+          mkdir -p "${evidence_dir}"
+          cp "${wheel}" "${evidence_dir}/"
+          wheel_name="$(basename "${wheel}")"
+          (
+            cd "${evidence_dir}"
+            sha256sum "${wheel_name}" >SHA256SUMS
+          )
+          {
+            printf 'QUALIFICATION_VERSION=%s\n' "${version}"
+            printf 'QUALIFICATION_WHEEL=%s\n' "${wheel}"
+            printf 'QUALIFICATION_EVIDENCE_DIR=%s\n' "${evidence_dir}"
+          } >>"${GITHUB_ENV}"
+
+      - name: Exercise clean installed-wheel modes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in core flask fastapi human-flask human-fastapi; do
+            environment="${RUNNER_TEMP}/client-${mode}"
+            uv venv "${environment}"
+            case "${mode}" in
+              core)
+                uv pip install --python "${environment}/bin/python" \
+                  --no-deps "${QUALIFICATION_WHEEL}"
+                "${environment}/bin/python" -I \
+                  release/scripts/smoke-registry-client-package.py
+                ;;
+              flask)
+                uv pip install --python "${environment}/bin/python" \
+                  "${QUALIFICATION_WHEEL}[flask]"
+                ;;
+              fastapi)
+                uv pip install --python "${environment}/bin/python" \
+                  "${QUALIFICATION_WHEEL}[fastapi]" httpx==0.28.1
+                ;;
+              human-flask)
+                uv pip install --python "${environment}/bin/python" \
+                  "${QUALIFICATION_WHEEL}[human,flask,postgres]"
+                ;;
+              human-fastapi)
+                uv pip install --python "${environment}/bin/python" \
+                  "${QUALIFICATION_WHEEL}[human,fastapi,postgres]"
+                ;;
+            esac
+            "${environment}/bin/python" -I \
+              release/scripts/smoke-registry-client-extras.py "${mode}"
+          done
+          service_environment="${RUNNER_TEMP}/client-service-smoke"
+          uv venv "${service_environment}"
+          uv pip install --python "${service_environment}/bin/python" \
+            "${QUALIFICATION_WHEEL}[human,flask,fastapi,postgres]" httpx==0.28.1
+          "${service_environment}/bin/python" -I \
+            release/scripts/smoke-registry-client-service.py
+
+      - name: Record qualification evidence
+        shell: bash
+        env:
+          QUALIFICATION_ASSET: ${{ matrix.asset }}
+          QUALIFICATION_WHEEL_TAG: ${{ matrix.wheel_tag }}
+        run: |
+          set -euo pipefail
+          python3 - "${QUALIFICATION_EVIDENCE_DIR}/qualification.json" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output = Path(__import__("sys").argv[1])
+          output.write_text(
+              json.dumps(
+                  {
+                      "schema_version": "registry-stack.python-wheel-qualification.v1",
+                      "source_sha": os.environ["QUALIFICATION_SOURCE_SHA"],
+                      "version": os.environ["QUALIFICATION_VERSION"],
+                      "asset": os.environ["QUALIFICATION_ASSET"],
+                      "wheel_tag": os.environ["QUALIFICATION_WHEEL_TAG"],
+                      "profile": "release",
+                      "checks": {
+                          "package_smoke": "passed",
+                          "clean_install_modes": [
+                              "core",
+                              "flask",
+                              "fastapi",
+                              "human-flask",
+                              "human-fastapi",
+                          ],
+                          "installed_service_smoke": "passed",
+                      },
+                  },
+                  indent=2,
+                  sort_keys=True,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Retain wheel and qualification evidence
+        if: ${{ always() && env.QUALIFICATION_WHEEL != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-release-wheel-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.QUALIFICATION_EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 8
+          compression-level: 0

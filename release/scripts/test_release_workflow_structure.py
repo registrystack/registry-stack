@@ -369,6 +369,129 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
             self.assertNotIn(forbidden, text)
 
 
+class PythonReleaseWheelQualificationWorkflowTest(unittest.TestCase):
+    WORKFLOW = "python-release-wheel-qualification.yml"
+
+    def test_activation_is_deliberate_and_the_matrix_is_linux_only(self) -> None:
+        _, document = workflow(self.WORKFLOW)
+        triggers = document[True]
+        self.assertIn("workflow_dispatch", triggers)
+        self.assertEqual(
+            triggers["pull_request"],
+            {
+                "branches": ["main", "release/1.0"],
+                "types": ["labeled", "synchronize"],
+            },
+        )
+        self.assertEqual(document["permissions"], {"contents": "read"})
+
+        job = document["jobs"]["qualify"]
+        self.assertEqual(
+            job["if"],
+            "github.event_name == 'workflow_dispatch' || "
+            "contains(github.event.pull_request.labels.*.name, "
+            "'ci:python-release-wheel')",
+        )
+        self.assertEqual(job["permissions"], {"contents": "read"})
+        self.assertEqual(job["timeout-minutes"], 45)
+        self.assertEqual(
+            job["strategy"]["matrix"]["include"],
+            [
+                {
+                    "runner": "ubuntu-24.04",
+                    "asset": "linux-amd64-glibc",
+                    "napi_platform": "linux-x64-gnu",
+                    "wheel_tag": "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
+                },
+                {
+                    "runner": "ubuntu-24.04-arm",
+                    "asset": "linux-arm64-glibc",
+                    "napi_platform": "linux-arm64-gnu",
+                    "wheel_tag": "cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
+                },
+            ],
+        )
+
+    def test_builds_and_exercises_the_release_profile_wheel(self) -> None:
+        _, document = workflow(self.WORKFLOW)
+        job = document["jobs"]["qualify"]
+        assert_pinned_go(self, document, "qualify")
+        self.assertEqual(job["env"]["RUSTUP_TOOLCHAIN"], "1.95.0")
+        self.assertEqual(job["env"]["AWS_LC_FIPS_SYS_STATIC"], "1")
+        self.assertEqual(
+            job["env"]["CARGO_TARGET_DIR"],
+            "${{ github.workspace }}/target/python-release-wheel-qualification",
+        )
+        checkout = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Checkout exact qualification source"
+        )
+        self.assertEqual(checkout["with"]["ref"], "${{ env.QUALIFICATION_SOURCE_SHA }}")
+        self.assertFalse(checkout["with"]["persist-credentials"])
+
+        build = step_run(document, "qualify", "Build release-profile unified wheel")
+        self.assertIn("release/requirements/maturin-1.9.6.txt", build)
+        self.assertIn('uv venv "${RUNNER_TEMP}/maturin"', build)
+        self.assertIn('uv pip install --python "${RUNNER_TEMP}/maturin/bin/python"', build)
+        self.assertIn("--require-hashes --only-binary :all:", build)
+        self.assertNotIn("python3 -m venv", build)
+        self.assertNotIn("/bin/pip", build)
+        self.assertIn("release/scripts/assemble-registry-client-packages.py", build)
+        self.assertIn("--artifacts python", build)
+        self.assertIn('--napi-platform "${{ matrix.napi_platform }}"', build)
+        self.assertIn("--python-profile release", build)
+        self.assertIn('--maturin "${RUNNER_TEMP}/maturin/bin/maturin"', build)
+        self.assertIn('--zig-python "${RUNNER_TEMP}/maturin/bin/python"', build)
+        self.assertIn("sha256sum", build)
+        self.assertNotIn("--include-render", build)
+
+        smoke = step_run(document, "qualify", "Exercise clean installed-wheel modes")
+        self.assertIn("release/scripts/smoke-registry-client-package.py", smoke)
+        self.assertIn("release/scripts/smoke-registry-client-service.py", smoke)
+        for mode in ("core", "flask", "fastapi", "human-flask", "human-fastapi"):
+            self.assertIn(mode, smoke)
+        self.assertIn("--no-deps", smoke)
+        self.assertIn('"${environment}/bin/python" -I', smoke)
+        self.assertIn('"${service_environment}/bin/python" -I', smoke)
+
+        evidence = step_run(document, "qualify", "Record qualification evidence")
+        self.assertIn("qualification.json", evidence)
+        self.assertIn("QUALIFICATION_SOURCE_SHA", evidence)
+        upload = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Retain wheel and qualification evidence"
+        )
+        self.assertEqual(
+            upload["if"], "${{ always() && env.QUALIFICATION_WHEEL != '' }}"
+        )
+        self.assertEqual(upload["with"]["retention-days"], 8)
+        self.assertEqual(upload["with"]["compression-level"], 0)
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+
+    def test_has_no_publication_or_registry_write_capability(self) -> None:
+        text, document = workflow(self.WORKFLOW)
+        job = document["jobs"]["qualify"]
+        self.assertFalse(any("attest" in str(step).lower() for step in job["steps"]))
+        for forbidden in (
+            "packages: write",
+            "contents: write",
+            "id-token: write",
+            "attestations: write",
+            "npm publish",
+            "maturin publish",
+            "twine upload",
+            "gh release",
+            "git tag",
+            "git push",
+            "docker push",
+            "oras ",
+            "ghcr.io",
+        ):
+            self.assertNotIn(forbidden, text)
+
+
 class CandidateWorkflowStructureTest(unittest.TestCase):
     def test_pins_go_for_every_host_native_artifact_build(self) -> None:
         _, document = workflow("release-candidate.yml")
@@ -2942,6 +3065,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 ("macos-contributor.yml", "direct-cargo-binaries"),
                 ("nightly-release.yml", "arm64"),
                 ("nightly-release.yml", "macos"),
+                ("python-release-wheel-qualification.yml", "qualify"),
                 ("release-candidate.yml", "build-macos-platforms"),
                 ("release-candidate.yml", "build-platforms"),
                 ("release-candidate.yml", "clients"),
@@ -3877,7 +4001,11 @@ PYTHON_VERSION_CLASSIFIER = re.compile(
 )
 PYTHON_WHEEL_ABI_TAG_PATTERN = re.compile(r"cp3\d+-abi3")
 PYTHON_STABLE_ABI_FEATURE_PATTERN = re.compile(r"abi3-py3\d+")
-PYTHON_WHEEL_WORKFLOWS = ("evidence-dev.yml", "release-candidate.yml")
+PYTHON_WHEEL_WORKFLOWS = (
+    "evidence-dev.yml",
+    "python-release-wheel-qualification.yml",
+    "release-candidate.yml",
+)
 
 
 def load_release_script(name: str):
