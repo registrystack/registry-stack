@@ -714,7 +714,9 @@ impl PostgresSource for ClientSource {
                     SourceScalar::Float(value) => Ok(NativeParam::Float(*value)),
                     SourceScalar::Boolean(value) => Ok(NativeParam::Boolean(*value)),
                     SourceScalar::Numeric(text) => Ok(NativeParam::Numeric(text.clone())),
-                    SourceScalar::Null => Err(PostgresReadFault::Statement),
+                    SourceScalar::Jsonb(_) | SourceScalar::Null => {
+                        Err(PostgresReadFault::Statement)
+                    }
                 })
                 .collect::<Result<_, _>>()?;
             let stream = self
