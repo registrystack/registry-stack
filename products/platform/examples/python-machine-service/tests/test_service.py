@@ -54,6 +54,18 @@ flask_adapter = load_client_module("flask_adapter")
 web = load_client_module("web")
 workload = load_client_module("workload")
 
+_REQUEST_AUTHORITY_SUBSTITUTIONS = (
+    ("binding", "secondary"),
+    ("url", "https://other.example.invalid"),
+    ("ur\u2113", "https://other.example.invalid"),
+    ("subject", "other-service"),
+    ("subj\u0435ct", "other-service"),
+    ("scope", "admin"),
+    ("sc\u03bfpe", "admin"),
+    ("recipient", "substitute@example.invalid"),
+    ("token", "secret-canary"),
+)
+
 
 class Stack:
     def __init__(self) -> None:
@@ -541,17 +553,11 @@ class MachineServiceTests(unittest.TestCase):
         self.assertEqual(cookie.status_code, 401)
         self.assertEqual(self.stack.primary.submit_calls, [])
 
-    def test_request_cannot_select_binding_url_scope_recipient_or_token(self) -> None:
+    def test_request_cannot_substitute_workload_authority_or_recipient(self) -> None:
         self.seed("notice-1", message("protected@example.invalid"))
         base = {"key": "command-1", "noticeId": "notice-1"}
 
-        for field, value in [
-            ("binding", "secondary"),
-            ("url", "https://other.example.invalid"),
-            ("scope", "admin"),
-            ("recipient", "substitute@example.invalid"),
-            ("token", "secret-canary"),
-        ]:
+        for field, value in _REQUEST_AUTHORITY_SUBSTITUTIONS:
             with self.subTest(field=field):
                 response = self.post({**base, field: value})
                 self.assertEqual(response.status_code, 422)
@@ -875,6 +881,18 @@ class FastAPIMachineServiceTests(unittest.TestCase):
         self.assertEqual(oversized.status_code, 422)
         self.assertEqual(lookalike.status_code, 422)
         self.assertEqual(self.stack.primary.submit_calls, [])
+
+    def test_request_cannot_substitute_workload_authority_or_recipient(self) -> None:
+        self.seed("notice-1", message("protected@example.invalid"))
+        base = {"key": "command-1", "noticeId": "notice-1"}
+
+        for field, value in _REQUEST_AUTHORITY_SUBSTITUTIONS:
+            with self.subTest(field=field):
+                response = self.post({**base, field: value})
+                self.assertEqual(response.status_code, 422)
+
+        self.assertEqual(self.stack.primary.submit_calls, [])
+        self.assertEqual(self.stack.secondary.submit_calls, [])
 
     def test_streamed_body_stops_when_declared_length_is_exceeded(self) -> None:
         self.seed("notice-1", message("protected@example.invalid"))

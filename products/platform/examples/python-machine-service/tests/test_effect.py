@@ -451,6 +451,72 @@ class MessageEffectTests(unittest.TestCase):
         self.assertEqual(len(self.messaging.submit_calls), 1)
         self.assertEqual(self.messaging.receipt_calls, [])
 
+    def test_missing_authority_binding_is_uncertain_until_exact_binding_returns(
+        self,
+    ) -> None:
+        self.seed("notice-1", message("person@example.invalid"), authority="b" * 64)
+
+        result = self.effect.execute(self.context, "command-1", "notice-1")
+
+        self.assertEqual(result.status, 202)
+        self.assertEqual(result.body["state"], "uncertain")
+        self.assertRegex(result.body["recovery"], r"\A[0-9a-f]{64}\Z")
+        self.assertEqual(self.messaging.submit_calls, [])
+        self.assertEqual(self.messaging.receipt_calls, [])
+
+        restored_client = FakeMessaging()
+        restored = MessageEffect(
+            MessageEffectStore(self.database),
+            MessagingTargets(
+                FakeStack(restored_client, authority=Authority("b" * 64)),
+                {"b" * 64: None},
+            ),
+            service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+        ).execute(self.context, "command-1", "notice-1")
+
+        self.assertEqual(restored.status, 200)
+        self.assertEqual(restored.body["recovery"], result.body["recovery"])
+        self.assertEqual(len(restored_client.submit_calls), 1)
+
+    def test_product_403_is_terminal_without_identity_fallback(self) -> None:
+        primary = FakeMessaging()
+        secondary = FakeMessaging()
+        primary.submit_error = FakeMessagingError(
+            "operation.not-authorized", status=403, outcome_unknown=False
+        )
+        stack = FakeStack(
+            primary,
+            {"secondary": secondary},
+            authority=Authority("a" * 64),
+            authorities={"secondary": Authority("b" * 64)},
+        )
+        effect = MessageEffect(
+            self.store,
+            MessagingTargets(
+                stack,
+                {"a" * 64: None, "b" * 64: "secondary"},
+            ),
+            service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+        )
+        self.seed("notice-1", message("person@example.invalid"))
+
+        refused = effect.execute(self.context, "command-1", "notice-1")
+        repeated = effect.execute(self.context, "command-1", "notice-1")
+
+        self.assertEqual(refused.status, 422)
+        self.assertEqual(
+            refused.body,
+            {"state": "refused", "code": "operation.not-authorized"},
+        )
+        self.assertEqual(repeated, refused)
+        self.assertEqual(len(primary.submit_calls), 1)
+        self.assertEqual(primary.receipt_calls, [])
+        self.assertEqual(secondary.submit_calls, [])
+        self.assertEqual(secondary.receipt_calls, [])
+        self.assertEqual(stack.selections, ["secondary"])
+
     def test_alias_can_change_for_same_authority_but_authority_cannot_change(
         self,
     ) -> None:
