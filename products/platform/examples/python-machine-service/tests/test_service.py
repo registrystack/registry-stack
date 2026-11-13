@@ -300,7 +300,45 @@ class RealConnectionFactoryTests(unittest.TestCase):
             admitted.json,
             {"state": "refused", "code": "notice-not-found"},
         )
-        self.assertEqual(len(self.AccessTokenVerifier.instances), 2)
+
+        with patch.dict(os.environ, settings, clear=True):
+            fastapi_app = create_fastapi_app_from_environment()
+
+        async def exercise_fastapi():
+            transport = httpx.ASGITransport(app=fastapi_app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as fastapi_client:
+                command = {"key": "command-1", "noticeId": "notice-1"}
+                denied_scope = await fastapi_client.post(
+                    "/v1/message-effects",
+                    json=command,
+                    headers={"Authorization": "Bearer wrong-scope"},
+                )
+                denied_claim = await fastapi_client.post(
+                    "/v1/message-effects",
+                    json=command,
+                    headers={"Authorization": "Bearer wrong-claim"},
+                )
+                allowed = await fastapi_client.post(
+                    "/v1/message-effects",
+                    json=command,
+                    headers={"Authorization": "Bearer admitted"},
+                )
+            return denied_scope, denied_claim, allowed
+
+        denied_scope, denied_claim, allowed = asyncio.run(exercise_fastapi())
+        self.assertEqual(denied_scope.status_code, 401)
+        self.assertEqual(denied_scope.json(), {"code": "authentication.refused"})
+        self.assertEqual(denied_claim.status_code, 401)
+        self.assertEqual(denied_claim.json(), {"code": "authentication.refused"})
+        self.assertEqual(allowed.status_code, 422)
+        self.assertEqual(
+            allowed.json(),
+            {"state": "refused", "code": "notice-not-found"},
+        )
+        self.assertEqual(len(self.AccessTokenVerifier.instances), 3)
         for verifier in self.AccessTokenVerifier.instances:
             self.assertEqual(
                 verifier.args,
