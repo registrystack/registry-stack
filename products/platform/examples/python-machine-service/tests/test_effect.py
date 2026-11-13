@@ -133,12 +133,13 @@ class FakeStack:
 def authority_fingerprint(
     *,
     subject: str = "notice-service",
+    client_id: str = "notice-client",
     profile: str = "service-sender",
     claims: dict[str, object] | None = None,
 ) -> str:
     identity = {
         "claims": claims or {"registry_actor_kind": "service"},
-        "clientId": "notice-client",
+        "clientId": client_id,
         "issuer": "https://issuer.example.invalid/",
         "product": "messaging",
         "profile": profile,
@@ -375,11 +376,17 @@ class MessageEffectTests(unittest.TestCase):
 
     def test_process_stop_after_acceptance_recovers_without_resubmission(self) -> None:
         payload = message("person@example.invalid")
+        original = json.loads(json.dumps(payload))
         self.seed("notice-1", payload)
         self.messaging.stop_after_accept = True
 
         with self.assertRaises(SyntheticProcessStop):
             self.effect.execute(self.context, "command-1", "notice-1")
+
+        payload["to"] = {"email": "changed@example.invalid"}
+        payload["template"] = {"id": "renewal", "version": "2"}
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            self.seed("notice-1", payload)
 
         recovered_client = FakeMessaging(self.messaging.effects)
         restarted = MessageEffect(
@@ -394,7 +401,7 @@ class MessageEffectTests(unittest.TestCase):
         self.assertEqual(result.body["state"], "accepted")
         self.assertEqual(recovered_client.submit_calls, [])
         self.assertEqual(len(recovered_client.receipt_calls), 1)
-        self.assertEqual(recovered_client.receipt_calls[0][1], payload)
+        self.assertEqual(recovered_client.receipt_calls[0][1], original)
 
     def test_unknown_reply_uses_receipt_recovery_and_never_submit_again(self) -> None:
         self.seed("notice-1", message("person@example.invalid"))
@@ -573,7 +580,7 @@ class MessageEffectTests(unittest.TestCase):
             )
         self.assertEqual(unavailable_client.submit_calls, [])
 
-    def test_subject_profile_or_claim_change_cannot_recover_old_unknown_command(
+    def test_subject_client_profile_or_claim_change_cannot_recover_old_unknown_command(
         self,
     ) -> None:
         original = authority_fingerprint()
@@ -599,6 +606,7 @@ class MessageEffectTests(unittest.TestCase):
 
         changes = {
             "subject": authority_fingerprint(subject="other-service"),
+            "client": authority_fingerprint(client_id="other-client"),
             "profile": authority_fingerprint(profile="other-sender"),
             "claims": authority_fingerprint(claims={"registry_actor_kind": "human"}),
         }
