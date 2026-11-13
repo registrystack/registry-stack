@@ -46,7 +46,7 @@ use crate::operational::{
     authorize_operational_read, AuthorizedOperationalRead, OperationalIdentity,
     OperationalReadFilter, OperationalReadProfileConfig,
 };
-use crate::service::{Caller, APPOINTMENT_READ_ACTION};
+use crate::service::{Caller, DetailAdmission, APPOINTMENT_READ_ACTION};
 use crate::source_busy::{
     authorize_busy_source, AuthorizedBusySource, BusyImportProfileConfig, BusySourceIdentity,
 };
@@ -107,27 +107,30 @@ impl SchedulingAuthenticator {
     /// source-managed appointment to the stored manager. For a self-booked
     /// appointment a current grant for that service and location reads it by
     /// id (accepted residual SCHEDULING-RES-01 in SECURITY-MODEL.md).
+    /// The returned admission records which of the two admitted the caller;
+    /// a caller holding the reads scope is admitted by it even with a grant.
     pub async fn authenticate_appointment_detail(
         &self,
         token: &str,
-    ) -> Result<Caller, AuthenticationError> {
+    ) -> Result<(Caller, DetailAdmission), AuthenticationError> {
         let (caller, scopes, _) = self.verified_caller(token).await?;
-        if scopes.iter().any(|scope| scope == &self.reads_scope)
-            || caller.grant.as_ref().is_some_and(|grant| {
-                grant
-                    .bounds()
-                    .scheduling_permissions()
-                    .is_some_and(|permissions| {
-                        permissions.iter().any(|permission| {
-                            permission
-                                .actions()
-                                .iter()
-                                .any(|action| action == APPOINTMENT_READ_ACTION)
-                        })
+        if scopes.iter().any(|scope| scope == &self.reads_scope) {
+            return Ok((caller, DetailAdmission::ReadsScope));
+        }
+        if caller.grant.as_ref().is_some_and(|grant| {
+            grant
+                .bounds()
+                .scheduling_permissions()
+                .is_some_and(|permissions| {
+                    permissions.iter().any(|permission| {
+                        permission
+                            .actions()
+                            .iter()
+                            .any(|action| action == APPOINTMENT_READ_ACTION)
                     })
-            })
-        {
-            return Ok(caller);
+                })
+        }) {
+            return Ok((caller, DetailAdmission::Grant));
         }
         Err(AuthenticationError::Profile)
     }
@@ -605,6 +608,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn appointment_detail_records_the_reads_scope_as_the_admission_when_both_are_held() {
+        let mut grant = grant_claims_value(AUDIENCE);
+        grant["registry_grant_bounds"]["permissions"][0]["actions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(APPOINTMENT_READ_ACTION));
+        let credential = token(merged("scheduling-read", grant));
+        let (_, admission) = authenticator()
+            .authenticate_appointment_detail(&credential)
+            .await
+            .expect("the reads scope admits");
+        assert_eq!(admission, DetailAdmission::ReadsScope);
+    }
+
+    #[tokio::test]
     async fn appointment_detail_accepts_its_explicit_grant_without_opening_other_reads() {
         let mut grant = grant_claims_value(AUDIENCE);
         grant["registry_grant_bounds"]["permissions"][0]["actions"]
@@ -613,10 +631,11 @@ mod tests {
             .push(json!(APPOINTMENT_READ_ACTION));
         let credential = token(merged("scheduling-explain", grant));
         let authenticator = authenticator();
-        authenticator
+        let (_, admission) = authenticator
             .authenticate_appointment_detail(&credential)
             .await
             .expect("the explicit detail action opens only the detail profile");
+        assert_eq!(admission, DetailAdmission::Grant);
         assert!(matches!(
             authenticator.authenticate_read(&credential).await,
             Err(AuthenticationError::Profile)
