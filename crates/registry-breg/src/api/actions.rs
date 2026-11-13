@@ -247,11 +247,7 @@ fn action_task_grant_binding(
     match (&permission.task_grant, claims.grant()) {
         (None, None) => Ok(None),
         (Some(source), Some(grant)) => {
-            if source.source_issuer != grant.source_issuer()
-                || permission.actor_kind != Some(crate::contract::ActorKindSource::Agent)
-                || Some(grant.client()) != claims.requester_client()
-                || Some(grant.principal()) != claims.principal()
-                || Some(grant.purpose()) != claims.purpose()
+            if permission.actor_kind != Some(crate::contract::ActorKindSource::Agent)
                 || !grant
                     .bounds()
                     .breg_permissions()
@@ -267,15 +263,9 @@ fn action_task_grant_binding(
             {
                 return Err(());
             }
-            let binding = crate::task_grant::TaskGrantBinding::from_verified(
-                grant,
-                claims.grant_subjects().clone(),
-            )
-            .map_err(|_| ())?;
-            if !binding.is_current() {
-                return Err(());
-            }
-            Ok(Some(binding))
+            bind_task_grant(&source.source_issuer, claims)
+                .map(Some)
+                .map_err(|_| ())
         }
         _ => Err(()),
     }

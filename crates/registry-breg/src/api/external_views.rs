@@ -633,17 +633,6 @@ fn projection_unavailable(projection: &str) -> Response {
     )
 }
 
-fn admission_profile(raw: Option<&str>) -> Option<String> {
-    raw.filter(|value| value.len() <= MAX_RAW_QUERY_BYTES)?
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find_map(|(name, value)| {
-            (percent_decode(name).ok().as_deref() == Some("accessProfile"))
-                .then(|| percent_decode(value).ok())
-                .flatten()
-        })
-}
-
 fn plan_query(
     mode: strict_query::ParsedReadQueryMode,
     grant: Option<&ExternalLinkPermissionSource>,
