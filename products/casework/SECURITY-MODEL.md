@@ -102,6 +102,12 @@ Deployment behavior is in the [README](README.md),
    copy of that key too. Restart every instance, because the list is read at
    startup. Revoke the key at the issuer and at every other relying party
    (CASEWORK-RES-09).
+10. Issue every person's tokens with the same principal claim. Casework trusts
+    one issuer and refuses a `casework.yaml` whose reviewer, initiator and
+    requester access profiles name different `principalClaim` values, because
+    one person would then appear as two principals and separation-of-duties
+    and one-seat checks would compare the wrong identities (CASEWORK-SEC-16).
+    Producer profiles, which are services, share one claim among themselves.
 
 ## 3. Accepted residuals
 

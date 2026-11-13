@@ -4016,24 +4016,24 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
     .unwrap();
     assert_eq!(borrowed_issuer(&state).unwrap(), Some(owner_root.clone()));
 
-    let administrator = "  administrator:\n    principalClaim: sub\n";
-    assert!(STANDALONE_YAML.contains(administrator));
+    // One claim for every person: with a custom claim everywhere, no profile is
+    // rewritten to the issuer owner's subject and each keeps its authored identity.
+    assert!(STANDALONE_YAML.contains("    principalClaim: sub\n"));
     fs::write(
         project.join("casework.yaml"),
-        STANDALONE_YAML.replacen(
-            administrator,
-            "  administrator:\n    principalClaim: custom_principal\n",
-            1,
+        STANDALONE_YAML.replace(
+            "    principalClaim: sub\n",
+            "    principalClaim: custom_principal\n",
         ),
     )
     .unwrap();
-    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let custom_policy = crate::project::load_and_check_policy(&project).unwrap();
     state.clients = vec![
         ReportedClient {
             id: "staff".to_owned(),
             profile: "staff".to_owned(),
             role: CaseworkActsAs::Staff,
-            principal: config::principal("staff"),
+            principal: "custom-staff".to_owned(),
         },
         ReportedClient {
             id: "administrator".to_owned(),
@@ -4047,21 +4047,32 @@ fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
         &serde_json::to_vec(&json!({"clients":[{"id":"staff"},{"id":"administrator"}]})).unwrap(),
     )
     .unwrap();
+    assert!(
+        config::borrowed_subjects(&state, &custom_policy)
+            .unwrap()
+            .is_empty(),
+        "custom principal claims retain their authored identity"
+    );
+    verify_borrowed_subjects(&state, &project).unwrap();
+
+    fs::write(project.join("casework.yaml"), STANDALONE_YAML).unwrap();
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    state.clients = vec![ReportedClient {
+        id: "staff".to_owned(),
+        profile: "staff".to_owned(),
+        role: CaseworkActsAs::Staff,
+        principal: config::principal("staff"),
+    }];
     let subjects = config::borrowed_subjects(&state, &policy).unwrap();
     let expected =
         registry_thunderid_tooling::local::agent_id(owner["instanceId"].as_str().unwrap(), "staff");
     assert_eq!(subjects["staff"], expected);
-    assert!(
-        !subjects.contains_key("administrator"),
-        "custom principal claims retain their authored identity"
-    );
     assert!(
         verify_borrowed_subjects(&state, &project).is_err(),
         "the standalone issuer's subject is not accepted under the borrowed issuer"
     );
     state.clients[0].principal = expected;
     verify_borrowed_subjects(&state, &project).unwrap();
-    assert_eq!(state.clients[1].principal, "custom-administrator");
     let mut foreign_owner = state.clone();
     foreign_owner.issuer_owner = Some(uuid::Uuid::new_v4().to_string());
     assert!(config::borrowed_subjects(&foreign_owner, &policy).is_err());

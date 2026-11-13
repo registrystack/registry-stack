@@ -148,6 +148,13 @@ override. `humanIdentity` defaults to claim
 Principal selection belongs exclusively to each authored
 `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`. The removed runtime field
 `authentication.oidc.principalClaim` is refused with that replacement.
+Casework trusts one issuer, so every access profile a person uses (staff, supervisor,
+administrator, an initiator profile and any other requester profile) must name the same
+`principalClaim`; `casework.yaml` is refused with `casework.access-profile.mixed-principal-claims`
+otherwise. Profiles a trusted producer uses are services and share one claim among themselves,
+which may differ from the people's. A service requester profile must be named by a trusted
+producer's `profile` to be compared apart from people; no Casework route serves a service through
+any other requester profile.
 
 `revokedKeyIds` is an optional list of at most 128 distinct nonempty key identifiers.
 Casework refuses a token whose protected `kid` appears in the list even while the key

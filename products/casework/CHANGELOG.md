@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: Casework refuses a `casework.yaml` whose access profiles for people
+  (staff, supervisor, administrator, an initiator profile and any other requester
+  profile) name different `principalClaim` values, with
+  `casework.access-profile.mixed-principal-claims`. Profiles that a trusted
+  producer uses are compared only with each other. Use one claim for every
+  person's profile: change the `principalClaim` members to the same claim and issue
+  that claim in every person's token.
+
 - Let a review stage choose a subset of the policy's outcomes with
   `stages[].outcomes`. The runtime enforces the stage's choices, and
   `caseworkctl explain` lists them. A stage that omits the list offers every
