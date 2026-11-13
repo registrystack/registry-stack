@@ -1517,6 +1517,12 @@ def classify(
         or unified_client_changed
         or "release/scripts/smoke-registry-client-service.py" in changed_paths
         or "release/scripts/smoke-registry-client-extras.py" in changed_paths
+        # This target's installed-wheel cases are ignored by the ordinary
+        # Coordinator PostgreSQL job and run in client-bindings instead.
+        or (
+            "crates/registry-coordinator/tests/external_wait_postgres.rs"
+            in changed_paths
+        )
         or any(path.startswith((
             "products/platform/examples/python-composition/",
             "products/platform/examples/python-machine-service/",

@@ -1446,6 +1446,12 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(outputs["coordinator"])
         self.assertTrue(outputs["client_bindings"])
+        acceptance_test_outputs = classify(
+            self.workspace,
+            ("crates/registry-coordinator/tests/external_wait_postgres.rs",),
+        )
+        self.assertTrue(acceptance_test_outputs["coordinator"])
+        self.assertTrue(acceptance_test_outputs["client_bindings"])
         self.assertFalse(
             classify(
                 self.workspace,
