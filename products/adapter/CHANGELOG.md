@@ -45,8 +45,9 @@
   without it fails to load with a refusal that names the member. Migration:
   set the audience member to the authorization server's issuer identifier,
   exactly as its metadata publishes it. The direct BReg receiver identity
-  includes `clientAssertionAudience`, so a direct BReg item still pending
-  from an earlier version stops the pass as `adapter.job.breg-receiver-changed`
+  includes `clientAssertionAudience`, so a direct BReg item left pending by a
+  previous binary whose stored receiver identity did not include it stops the
+  pass as `adapter.job.breg-receiver-changed`
   before any BReg call, with the job position unchanged, and no configuration
   under this version releases it: run passes with the previous binary until
   `adapter-job status` lists no pending items, and take a database backup,

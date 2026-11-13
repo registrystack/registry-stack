@@ -280,8 +280,9 @@ recorded receiver or body identity, so the new binary stops it as
 recovery is to restore that backup, settle the item with the previous binary,
 and upgrade again.
 Drain a direct BReg job the same way, and take a backup, before upgrading from
-0.46.0 or earlier: the receiver identity now includes the client assertion
-audience, so an item left pending stops as `adapter.job.breg-receiver-changed`
+a binary whose stored receiver identity did not include the client assertion
+audience: this binary's receiver identity includes it, so an item left pending
+stops as `adapter.job.breg-receiver-changed`
 before any BReg call, and no configuration clears it. The new `init-store`
 moves the store to schema 104, which the previous binary refuses, so the
 recovery is the same: restore that backup, settle the item with the previous
@@ -309,7 +310,8 @@ the same way under `adapter.job.breg-body-changed` (the mapped operation
 differs), `adapter.job.breg-receiver-changed` (another BReg binding, base URL, token
 endpoint, caller, client assertion audience, TLS trust profile, access profile, Action or mode) and `adapter.job.breg-identity-unrecorded`
 (staged before schema 103); the recoveries are the same. The exception is an
-item left pending by 0.46.0 or earlier: its `adapter.job.breg-receiver-changed`
+item left pending by a previous binary whose stored receiver identity did not
+include the client assertion audience: its `adapter.job.breg-receiver-changed`
 stop is not cleared by restoring any configuration (see Upgrade and recover).
 Removing `destination.revisedReceiver` from a Coordinator job does not stop: a
 possibly admitted item then has no receiver and is held as
