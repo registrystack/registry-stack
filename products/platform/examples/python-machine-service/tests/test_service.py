@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import redirect_stderr
 import importlib
 from io import StringIO
@@ -8,9 +9,13 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import tomllib
 import types
 import unittest
 from unittest.mock import patch
+
+import httpx
 
 
 EXAMPLE = Path(__file__).resolve().parents[1]
@@ -23,7 +28,12 @@ sys.path.insert(0, str(EXAMPLE))
 sys.path.insert(0, str(TESTS))
 
 from effect import MessageEffectStore  # noqa: E402
-from service import create_app, create_app_from_environment  # noqa: E402
+from service import (  # noqa: E402
+    create_app,
+    create_app_from_environment,
+    create_fastapi_app,
+    create_fastapi_app_from_environment,
+)
 
 from test_effect import Authority, FakeMessaging, FakeMessagingError, message  # noqa: E402
 
@@ -39,7 +49,10 @@ def load_client_module(name: str):
 
 
 machine = load_client_module("machine")
+fastapi_adapter = load_client_module("fastapi_adapter")
 flask_adapter = load_client_module("flask_adapter")
+web = load_client_module("web")
+workload = load_client_module("workload")
 
 
 class Stack:
@@ -87,6 +100,30 @@ class Stack:
         if product != "messaging":
             raise AssertionError("unexpected product")
         return self.primary_authority
+
+
+class PackagingTests(unittest.TestCase):
+    def test_framework_servers_are_separate_extras_and_dev_installs_both(self) -> None:
+        with (EXAMPLE / "pyproject.toml").open("rb") as source:
+            project = tomllib.load(source)
+
+        metadata = project["project"]
+        self.assertEqual(metadata.get("dependencies", []), [])
+        extras = metadata["optional-dependencies"]
+        self.assertEqual(set(extras), {"fastapi", "flask"})
+        self.assertEqual(
+            set(extras["flask"]),
+            {"flask==3.1.2", "gunicorn>=23,<24"},
+        )
+        self.assertEqual(
+            set(extras["fastapi"]),
+            {"fastapi>=0.115,<1", "uvicorn>=0.34,<1"},
+        )
+        dev = set(project["dependency-groups"]["dev"])
+        self.assertTrue(set(extras["flask"]).issubset(dev))
+        self.assertTrue(set(extras["fastapi"]).issubset(dev))
+        self.assertIn("httpx>=0.28,<1", dev)
+        self.assertIn("ruff==0.14.3", dev)
 
 
 class MachineServiceTests(unittest.TestCase):
@@ -383,6 +420,287 @@ class MachineServiceTests(unittest.TestCase):
         self.assertEqual(recovered.status_code, 200)
         self.assertEqual(recovered.json["state"], "accepted")
         self.assertEqual(len(self.stack.primary.submit_calls), 1)
+
+
+class FastAPIMachineServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.database = Path(self.temporary.name) / "effects.sqlite3"
+        self.stack = Stack()
+        self.connect_calls = 0
+
+        registry_client = types.ModuleType("registry_client")
+
+        def connect():
+            self.connect_calls += 1
+            return self.stack
+
+        registry_client.connect = connect
+        registry_client.fastapi_adapter = fastapi_adapter
+        registry_client.web = web
+        self.prior_registry_client = sys.modules.get("registry_client")
+        sys.modules["registry_client"] = registry_client
+
+        self.audit = []
+        self.app = create_fastapi_app(
+            database_path=self.database,
+            service_namespace="urn:example:service:renewal-notices",
+            audit_key=b"A" * 32,
+            audit_sink=self.audit.append,
+            targets={
+                "a" * 64: None,
+                "b" * 64: "secondary",
+            },
+        )
+        self.store: MessageEffectStore = self.app.state.registry_message_effect_store
+        self.context = machine.MachineContext(
+            "caller-a",
+            "coordinator-client",
+            "coordinator-invoker",
+            "https://issuer.example.invalid/",
+            "urn:registry:python:test",
+        )
+
+    def tearDown(self) -> None:
+        if self.prior_registry_client is None:
+            sys.modules.pop("registry_client", None)
+        else:
+            sys.modules["registry_client"] = self.prior_registry_client
+        self.temporary.cleanup()
+
+    def seed(self, notice_id, payload, authority="a" * 64):
+        self.store.put_notice(
+            self.context,
+            notice_id,
+            authority,
+            payload,
+            service_namespace="urn:example:service:renewal-notices",
+        )
+
+    async def request(self, method, path, **kwargs):
+        transport = httpx.ASGITransport(app=self.app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            return await client.request(method, path, **kwargs)
+
+    def post(self, body, *, bearer="caller-a"):
+        return asyncio.run(
+            self.request(
+                "POST",
+                "/v1/message-effects",
+                json=body,
+                headers={"Authorization": f"Bearer {bearer}"},
+            )
+        )
+
+    def test_factory_uses_connect_and_sync_handler_for_native_effect(self) -> None:
+        self.seed("notice-1", message("person@example.invalid"))
+        effect_thread = []
+        request_deadline = []
+        running_loop = []
+        original_submit = self.stack.primary.submit
+
+        def observe_submit(key, payload):
+            effect_thread.append(threading.get_ident())
+            request_deadline.append(workload._deadline.get())
+            workload._require_sync()
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop.append(False)
+            else:
+                running_loop.append(True)
+            return original_submit(key, payload)
+
+        self.stack.primary.submit = observe_submit
+
+        async def exercise():
+            loop_thread = threading.get_ident()
+            response = await self.request(
+                "POST",
+                "/v1/message-effects",
+                json={"key": "command-1", "noticeId": "notice-1"},
+                headers={"Authorization": "Bearer caller-a"},
+            )
+            return response, loop_thread
+
+        response, loop_thread = asyncio.run(exercise())
+
+        self.assertEqual(self.connect_calls, 1)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["state"], "accepted")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(running_loop, [False])
+        self.assertIsInstance(request_deadline[0], float)
+        self.assertNotEqual(effect_thread, [loop_thread])
+        self.assertEqual(
+            self.stack.admission_calls[-1],
+            {"authorization": ["Bearer caller-a"]},
+        )
+
+    def test_missing_or_invalid_bearer_is_refused_before_effect(self) -> None:
+        self.seed("notice-1", message("person@example.invalid"))
+        command = {"key": "command-1", "noticeId": "notice-1"}
+
+        missing = asyncio.run(self.request("POST", "/v1/message-effects", json=command))
+        cookie = asyncio.run(
+            self.request(
+                "POST",
+                "/v1/message-effects",
+                json=command,
+                headers={"Cookie": "session=canary"},
+            )
+        )
+        invalid = asyncio.run(
+            self.request(
+                "POST",
+                "/v1/message-effects",
+                json=command,
+                headers={"Authorization": "Bearer invalid-canary"},
+            )
+        )
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(cookie.status_code, 401)
+        self.assertEqual(invalid.status_code, 401)
+        self.assertEqual(
+            invalid.json(),
+            {"code": "authentication.refused"},
+        )
+        self.assertEqual(invalid.headers["Cache-Control"], "no-store")
+        self.assertEqual(self.stack.primary.submit_calls, [])
+
+    def test_public_liveness_exception_is_explicit(self) -> None:
+        response = asyncio.run(self.request("GET", "/healthz"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(self.stack.admission_calls, [])
+
+    def test_duplicate_oversized_or_lookalike_command_is_refused(self) -> None:
+        self.seed("notice-1", message("protected@example.invalid"))
+        headers = {
+            "Authorization": "Bearer caller-a",
+            "Content-Type": "application/json",
+        }
+        duplicate = asyncio.run(
+            self.request(
+                "POST",
+                "/v1/message-effects",
+                content=b'{"key":"first","key":"second","noticeId":"notice-1"}',
+                headers=headers,
+            )
+        )
+        valid = b'{"key":"command-1","noticeId":"notice-1"}'
+        duplicate_length = asyncio.run(
+            self.request(
+                "POST",
+                "/v1/message-effects",
+                content=valid,
+                headers=[
+                    ("Authorization", "Bearer caller-a"),
+                    ("Content-Type", "application/json"),
+                    ("Content-Length", str(len(valid))),
+                    ("Content-Length", str(len(valid))),
+                ],
+            )
+        )
+        oversized = asyncio.run(
+            self.request(
+                "POST",
+                "/v1/message-effects",
+                content=json.dumps(
+                    {
+                        "key": "command-1",
+                        "noticeId": "notice-1",
+                        "padding": "x" * 5000,
+                    }
+                ),
+                headers=headers,
+            )
+        )
+        lookalike = self.post(
+            {
+                "key": "command-1",
+                "noticeId": "notice-1",
+                "token": "secret-canary",
+            }
+        )
+
+        self.assertEqual(duplicate.status_code, 422)
+        self.assertEqual(duplicate_length.status_code, 422)
+        self.assertEqual(oversized.status_code, 422)
+        self.assertEqual(lookalike.status_code, 422)
+        self.assertEqual(self.stack.primary.submit_calls, [])
+
+    def test_streamed_body_stops_when_declared_length_is_exceeded(self) -> None:
+        self.seed("notice-1", message("protected@example.invalid"))
+        declared = b'{"key":"command-1","noticeId":"notice-1"}'
+        chunks_requested = []
+
+        async def body():
+            chunks_requested.append(1)
+            yield declared
+            chunks_requested.append(2)
+            yield b"x"
+            raise AssertionError("bounded reader requested another body chunk")
+
+        response = asyncio.run(
+            self.request(
+                "POST",
+                "/v1/message-effects",
+                content=body(),
+                headers={
+                    "Authorization": "Bearer caller-a",
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(declared)),
+                },
+            )
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(chunks_requested, [1, 2])
+        self.assertEqual(self.stack.primary.submit_calls, [])
+
+    def test_response_contract_preserves_refusal_and_uncertainty(self) -> None:
+        self.seed("refused", message("one@example.invalid"))
+        self.stack.primary.submit_error = FakeMessagingError(
+            "template.not-found", status=422, outcome_unknown=False
+        )
+        refused = self.post({"key": "command-1", "noticeId": "refused"})
+
+        self.seed("unknown", message("two@example.invalid"))
+        self.stack.primary.submit_error = FakeMessagingError(
+            "service.unavailable", status=503, outcome_unknown=True
+        )
+        uncertain = self.post({"key": "command-2", "noticeId": "unknown"})
+
+        self.assertEqual(refused.status_code, 422)
+        self.assertEqual(
+            refused.json(),
+            {"state": "refused", "code": "template.not-found"},
+        )
+        self.assertEqual(uncertain.status_code, 202)
+        self.assertEqual(uncertain.json()["state"], "uncertain")
+        self.assertIn("recovery", uncertain.json())
+
+    def test_environment_factory_constructs_fastapi_worker(self) -> None:
+        settings = {
+            "MESSAGE_EFFECT_DATABASE": str(self.database),
+            "MESSAGE_EFFECT_SERVICE_NAMESPACE": "urn:example:service:renewal-notices",
+            "MESSAGE_EFFECT_TARGETS": json.dumps({"a" * 64: None}),
+            "MESSAGE_EFFECT_AUDIT_KEY_HEX": "a" * 64,
+        }
+
+        with patch.dict(os.environ, settings, clear=True):
+            app = create_fastapi_app_from_environment()
+
+        self.assertIsInstance(
+            app.state.registry_message_effect_store, MessageEffectStore
+        )
 
 
 if __name__ == "__main__":

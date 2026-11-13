@@ -1,6 +1,6 @@
 # Keyed Python machine-service effect
 
-This reference shows a Flask machine endpoint performing one keyed Registry Messaging effect through the `registry-stack-client` wheel.
+This reference shows Flask and FastAPI machine endpoints performing one keyed Registry Messaging effect through the `registry-stack-client` wheel.
 It separates the verified Coordinator caller from the service's Messaging workload authority, keeps recipients and templates in protected application state, and recovers an uncertain submission without sending it again.
 It targets the candidate Python service APIs in this checkout.
 It is not a published capability until the assembled wheel and release evidence say so.
@@ -12,7 +12,7 @@ The endpoint accepts only this caller command:
 ```
 
 It does not accept a bearer for Messaging, recipient, template, binding, URL, subject, scope, or workload profile.
-The Flask adapter verifies the service caller and supplies an immutable `MachineContext`.
+Each framework adapter verifies the service caller and supplies an immutable `MachineContext`.
 `registry_client.connect()` selects the default or declared named Messaging binding and supplies its workload credential internally.
 
 ## Effect and recovery contract
@@ -44,25 +44,28 @@ The response is deliberately small:
 | `422` | `refused` | Input or a typed Messaging problem established that this command caused no effect. |
 | `429` | `not-processed` | Local submission capacity was unavailable before this command started a native effect. |
 
-An unusable response after Messaging accepted the command remains recoverable because the receipt is committed before Flask encodes the response.
+An unusable response after Messaging accepted the command remains recoverable because the receipt is committed before either framework encodes the response.
 The Coordinator `external.command/v1` interpreter should declare only the `200 accepted`, `422 refused`, and `429 not-processed` shapes.
 Every other status or shape remains uncertain.
 
-`MessageEffect` emits one structured application audit event for each returned command result and changed-command conflict. Its fields are the operation, a deployment-keyed HMAC caller reference, the configured workload-authority fingerprint, the recovery reference, and the outcome. Recipients, templates, request bodies, credentials, and exception messages are absent. `create_app` requires an injected audit sink; the environment factory writes each bounded JSON event to stderr, which the deployment must capture. Keep the audit key stable for cross-command correlation; rotating it changes only the audit reference, not command recovery. This example does not provide durable, append-only audit storage. Messaging's own audit remains the product record of native acceptance and delivery.
+`MessageEffect` emits one structured application audit event for each returned command result and changed-command conflict. Its fields are the operation, a deployment-keyed HMAC caller reference, the configured workload-authority fingerprint, the recovery reference, and the outcome. Recipients, templates, request bodies, credentials, and exception messages are absent. Both application factories require an injected audit sink; the environment factories write each bounded JSON event to stderr, which the deployment must capture. Keep the audit key stable for cross-command correlation; rotating it changes only the audit reference, not command recovery. This example does not provide durable, append-only audit storage. Messaging's own audit remains the product record of native acceptance and delivery.
 
 ## Configure the service
 
 Use Python 3.11 or later and the assembled `registry-stack-client` wheel from the same Registry Stack source or release as the services.
 The source facade directory is not a substitute for that wheel.
 
-Install Flask from this project's lock, then supply the matching wheel explicitly:
+Install the Flask server from this project's lock, then supply the matching wheel explicitly:
 
 ```sh
-uv sync --locked
+uv sync --locked --no-dev --extra flask
 sdk='registry-stack-client==<matching-release-version>'
 # Prepared source candidates may use an absolute wheel path instead.
-uv run --locked --with "$sdk" python service.py
+uv run --locked --no-dev --extra flask --with "$sdk" python service.py
 ```
+
+That last command starts the loopback Flask development runner. For FastAPI,
+use the worker factory in [Run after the server forks](#run-after-the-server-forks).
 
 Set these variables before starting the process:
 
@@ -87,12 +90,71 @@ The non-secret fingerprint covers the product and the connection's declared issu
 It deliberately excludes the binding alias, endpoint URL, token endpoint, and client-key reference.
 Renaming an alias, moving an endpoint, or rotating a key while retaining the same authority therefore preserves receipt recovery.
 Changing any covered declaration changes the fingerprint and makes a stale target mapping fail application construction, before any effect is attempted under another declared identity.
-The connection does not inspect bearer bytes, so this proves continuity of the closed operator declaration, not that an issuer emitted matching claims.
-A live issuer and Messaging recovery check remains required before claiming effective issuer/subject continuity under L2-04.
+The connection does not inspect bearer bytes, so this proves continuity of the
+closed operator declaration, not that an issuer emitted matching claims.
+A live issuer and Messaging recovery check remains required before claiming
+continuity of the effective issuer and subject.
+
+## Durable jobs use a separate recovery boundary
+
+The [Coordinator external-job example](../../../coordinator/examples/external-job/README.md)
+admits an application-owned job and its stable receipt in one PostgreSQL
+transaction. Coordinator repeats only the frozen admission command after an
+uncertain response, then observes the saved job ID through `external.get/v1`
+within a bounded wait. Admission means the job exists; an observation timeout
+does not mean it failed or was cancelled. Use that pattern for work that should
+outlive one HTTP request. This Messaging example demonstrates recovery of one
+immediate keyed product effect.
+
+## Run after the server forks
 
 Construct the application inside each server worker after fork.
-The module imports no native client at import time, and `create_app_from_environment()` calls `connect()` during application construction.
+The module imports no native client at import time. Both environment factories
+call `connect()` during application construction.
 The built-in `app.run` path is a loopback development runner, not the production server recipe.
+
+The `flask` extra includes Gunicorn. Use the application factory without
+Gunicorn's preload mode:
+
+```sh
+uv run --locked --no-dev --extra flask --with "$sdk" gunicorn --bind 127.0.0.1:9011 --workers 2 \
+  'service:create_app_from_environment()'
+```
+
+The separate `fastapi` extra includes Uvicorn. Install it and use factory mode:
+
+```sh
+uv sync --locked --no-dev --extra fastapi
+uv run --locked --no-dev --extra fastapi --with "$sdk" uvicorn --factory \
+  service:create_fastapi_app_from_environment \
+  --host 127.0.0.1 --port 9011
+```
+
+Keep the listener on a protected network or behind the deployment's TLS edge.
+Do not add Gunicorn's `--preload` option: constructing the application in the
+master would call `connect()` before worker fork.
+Worker replacement constructs a new connection and native clients inside the
+replacement worker.
+
+## Request budgets and blocking calls
+
+Both framework factories install a two-second request budget by default.
+The workload wrapper checks this budget before each Registry Stack native call
+and refuses to start another call after the budget ends.
+The budget does not cancel a native call that already started, stop application
+database work or arbitrary network calls, or guarantee that the handler returns
+within two seconds.
+A native call may therefore finish after the budget.
+If the response to a Messaging submission is lost, preserve the stored `unknown`
+state and recover the original receipt with the same key and request.
+Do not submit a replacement command.
+
+Registry Stack native calls are synchronous.
+The Flask and FastAPI effect routes therefore use synchronous handlers.
+In another FastAPI route, use a synchronous `def` handler or explicitly call the
+native operation through `asyncio.to_thread`; a direct native call on the
+event-loop thread raises an error instead of blocking silently.
+The FastAPI adapter already offloads caller admission.
 
 ## Populate protected notice state
 
@@ -107,7 +169,7 @@ A multi-host deployment should implement the same transitions in its application
 
 ## Verify
 
-Run the pure-Python recovery and Flask boundary tests:
+Run the pure-Python recovery and both framework boundary tests:
 
 ```sh
 uv run --locked python -W error::ResourceWarning -m unittest discover -s tests -p 'test_*.py' -v
@@ -115,7 +177,7 @@ ruff format --check .
 ruff check .
 ```
 
-The tests cover exact protected-request forwarding, bounded duplicate-free JSON input, two configured bindings, caller-separated keys, changed-command conflicts, concurrent duplicates, native declared refusal, unknown outcome, process stop after acceptance, restart recovery, response-encoding failure, authority rename versus replacement, expired receipt behavior, machine admission, the pre-effect-only `429` rule, and minimized application audit correlation.
+The tests cover exact protected-request forwarding, bounded duplicate-free JSON input, oversized streamed FastAPI bodies, two configured bindings, caller-separated keys, changed-command conflicts, concurrent duplicates, native declared refusal, unknown outcome, process stop after acceptance, restart recovery, response-encoding failure, authority rename versus replacement, expired receipt behavior, machine admission, the pre-effect-only `429` rule, and minimized application audit correlation.
 
 They use protocol doubles and do not establish a real issuer, Messaging, Coordinator, built-wheel, Linux, or multi-host result.
 Complete acceptance still needs the matching assembled wheel, a real machine token, two real workload bindings, Messaging product denials and receipts, and Coordinator's actual `external.command/v1` interpretation and same-command recovery path.

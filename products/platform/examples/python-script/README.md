@@ -60,6 +60,31 @@ Passing this command against a live runner demonstrates the runtime behavior.
 The source test below proves only that the same connection is retained and the
 second protected call is made; it cannot prove that a token file rotated.
 
+## Recover after local expiry
+
+Runner rotation keeps a live run usable, but it never extends the run's TTL.
+When the run expires or is stopped, its connection and token-state files are
+removed.
+Do not retry with the old `Connection`, copy its generated files, or lengthen a
+token lifetime.
+Start a new run with the commands in
+[Start the prepared project](#start-the-prepared-project), export the new
+`connection_file`, and rerun the script.
+
+If the supervisor was lost before cleanup completed, inspect the recorded run
+and recover only that run against the PostgreSQL cluster used to start it:
+
+```sh
+rstack dev status "$RUN_ID" --json
+rstack dev stop "$RUN_ID" --recover
+```
+
+Use plain `rstack dev stop "$RUN_ID"` while the supervisor is still running.
+Recovery refuses a different PostgreSQL cluster or maintenance database and
+reports any resources that still need attention.
+After recovery reports the run stopped, start a new run rather than reusing the
+expired connection.
+
 ## Verify the source example
 
 ```sh

@@ -84,7 +84,7 @@ contract exported by BReg. Its synthetic reviewer uses the
 `licensing-auditor` client with matched BReg `auditor` and Casework `reviewer`
 grants. The local picker and native product journey have been exercised with
 synthetic credentials; real issuer tokens and browser renewal still require
-separate acceptance before treating L3 or L4 as complete.
+separate acceptance before treating holder or staff portal support as complete.
 
 ## Secrets and database
 
@@ -102,6 +102,44 @@ PORTAL_SESSION_KEY_CURRENT
 Use a dedicated PostgreSQL database and least-privilege role for portal session
 state. Do not share the product databases. Supply secrets with the deployment
 platform or `op run`; do not commit an environment file.
+
+## Session and request lifecycle
+
+`sessionSeconds` is an absolute portal-session lifetime measured from the final
+successful product-grant callback.
+Refreshing a product access token does not extend this lifetime.
+`pendingSeconds` limits each pending authorization step; an expired callback is
+refused and creates no session.
+The example sets both services to a 900-second session and each pending step to
+300 seconds.
+
+Before a protected route runs, the portal refreshes any product grant that has
+30 seconds or less remaining.
+The refresh must preserve the configured issuer, client, subject, principal,
+persona, resource, profile, scopes and required claims.
+If refresh fails, changes identity or authority, or finishes after the absolute
+session expiry, the server deletes that session and the adapter returns
+`401 authentication.reauthentication-required`.
+It never converts expired person authority into a workload grant or
+automatically replays a mutating handler.
+
+Logout and account switch delete local session state before attempting issuer
+logout.
+The browser cookie is cleared even if the issuer does not provide a usable
+end-session response.
+PostgreSQL keeps valid encrypted sessions across worker replacement and server
+restart; a memory session store would intentionally lose them on restart.
+
+`requestSeconds` bounds the start of Registry Stack native work during one
+request.
+It does not cancel an already-started product call, application database work or
+the Python handler.
+The FastAPI routes in this example use synchronous `def` handlers, which the
+framework offloads from its event-loop thread.
+A direct native call from an asynchronous event-loop handler is refused;
+explicitly use `asyncio.to_thread` when an asynchronous handler must make one.
+If a mutating request loses its response, retain the original idempotency key
+and inputs and reconcile the product result before attempting more work.
 
 ## Install and start
 
@@ -225,4 +263,4 @@ dedicated PostgreSQL fixture, real products and a browser. Run one holder throug
 both frameworks, one staff service, two people with row/history denials, access
 token expiry and renewal, logout, account replacement, restart, two-worker
 refresh, encryption rotation, source reads and the full Casework staff journey.
-Do not describe the source test as real sign-in or L3/L4 completion.
+Do not describe the source test as real holder or staff sign-in proof.

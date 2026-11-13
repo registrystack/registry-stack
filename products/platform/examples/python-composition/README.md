@@ -32,10 +32,10 @@ application calls `connect()` and uses the default `stack.breg` and
 `stack.messaging` bindings; it does not construct either client or handle their
 bearer tokens.
 
-Casework deliberately remains on its existing path in this L1 migration. Its
-URL and token provider remain in the application config, and every Casework call
-still supplies that provider's bearer. For this remaining provider, a
-`privateKeyJwt` object uses the released canonical helper's `token_endpoint`,
+Casework deliberately remains on its existing explicit token-provider path in
+this example. Its URL and token provider remain in the application config, and
+every Casework call still supplies that provider's bearer. A `privateKeyJwt`
+object uses the released canonical helper's `token_endpoint`,
 `client_id`, `client_key`, `resource`, and `scopes` settings instead of a
 `headerFile`. Its optional `audience` identifies the OAuth token endpoint as the
 client assertion's recipient. It is distinct from `resource`, which requests
