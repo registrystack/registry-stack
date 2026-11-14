@@ -23,6 +23,17 @@ use super::{
     PostgresStore, StoreError, MIGRATION_LOCK_KEY, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
 };
 
+/// Supported SQL in application order. Keep the version ledger and dispatcher
+/// aligned: adding a known version without its implementation must not compile.
+const SUPPORTED_MIGRATIONS: [(i64, &str); SCHEMA_VERSIONS.len()] = [(200, SCHEDULING_MIGRATION)];
+const _: () = {
+    let mut index = 0;
+    while index < SCHEMA_VERSIONS.len() {
+        assert!(SUPPORTED_MIGRATIONS[index].0 == SCHEMA_VERSIONS[index]);
+        index += 1;
+    }
+};
+
 /// Said wherever the effective role mode is `single`.
 pub use registry_platform_activation::{Activation, RoleMode, SINGLE_ROLE_STATEMENT};
 
@@ -111,7 +122,18 @@ impl SchemaState {
     /// baseline was left by an earlier pre-1.0 release, a newer one belongs to a later
     /// release, and an unknown one in between is a damaged ledger.
     pub fn check(&self) -> Result<(), StoreError> {
-        self.check_against(&SCHEMA_VERSIONS)
+        self.check_against(&SCHEMA_VERSIONS)?;
+        // Validate the complete pending plan before any migration is dispatched.
+        // A version is applied at most once, in the supported ledger order.
+        if self.pending.windows(2).any(|pair| pair[0] >= pair[1])
+            || self
+                .pending
+                .iter()
+                .any(|version| !SCHEMA_VERSIONS.contains(version) || self.applied.contains(version))
+        {
+            return Err(StoreError::Corrupt);
+        }
+        Ok(())
     }
 
     fn check_against(&self, known: &[i64]) -> Result<(), StoreError> {
@@ -1088,11 +1110,11 @@ pub(super) async fn apply_migrations_in(
         .await?;
     let state = schema_state_in(&**transaction).await?;
     state.check()?;
-    for version in &state.pending {
-        if *version != SCHEMA_VERSIONS[0] {
-            return Err(StoreError::Corrupt);
-        }
-        transaction.batch_execute(SCHEDULING_MIGRATION).await?;
+    for (version, sql) in SUPPORTED_MIGRATIONS
+        .iter()
+        .filter(|(version, _)| state.pending.contains(version))
+    {
+        transaction.batch_execute(sql).await?;
         let schema = current_schema_in(&**transaction).await?;
         registry_platform_hooks::delivery_schema::install(&**transaction, &schema).await?;
         transaction
@@ -1203,6 +1225,60 @@ mod tests {
             }
             .check()
             .expect("an empty or current 1.0 ledger is accepted");
+        }
+    }
+
+    #[test]
+    fn supported_pending_migrations_preserve_fresh_and_current_schema_states() {
+        for state in [
+            SchemaState::default(),
+            SchemaState {
+                applied: vec![],
+                pending: vec![200],
+            },
+            SchemaState {
+                applied: vec![200],
+                pending: vec![],
+            },
+        ] {
+            state
+                .check()
+                .expect("a fresh or current schema is supported");
+        }
+    }
+
+    #[test]
+    fn unsupported_or_repeated_pending_migrations_are_refused_before_apply() {
+        for state in [
+            SchemaState {
+                applied: vec![],
+                pending: vec![199],
+            },
+            SchemaState {
+                applied: vec![],
+                pending: vec![201],
+            },
+            SchemaState {
+                applied: vec![],
+                pending: vec![200, 201],
+            },
+            SchemaState {
+                applied: vec![],
+                pending: vec![201, 200],
+            },
+            SchemaState {
+                applied: vec![],
+                pending: vec![200, 200],
+            },
+            SchemaState {
+                applied: vec![200],
+                pending: vec![200],
+            },
+        ] {
+            assert!(
+                matches!(state.check(), Err(StoreError::Corrupt)),
+                "{state:?}"
+            );
         }
     }
 
