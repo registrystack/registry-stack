@@ -5622,7 +5622,7 @@
       "description": "Evidence OpenID4VP verifier runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-oid4vp/src/schema.rs",
-        "sha256": "7f111792435d2d9d6c18174e157b8ff05b3f19d733c2ea19f7327eaa99268eb4"
+        "sha256": "fc708ba2bd46becf9082fc979e77c970c47a96061f1ede3abf2fdd93346531d9"
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json",
