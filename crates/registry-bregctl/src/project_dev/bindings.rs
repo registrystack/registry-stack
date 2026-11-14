@@ -77,6 +77,45 @@ pub(super) struct BregReviewAuthority {
     /// Name of the test person, in `people`, whose Casework grant BReg uses to authenticate. That grant needs at least one scope.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub(super) identity: String,
+    /// Explicit exact source guards for binding this existing producer to the synthetic run issuer.
+    #[serde(
+        default,
+        rename = "runIssuerBinding",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(super) run_issuer_binding: Option<RunIssuerBinding>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RunIssuerBinding {
+    pub producer: RunProducer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiator: Option<RunInitiator>,
+}
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RunProducer {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub expected_issuer: String,
+    pub expected_profile: String,
+    pub expected_subject: String,
+}
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RunInitiator {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub expected_issuer: String,
+    pub trust: RunInitiatorTrust,
+}
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(super) enum RunInitiatorTrust {
+    #[serde(rename = "run-test-people")]
+    RunTestPeople,
 }
 
 /// A Casework context provider that the run connects to BReg.
@@ -96,6 +135,12 @@ pub(super) struct CaseworkContextProvider {
 }
 
 impl Bindings {
+    pub(super) fn binds_run_issuer(&self) -> bool {
+        self.breg_review_authority
+            .as_ref()
+            .is_some_and(|binding| binding.run_issuer_binding.is_some())
+    }
+
     pub(super) fn validate(&self, plan: &Plan) -> plan::SemanticResult<()> {
         if self.breg_review_authority.is_none() && self.casework_context_provider.is_none() {
             return Ok(());
@@ -928,6 +973,7 @@ mod tests {
                     id: "casework".to_owned(),
                     producer: "registry".to_owned(),
                     identity: "producer".to_owned(),
+                    run_issuer_binding: None,
                 }),
                 casework_context_provider: Some(CaseworkContextProvider {
                     id: "registry".to_owned(),
@@ -964,6 +1010,7 @@ mod tests {
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),
+            casework_source_digest: None,
             binaries: BTreeMap::new(),
         }
     }
@@ -1004,6 +1051,33 @@ mod tests {
             assert_eq!(config.pointer(pointer).unwrap(), CHECK_ORIGIN);
         }
         assert_eq!(value.issuer, "run");
+    }
+
+    #[test]
+    fn run_source_opt_in_is_closed() {
+        let mut value = plan();
+        value
+            .bindings
+            .breg_review_authority
+            .as_mut()
+            .unwrap()
+            .run_issuer_binding = Some(RunIssuerBinding {
+            producer: RunProducer {
+                expected_issuer: value.issuer.clone(),
+                expected_profile: "producer".to_owned(),
+                expected_subject: "review-producer".to_owned(),
+            },
+            initiator: None,
+        });
+
+        let json = serde_json::to_value(&value.bindings).unwrap();
+        let mut invalid = json.clone();
+        invalid["bregReviewAuthority"]["runIssuerBinding"]["initiator"] =
+            json!({"expectedIssuer":"https://example.test","trust":"selected-subjects"});
+        assert!(serde_json::from_value::<Bindings>(invalid).is_err());
+        let mut invalid = json;
+        invalid["bregReviewAuthority"]["runIssuerBinding"]["unknown"] = json!(true);
+        assert!(serde_json::from_value::<Bindings>(invalid).is_err());
     }
 
     #[test]
@@ -1190,7 +1264,22 @@ mod tests {
     fn allocated_run_issuer_endpoint_keeps_exact_assertion_audience_and_resource_checks() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let mut value = plan();
+        let expected_issuer = value.issuer.clone();
         value.issuer = format!("http://{}", listener.local_addr().unwrap());
+        value
+            .bindings
+            .breg_review_authority
+            .as_mut()
+            .unwrap()
+            .run_issuer_binding = Some(RunIssuerBinding {
+            producer: RunProducer {
+                expected_issuer,
+                expected_profile: "producer".to_owned(),
+                expected_subject: "review-producer".to_owned(),
+            },
+            initiator: None,
+        });
+        assert!(value.application.is_none() && value.paired_run_binding());
         exercise_endpoint(value);
     }
 

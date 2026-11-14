@@ -93,6 +93,10 @@
         "producer": {
           "$ref": "#/$defs/LocalId",
           "description": "Local identifier of the review producer."
+        },
+        "runIssuerBinding": {
+          "$ref": "#/$defs/RunIssuerBinding",
+          "description": "Explicit exact source guards for binding this existing producer to the synthetic run issuer."
         }
       },
       "required": [
@@ -497,6 +501,63 @@
       ],
       "type": "object"
     },
+    "RunInitiator": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedIssuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "trust": {
+          "$ref": "#/$defs/RunInitiatorTrust"
+        }
+      },
+      "required": [
+        "expectedIssuer",
+        "trust"
+      ],
+      "type": "object"
+    },
+    "RunInitiatorTrust": {
+      "enum": [
+        "run-test-people"
+      ],
+      "type": "string"
+    },
+    "RunIssuerBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "initiator": {
+          "$ref": "#/$defs/RunInitiator"
+        },
+        "producer": {
+          "$ref": "#/$defs/RunProducer"
+        }
+      },
+      "required": [
+        "producer"
+      ],
+      "type": "object"
+    },
+    "RunProducer": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedIssuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "expectedProfile": {
+          "type": "string"
+        },
+        "expectedSubject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expectedIssuer",
+        "expectedProfile",
+        "expectedSubject"
+      ],
+      "type": "object"
+    },
     "Step": {
       "additionalProperties": false,
       "description": "One HTTP request, what to expect back, and what to remember from the response.",
@@ -682,7 +743,7 @@
           "const": "run"
         }
       ],
-      "description": "HTTPS URL for an existing issuer, or `run` when a declared application uses this run's loopback browser issuer."
+      "description": "HTTPS logical issuer, or `run` for an application or an explicitly bound BReg and Casework pair."
     },
     "journey": {
       "$ref": "#/$defs/Journey",

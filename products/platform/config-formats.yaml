@@ -799,6 +799,12 @@ formats:
         whenOmitted: closed
       - pointer: /people/*/caseworkContext
         whenOmitted: closed
+      - pointer: /bindings/bregReviewAuthority/runIssuerBinding
+        whenOmitted: closed
+      - pointer: /bindings/bregReviewAuthority/runIssuerBinding/producer
+        whenOmitted: refused
+      - pointer: /bindings/bregReviewAuthority/runIssuerBinding/initiator
+        whenOmitted: closed
     restrictingMembers: [/issuer, /application/client, /application/callbackPath, /products/*/audience, /people/*/grants/breg/profile, /people/*/grants/casework/profile, /people/*/caseworkContext]
   - id: rstack/scenarios
     product: rstack
