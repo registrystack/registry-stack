@@ -15,12 +15,9 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use pkcs1::der::{asn1::UintRef, Encode as _};
 use pkcs8::{
-    der::{
-        asn1::{BitString, UintRef},
-        pem::LineEnding,
-        Any, Encode as _,
-    },
+    der::{asn1::BitString, pem::LineEnding, Any, Encode as _},
     spki::{AlgorithmIdentifierOwned, ObjectIdentifier, SubjectPublicKeyInfoOwned},
 };
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm, PrivateJwk};

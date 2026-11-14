@@ -806,7 +806,7 @@ fn selected_behavior(
         // compiled AST only to find source relations, never guess SQL behavior.
         let sql = std::str::from_utf8(&relation.sql_bytes)
             .map_err(|_| refusal("derived", "compiled SQL is not UTF-8"))?;
-        let parsed = pg_query::parse(sql)
+        let parsed = pg_query::parse(sql, 0)
             .map_err(|_| refusal("derived", "compiled SQL could not be read"))?;
         for (node, _, _, _) in parsed.protobuf.nodes() {
             if let pg_query::NodeRef::RangeVar(range) = node {

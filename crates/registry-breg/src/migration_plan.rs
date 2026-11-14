@@ -2525,7 +2525,7 @@ fn parse_one(sql: &str) -> Result<pg_query::ParseResult, ReviewedMigrationError>
     if sql.is_empty() || sql.len() > MAX_SQL_BYTES || sql.as_bytes().contains(&0) {
         return Err(ReviewedMigrationError::Sql);
     }
-    let parsed = pg_query::parse(sql).map_err(|_| ReviewedMigrationError::Sql)?;
+    let parsed = pg_query::parse(sql, 0).map_err(|_| ReviewedMigrationError::Sql)?;
     if parsed.protobuf.stmts.len() != 1 || !parsed.warnings.is_empty() {
         return Err(ReviewedMigrationError::Sql);
     }
@@ -2752,7 +2752,7 @@ fn validate_update_relation(
         || update.where_clause.is_none()
         || update.with_clause.is_some()
         || !update.from_clause.is_empty()
-        || !update.returning_list.is_empty()
+        || update.returning_clause.is_some()
     {
         return Err(ReviewedMigrationError::Sql);
     }

@@ -17,16 +17,16 @@ use super::verify::{
     single_attribute, verify_signed_data, DigestAlgorithm, SignerVerificationError,
 };
 use aws_lc_rs::rand::{SecureRandom as _, SystemRandom};
+use cms::cert::x509::attr::Attributes;
+use cms::cert::x509::ext::pkix::name::GeneralName;
+use cms::cert::x509::ext::pkix::ExtendedKeyUsage;
+use cms::cert::x509::Certificate;
 use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
 use der::asn1::{Int, OctetString, Uint};
 use der::{Any, Decode as _, Encode as _, Tag, Tagged as _};
 use thiserror::Error;
 use time::OffsetDateTime;
-use x509_cert::attr::Attributes;
-use x509_cert::ext::pkix::name::GeneralName;
-use x509_cert::ext::pkix::ExtendedKeyUsage;
-use x509_cert::Certificate;
 
 /// The largest timestamp response [`accept_timestamp_response`] reads. A
 /// token holds one TSTInfo and the authority's certificates; 64 KiB leaves

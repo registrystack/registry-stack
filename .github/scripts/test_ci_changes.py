@@ -232,6 +232,29 @@ class CiRetirementTest(unittest.TestCase):
         )
 
 
+class DependabotGroupingTest(unittest.TestCase):
+    def test_every_version_update_joins_one_multi_ecosystem_group(self) -> None:
+        configuration = yaml.safe_load(
+            Path(".github/dependabot.yml").read_text(encoding="utf-8")
+        )
+        groups = configuration["multi-ecosystem-groups"]
+        self.assertEqual(set(groups), {"registry-stack-dependencies"})
+        self.assertEqual(
+            groups["registry-stack-dependencies"]["schedule"]["interval"],
+            "weekly",
+        )
+        for update in configuration["updates"]:
+            with self.subTest(
+                ecosystem=update["package-ecosystem"],
+                paths=update.get("directories", update.get("directory")),
+            ):
+                self.assertEqual(
+                    update["multi-ecosystem-group"],
+                    "registry-stack-dependencies",
+                )
+                self.assertEqual(update["patterns"], ["*"])
+
+
 class PlatformRetirementTest(unittest.TestCase):
     def test_orphan_platform_crates_and_oid4vci_fuzz_surface_are_absent(self) -> None:
         retired_crates = (

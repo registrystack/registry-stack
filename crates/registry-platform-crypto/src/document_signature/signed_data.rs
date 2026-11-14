@@ -7,6 +7,10 @@ use super::certificate::{CertificateChain, CertificateError};
 use super::timestamp::{check_imprint, read_token, verify_token, TimestampError};
 use super::verify::{verify_signed_data, DigestAlgorithm, SignerVerificationError};
 use crate::{SigningAlgorithm, SigningError, SigningProvider};
+use cms::cert::x509::attr::{Attribute, Attributes};
+use cms::cert::x509::ext::pkix::name::GeneralName;
+use cms::cert::x509::spki::AlgorithmIdentifierOwned;
+use cms::cert::x509::Certificate;
 use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
 use cms::content_info::{CmsVersion, ContentInfo};
 use cms::signed_data::{
@@ -17,10 +21,6 @@ use der::{Any, Decode as _, Encode as _};
 use std::fmt;
 use thiserror::Error;
 use time::OffsetDateTime;
-use x509_cert::attr::{Attribute, Attributes};
-use x509_cert::ext::pkix::name::GeneralName;
-use x509_cert::spki::AlgorithmIdentifierOwned;
-use x509_cert::Certificate;
 
 /// A detached CMS signature, ready to embed in a PDF signature dictionary.
 #[derive(Clone, PartialEq, Eq)]

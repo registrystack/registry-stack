@@ -353,7 +353,7 @@ fn certificate_is_valid_at(der: &[u8], now: i64) -> Result<bool, EvidenceSigning
 
     let certificate =
         Certificate::from_der(der).map_err(|_| EvidenceSigningError::CertificateChain)?;
-    let validity = &certificate.tbs_certificate.validity;
+    let validity = certificate.tbs_certificate().validity();
     let seconds = |time: &x509_cert::time::Time| {
         i64::try_from(time.to_unix_duration().as_secs())
             .map_err(|_| EvidenceSigningError::CertificateChain)

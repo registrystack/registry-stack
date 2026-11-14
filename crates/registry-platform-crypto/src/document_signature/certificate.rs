@@ -6,6 +6,11 @@ use super::asn1::oid;
 use crate::{decode_fixed, decode_nonempty, PublicJwk, SigningAlgorithm};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use cms::cert::x509::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
+use cms::cert::x509::name::Name;
+use cms::cert::x509::spki::SubjectPublicKeyInfoOwned;
+use cms::cert::x509::time::Time as X509Time;
+use cms::cert::x509::Certificate;
 use der::asn1::ObjectIdentifier;
 use der::{Decode as _, Encode as _, Tag, Tagged as _};
 use sha2::{Digest as _, Sha256};
@@ -13,11 +18,6 @@ use std::collections::HashSet;
 use std::fmt;
 use thiserror::Error;
 use time::OffsetDateTime;
-use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
-use x509_cert::name::Name;
-use x509_cert::spki::SubjectPublicKeyInfoOwned;
-use x509_cert::time::Time as X509Time;
-use x509_cert::Certificate;
 
 /// SHA-256 over a certificate's DER encoding: the only certificate value this
 /// module prints, in errors, audit records and logs.
@@ -380,7 +380,7 @@ fn spki_matches_jwk(spki: &SubjectPublicKeyInfoOwned, jwk: &PublicJwk) -> KeyCom
                 return KeyComparison::Unsupported;
             };
             spki.algorithm.oid == oid::RSA_ENCRYPTION
-                && pkcs1::RsaPublicKey::from_der(certificate_key).is_ok_and(|key| {
+                && pkcs1::RsaPublicKeyRef::try_from(certificate_key).is_ok_and(|key| {
                     key.modulus.as_bytes() == strip_leading_zeros(&n)
                         && key.public_exponent.as_bytes() == strip_leading_zeros(&e)
                 })

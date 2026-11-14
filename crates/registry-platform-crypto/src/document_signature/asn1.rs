@@ -3,17 +3,17 @@
 //! provides: the RFC 3161 time-stamp protocol, the ESS signing-certificate
 //! attributes of RFC 2634 and RFC 5035, and the ECDSA-Sig-Value of RFC 5480.
 
+use cms::cert::x509::ext::pkix::certpolicy::PolicyInformation;
+use cms::cert::x509::ext::pkix::name::{GeneralName, GeneralNames};
+use cms::cert::x509::ext::Extensions;
+use cms::cert::x509::serial_number::SerialNumber;
+use cms::cert::x509::spki::AlgorithmIdentifierOwned;
 use cms::content_info::ContentInfo;
 use der::asn1::{BitString, Int, ObjectIdentifier, OctetString, Uint};
 use der::{
     DecodeValue, EncodeValue, ErrorKind, FixedTag, Header, Length, Reader, Sequence, Tag, Writer,
 };
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
-use x509_cert::ext::pkix::certpolicy::PolicyInformation;
-use x509_cert::ext::pkix::name::{GeneralName, GeneralNames};
-use x509_cert::ext::Extensions;
-use x509_cert::serial_number::SerialNumber;
-use x509_cert::spki::AlgorithmIdentifierOwned;
 
 /// Object identifiers, spelled out so each can be checked against its RFC.
 pub(super) mod oid {

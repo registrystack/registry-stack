@@ -1,8 +1,23 @@
 version: 2
+
+# Version updates from every maintained ecosystem land in one review and one
+# merge-queue run. Dependabot schedules security updates separately from this
+# weekly version-update group.
+multi-ecosystem-groups:
+  registry-stack-dependencies:
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:00"
+      timezone: Etc/UTC
+
 updates:
   # Rust workspace at the repository root.
   - package-ecosystem: cargo
     directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: weekly
       day: wednesday
@@ -70,6 +85,9 @@ updates:
   # covered by the root cargo entry above.
   - package-ecosystem: cargo
     directory: "/products/breg/wasm-handler-sdk"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: weekly
       day: wednesday
@@ -143,6 +161,9 @@ updates:
       - "/products/evidence/fuzz"
       - "/products/manifest/fuzz"
       - "/products/platform/fuzz"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: weekly
       day: wednesday
@@ -187,13 +208,16 @@ updates:
         update-types:
           - "version-update:semver-major"
 
-  # The npm and GitHub Actions entries run monthly; the cargo and docker
-  # entries stay weekly. A schedule governs version updates only: Dependabot
-  # security updates open when an alert is raised, whatever the interval.
+  # Entry schedules document the previous per-ecosystem cadence. The shared
+  # multi-ecosystem group runs version updates weekly. Security update
+  # scheduling remains separate from the group.
 
   # Docs site dependencies.
   - package-ecosystem: npm
     directory: "/docs/site"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: monthly
       time: "05:30"
@@ -236,6 +260,9 @@ updates:
       - "/crates/registry-coordinator-client-node"
       - "/crates/registry-render-client-node"
       - "/crates/registry-stack-client-node"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: monthly
       time: "05:45"
@@ -265,6 +292,9 @@ updates:
   # Architecture diagram site (LikeC4) dependencies.
   - package-ecosystem: npm
     directory: "/docs/architecture"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: monthly
       time: "06:15"
@@ -282,6 +312,9 @@ updates:
   # Pinned GitHub Actions used by the workflows.
   - package-ecosystem: github-actions
     directory: "/"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: monthly
       time: "07:00"
@@ -297,6 +330,9 @@ updates:
   - package-ecosystem: docker
     directories:
       - "/release/docker"
+    patterns:
+      - "*"
+    multi-ecosystem-group: registry-stack-dependencies
     schedule:
       interval: weekly
       day: wednesday
