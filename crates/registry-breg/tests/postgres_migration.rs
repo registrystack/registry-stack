@@ -8275,6 +8275,9 @@ fn blind_column(registry: &CompiledRegistry, field: &str) -> String {
         .clone()
 }
 
+/// One encrypted field as stored: its sealed envelope and its blind-index digest.
+type StoredSeal = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// Seal one seeded plaintext the way a write under the predecessor stored it.
 fn seed_seal(
     service: &FieldEncryptionService,
@@ -8282,7 +8285,7 @@ fn seed_seal(
     record_id: Uuid,
     normalization: &[NormalizationStep],
     plaintext: Option<&str>,
-) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+) -> StoredSeal {
     let Some(plaintext) = plaintext else {
         return (None, None);
     };
@@ -8514,9 +8517,7 @@ fn blind_index_reindex_source(
     })
 }
 
-async fn stored_envelopes_and_digests(
-    scenario: &ReindexScenario,
-) -> Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+async fn stored_envelopes_and_digests(scenario: &ReindexScenario) -> Vec<StoredSeal> {
     let entity = &scenario.candidate.entities()["asset"];
     let envelope = quote(&entity.fields["secret"].physical_name);
     let blind = quote(
@@ -9033,7 +9034,7 @@ async fn real_postgres_operator_preflight_scans_blind_index_reindex_steps() {
 async fn assert_refused_reindex_is_revertible(
     scenario: &ReindexScenario,
     step_ids: &[&str],
-    before: &[(Option<Vec<u8>>, Option<Vec<u8>>)],
+    before: &[StoredSeal],
 ) {
     assert_non_ready_target(
         &scenario.database,
