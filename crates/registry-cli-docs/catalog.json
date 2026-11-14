@@ -9461,6 +9461,87 @@
           "constraints": [],
           "subcommands": [
             {
+              "name": "run-source",
+              "invocation": "caseworkctl generate run-source",
+              "about": "Capture or bind an exact synthetic-run source closure before normal packaging",
+              "long_about": null,
+              "usage": "caseworkctl generate run-source [OPTIONS] --binding <BINDING> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Existing authored Casework project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--binding <BINDING>",
+                  "description": "Closed run binding request; subjects never appear in command arguments",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--issuer <ISSUER>",
+                  "description": "Actual allocated loopback run issuer; omit to capture original bytes",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expected-source-digest <EXPECTED_SOURCE_DIGEST>",
+                  "description": "Exact checked original source closure digest",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <OUTPUT>",
+                  "description": "New owner-only source directory; omit for offline inspection only",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
               "name": "identity-facts",
               "invocation": "caseworkctl generate identity-facts",
               "about": "Write the identity facts Casework expects of its token issuer: OIDC settings, task authority and exchange bindings",

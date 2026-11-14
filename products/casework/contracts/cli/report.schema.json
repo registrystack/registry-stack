@@ -1028,6 +1028,22 @@
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
+    "FileDigest": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "digest"
+      ],
+      "type": "object"
+    },
     "InboxPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -3199,6 +3215,179 @@
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "ok",
+        "status",
+        "apiVersion",
+        "kind",
+        "version",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "ok": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              },
+              {
+                "required": [
+                  "bindingDigest"
+                ]
+              },
+              {
+                "required": [
+                  "changedPointers"
+                ]
+              },
+              {
+                "required": [
+                  "databaseAccess"
+                ]
+              },
+              {
+                "required": [
+                  "files"
+                ]
+              },
+              {
+                "required": [
+                  "issuer"
+                ]
+              },
+              {
+                "required": [
+                  "networkAccess"
+                ]
+              },
+              {
+                "required": [
+                  "output"
+                ]
+              },
+              {
+                "required": [
+                  "sourceDigest"
+                ]
+              },
+              {
+                "required": [
+                  "sourceFiles"
+                ]
+              },
+              {
+                "required": [
+                  "transformedDigest"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "sourceDigest",
+              "transformedDigest",
+              "sourceFiles",
+              "bindingDigest",
+              "issuer",
+              "files",
+              "changedPointers",
+              "output",
+              "networkAccess",
+              "databaseAccess"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
+          "type": "string"
+        },
+        "bindingDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "changedPointers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "const": "generate-run-source",
+          "type": "string"
+        },
+        "databaseAccess": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/FileDigest"
+          },
+          "type": "array"
+        },
+        "issuer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "CaseworkReport",
+          "type": "string"
+        },
+        "networkAccess": {
+          "type": "boolean"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "sourceFiles": {
+          "items": {
+            "$ref": "#/$defs/FileDigest"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/ReportStatus"
+        },
+        "transformedDigest": {
+          "$ref": "#/$defs/Digest"
         },
         "version": {
           "type": "string"
