@@ -755,7 +755,9 @@ impl Builder<'_, '_> {
         // A tab the parser names may indent the line after its marker. Any
         // other error blames a tab only when it indents the error's own line
         // up to the error's column.
-        let parser_names_a_tab = info.contains("tab");
+        let parser_names_a_tab = info
+            .split(|character: char| !character.is_ascii_alphabetic())
+            .any(|word| matches!(word, "tab" | "tabs" | "tabulation"));
         let leading_tab = if parser_names_a_tab {
             [at.line, at.line + 1]
                 .into_iter()
