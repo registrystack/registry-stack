@@ -3152,7 +3152,7 @@ mod tests {
             }))
             .unwrap(),
             scenarios: Vec::new(),
-            scenario_revision: None,
+            scenario_digest: None,
             ttl_seconds: 300,
             schema_people: Vec::new(),
             breg_authority: Some(BregAuthority {

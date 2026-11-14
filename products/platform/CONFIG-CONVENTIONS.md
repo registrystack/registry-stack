@@ -138,6 +138,7 @@ prefix, and is unique across the stack.**
 | Prefix | Product token |
 |---|---|
 | `BReg` | `breg` |
+| `RStack` | `rstack` |
 | `Casework` | `casework` |
 | `Coordinator` | `coordinator` |
 | `Documents` | `documents` |

@@ -127,7 +127,7 @@ struct RunInput {
     #[serde(default)]
     scenarios: Vec<plan::Journey>,
     #[serde(default)]
-    scenario_revision: Option<String>,
+    scenario_digest: Option<String>,
     ttl_seconds: u64,
     schema_people: Vec<SchemaPerson>,
     breg_authority: Option<BregAuthority>,
@@ -725,7 +725,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         application_node,
         plan,
         scenarios: loaded.scenarios,
-        scenario_revision: loaded.scenario_revision,
+        scenario_digest: loaded.scenario_digest,
         ttl_seconds,
         schema_people,
         breg_authority: inspection.breg_authority,
@@ -956,7 +956,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         });
         if input.plan.scenario_file.is_some() {
             report["scenarios"] = json!(journey_reports);
-            report["scenario_revision"] = json!(input.scenario_revision);
+            report["scenarioDigest"] = json!(input.scenario_digest);
         } else {
             report["journey"] = json!(journey_reports.into_iter().next().expect("inline journey"));
         }

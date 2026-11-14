@@ -131,7 +131,8 @@ To adapt the plan to your own project, change these parts and leave the structur
 - `journey` is the existing inline sequence of requests the run makes before it reports ready.
   For an authored pack, replace it with `scenarioFile: tests/scenarios.yaml` and put one or more
   scenarios in that project-relative file. Each step names a person, a product, a method, a path
-  starting with `/v1/`, and what it expects back.
+  starting with `/v1/`, and what it expects back. The file path cannot contain `..` or backslashes.
+  The start and status reports include `scenarioDigest` for the exact file bytes captured at start.
 
 The [`rstack dev` reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
 describes every key, capture type and limit.
@@ -232,10 +233,12 @@ pg_ctl -D "$DEV/data" stop
 ## When a run fails
 
 A failed journey is different from a startup failure. `start` exits 1 but prints the normal run
-report. With `--json`, its `schema_version` is `registry.rstack.dev.v1`, its `status` is `ready`,
-and `journey.result` is `failed`; the journey includes the failed step and its reason. The services
-keep running, and `rstack dev status RUN_ID` repeats the report, so use the run ID to inspect the
-products and logs before you stop the run.
+report. With `--json`, its `schema_version` is `registry.rstack.dev.v1` and its `status` is `ready`.
+An inline plan has `journey.result` `failed`; an authored file has `scenarios[*].result`, with at
+least one `failed`, and `scenarioDigest` (`sha256:<hex>`) identifies the exact file bytes captured
+at start. The failed step includes its reason. The services keep running, and
+`rstack dev status RUN_ID` repeats the results and digest, so use the run ID to inspect the products
+and logs before you stop the run.
 
 Other refusals and failures produce an error report instead. With `--json`, the report is one
 object on standard output with `schema_version` `registry.rstack.error.v1` and `status` `refused`.
