@@ -75,13 +75,16 @@ and ask through Evidence when a decision needs the fact. In BReg an event record
 source can hold an identifier another system owns, declared with `external: {namespace}`; see the
 [event records guide](https://github.com/registrystack/registry-stack/blob/e05a43a55ba5a9a178e088d6b8c686b0f89b659f/products/breg/event-records.md).
 
-Payment and treasury hand-offs belong in an application or module. The maintained product and
-operation rosters define no payment product or payment-specific operation.
+Payment policy and provider contracts remain adopter-owned. An application or module can implement
+them directly, or Coordinator can dispatch a configured payment-provider POST through its generic
+`external.command/v1`. The maintained product and operation rosters define no payment product or
+payment-specific operation.
 
 For how much to share, see [the disclosure ladder](../../explanation/data-minimization-and-purpose-limitation/#ask-for-the-weakest-answer-that-does-the-job).
 
 {/* Evidence: AGENTS.md, maintained runtime products;
     crates/registry-coordinator/src/operations.rs, operation_catalog;
+    products/coordinator/README.md, external.command/v1;
     products/adapter/README.md, adapter-job; products/adapter/EFFECTIVE-CONTRACT.md, facade;
     products/breg/event-records.md, namespace;
     docs/site/src/content/docs/reference/breg-api.mdx, If-Match and Idempotency-Key;
