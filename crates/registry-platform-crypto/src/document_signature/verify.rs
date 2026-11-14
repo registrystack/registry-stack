@@ -13,15 +13,15 @@ use aws_lc_rs::signature::{
     ECDSA_P521_SHA256_ASN1, ECDSA_P521_SHA384_ASN1, ECDSA_P521_SHA512_ASN1,
     RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
 };
+use cms::cert::x509::attr::Attributes;
+use cms::cert::x509::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
+use cms::cert::x509::Certificate;
 use cms::cert::CertificateChoices;
 use cms::signed_data::{SignedData, SignerIdentifier};
 use der::asn1::{ObjectIdentifier, OctetString};
 use der::{Any, Decode as _, Encode as _, Tag, Tagged as _};
 use sha2::{Sha256, Sha384, Sha512};
 use thiserror::Error;
-use x509_cert::attr::Attributes;
-use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
-use x509_cert::Certificate;
 
 /// Why a CMS signer did not verify.
 #[derive(Debug, Error)]

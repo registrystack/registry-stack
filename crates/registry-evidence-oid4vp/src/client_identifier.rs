@@ -247,7 +247,7 @@ impl RequestIdentity {
         };
 
         for certificate in &certificates {
-            let validity = &certificate.tbs_certificate.validity;
+            let validity = certificate.tbs_certificate().validity();
             if now >= validity.not_after.to_unix_duration().as_secs() {
                 return Err(IdentityError::CertificateExpired);
             }
@@ -259,8 +259,8 @@ impl RequestIdentity {
             .iter()
             .map(|certificate| {
                 certificate
-                    .tbs_certificate
-                    .validity
+                    .tbs_certificate()
+                    .validity()
                     .not_after
                     .to_unix_duration()
                     .as_secs()
@@ -467,7 +467,7 @@ fn base58btc(bytes: &[u8]) -> String {
 }
 
 fn san_dns_names(certificate: &Certificate) -> Vec<String> {
-    let Some(extensions) = &certificate.tbs_certificate.extensions else {
+    let Some(extensions) = certificate.tbs_certificate().extensions() else {
         return Vec::new();
     };
     extensions

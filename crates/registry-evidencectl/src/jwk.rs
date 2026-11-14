@@ -215,7 +215,7 @@ pub(crate) fn public_jwk_from_pem(input: &str, alg: Option<JwkAlgorithm>) -> Res
     let jwk = match decoded_label {
         "PUBLIC KEY" => from_spki(&der, alg)?,
         "RSA PUBLIC KEY" => {
-            let key = pkcs1::RsaPublicKey::from_der(&der)
+            let key = pkcs1::RsaPublicKeyRef::try_from(der.as_slice())
                 .map_err(|_| anyhow::anyhow!("the `RSA PUBLIC KEY` block is not PKCS #1"))?;
             rsa_jwk(key, alg)?
         }
@@ -290,7 +290,7 @@ fn from_spki(der: &[u8], alg: Option<JwkAlgorithm>) -> Result<PublicJwk> {
             .and_then(|jwk| validate(jwk, &format!("EC {crv}")))
         }
         RSA_ENCRYPTION => {
-            let key = pkcs1::RsaPublicKey::from_der(key)
+            let key = pkcs1::RsaPublicKeyRef::try_from(key)
                 .map_err(|_| anyhow::anyhow!("the RSA public key is not PKCS #1"))?;
             rsa_jwk(key, alg)
         }
@@ -300,7 +300,7 @@ fn from_spki(der: &[u8], alg: Option<JwkAlgorithm>) -> Result<PublicJwk> {
     }
 }
 
-fn rsa_jwk(key: pkcs1::RsaPublicKey<'_>, alg: Option<JwkAlgorithm>) -> Result<PublicJwk> {
+fn rsa_jwk(key: pkcs1::RsaPublicKeyRef<'_>, alg: Option<JwkAlgorithm>) -> Result<PublicJwk> {
     let alg = match alg {
         Some(alg @ (JwkAlgorithm::Rs256 | JwkAlgorithm::Rs384)) => alg,
         Some(named) => bail!(
@@ -426,8 +426,8 @@ mod tests {
             let mut modulus = vec![0xff; bytes];
             modulus[bytes - 1] = 0x01;
             let key = pkcs1::RsaPublicKey {
-                modulus: pkcs8::der::asn1::UintRef::new(&modulus).expect("modulus"),
-                public_exponent: pkcs8::der::asn1::UintRef::new(&exponent).expect("exponent"),
+                modulus: pkcs1::der::asn1::UintRef::new(&modulus).expect("modulus"),
+                public_exponent: pkcs1::der::asn1::UintRef::new(&exponent).expect("exponent"),
             };
             rsa_jwk(key, Some(JwkAlgorithm::Rs256)).map_err(|error| error.to_string())
         };
@@ -447,8 +447,8 @@ mod tests {
             let mut modulus = vec![0xff; 256];
             modulus[255] = modulus_tail;
             let key = pkcs1::RsaPublicKey {
-                modulus: pkcs8::der::asn1::UintRef::new(&modulus).expect("modulus"),
-                public_exponent: pkcs8::der::asn1::UintRef::new(exponent).expect("exponent"),
+                modulus: pkcs1::der::asn1::UintRef::new(&modulus).expect("modulus"),
+                public_exponent: pkcs1::der::asn1::UintRef::new(exponent).expect("exponent"),
             };
             rsa_jwk(key, Some(JwkAlgorithm::Rs256)).map_err(|error| error.to_string())
         };

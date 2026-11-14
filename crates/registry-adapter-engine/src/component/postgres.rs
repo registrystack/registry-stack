@@ -131,7 +131,7 @@ impl QueryRefused {
 /// root `LIMIT` or `OFFSET` (the engine pages), and a parameter set of
 /// `$1` through `$n` with no gap.
 pub fn compile_query(text: &str, parameter_order: &[String]) -> Result<PinnedQuery, QueryRefused> {
-    let parsed = pg_query::parse(text)
+    let parsed = pg_query::parse(text, 0)
         .map_err(|_| QueryRefused::Query("the query file is not valid SQL"))?;
     // The statement root decides, not a count of SELECT nodes: a
     // utility command (CREATE ... AS SELECT, EXPLAIN) wraps a SELECT
@@ -254,7 +254,7 @@ fn paged_statement(
     };
     let statement = text.get(start..end).ok_or_else(refused)?.trim_end();
     let paged = format!("{statement}\nOFFSET ${offset_position}");
-    let parsed = pg_query::parse(&paged).map_err(|_| refused())?;
+    let parsed = pg_query::parse(&paged, 0).map_err(|_| refused())?;
     let [raw] = parsed.protobuf.stmts.as_slice() else {
         return Err(refused());
     };

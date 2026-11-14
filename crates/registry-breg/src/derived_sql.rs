@@ -31,7 +31,7 @@ pub(crate) type DerivedSourceColumns = BTreeMap<String, BTreeSet<String>>;
 pub(crate) fn derived_sql_dependencies(sql: &[u8]) -> DerivedSqlDependencies {
     const VALIDATED: &str = "derived SQL was validated before its dependency inventory";
     let text = std::str::from_utf8(sql).expect(VALIDATED);
-    let parsed = pg_query::parse(text).expect(VALIDATED);
+    let parsed = pg_query::parse(text, 0).expect(VALIDATED);
     let mut dependencies = DerivedSqlDependencies::default();
     for node in raw_nodes(&parsed) {
         match node {
@@ -63,7 +63,7 @@ pub(crate) fn derived_sql_source_columns(
 ) -> DerivedSourceColumns {
     const VALIDATED: &str = "derived SQL was validated before its source-column inventory";
     let text = std::str::from_utf8(sql).expect(VALIDATED);
-    let parsed = pg_query::parse(text).expect(VALIDATED);
+    let parsed = pg_query::parse(text, 0).expect(VALIDATED);
     let Some(PgNode::SelectStmt(select)) = root_node(&parsed) else {
         panic!("{VALIDATED}");
     };
@@ -94,7 +94,7 @@ pub(crate) fn validate_derived_sql(
         errors.push(sql_error(path));
         return;
     }
-    let Ok(parsed) = pg_query::parse(text) else {
+    let Ok(parsed) = pg_query::parse(text, 0) else {
         errors.push(sql_error(path));
         return;
     };
@@ -1358,7 +1358,7 @@ mod tests {
     }
 
     fn accepts(sql: &str) -> bool {
-        let parsed = pg_query::parse(sql)
+        let parsed = pg_query::parse(sql, 0)
             .unwrap_or_else(|error| panic!("test SQL did not parse: {sql}: {error}"));
         let source_columns = BTreeMap::from([
             (
@@ -1541,7 +1541,7 @@ mod tests {
             "SELECT JSON_VALUE(h.document, '$.name') FROM registry_source.household h",
             "WITH hidden AS (SELECT h.id AS id, h.document AS secret FROM registry_source.household h) SELECT hidden.id FROM hidden",
         ] {
-            let parsed = pg_query::parse(sql).expect("test SQL parses");
+            let parsed = pg_query::parse(sql, 0).expect("test SQL parses");
             let mut errors = Vec::new();
 
             refuse_encrypted_columns(

@@ -166,15 +166,15 @@ pub fn verify_chain(
 /// webpki ignores KeyUsage; the leaf must carry it with digitalSignature. A leaf asserting
 /// cA is refused here as well, independent of the path builder.
 fn check_leaf_extensions(leaf: &Certificate) -> Result<(), X509Error> {
-    let tbs = &leaf.tbs_certificate;
+    let tbs = leaf.tbs_certificate();
     let basic = tbs
-        .get::<BasicConstraints>()
+        .get_extension::<BasicConstraints>()
         .map_err(|_| X509Error::BadCertificate)?;
     if basic.is_some_and(|(_, bc)| bc.ca) {
         return Err(X509Error::CaAsLeaf);
     }
     let usage = tbs
-        .get::<KeyUsage>()
+        .get_extension::<KeyUsage>()
         .map_err(|_| X509Error::BadCertificate)?
         .ok_or(X509Error::KeyUsage)?;
     if !usage.1 .0.contains(KeyUsages::DigitalSignature) {
@@ -185,7 +185,7 @@ fn check_leaf_extensions(leaf: &Certificate) -> Result<(), X509Error> {
 
 /// The certificate's public key as a JWK, for the key types this crate supports.
 pub(crate) fn leaf_public_jwk(cert: &Certificate) -> Result<(PublicJwk, LeafKeyType), X509Error> {
-    let spki = &cert.tbs_certificate.subject_public_key_info;
+    let spki = cert.tbs_certificate().subject_public_key_info();
     let key = spki
         .subject_public_key
         .as_bytes()
@@ -230,8 +230,8 @@ fn san_names(
     select: impl Fn(GeneralName) -> Option<String>,
 ) -> Result<Vec<String>, X509Error> {
     let san = cert
-        .tbs_certificate
-        .get::<SubjectAltName>()
+        .tbs_certificate()
+        .get_extension::<SubjectAltName>()
         .map_err(|_| X509Error::BadCertificate)?;
     Ok(san
         .into_iter()
@@ -241,8 +241,8 @@ fn san_names(
 }
 
 fn printable_subject(cert: &Certificate) -> String {
-    cert.tbs_certificate
-        .subject
+    cert.tbs_certificate()
+        .subject()
         .to_string()
         .chars()
         .map(|c| if c.is_control() { '?' } else { c })

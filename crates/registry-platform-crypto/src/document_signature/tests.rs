@@ -18,6 +18,9 @@ use aws_lc_rs::signature::{
     UnparsedPublicKey, VerificationAlgorithm, ECDSA_P256_SHA256_ASN1, ECDSA_P384_SHA384_ASN1,
     RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384,
 };
+use cms::cert::x509::attr::Attributes;
+use cms::cert::x509::ext::pkix::name::GeneralName;
+use cms::cert::x509::Certificate;
 use cms::cert::CertificateChoices;
 use cms::content_info::{CmsVersion, ContentInfo};
 use cms::signed_data::{SignedData, SignerIdentifier};
@@ -26,9 +29,6 @@ use der::{Any, Decode, Encode};
 use rcgen::{DistinguishedName, DnType, ExtendedKeyUsagePurpose, KeyUsagePurpose};
 use sha2::{Digest, Sha256, Sha384};
 use time::{Duration, OffsetDateTime};
-use x509_cert::attr::Attributes;
-use x509_cert::ext::pkix::name::GeneralName;
-use x509_cert::Certificate;
 
 const FIRST_RANGE: &[u8] = b"%PDF-1.7\n% first byte range before the signature value\n";
 const SECOND_RANGE: &[u8] = b"\n% second byte range after the signature value\n%%EOF\n";

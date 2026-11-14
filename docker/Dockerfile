@@ -74,7 +74,7 @@ RUN --mount=type=bind,source=release/scripts/install-runtime-packages.sh,target=
         /workspace/runtime-root/var/lib/registry-evidence/authority \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab AS evidence
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS evidence
 
 COPY --from=evidence-builder /workspace/runtime-root/ /
 COPY --from=evidence-builder /workspace/target/release/evidence /usr/local/bin/evidence
@@ -116,7 +116,7 @@ RUN --mount=type=bind,source=release/scripts/install-runtime-packages.sh,target=
     && chmod 0700 /workspace/runtime-root/var/lib/registry-casework/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab AS casework
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS casework
 
 COPY --from=casework-builder /workspace/runtime-root/ /
 COPY --from=casework-builder /workspace/target/release/casework /usr/local/bin/casework

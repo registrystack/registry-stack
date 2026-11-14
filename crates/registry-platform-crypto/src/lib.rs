@@ -62,7 +62,8 @@ use p256::pkcs8::DecodePublicKey as _;
 #[cfg(feature = "transit")]
 use p256::PublicKey as P256PublicKey;
 use pkcs1::{
-    der::asn1::UintRef, der::Decode as _, der::SecretDocument, RsaPrivateKey as Pkcs1RsaPrivateKey,
+    der::asn1::UintRef, der::Decode as _, der::SecretDocument,
+    RsaPrivateKeyRef as Pkcs1RsaPrivateKey,
 };
 use pkcs8::PrivateKeyInfo as Pkcs8PrivateKeyInfo;
 pub use random::{random_base64url, RandomTokenError};

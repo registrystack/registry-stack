@@ -19,10 +19,10 @@ use aws_lc_rs::signature::{
 };
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use cms::cert::x509::request::{CertReq, Version};
 use der::asn1::ObjectIdentifier;
 use der::pem::LineEnding;
 use der::{Any, Decode as _, Encode as _, Tag, Tagged as _};
-use x509_cert::request::{CertReq, Version};
 
 const SEAL_KEY_ALGORITHMS: [SigningAlgorithm; 4] = [
     SigningAlgorithm::Es256,
@@ -372,7 +372,7 @@ fn check_request(request: &CertificateRequest, jwk: &PublicJwk, algorithm: Signi
             SigningAlgorithm::Rs256 | SigningAlgorithm::Rs384 => {
                 assert_eq!(spki.algorithm.oid, oid::RSA_ENCRYPTION);
                 assert_eq!(spki.algorithm.parameters, Some(Any::null()));
-                let key = pkcs1::RsaPublicKey::from_der(key_bits).expect("RSAPublicKey");
+                let key = pkcs1::RsaPublicKeyRef::try_from(key_bits).expect("RSAPublicKey");
                 assert_eq!(
                     key.modulus.as_bytes(),
                     decode_b64(jwk.n.as_deref()).as_slice()

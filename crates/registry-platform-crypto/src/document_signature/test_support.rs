@@ -27,18 +27,19 @@ use crate::{
 use aws_lc_rs::rand::{SecureRandom as _, SystemRandom};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
+use cms::cert::x509::ext::pkix::name::GeneralName;
+use cms::cert::x509::ext::pkix::ExtendedKeyUsage;
+use cms::cert::x509::Certificate;
 use cms::signed_data::EncapsulatedContentInfo;
-use der::asn1::{Int, ObjectIdentifier, OctetString, UintRef};
+use der::asn1::{Int, ObjectIdentifier, OctetString};
 use der::{Any, Decode as _, Encode as _, Tag};
+use pkcs1::der::{asn1::UintRef as Pkcs1UintRef, Encode as _};
 use rcgen::{
     BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, Issuer,
     KeyPair, KeyUsagePurpose, PublicKeyData, SerialNumber, SignatureAlgorithm,
 };
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
-use x509_cert::ext::pkix::name::GeneralName;
-use x509_cert::ext::pkix::ExtendedKeyUsage;
-use x509_cert::Certificate;
 
 #[cfg(unix)]
 mod transit;
@@ -62,6 +63,8 @@ pub enum TestPkiError {
     Key(#[from] CryptoError),
     #[error("test DER encoding failed: {0}")]
     Der(#[from] der::Error),
+    #[error("test RSA public-key encoding failed: {0}")]
+    RsaDer(#[from] pkcs1::der::Error),
     #[error("test token signature failed: {0}")]
     Signature(#[from] CmsError),
     #[error("the test PKI issues ES256, ES384, RS256 and RS384 seals only")]
@@ -456,11 +459,11 @@ fn timestamp_token(
 /// Replace the signingCertificateV2 that [`signed_attributes`] writes with
 /// the attribute `choice` names.
 fn with_signing_certificate(
-    signed_attrs: x509_cert::attr::Attributes,
+    signed_attrs: cms::cert::x509::attr::Attributes,
     choice: EssAttribute,
     certificate_der: &[u8],
     certificate: &Certificate,
-) -> Result<x509_cert::attr::Attributes, TestPkiError> {
+) -> Result<cms::cert::x509::attr::Attributes, TestPkiError> {
     if choice == EssAttribute::V2 {
         return Ok(signed_attrs);
     }
@@ -515,12 +518,12 @@ fn with_signing_certificate(
         EssAttribute::V1OtherCertificate => Some(v1(&sha1(b"another certificate"))?),
         EssAttribute::OtherIssuerSerial => {
             let mut other = issuer_serial();
-            other.serial_number = x509_cert::serial_number::SerialNumber::new(&[0x7f; 8])?;
+            other.serial_number = cms::cert::x509::serial_number::SerialNumber::new(&[0x7f; 8])?;
             Some(v2(sha256(certificate_der), other)?)
         }
     };
     if let Some((oid, value)) = added {
-        attributes.push(x509_cert::attr::Attribute {
+        attributes.push(cms::cert::x509::attr::Attribute {
             oid,
             values: der::asn1::SetOfVec::try_from(vec![value])?,
         });
@@ -528,8 +531,8 @@ fn with_signing_certificate(
     Ok(der::asn1::SetOfVec::try_from(attributes)?)
 }
 
-fn ecdsa_with_sha256() -> x509_cert::spki::AlgorithmIdentifierOwned {
-    x509_cert::spki::AlgorithmIdentifierOwned {
+fn ecdsa_with_sha256() -> cms::cert::x509::spki::AlgorithmIdentifierOwned {
+    cms::cert::x509::spki::AlgorithmIdentifierOwned {
         oid: oid::ECDSA_WITH_SHA256,
         parameters: None,
     }
@@ -658,8 +661,8 @@ impl JwkPublicKey {
                 let n = member(&jwk.n)?;
                 let e = member(&jwk.e)?;
                 let key = pkcs1::RsaPublicKey {
-                    modulus: UintRef::new(&n)?,
-                    public_exponent: UintRef::new(&e)?,
+                    modulus: Pkcs1UintRef::new(&n)?,
+                    public_exponent: Pkcs1UintRef::new(&e)?,
                 };
                 (key.to_der()?, &rcgen::PKCS_RSA_SHA256)
             }

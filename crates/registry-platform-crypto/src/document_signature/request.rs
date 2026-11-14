@@ -9,17 +9,16 @@ use crate::{
     decode_fixed, decode_nonempty, JwkError, PublicJwk, SigningAlgorithm, SigningError,
     SigningProvider,
 };
-use der::asn1::{
-    BitString, ObjectIdentifier, PrintableStringRef, SetOfVec, UintRef, Utf8StringRef,
-};
+use cms::cert::x509::attr::AttributeTypeAndValue;
+use cms::cert::x509::name::{Name, RdnSequence, RelativeDistinguishedName};
+use cms::cert::x509::request::{CertReq, CertReqInfo, Version};
+use cms::cert::x509::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
+use der::asn1::{BitString, ObjectIdentifier, PrintableStringRef, SetOfVec, Utf8StringRef};
 use der::pem::LineEnding;
 use der::{Any, Decode as _, Encode as _};
+use pkcs1::der::{asn1::UintRef as Pkcs1UintRef, Encode as _};
 use std::fmt;
 use thiserror::Error;
-use x509_cert::attr::AttributeTypeAndValue;
-use x509_cert::name::{Name, RdnSequence, RelativeDistinguishedName};
-use x509_cert::request::{CertReq, CertReqInfo, Version};
-use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
 
 /// The X.520 upper bound on a common name and an organization name, in
 /// characters (`ub-common-name` and `ub-organization-name`).
@@ -92,6 +91,8 @@ pub enum CertificateRequestError {
     SelfVerification,
     #[error("certificate request encoding failed: {0}")]
     Encoding(#[from] der::Error),
+    #[error("certificate request RSA public-key encoding failed: {0}")]
+    RsaEncoding(#[from] pkcs1::der::Error),
 }
 
 /// How one seal algorithm signs a certificate request.
@@ -283,8 +284,8 @@ fn public_key_info(
             let n = decode_nonempty(jwk.n.as_deref(), "n").map_err(invalid)?;
             let e = decode_nonempty(jwk.e.as_deref(), "e").map_err(invalid)?;
             let key = pkcs1::RsaPublicKey {
-                modulus: UintRef::new(&n)?,
-                public_exponent: UintRef::new(&e)?,
+                modulus: Pkcs1UintRef::new(&n)?,
+                public_exponent: Pkcs1UintRef::new(&e)?,
             }
             .to_der()?;
             Ok(SubjectPublicKeyInfoOwned {
