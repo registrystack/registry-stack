@@ -313,3 +313,16 @@ client.readProposalReviewContextBatch(metadata.selectProposalReviewContext('revi
     id?.toUpperCase()
   })
 })
+
+// Invocation control stays separate from JSON/query options and never reaches writes.
+const readAbort = new AbortController()
+declare const cancellableClient: BaseRegistryClient
+declare const cancellableContinuation: ListContinuation
+cancellableClient.getRecordJson('records', 'id', undefined, { signal: readAbort.signal })
+cancellableClient.listRecords('records', { accessProfile: 'reader' }, { signal: readAbort.signal })
+cancellableClient.continueListJson(cancellableContinuation, { signal: readAbort.signal })
+cancellableClient.registryContract(undefined, { signal: readAbort.signal })
+// @ts-expect-error signals are not wire record options
+cancellableClient.getRecord('records', 'id', { signal: readAbort.signal })
+// @ts-expect-error cancellation is not an option on mutations
+cancellableClient.cancelIngestionRun('records', 'run', undefined, { signal: readAbort.signal })

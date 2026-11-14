@@ -318,3 +318,44 @@ Both methods delegate to the canonical Rust client. They retain the same
 pre-I/O checks, lifecycle conditions, source binding, and caller-chosen key.
 Persist and recover the returned `BRegPreparedProposal` through
 `recoverProposal` before executing after a restart, just as for an object body.
+
+## Cancel one read
+
+The record, record-list and explicit continuation methods (including their exact
+JSON variants) accept a final optional `{ signal: AbortSignal }` argument,
+separate from their JSON/query options:
+
+```js
+const controller = new AbortController();
+const pending = client.getRecordJson('records', recordId,
+  { accessProfile: 'reader' }, { signal: controller.signal });
+controller.abort();
+await pending; // rejects with BaseRegistryClientError, kind: 'cancelled'
+```
+
+Cancellation drops that invocation's native async operation, including a queued
+credential acquisition, an active token/request exchange or a response-body
+read. An already-aborted signal starts no acquisition or HTTP request. Another
+call on the same client keeps its own lifetime, profile and headers. No read is
+retried or automatically continued. Pass the same signal explicitly to each
+secondary read or continuation; a continuation does not store a signal.
+
+The same option is available on `registryMetadata`, `registryContract`,
+`recordSchema`, `recordRevisions`, `getRecordRevision`,
+`eventRecordCreationRevision`, `lookupRecord`/`lookupRecordJson`,
+`getProposal`, `readProposal`, `readProposalSubmission`,
+`listProposals`/`listProposalsJson`, `readProposalReviewById`,
+`readProposalReviewStatus`, `readProposalReviewStatusWithProgress`,
+`readProposalReviewContext`, `readProposalReviewContextBatch`, and the read-only
+`actionAvailability`/`actionAvailabilityJson`. Other methods, including
+mutations and specialized GeoJSON/temporal reads, do not accept this option.
+
+No credential policy changes: a nonrenewable first-party exchange already
+attempted remains consumed if cancelled, and must not be restarted by resetting
+its authority context. Shared provider acquisition locks and caches retain their
+canonical behavior. Cancellation cannot undo a request the server already
+received. It reports `outcomeUnknown: false` for these read-only operations;
+mutation recovery and same-key retries are unchanged. Errors never include the
+signal's arbitrary reason. The native token is internal binding glue, not a
+shared client cancellation switch. Rust callers continue to cancel by dropping
+their read future; this Node option adds no Python or server API.

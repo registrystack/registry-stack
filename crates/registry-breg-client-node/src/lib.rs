@@ -3,6 +3,9 @@
 
 #![deny(unsafe_code)]
 
+mod read_cancellation;
+use read_cancellation::ReadCancellation;
+
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
@@ -2666,12 +2669,19 @@ impl BaseRegistryClient {
     }
 
     #[napi]
-    pub async fn registry_metadata(&self, access_profile: Option<String>) -> Result<RawOutcome> {
-        self.inner
-            .registry_metadata(access_profile.as_deref())
-            .await
-            .map(raw_value)
-            .map_err(client_error)
+    pub async fn registry_metadata(
+        &self,
+        access_profile: Option<String>,
+        cancellation: Option<&ReadCancellation>,
+    ) -> Result<RawOutcome> {
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .registry_metadata(access_profile.as_deref())
+                .await
+                .map(raw_value)
+                .map_err(client_error)
+        })
+        .await
     }
 
     #[napi]
@@ -2840,18 +2850,25 @@ impl BaseRegistryClient {
     }
 
     #[napi]
-    pub async fn registry_contract(&self, access_profile: Option<String>) -> Result<Metadata> {
-        let BRegComplete { value, metadata } = self
-            .inner
-            .registry_contract(access_profile.as_deref())
-            .await
-            .map_err(client_error)?;
-        let (trace_id, etag, _) = metadata_parts(&metadata);
-        Ok(Metadata {
-            inner: value,
-            trace_id,
-            etag,
+    pub async fn registry_contract(
+        &self,
+        access_profile: Option<String>,
+        cancellation: Option<&ReadCancellation>,
+    ) -> Result<Metadata> {
+        read_cancellation::read(cancellation, async {
+            let BRegComplete { value, metadata } = self
+                .inner
+                .registry_contract(access_profile.as_deref())
+                .await
+                .map_err(client_error)?;
+            let (trace_id, etag, _) = metadata_parts(&metadata);
+            Ok(Metadata {
+                inner: value,
+                trace_id,
+                etag,
+            })
         })
+        .await
     }
 
     #[napi]
@@ -2859,12 +2876,16 @@ impl BaseRegistryClient {
         &self,
         record_type_identifier: String,
         access_profile: Option<String>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<RawOutcome> {
-        self.inner
-            .record_schema(&record_type_identifier, access_profile.as_deref())
-            .await
-            .map(raw_value)
-            .map_err(client_error)
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .record_schema(&record_type_identifier, access_profile.as_deref())
+                .await
+                .map(raw_value)
+                .map_err(client_error)
+        })
+        .await
     }
 
     /// Retrieve one bounded first page of record revisions as inert JSON.
@@ -2874,12 +2895,16 @@ impl BaseRegistryClient {
         record_route: String,
         record_identifier: String,
         access_profile: Option<String>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<RawOutcome> {
-        self.inner
-            .record_revisions(&record_route, &record_identifier, access_profile.as_deref())
-            .await
-            .map(raw_value)
-            .map_err(client_error)
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .record_revisions(&record_route, &record_identifier, access_profile.as_deref())
+                .await
+                .map(raw_value)
+                .map_err(client_error)
+        })
+        .await
     }
 
     /// Retrieve one exact retained revision as validated inert record JSON.
@@ -2890,24 +2915,28 @@ impl BaseRegistryClient {
         record_identifier: String,
         revision: i64,
         options: Option<Value>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<RawOutcome> {
-        if !(1..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&revision) {
-            return Err(binding_error(
-                "invalid-request",
-                "revision must be a positive safe integer",
-            ));
-        }
-        let options = options_object(options, "record options must be an object")?;
-        self.inner
-            .get_record_revision(
-                &record_route,
-                &record_identifier,
-                revision as u64,
-                &record_options(options.as_ref())?,
-            )
-            .await
-            .map(raw_value)
-            .map_err(client_error)
+        read_cancellation::read(cancellation, async {
+            if !(1..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&revision) {
+                return Err(binding_error(
+                    "invalid-request",
+                    "revision must be a positive safe integer",
+                ));
+            }
+            let options = options_object(options, "record options must be an object")?;
+            self.inner
+                .get_record_revision(
+                    &record_route,
+                    &record_identifier,
+                    revision as u64,
+                    &record_options(options.as_ref())?,
+                )
+                .await
+                .map(raw_value)
+                .map_err(client_error)
+        })
+        .await
     }
 
     /// Read the first revision of one record as the compact
@@ -2919,21 +2948,25 @@ impl BaseRegistryClient {
         record_route: String,
         record_identifier: String,
         access_profile: Option<String>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<Option<String>> {
-        self.inner
-            .event_record_creation_revision(
-                &record_route,
-                &record_identifier,
-                access_profile.as_deref(),
-            )
-            .await
-            .map_err(client_error)?
-            .map(|revision| {
-                serde_json::to_string(&revision).map_err(|_| {
-                    binding_error("protocol", "creation revision is not representable")
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .event_record_creation_revision(
+                    &record_route,
+                    &record_identifier,
+                    access_profile.as_deref(),
+                )
+                .await
+                .map_err(client_error)?
+                .map(|revision| {
+                    serde_json::to_string(&revision).map_err(|_| {
+                        binding_error("protocol", "creation revision is not representable")
+                    })
                 })
-            })
-            .transpose()
+                .transpose()
+        })
+        .await
     }
 
     #[napi]
@@ -2942,18 +2975,22 @@ impl BaseRegistryClient {
         record_route: String,
         record_identifier: String,
         options: Option<Value>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let options = options_object(options, "record options must be an object")?;
-        let BRegComplete { value, metadata } = self
-            .inner
-            .get_record(
-                &record_route,
-                &record_identifier,
-                &record_options(options.as_ref())?,
-            )
-            .await
-            .map_err(client_error)?;
-        complete_value(value, metadata)
+        read_cancellation::read(cancellation, async {
+            let options = options_object(options, "record options must be an object")?;
+            let BRegComplete { value, metadata } = self
+                .inner
+                .get_record(
+                    &record_route,
+                    &record_identifier,
+                    &record_options(options.as_ref())?,
+                )
+                .await
+                .map_err(client_error)?;
+            complete_value(value, metadata)
+        })
+        .await
     }
 
     #[napi]
@@ -2961,25 +2998,36 @@ impl BaseRegistryClient {
         &self,
         record_route: String,
         options: Option<Value>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<PageOutcome> {
-        self.inner
-            .list_records(&record_route, &list_request(options)?)
-            .await
-            .map_err(client_error)
-            .and_then(page_value)
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .list_records(&record_route, &list_request(options)?)
+                .await
+                .map_err(client_error)
+                .and_then(page_value)
+        })
+        .await
     }
 
     #[napi]
-    pub async fn continue_list(&self, value: Value) -> Result<PageOutcome> {
-        let projection: BRegContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid-request", "continuation is invalid"))?;
-        let continuation = BRegContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-        self.inner
-            .continue_list(&continuation)
-            .await
-            .map_err(client_error)
-            .and_then(page_value)
+    pub async fn continue_list(
+        &self,
+        value: Value,
+        cancellation: Option<&ReadCancellation>,
+    ) -> Result<PageOutcome> {
+        read_cancellation::read(cancellation, async {
+            let projection: BRegContinuationProjection = serde_json::from_value(value)
+                .map_err(|_| binding_error("invalid-request", "continuation is invalid"))?;
+            let continuation = BRegContinuation::try_from_projection(projection)
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
+            self.inner
+                .continue_list(&continuation)
+                .await
+                .map_err(client_error)
+                .and_then(page_value)
+        })
+        .await
     }
 
     #[napi(js_name = "getGeoJsonRecord")]
@@ -3177,14 +3225,18 @@ impl BaseRegistryClient {
         selector: String,
         values: Option<Value>,
         options: Option<Value>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let request = lookup_request(selector, values, options)?;
-        let BRegComplete { value, metadata } = self
-            .inner
-            .lookup_record(&record_route, &request)
-            .await
-            .map_err(client_error)?;
-        complete_value(value, metadata)
+        read_cancellation::read(cancellation, async {
+            let request = lookup_request(selector, values, options)?;
+            let BRegComplete { value, metadata } = self
+                .inner
+                .lookup_record(&record_route, &request)
+                .await
+                .map_err(client_error)?;
+            complete_value(value, metadata)
+        })
+        .await
     }
 
     #[napi]
@@ -3207,37 +3259,56 @@ impl BaseRegistryClient {
     }
 
     #[napi]
-    pub async fn read_proposal(&self, proposal: &Proposal) -> Result<Proposal> {
-        self.inner
-            .read_proposal(&proposal.inner)
-            .await
-            .map(|response| Proposal {
-                inner: response.value,
-            })
-            .map_err(client_error)
+    pub async fn read_proposal(
+        &self,
+        proposal: &Proposal,
+        cancellation: Option<&ReadCancellation>,
+    ) -> Result<Proposal> {
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .read_proposal(&proposal.inner)
+                .await
+                .map(|response| Proposal {
+                    inner: response.value,
+                })
+                .map_err(client_error)
+        })
+        .await
     }
     #[napi]
     pub async fn read_proposal_submission(
         &self,
         proposal: &Proposal,
         version: u32,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let response = self
-            .inner
-            .read_proposal_submission(&proposal.inner, version)
-            .await
-            .map_err(client_error)?;
-        complete_value(response.value, response.metadata)
+        read_cancellation::read(cancellation, async {
+            let response = self
+                .inner
+                .read_proposal_submission(&proposal.inner, version)
+                .await
+                .map_err(client_error)?;
+            complete_value(response.value, response.metadata)
+        })
+        .await
     }
     #[napi]
-    pub async fn get_proposal(&self, binding: &ProposalGetBinding, id: String) -> Result<Proposal> {
-        self.inner
-            .get_proposal(&binding.inner, &id)
-            .await
-            .map(|response| Proposal {
-                inner: response.value,
-            })
-            .map_err(client_error)
+    pub async fn get_proposal(
+        &self,
+        binding: &ProposalGetBinding,
+        id: String,
+        cancellation: Option<&ReadCancellation>,
+    ) -> Result<Proposal> {
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .get_proposal(&binding.inner, &id)
+                .await
+                .map(|response| Proposal {
+                    inner: response.value,
+                })
+                .map_err(client_error)
+        })
+        .await
     }
 
     #[napi]
@@ -3258,13 +3329,17 @@ impl BaseRegistryClient {
         &self,
         binding: &ProposalReviewBinding,
         id: String,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let response = self
-            .inner
-            .read_proposal_review_by_id(&binding.inner, &id)
-            .await
-            .map_err(client_error)?;
-        complete_value(response.value, response.metadata)
+        read_cancellation::read(cancellation, async {
+            let response = self
+                .inner
+                .read_proposal_review_by_id(&binding.inner, &id)
+                .await
+                .map_err(client_error)?;
+            complete_value(response.value, response.metadata)
+        })
+        .await
     }
 
     #[napi]
@@ -3286,51 +3361,67 @@ impl BaseRegistryClient {
     pub async fn read_proposal_review_status(
         &self,
         proposal: &Proposal,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let response = self
-            .inner
-            .read_proposal_review_status(&proposal.inner)
-            .await
-            .map_err(client_error)?;
-        complete_value(response.value, response.metadata)
+        read_cancellation::read(cancellation, async {
+            let response = self
+                .inner
+                .read_proposal_review_status(&proposal.inner)
+                .await
+                .map_err(client_error)?;
+            complete_value(response.value, response.metadata)
+        })
+        .await
     }
     #[napi]
     pub async fn read_proposal_review_status_with_progress(
         &self,
         proposal: &Proposal,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let response = self
-            .inner
-            .read_proposal_review_status_with_progress(&proposal.inner)
-            .await
-            .map_err(client_error)?;
-        complete_value(response.value, response.metadata)
+        read_cancellation::read(cancellation, async {
+            let response = self
+                .inner
+                .read_proposal_review_status_with_progress(&proposal.inner)
+                .await
+                .map_err(client_error)?;
+            complete_value(response.value, response.metadata)
+        })
+        .await
     }
     #[napi]
     pub async fn read_proposal_review_context(
         &self,
         proposal: &Proposal,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let response = self
-            .inner
-            .read_proposal_review_context(&proposal.inner)
-            .await
-            .map_err(client_error)?;
-        complete_value(response.value, response.metadata)
+        read_cancellation::read(cancellation, async {
+            let response = self
+                .inner
+                .read_proposal_review_context(&proposal.inner)
+                .await
+                .map_err(client_error)?;
+            complete_value(response.value, response.metadata)
+        })
+        .await
     }
     #[napi]
     pub async fn read_proposal_review_context_batch(
         &self,
         binding: &ProposalReviewBinding,
         ids: Vec<String>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
-        let response = self
-            .inner
-            .read_proposal_review_context_batch(&binding.inner, &ids)
-            .await
-            .map_err(client_error)?;
-        complete_value(response.value, response.metadata)
+        read_cancellation::read(cancellation, async {
+            let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+            let response = self
+                .inner
+                .read_proposal_review_context_batch(&binding.inner, &ids)
+                .await
+                .map_err(client_error)?;
+            complete_value(response.value, response.metadata)
+        })
+        .await
     }
 
     #[napi]
@@ -3373,22 +3464,26 @@ impl BaseRegistryClient {
         &self,
         collection: &ProposalCollection,
         query: Value,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<ProposalPage> {
-        let query = serde_json::from_value(query)
-            .map_err(|_| binding_error("invalid-request", "Proposal query does not conform"))?;
-        self.inner
-            .list_proposals(&collection.inner, &query)
-            .await
-            .map(|response| ProposalPage {
-                items: response
-                    .value
-                    .items
-                    .into_iter()
-                    .map(|inner| Proposal { inner })
-                    .collect(),
-                next_cursor: response.value.next_cursor,
-            })
-            .map_err(client_error)
+        read_cancellation::read(cancellation, async {
+            let query = serde_json::from_value(query)
+                .map_err(|_| binding_error("invalid-request", "Proposal query does not conform"))?;
+            self.inner
+                .list_proposals(&collection.inner, &query)
+                .await
+                .map(|response| ProposalPage {
+                    items: response
+                        .value
+                        .items
+                        .into_iter()
+                        .map(|inner| Proposal { inner })
+                        .collect(),
+                    next_cursor: response.value.next_cursor,
+                })
+                .map_err(client_error)
+        })
+        .await
     }
 
     #[napi]
@@ -3423,9 +3518,13 @@ impl BaseRegistryClient {
         &self,
         collection: &ProposalCollection,
         query_json: String,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<ProposalPage> {
-        self.list_proposals(collection, exact_input(&query_json)?)
-            .await
+        read_cancellation::read(cancellation, async {
+            self.list_proposals(collection, exact_input(&query_json)?, None)
+                .await
+        })
+        .await
     }
 
     #[napi]
@@ -3481,19 +3580,23 @@ impl BaseRegistryClient {
         binding: &ActionBinding,
         target_input: String,
         inputs: Value,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<CompleteOutcome> {
-        let request = BRegActionAvailabilityRequest::new(
-            &binding.inner,
-            target_input,
-            input_object(inputs, "action inputs must be an object")?,
-        )
-        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-        let BRegComplete { value, metadata } = self
-            .inner
-            .action_availability(&binding.inner, &request)
-            .await
-            .map_err(client_error)?;
-        complete_value(value, metadata)
+        read_cancellation::read(cancellation, async {
+            let request = BRegActionAvailabilityRequest::new(
+                &binding.inner,
+                target_input,
+                input_object(inputs, "action inputs must be an object")?,
+            )
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
+            let BRegComplete { value, metadata } = self
+                .inner
+                .action_availability(&binding.inner, &request)
+                .await
+                .map_err(client_error)?;
+            complete_value(value, metadata)
+        })
+        .await
     }
 
     /// Invoke one metadata-selected immediate action. An invocation whose
@@ -3892,18 +3995,22 @@ impl BaseRegistryClient {
         record_route: String,
         record_identifier: String,
         options: Option<Value>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<JsonOutcome> {
-        let options = options_object(options, "record options must be an object")?;
-        let BRegComplete { value, metadata } = self
-            .inner
-            .get_record(
-                &record_route,
-                &record_identifier,
-                &record_options(options.as_ref())?,
-            )
-            .await
-            .map_err(client_error)?;
-        complete_json_value(value, metadata)
+        read_cancellation::read(cancellation, async {
+            let options = options_object(options, "record options must be an object")?;
+            let BRegComplete { value, metadata } = self
+                .inner
+                .get_record(
+                    &record_route,
+                    &record_identifier,
+                    &record_options(options.as_ref())?,
+                )
+                .await
+                .map_err(client_error)?;
+            complete_json_value(value, metadata)
+        })
+        .await
     }
 
     #[napi]
@@ -3911,25 +4018,36 @@ impl BaseRegistryClient {
         &self,
         record_route: String,
         options: Option<Value>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<JsonOutcome> {
-        self.inner
-            .list_records(&record_route, &list_request(options)?)
-            .await
-            .map_err(client_error)
-            .and_then(page_json_value)
+        read_cancellation::read(cancellation, async {
+            self.inner
+                .list_records(&record_route, &list_request(options)?)
+                .await
+                .map_err(client_error)
+                .and_then(page_json_value)
+        })
+        .await
     }
 
     #[napi]
-    pub async fn continue_list_json(&self, value: Value) -> Result<JsonOutcome> {
-        let projection: BRegContinuationProjection = serde_json::from_value(value)
-            .map_err(|_| binding_error("invalid-request", "continuation is invalid"))?;
-        let continuation = BRegContinuation::try_from_projection(projection)
-            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-        self.inner
-            .continue_list(&continuation)
-            .await
-            .map_err(client_error)
-            .and_then(page_json_value)
+    pub async fn continue_list_json(
+        &self,
+        value: Value,
+        cancellation: Option<&ReadCancellation>,
+    ) -> Result<JsonOutcome> {
+        read_cancellation::read(cancellation, async {
+            let projection: BRegContinuationProjection = serde_json::from_value(value)
+                .map_err(|_| binding_error("invalid-request", "continuation is invalid"))?;
+            let continuation = BRegContinuation::try_from_projection(projection)
+                .map_err(|error| binding_error("invalid-request", error.to_string()))?;
+            self.inner
+                .continue_list(&continuation)
+                .await
+                .map_err(client_error)
+                .and_then(page_json_value)
+        })
+        .await
     }
 
     #[napi(js_name = "getGeoJsonRecordJson")]
@@ -4127,15 +4245,19 @@ impl BaseRegistryClient {
         selector: String,
         values_json: Option<String>,
         options: Option<Value>,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<JsonOutcome> {
-        let values = values_json.map(|value| exact_input(&value)).transpose()?;
-        let request = lookup_request(selector, values, options)?;
-        let BRegComplete { value, metadata } = self
-            .inner
-            .lookup_record(&record_route, &request)
-            .await
-            .map_err(client_error)?;
-        complete_json_value(value, metadata)
+        read_cancellation::read(cancellation, async {
+            let values = values_json.map(|value| exact_input(&value)).transpose()?;
+            let request = lookup_request(selector, values, options)?;
+            let BRegComplete { value, metadata } = self
+                .inner
+                .lookup_record(&record_route, &request)
+                .await
+                .map_err(client_error)?;
+            complete_json_value(value, metadata)
+        })
+        .await
     }
 
     /// Fetch opaque target conditions from exact action-input JSON.
@@ -4171,22 +4293,26 @@ impl BaseRegistryClient {
         binding: &ActionBinding,
         target_input: String,
         inputs_json: String,
+        cancellation: Option<&ReadCancellation>,
     ) -> Result<JsonOutcome> {
-        let request = BRegActionAvailabilityRequest::new(
-            &binding.inner,
-            target_input,
-            input_object(
-                exact_input(&inputs_json)?,
-                "action inputs must be an object",
-            )?,
-        )
-        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
-        let BRegComplete { value, metadata } = self
-            .inner
-            .action_availability(&binding.inner, &request)
-            .await
-            .map_err(client_error)?;
-        complete_json_value(value, metadata)
+        read_cancellation::read(cancellation, async {
+            let request = BRegActionAvailabilityRequest::new(
+                &binding.inner,
+                target_input,
+                input_object(
+                    exact_input(&inputs_json)?,
+                    "action inputs must be an object",
+                )?,
+            )
+            .map_err(|error| binding_error("invalid-request", error.to_string()))?;
+            let BRegComplete { value, metadata } = self
+                .inner
+                .action_availability(&binding.inner, &request)
+                .await
+                .map_err(client_error)?;
+            complete_json_value(value, metadata)
+        })
+        .await
     }
 
     /// Invoke an action from exact JSON and preserve exact receipt values.

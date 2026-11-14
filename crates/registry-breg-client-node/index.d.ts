@@ -14,7 +14,7 @@ export declare class BaseRegistryClient {
   health(): Promise<CompleteOutcome>
   ready(): Promise<CompleteOutcome>
   openapi(accessProfile?: string | undefined | null): Promise<RawOutcome>
-  registryMetadata(accessProfile?: string | undefined | null): Promise<RawOutcome>
+  registryMetadata(accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
   statisticsLive(dataset: string, from?: string | undefined | null, to?: string | undefined | null, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
   statisticsReleases(dataset: string, top?: number | undefined | null, skipToken?: string | undefined | null, accessProfile?: string | undefined | null): Promise<RawOutcome>
   statisticsLatestRelease(dataset: string, period: string, selection: string, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
@@ -22,21 +22,21 @@ export declare class BaseRegistryClient {
   statisticsReleaseSeries(dataset: string, from: string, to: string, selection: string, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
   statisticsPublish(dataset: string, period: string, status: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   statisticsWithdraw(dataset: string, period: string, version: number, reason: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
-  registryContract(accessProfile?: string | undefined | null): Promise<BRegMetadata>
-  recordSchema(recordTypeIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  registryContract(accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<BRegMetadata>
+  recordSchema(recordTypeIdentifier: string, accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
   /** Retrieve one bounded first page of record revisions as inert JSON. */
-  recordRevisions(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  recordRevisions(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
   /** Retrieve one exact retained revision as validated inert record JSON. */
-  getRecordRevision(recordRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null): Promise<RawOutcome>
+  getRecordRevision(recordRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
   /**
    * Read the first revision of one record as the compact
    * `{recordType, recordId, revision, createdAt}` JSON, or null when the
    * caller may not read it.
    */
-  eventRecordCreationRevision(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<string | null>
-  getRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
-  listRecords(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
-  continueList(value: any): Promise<PageOutcome>
+  eventRecordCreationRevision(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<string | null>
+  getRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
+  listRecords(recordRoute: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<PageOutcome>
+  continueList(value: any, cancellation?: ReadCancellation | undefined | null): Promise<PageOutcome>
   getGeoJsonRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
   listGeoJsonRecords(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueGeoJsonList(value: any): Promise<PageOutcome>
@@ -48,32 +48,32 @@ export declare class BaseRegistryClient {
   continueSnapshotList(value: any): Promise<PageOutcome>
   listRelationshipRecords(recordRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueRelationshipList(value: any): Promise<PageOutcome>
-  lookupRecord(recordRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
+  lookupRecord(recordRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
   startProposal(binding: BRegActionBinding, inputs: any, key: string): Promise<BRegProposal>
-  readProposal(proposal: BRegProposal): Promise<BRegProposal>
-  readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome>
-  getProposal(binding: BRegProposalGetBinding, id: string): Promise<BRegProposal>
+  readProposal(proposal: BRegProposal, cancellation?: ReadCancellation | undefined | null): Promise<BRegProposal>
+  readProposalSubmission(proposal: BRegProposal, version: number, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
+  getProposal(binding: BRegProposalGetBinding, id: string, cancellation?: ReadCancellation | undefined | null): Promise<BRegProposal>
   downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
-  readProposalReviewById(binding: BRegProposalReviewBinding, id: string): Promise<CompleteOutcome>
+  readProposalReviewById(binding: BRegProposalReviewBinding, id: string, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
   downloadProposalReviewDocument(binding: BRegProposalReviewBinding, context: any, field: string): Promise<RawOutcome>
-  readProposalReviewStatus(proposal: BRegProposal): Promise<CompleteOutcome>
-  readProposalReviewStatusWithProgress(proposal: BRegProposal): Promise<CompleteOutcome>
-  readProposalReviewContext(proposal: BRegProposal): Promise<CompleteOutcome>
-  readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids: Array<string>): Promise<CompleteOutcome>
+  readProposalReviewStatus(proposal: BRegProposal, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
+  readProposalReviewStatusWithProgress(proposal: BRegProposal, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
+  readProposalReviewContext(proposal: BRegProposal, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
+  readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids: Array<string>, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
   uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
   deleteProposalAttachment(proposal: BRegProposal, slot: string, key: string): Promise<BRegProposal>
-  listProposals(collection: BRegProposalCollection, query: any): Promise<ProposalPage>
+  listProposals(collection: BRegProposalCollection, query: any, cancellation?: ReadCancellation | undefined | null): Promise<ProposalPage>
   prepareProposal(proposal: BRegProposal, operation: string, body: any, key: string): BRegPreparedProposal
   /** Prepare a transition from exact JSON through the same lifecycle authority. */
   prepareProposalJson(proposal: BRegProposal, operation: string, bodyJson: string, key: string): BRegPreparedProposal
   /** List through the same metadata-selected collection with an exact JSON query. */
-  listProposalsJson(collection: BRegProposalCollection, queryJson: string): Promise<ProposalPage>
+  listProposalsJson(collection: BRegProposalCollection, queryJson: string, cancellation?: ReadCancellation | undefined | null): Promise<ProposalPage>
   recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
   executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   /** Fetch opaque target conditions for one metadata-selected action. */
   actionTargetConditions(binding: BRegActionBinding, inputs: any): Promise<BRegActionTargetConditions>
   /** Read current field-guard availability for one selected reference. */
-  actionAvailability(binding: BRegActionBinding, targetInput: string, inputs: any): Promise<CompleteOutcome>
+  actionAvailability(binding: BRegActionBinding, targetInput: string, inputs: any, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
   /**
    * Invoke one metadata-selected immediate action. An invocation whose
    * outcome is unknown is resent identically under the same key, at most
@@ -139,9 +139,9 @@ export declare class BaseRegistryClient {
   ingestionChunkReceipt(recordRoute: string, runId: string, chunkIndex: number, profileId: string): Promise<CompleteOutcome>
   /** Tombstone one record against its current strong ETag. */
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
-  getRecordJson(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
-  listRecordsJson(recordRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
-  continueListJson(value: any): Promise<JsonOutcome>
+  getRecordJson(recordRoute: string, recordIdentifier: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<JsonOutcome>
+  listRecordsJson(recordRoute: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<JsonOutcome>
+  continueListJson(value: any, cancellation?: ReadCancellation | undefined | null): Promise<JsonOutcome>
   getGeoJsonRecordJson(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<JsonOutcome>
   listGeoJsonRecordsJson(recordRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueGeoJsonListJson(value: any): Promise<JsonOutcome>
@@ -153,11 +153,11 @@ export declare class BaseRegistryClient {
   continueSnapshotListJson(value: any): Promise<JsonOutcome>
   listRelationshipRecordsJson(recordRoute: string, recordIdentifier: string, pathRoute: string, options?: any | undefined | null): Promise<JsonOutcome>
   continueRelationshipListJson(value: any): Promise<JsonOutcome>
-  lookupRecordJson(recordRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
+  lookupRecordJson(recordRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<JsonOutcome>
   /** Fetch opaque target conditions from exact action-input JSON. */
   actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
   /** Read field-guard availability from exact action-input JSON. */
-  actionAvailabilityJson(binding: BRegActionBinding, targetInput: string, inputsJson: string): Promise<JsonOutcome>
+  actionAvailabilityJson(binding: BRegActionBinding, targetInput: string, inputsJson: string, cancellation?: ReadCancellation | undefined | null): Promise<JsonOutcome>
   /** Invoke an action from exact JSON and preserve exact receipt values. */
   invokeActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
   /** Prepare inert invocation evidence from exact action-input JSON. */
@@ -331,6 +331,12 @@ export declare class PrivateKeyJwt {
   bearerToken(): Promise<string>
 }
 export type PrivateKeyJwtBinding = PrivateKeyJwt
+
+/** Internal bridge for the public facade's per-invocation AbortSignal. */
+export declare class ReadCancellation {
+  constructor()
+  cancel(): void
+}
 
 export interface CompleteOutcome {
   kind: string
