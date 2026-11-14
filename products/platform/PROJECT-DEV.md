@@ -26,10 +26,12 @@ product authoring tools. The check works with the database offline. With
 `--json`, it writes a `BRegCtlReport` with `command` set to `dev-check`.
 Use `--deny-warnings` to refuse any unaccepted warning.
 
-Start reports the product URLs and the journey result.
-A failed journey still produces the normal `registry.rstack.dev.v1` run report:
-the report has `status` `ready`, `journey.result` `failed`, the failed step and
-its reason, and the live run ID. `start` exits 1, but the supervisor and
+Start reports the product URLs and the authored scenario results. A plan with
+`scenarioFile` reports each result under `scenarios` and the exact file hash as
+`scenarioDigest` (`sha256:<hex>`). An existing inline `journey` plan keeps
+its singular `journey` report. A failed journey or scenario still produces the
+normal `registry.rstack.dev.v1` run report with `status` `ready`, the failed
+step and its reason, and the live run ID. `start` exits 1, but the supervisor and
 products keep running. Use `status` to repeat the report, inspect the products
 and logs, and then use `stop` to release the run. This differs from a startup
 failure, which produces a `registry.rstack.error.v1` error report and cleans up,
@@ -209,6 +211,42 @@ token subject or the BReg principal claim. The token carries both audiences
 and the authority explicitly shared by both grants.
 See the [native review example](../breg/acceptance/reviewed-evidence-journey/dev.yaml).
 
+### Authored scenario file
+
+Set `scenarioFile: tests/scenarios.yaml` in `dev.yaml` and omit `journey` to
+run an authored pack. The path must stay inside the development project;
+absolute paths, parent components, backslashes and symlinks escaping the project are refused.
+The file uses the [Stack scenarios schema](../breg/generated/tools/scenarios.v1alpha1.schema.json):
+
+```yaml
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: read
+    steps:
+      - id: list
+        product: breg
+        as: operator
+        method: GET
+        path: /v1/records/records
+        expect: {status: 200}
+```
+
+The file contains 1 to 16 uniquely named scenarios, each with 1 to 32 steps,
+and no more than 64 steps in total. Each scenario uses the same `Journey`,
+`Step`, `Expected` and `Capture` rules as the inline form below. Captures are
+available only to later steps in the same scenario. `{{run.issuer}}` is the one
+run value available in strings; it resolves to the effective issuer URL after
+the runner binds its loopback port. Other references must name an earlier
+capture. The runner reads and validates the file during `check` and `start`,
+then snapshots its content before execution, so edits after `start` do not
+alter that run. Scenarios execute in file order and each gets fresh captures.
+
+The BReg project's `tests/journeys.yaml` remains its separate native schema
+test input. The Stack scenario file does not replace or change it. Existing
+plans with one inline `journey` remain supported, but a plan cannot specify
+both forms or neither.
+
 ### Journey steps
 
 A journey runs 1 to 32 steps in order. Each step names the test person it runs
@@ -358,9 +396,12 @@ With `--json`, a refusal or startup failure from `rstack dev` start, status,
 token or stop prints one JSON object on standard output, validated by
 `schemas/rstack-dev-error.v1.schema.json`. The launcher prints the same object
 for failures before the helper starts, such as a missing component.
-When a journey assertion fails, `start` exits 1 and prints the regular
+When an inline journey assertion fails, `start` exits 1 and prints the regular
 `registry.rstack.dev.v1` run report with `status` `ready` and
-`journey.result` `failed`. The run remains available for inspection.
+`journey.result` `failed`. For an authored file, the report instead has
+`scenarios[*].result`, with at least one `failed`, and `scenarioDigest` pins
+the exact scenario file bytes captured at start. The run remains available
+for inspection; `status` repeats the same results and digest.
 
 - `schema_version` is `registry.rstack.error.v1` and `status` is `refused`.
 - `error.class` is `domain` (exit 1: the request, the project, the plan or the

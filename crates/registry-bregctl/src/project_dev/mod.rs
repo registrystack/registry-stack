@@ -124,6 +124,10 @@ struct RunInput {
     #[serde(default)]
     application_node: Option<PathBuf>,
     plan: Plan,
+    #[serde(default)]
+    scenarios: Vec<plan::Journey>,
+    #[serde(default)]
+    scenario_digest: Option<String>,
     ttl_seconds: u64,
     schema_people: Vec<SchemaPerson>,
     breg_authority: Option<BregAuthority>,
@@ -413,7 +417,13 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
     };
     let (result, code) = match outcome {
         Ok(value) => {
-            let code = u8::from(starting && value["journey"]["result"] == "failed");
+            let code = u8::from(
+                starting
+                    && (value["journey"]["result"] == "failed"
+                        || value["scenarios"].as_array().is_some_and(|scenarios| {
+                            scenarios.iter().any(|item| item["result"] == "failed")
+                        })),
+            );
             (emit(stdout, &value, machine), code)
         }
         Err(error) => {
@@ -524,13 +534,21 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     if let Some(application) = report["application"].as_str() {
         writeln!(output, "  Application {application}")?;
     }
-    if let Some(result) = report["journey"]["result"].as_str() {
+    for journey in report["journey"]
+        .as_object()
+        .into_iter()
+        .map(|_| &report["journey"])
+        .chain(report["scenarios"].as_array().into_iter().flatten())
+    {
+        let Some(result) = journey["result"].as_str() else {
+            continue;
+        };
         writeln!(
             output,
             "  Journey {} {result}",
-            report["journey"]["id"].as_str().expect("journey ID")
+            journey["id"].as_str().expect("journey ID")
         )?;
-        if let Some(steps) = report["journey"]["steps"].as_array() {
+        if let Some(steps) = journey["steps"].as_array() {
             for step in steps.iter().filter(|step| step["result"] == "failed") {
                 writeln!(
                     output,
@@ -661,7 +679,8 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     let project = project
         .canonicalize()
         .context("cannot open the development project directory")?;
-    let plan = plan::load(&project)?;
+    let loaded = plan::load(&project)?;
+    let plan = loaded.plan;
     ensure!(
         plan.application.is_some() == application_root.is_some(),
         "supply --application-root exactly when dev.yaml declares application"
@@ -705,6 +724,8 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         application_root,
         application_node,
         plan,
+        scenarios: loaded.scenarios,
+        scenario_digest: loaded.scenario_digest,
         ttl_seconds,
         schema_people,
         breg_authority: inspection.breg_authority,
@@ -899,7 +920,15 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         .context("cannot record the PostgreSQL cluster for recovery")
         .map_err(operational)?;
         let urls = products.start(database.insert(connected), issuer.clone())?;
-        let journey = products.journey(&issuer, &urls)?;
+        let journeys = if let Some(journey) = &input.plan.journey {
+            std::slice::from_ref(journey)
+        } else {
+            &input.scenarios
+        };
+        let journey_reports = journeys
+            .iter()
+            .map(|journey| products.journey(&issuer, &urls, journey))
+            .collect::<Result<Vec<_>>>()?;
         ensure!(
             products.services_alive()?,
             "a product exited during the journey"
@@ -923,8 +952,14 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         let mut report = json!({
             "schema_version": SCHEMA, "run_id": input.run_id, "status": "ready",
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),
-            "journey": journey, "expires_at": expires_at, "logs": root.join("logs"),
+            "expires_at": expires_at, "logs": root.join("logs"),
         });
+        if input.plan.scenario_file.is_some() {
+            report["scenarios"] = json!(journey_reports);
+            report["scenarioDigest"] = json!(input.scenario_digest);
+        } else {
+            report["journey"] = json!(journey_reports.into_iter().next().expect("inline journey"));
+        }
         if let Some(url) = application_url {
             report["issuer"] = json!(browser.as_ref().expect("application issuer").origin);
             report["application"] = json!(url);

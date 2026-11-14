@@ -59,7 +59,7 @@ test('BReg covers every committed tool schema, in the order an adopter meets the
   const root = new URL('../../../products/breg/generated/tools/', import.meta.url);
   assert.deepEqual((await readdir(root)).map((name) => `tools/${name}`).sort(),
     TOOL_CONTRACTS.map((entry) => entry.file.split('/generated/')[1]).sort());
-  assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['project-dev', 'dev-clients', 'example-scenarios',
+  assert.deepEqual(TOOL_CONTRACTS.map((entry) => entry.id), ['project-dev', 'rstack-scenarios', 'dev-clients', 'example-scenarios',
     'journeys', 'schema-test-credentials', 'migration-descriptor', 'backup-binding', 'model-selection']);
 });
 

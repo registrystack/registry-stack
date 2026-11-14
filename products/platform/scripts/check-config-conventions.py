@@ -90,6 +90,7 @@ SCHEMA_GLOBS = (
 
 PREFIXES = {
     "breg": "BReg",
+    "rstack": "RStack",
     "casework": "Casework",
     "coordinator": "Coordinator",
     "documents": "Documents",
@@ -102,7 +103,7 @@ PREFIXES = {
     "adapter": "Adapter",
     "platform": "Platform",
 }
-KIND_RE = re.compile(r"^(BReg|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Adapter|Platform)([A-Z][a-z0-9]+)+$")
+KIND_RE = re.compile(r"^(BReg|RStack|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Adapter|Platform)([A-Z][a-z0-9]+)+$")
 VERSION_RE = re.compile(r"^v[1-9][0-9]*((alpha|beta)[1-9][0-9]*)?$")
 API_VERSION_PREFIX = "id.registrystack.org/formats/"
 SCHEMA_ID_PREFIX = "https://id.registrystack.org/schemas/"

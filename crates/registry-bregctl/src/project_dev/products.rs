@@ -935,8 +935,9 @@ impl<'a> ProductRunner<'a> {
         &self,
         issuer: &Issuer,
         urls: &BTreeMap<Product, String>,
+        journey: &plan::Journey,
     ) -> Result<super::journey::JourneyReport> {
-        super::journey::run(&self.input, issuer, urls, || self.ensure_active())
+        super::journey::run(&self.input, issuer, urls, journey, || self.ensure_active())
     }
 }
 
@@ -3150,6 +3151,8 @@ mod tests {
                 }]}
             }))
             .unwrap(),
+            scenarios: Vec::new(),
+            scenario_digest: None,
             ttl_seconds: 300,
             schema_people: Vec::new(),
             breg_authority: Some(BregAuthority {

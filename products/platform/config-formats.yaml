@@ -800,6 +800,51 @@ formats:
       - pointer: /people/*/caseworkContext
         whenOmitted: closed
     restrictingMembers: [/issuer, /application/client, /application/callbackPath, /products/*/audience, /people/*/grants/breg/profile, /people/*/grants/casework/profile, /people/*/caseworkContext]
+  - id: rstack/scenarios
+    product: rstack
+    title: Registry Stack authored development scenarios
+    files: [tests/scenarios.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+      kind: RStackScenarios
+      checkedBy:
+        file: crates/registry-bregctl/src/project_dev/plan.rs
+        symbol: SCENARIOS_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+      kind: RStackScenarios
+    schema:
+      path: products/breg/generated/tools/scenarios.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/project_dev/plan.rs
+      function: read_scenarios
+      type: ScenarioFile
+    check: rstack dev check {project}
+    example: products/platform/conformance/projects/breg-project-dev/tests/scenarios.yaml
+    conformance:
+      requiredText: /scenarios/0/id
+      optionalText: none
+      integer: /scenarios/0/steps/0/expect/status
+      boolean: none
+      idList: /scenarios
+      set: none
+      reference: /scenarios/0/steps/0/as
+      operand: none
+      relativePath: none
+    securityMembers:
+      - pointer: /scenarios/*/steps/*/product
+        whenOmitted: refused
+      - pointer: /scenarios/*/steps/*/as
+        whenOmitted: refused
+    restrictingMembers: [/scenarios/*/steps/*/product, /scenarios/*/steps/*/as]
   - id: breg/example-scenarios
     product: breg
     title: Example scenarios
