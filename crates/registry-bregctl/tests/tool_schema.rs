@@ -36,6 +36,10 @@ const EXAMPLES: &[(&str, &str)] = &[
         "products/platform/examples/licensing/dev.yaml",
     ),
     (
+        "scenarios.v1alpha1.schema.json",
+        "products/platform/conformance/projects/breg-project-dev/tests/scenarios.yaml",
+    ),
+    (
         "example-scenarios.v1alpha1.schema.json",
         "products/breg/examples/minimal/examples/scenarios.json",
     ),
@@ -491,7 +495,7 @@ fn a_wrong_header_a_missing_header_and_an_explicit_null_are_refused() {
 }
 
 /// The identifiers the catalog records, in file-name order.
-const IDENTIFIERS: [&str; 8] = [
+const IDENTIFIERS: [&str; 9] = [
     "https://id.registrystack.org/schemas/breg/backup-binding/backup-binding.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/example-scenarios/example-scenarios.v1alpha1.schema.json",
@@ -499,8 +503,45 @@ const IDENTIFIERS: [&str; 8] = [
     "https://id.registrystack.org/schemas/breg/migration-descriptor/migration-descriptor.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
+    "https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/schema-test-credentials/schema-test-credentials.v1.schema.json",
 ];
+
+#[test]
+fn authored_scenarios_schema_closes_the_envelope_and_reuses_runner_steps() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["scenarios.v1alpha1.schema.json"]);
+    let valid =
+        example("products/platform/conformance/projects/breg-project-dev/tests/scenarios.yaml");
+    assert!(schema.is_valid(&valid));
+    let mut unknown = valid.clone();
+    unknown["unexpected"] = json!(true);
+    assert!(!schema.is_valid(&unknown));
+    let mut invalid_step = valid;
+    invalid_step["scenarios"][0]["steps"][0]["product"] = json!("other");
+    assert!(!schema.is_valid(&invalid_step));
+}
+
+#[test]
+fn project_dev_schema_requires_one_scenario_source() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["project-dev.v1alpha1.schema.json"]);
+    let inline = example("products/platform/examples/licensing/dev.yaml");
+    assert!(schema.is_valid(&inline));
+
+    let mut file = inline.clone();
+    file.as_object_mut().unwrap().remove("journey");
+    file["scenarioFile"] = json!("tests/scenarios.yaml");
+    assert!(schema.is_valid(&file));
+
+    let mut both = inline.clone();
+    both["scenarioFile"] = json!("tests/scenarios.yaml");
+    assert!(!schema.is_valid(&both));
+
+    let mut neither = inline;
+    neither.as_object_mut().unwrap().remove("journey");
+    assert!(!schema.is_valid(&neither));
+}
 
 #[test]
 fn each_identifier_names_the_format_and_its_version() {

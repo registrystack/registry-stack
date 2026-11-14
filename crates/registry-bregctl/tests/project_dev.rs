@@ -3,7 +3,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::{
     fs,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -121,6 +121,25 @@ products:\n  - {{product: breg, project: ., audience: registry}}\n\
 people:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: []}}\n\
 journey:\n  id: smoke\n  steps:\n    - {{id: read, product: breg, as: operator, method: GET, path: /v1/records, expect: {{status: 200}}}}\n\
 {extra}"
+        ),
+    )
+    .unwrap();
+}
+
+fn authored_scenarios(root: &std::path::Path, scenarios: &str) {
+    project(root, "");
+    let dev = fs::read_to_string(root.join("dev.yaml")).unwrap();
+    let (prefix, _) = dev.split_once("journey:\n").unwrap();
+    fs::write(
+        root.join("dev.yaml"),
+        format!("{prefix}scenarioFile: tests/scenarios.yaml\n"),
+    )
+    .unwrap();
+    fs::create_dir(root.join("tests")).unwrap();
+    fs::write(
+        root.join("tests/scenarios.yaml"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\nkind: RStackScenarios\nscenarios:\n{scenarios}"
         ),
     )
     .unwrap();
@@ -410,6 +429,38 @@ fn fixture_project(root: &std::path::Path, extra: &str) {
     .unwrap();
 }
 
+#[test]
+fn authored_stack_scenarios_coexist_with_native_breg_fixture_journeys() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fixture_project(scratch.path(), "");
+    let dev = fs::read_to_string(scratch.path().join("dev.yaml")).unwrap();
+    let (prefix, _) = dev.split_once("journey:\n").unwrap();
+    fs::write(
+        scratch.path().join("dev.yaml"),
+        format!("{prefix}scenarioFile: tests/scenarios.yaml\nschemaTestPeople:\n  real-journey:\n    real-step: operator\n"),
+    )
+    .unwrap();
+    fs::write(
+        scratch.path().join("tests/scenarios.yaml"),
+        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\nkind: RStackScenarios\nscenarios:\n  - id: read\n    steps:\n      - {id: list, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
+    )
+    .unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    assert!(result.status.success(), "{result:?}");
+    assert!(!state.exists());
+    fs::rename(
+        scratch.path().join("tests/journeys.yaml"),
+        scratch.path().join("tests/journeys.saved"),
+    )
+    .unwrap();
+    let result = check(scratch.path(), &state, true);
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    assert!(!state.exists());
+}
+
 fn check(root: &std::path::Path, state: &std::path::Path, json: bool) -> std::process::Output {
     let request = serde_json::json!({
         "action": "check", "project": root, "deny_warnings": true, "json": json,
@@ -631,6 +682,161 @@ fn check_validates_the_closed_plan_without_allocating_run_state() {
     assert_eq!(report["status"], "complete");
     assert_eq!(report["ok"], true);
     assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_reads_authored_scenarios_without_allocating_run_state() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: read\n    steps:\n      - {id: list, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n  - id: refusal\n    steps:\n      - id: submit\n        product: breg\n        as: operator\n        method: POST\n        path: /v1/actions/missing\n        body: {issuer: '{{run.issuer}}'}\n        expect: {status: 403}\n",
+    );
+
+    let result = check(scratch.path(), &state, true);
+
+    assert!(result.status.success(), "{result:?}");
+    assert!(result.stderr.is_empty(), "{result:?}");
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_refuses_duplicate_authored_scenarios() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: repeated\n    steps:\n      - {id: first, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n  - id: repeated\n    steps:\n      - {id: second, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
+    );
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(report.to_string().contains("scenarios"), "{report}");
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_refuses_a_scenario_file_outside_the_project() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: read\n    steps:\n      - {id: list, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
+    );
+    let dev = fs::read_to_string(scratch.path().join("dev.yaml")).unwrap();
+    for outside in ["../scenarios.yaml", "/private/tmp/scenarios.yaml"] {
+        fs::write(
+            scratch.path().join("dev.yaml"),
+            dev.replace("tests/scenarios.yaml", outside),
+        )
+        .unwrap();
+
+        let result = check(scratch.path(), &state, true);
+
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert!(report.to_string().contains("scenarioFile"), "{report}");
+        assert!(!state.exists());
+    }
+}
+
+#[test]
+fn check_refuses_a_scenario_file_symlink_escaping_the_project() {
+    let scratch = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: read\n    steps:\n      - {id: list, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
+    );
+    let file = scratch.path().join("tests/scenarios.yaml");
+    fs::rename(&file, outside.path().join("scenarios.yaml")).unwrap();
+    symlink(outside.path().join("scenarios.yaml"), &file).unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(report.to_string().contains("scenarioFile"), "{report}");
+    assert!(!state.exists());
+}
+
+#[test]
+fn check_refuses_ambiguous_or_missing_scenario_selection() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: read\n    steps:\n      - {id: list, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
+    );
+    let plan = scratch.path().join("dev.yaml");
+    let authored = fs::read_to_string(&plan).unwrap();
+    let inline = "journey:\n  id: inline\n  steps:\n    - {id: list, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n";
+    for changed in [
+        format!("{authored}{inline}"),
+        authored.replace("scenarioFile: tests/scenarios.yaml\n", ""),
+    ] {
+        fs::write(&plan, changed).unwrap();
+        let result = check(scratch.path(), &state, true);
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert!(report.to_string().contains("scenarioFile"), "{report}");
+        assert!(!state.exists());
+    }
+}
+
+#[test]
+fn check_refuses_unknown_scenario_members_and_dynamic_references() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: submit\n    steps:\n      - {id: create, product: breg, as: operator, method: POST, path: /v1/actions/missing, body: {issuer: '{{run.issuer}}'}, expect: {status: 400}}\n",
+    );
+    let file = scratch.path().join("tests/scenarios.yaml");
+    let authored = fs::read_to_string(&file).unwrap();
+    for (changed, expected) in [
+        (
+            authored.replace("scenarios:\n", "unexpected: true\nscenarios:\n"),
+            "unexpected",
+        ),
+        (
+            authored.replace("run.issuer", "run.unsupported"),
+            "earlier capture",
+        ),
+    ] {
+        fs::write(&file, changed).unwrap();
+        let result = check(scratch.path(), &state, true);
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert!(report.to_string().contains(expected), "{report}");
+        assert!(!state.exists());
+    }
+}
+
+#[test]
+fn check_reports_a_capture_union_error_in_the_authored_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: read\n    steps:\n      - id: list\n        product: breg\n        as: operator\n        method: GET\n        path: /v1/records\n        expect: {status: 200}\n        capture: {result: {type: pointer, pointer: /items, surprise: true}}\n",
+    );
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(
+        diagnostic["path"], "/scenarios/0/steps/0/capture/result/surprise",
+        "{report}"
+    );
+    assert_eq!(diagnostic["source"]["line"], 12, "{report}");
+    assert!(diagnostic["source"]["column"].as_u64().unwrap() > 0);
     assert!(!state.exists());
 }
 

@@ -422,6 +422,7 @@ def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
     }
     try:
         exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env)
+        verify_authored_scenarios(root, bin_dir, checkout, state, env)
         verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
         verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env)
         verify_provisioning_deadline(bin_dir, pg, checkout, state, env, pg_env)
@@ -538,6 +539,57 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
     print(
         "Stop, TTL expiry and failed startup cleaned up; authored product files stayed byte-identical"
     )
+
+
+def verify_authored_scenarios(root, bin_dir, checkout, state, env):
+    project = root / "authored-scenarios"
+    shutil.copytree(checkout, project)
+    plan = project / "dev.yaml"
+    prefix, inline = plan.read_text().split("journey:\n", 1)
+    lines = inline.splitlines()
+    assert lines[0].startswith("  id: ")
+    scenario = "  - " + lines[0].lstrip() + "\n"
+    scenario += "\n".join("  " + line for line in lines[1:]) + "\n"
+    scenario = scenario.replace(
+        "https://identity.licensing.example.test", "'{{run.issuer}}'"
+    )
+    scenarios = project / "tests/scenarios.yaml"
+    scenarios.parent.mkdir(exist_ok=True)
+    scenarios.write_text(
+        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\n"
+        "kind: RStackScenarios\nscenarios:\n" + scenario
+    )
+    plan.write_text(prefix + "scenarioFile: tests/scenarios.yaml\n")
+    assert dev(bin_dir, env, project, "check", ".")["status"] == "complete"
+
+    first_revision = "sha256:" + hashlib.sha256(scenarios.read_bytes()).hexdigest()
+    first = dev(bin_dir, env, project, "start", ".")
+    first_run = first["run_id"]
+    try:
+        assert first["scenarios"][0]["result"] == "passed", first
+        assert first["scenario_revision"] == first_revision, first
+        changed = scenarios.read_text().replace("expect: {status: 201}", "expect: {status: 202}", 1)
+        assert changed != scenarios.read_text()
+        scenarios.write_text(changed)
+        status = dev(bin_dir, env, project, "status", first_run)
+        assert status["scenario_revision"] == first_revision, status
+        assert status["scenarios"] == first["scenarios"], status
+    finally:
+        assert dev(bin_dir, env, project, "stop", first_run)["status"] == "stopped"
+
+    assert dev(bin_dir, env, project, "check", ".")["status"] == "complete"
+    second_revision = "sha256:" + hashlib.sha256(scenarios.read_bytes()).hexdigest()
+    assert second_revision != first_revision
+    second = dev(bin_dir, env, project, "start", ".", expected=1)
+    second_run = second["run_id"]
+    try:
+        assert second["status"] == "ready" and second["scenarios"][0]["result"] == "failed", second
+        assert second["scenario_revision"] == second_revision, second
+        assert all(accepts_connections(url) for url in second["products"].values())
+    finally:
+        assert dev(bin_dir, env, project, "stop", second_run)["status"] == "stopped"
+    nothing_left_behind(state)
+    print("Authored Stack scenarios passed, pinned their revision, and reported a failed expectation")
 
 
 def verify_failed_journey(root, bin_dir, checkout, state, env):
@@ -886,6 +938,9 @@ if sys.argv[1] == "test":
     Path(os.environ["RSTACK_TEST_MARKER"]).touch()
     time.sleep(90)
     raise SystemExit(1)
+runtime_library_path = os.environ.get("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH")
+if runtime_library_path:
+    os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = runtime_library_path
 os.execv(os.environ["RSTACK_TEST_BREGCTL"], sys.argv)
 """)
     shim.chmod(0o700)

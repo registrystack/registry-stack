@@ -11,6 +11,7 @@ use registry_platform_yaml::{
 use registry_platform_yaml::{ExternalId, Url as PlatformUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -21,6 +22,9 @@ use url::Url as ParsedUrl;
 
 pub(crate) const API_VERSION: &str = "id.registrystack.org/formats/breg/project-dev/v1alpha1";
 pub(crate) const KIND: &str = "BRegProjectDev";
+pub(crate) const SCENARIOS_API_VERSION: &str =
+    "id.registrystack.org/formats/rstack/scenarios/v1alpha1";
+pub(crate) const SCENARIOS_KIND: &str = "RStackScenarios";
 
 pub(crate) const FORMAT: FormatSpec<'static> = FormatSpec {
     kind: KIND,
@@ -31,9 +35,34 @@ pub(crate) const FORMAT: FormatSpec<'static> = FormatSpec {
     removed_keys: &[],
 };
 
+pub(crate) const SCENARIOS_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: SCENARIOS_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SCENARIOS_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
 #[cfg(feature = "schema")]
 pub(crate) fn schema() -> schemars::Schema {
-    schemars::schema_for!(Plan)
+    let mut schema = schemars::schema_for!(Plan);
+    schema
+        .as_object_mut()
+        .expect("Plan schema is an object")
+        .insert(
+            "oneOf".to_owned(),
+            serde_json::json!([
+                { "required": ["journey"] },
+                { "required": ["scenarioFile"] }
+            ]),
+        );
+    schema
+}
+
+#[cfg(feature = "schema")]
+pub(crate) fn scenarios_schema() -> schemars::Schema {
+    schemars::schema_for!(ScenarioFile)
 }
 
 #[cfg(feature = "schema")]
@@ -190,8 +219,12 @@ pub(super) struct Plan {
         schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
     )]
     pub people: BTreeMap<String, TestPerson>,
-    /// The ordered sequence of HTTP requests the run sends to the started products.
-    pub journey: Journey,
+    /// One inline journey, retained for existing development plans. Use scenarioFile for authored scenarios.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journey: Option<Journey>,
+    /// Project-relative path to the authored Stack scenarios file. Exactly one of journey and scenarioFile is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_file: Option<PathBuf>,
     /// Run-local connections between BReg and Casework. Leave empty when the products do not call each other.
     #[serde(default)]
     pub bindings: super::bindings::Bindings,
@@ -345,6 +378,29 @@ pub(super) struct Journey {
     pub steps: Vec<Step>,
 }
 
+impl Identified for Journey {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+fn deserialize_scenarios<'de, D>(deserializer: D) -> std::result::Result<Vec<Journey>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    UniqueIdList::<Journey>::deserialize(deserializer).map(UniqueIdList::into_vec)
+}
+
+/// Authored HTTP scenarios shared by standalone rstack dev and Studio.
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+struct ScenarioFile {
+    /// Ordered scenarios. Each uses the development runner's Journey, Step, Expected and Capture contract.
+    #[serde(deserialize_with = "deserialize_scenarios")]
+    scenarios: Vec<Journey>,
+}
+
 /// One HTTP request, what to expect back, and what to remember from the response.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -493,7 +549,8 @@ pub(super) struct Check {
 /// A value remembered from a response, selected by `type`.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub(super) enum Capture {
     /// Remember the value at a JSON pointer in the response body.
     Pointer {
@@ -521,6 +578,31 @@ pub(super) enum Capture {
         /// Name of a query parameter. When set, the value at the pointer must be a URL or relative reference, and the parameter's value is remembered instead. At most 256 characters without whitespace or control characters.
         query: Option<String>,
     },
+}
+
+registry_platform_yaml::tagged_union!(Capture);
+
+impl Serialize for Capture {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::Error as _;
+        let external =
+            Capture::serialize(self, serde_json::value::Serializer).map_err(S::Error::custom)?;
+        let Value::Object(external) = external else {
+            return Err(S::Error::custom("a capture must serialize as a mapping"));
+        };
+        let mut variants = external.into_iter();
+        let (Some((name, Value::Object(members))), None) = (variants.next(), variants.next())
+        else {
+            return Err(S::Error::custom("a capture must contain one variant"));
+        };
+        let mut tagged = Map::new();
+        tagged.insert("type".to_owned(), Value::String(name));
+        tagged.extend(members);
+        Value::Object(tagged).serialize(serializer)
+    }
 }
 
 /// A response header a capture can remember.
@@ -743,9 +825,51 @@ fn validate_plan(root: &Path, decoded: &Decoded<Plan>) -> Result<()> {
         .map_err(|refusal| refusal_report(decoded, &refusal).into())
 }
 
+fn read_scenarios(root: &Path, plan: &Plan) -> Result<(Vec<Journey>, Option<String>)> {
+    let Some(path) = &plan.scenario_file else {
+        return Ok((Vec::new(), None));
+    };
+    let file = root.join(path);
+    let bytes = read(
+        &file,
+        registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64 + 1,
+    )
+    .context("cannot read the authored scenario file")?;
+    let mut decoded = Reader::new(file.display().to_string())
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE,
+        })
+        .decode::<ScenarioFile>(&bytes, &Expect::one(&SCENARIOS_FORMAT))?;
+    if let Err(refusal) = decoded.value.validate(plan) {
+        let diagnostic = decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "breg.project-dev.invalid-scenarios",
+            &refusal.field,
+            &refusal.reason,
+            &refusal.remedy,
+        );
+        return Err(decoded.document.report_with([diagnostic]).into());
+    }
+    let revision = format!(
+        "sha256:{}",
+        Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    Ok((std::mem::take(&mut decoded.value.scenarios), Some(revision)))
+}
+
+pub(super) struct LoadedPlan {
+    pub plan: Plan,
+    pub scenarios: Vec<Journey>,
+    pub scenario_revision: Option<String>,
+}
+
 pub(crate) fn check(root: &Path) -> Result<Report> {
     let decoded = read_plan(root)?;
     validate_plan(root, &decoded)?;
+    read_scenarios(root, &decoded.value)?;
     if let Err(refusal) = super::products::schema_people(root, &decoded.value, false) {
         return Err(refusal_report(&decoded, &refusal).into());
     }
@@ -764,10 +888,15 @@ pub(crate) fn check(root: &Path) -> Result<Report> {
     Ok(decoded.document.report_with(Vec::new()))
 }
 
-pub(super) fn load(root: &Path) -> Result<Plan> {
+pub(super) fn load(root: &Path) -> Result<LoadedPlan> {
     let decoded = read_plan(root)?;
     validate_plan(root, &decoded)?;
-    Ok(decoded.value)
+    let (scenarios, scenario_revision) = read_scenarios(root, &decoded.value)?;
+    Ok(LoadedPlan {
+        plan: decoded.value,
+        scenarios,
+        scenario_revision,
+    })
 }
 
 impl Plan {
@@ -779,6 +908,31 @@ impl Plan {
     }
 
     fn validate(&self, root: &Path) -> SemanticResult<()> {
+        require(
+            self.journey.is_some() != self.scenario_file.is_some(),
+            "/scenarioFile",
+            "Specify exactly one inline journey or authored scenario file.",
+            "Set scenarioFile to a project-relative authored file and remove journey, or keep journey alone.",
+        )?;
+        if let Some(path) = &self.scenario_file {
+            require(
+                !path.as_os_str().is_empty()
+                    && path
+                        .components()
+                        .all(|part| matches!(part, Component::Normal(_))),
+                "/scenarioFile",
+                "The scenario file path must be relative to the project without `.` or `..`.",
+                "Use normal relative path components inside the development project.",
+            )?;
+            require(
+                root.join(path)
+                    .canonicalize()
+                    .is_ok_and(|file| file.starts_with(root) && file.is_file()),
+                "/scenarioFile",
+                "The authored scenario file must be inside the development project.",
+                "Provide the declared scenario file inside the development project.",
+            )?;
+        }
         require(
             self.issuer == "run" || ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
                 url.scheme() == "https"
@@ -1066,28 +1220,31 @@ impl Plan {
             )?;
         }
         self.bindings.validate(self)?;
-        self.journey.validate(self)
+        if let Some(journey) = &self.journey {
+            journey.validate(self, "/journey")?;
+        }
+        Ok(())
     }
 }
 
 impl Journey {
-    fn validate(&self, plan: &Plan) -> SemanticResult<()> {
+    fn validate(&self, plan: &Plan, base: &str) -> SemanticResult<()> {
         require(
             identifier(&self.id),
-            "/journey/id",
+            &format!("{base}/id"),
             "The journey ID must be a local identifier.",
             "Set id to a lowercase local identifier of at most 64 characters.",
         )?;
         require(
             (1..=32).contains(&self.steps.len()),
-            "/journey/steps",
+            &format!("{base}/steps"),
             "The journey must contain 1 to 32 steps.",
             "Add or remove steps until the journey contains between 1 and 32 steps.",
         )?;
         let mut ids = BTreeSet::new();
         let mut captures = BTreeSet::new();
         for (index, step) in self.steps.iter().enumerate() {
-            let field = format!("/journey/steps/{index}");
+            let field = format!("{base}/steps/{index}");
             require(
                 step_identifier(&step.id) && ids.insert(&step.id),
                 &format!("{field}/id"),
@@ -1193,8 +1350,7 @@ impl Journey {
                 )?;
             }
             let verify_reference = |value: &str| {
-                captures
-                    .contains(value)
+                (value == "run.issuer" || captures.contains(value))
                     .then(|| value.to_owned())
                     .ok_or_else(|| EarlierCapture.into())
             };
@@ -1316,8 +1472,7 @@ impl Journey {
                         )?;
                         validate_expansion(
                             expand_json(&r#where.equals, |value| {
-                                captures
-                                    .contains(value)
+                                (value == "run.issuer" || captures.contains(value))
                                     .then(|| value.to_owned())
                                     .ok_or_else(|| EarlierCapture.into())
                             }),
@@ -1329,6 +1484,31 @@ impl Journey {
             // A step's captures are all read from its own response, so they
             // become available only to later steps.
             captures.extend(step.capture.keys().cloned());
+        }
+        Ok(())
+    }
+}
+
+impl ScenarioFile {
+    fn validate(&self, plan: &Plan) -> SemanticResult<()> {
+        require(
+            (1..=16).contains(&self.scenarios.len()),
+            "/scenarios",
+            "The authored file must contain 1 to 16 scenarios.",
+            "Add a scenario or reduce the pack to at most 16 scenarios.",
+        )?;
+        require(
+            self.scenarios
+                .iter()
+                .map(|scenario| scenario.steps.len())
+                .sum::<usize>()
+                <= 64,
+            "/scenarios",
+            "The authored scenarios contain more than 64 steps in total.",
+            "Reduce the total to at most 64 steps.",
+        )?;
+        for (index, scenario) in self.scenarios.iter().enumerate() {
+            scenario.validate(plan, &format!("/scenarios/{index}"))?;
         }
         Ok(())
     }
@@ -1640,10 +1820,19 @@ mod tests {
                 }
             }
         }));
-        assert_eq!(plan.journey.steps[0].expect.status.first(), 200);
-        assert!(plan.journey.steps[0].expect.status.contains(201));
+        assert_eq!(
+            plan.journey.as_ref().unwrap().steps[0]
+                .expect
+                .status
+                .first(),
+            200
+        );
+        assert!(plan.journey.as_ref().unwrap().steps[0]
+            .expect
+            .status
+            .contains(201));
         assert!(matches!(
-            plan.journey.steps[0].capture["etag"],
+            plan.journey.as_ref().unwrap().steps[0].capture["etag"],
             Capture::Header { .. }
         ));
         assert!(!plan.people["operator"].casework_context);

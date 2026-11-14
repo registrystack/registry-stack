@@ -34,6 +34,12 @@ export const TOOL_CONTRACTS = [
     reference: 'reference/breg-configuration.mdx',
   },
   {
+    id: 'rstack-scenarios',
+    title: 'tests/scenarios.yaml',
+    file: 'tools/scenarios.v1alpha1.schema.json',
+    reference: 'configure/run-a-project-with-rstack-dev.mdx',
+  },
+  {
     id: 'dev-clients',
     title: 'dev-clients.yaml',
     file: 'tools/dev-clients.v1alpha1.schema.json',

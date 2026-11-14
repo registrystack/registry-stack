@@ -41,6 +41,15 @@ export const PRODUCTS = [
     ],
   },
   {
+    id: 'rstack',
+    title: 'Registry Stack development runner',
+    docsetProduct: 'registry-stack',
+    checkPage: 'configure/run-a-project-with-rstack-dev',
+    references: [
+      { label: 'Run a project with rstack dev', page: 'configure/run-a-project-with-rstack-dev' },
+    ],
+  },
+  {
     id: 'casework',
     title: 'Registry Casework',
     docsetProduct: 'registry-casework',

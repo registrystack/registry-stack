@@ -909,10 +909,11 @@ mod tests {
                     action: "reviewed-change".to_owned(),
                 }),
             },
-            journey: Journey {
+            journey: Some(Journey {
                 id: "binding".to_owned(),
                 steps: Vec::new(),
-            },
+            }),
+            scenario_file: None,
             schema_test_people: BTreeMap::new(),
             application: None,
         }
@@ -925,6 +926,8 @@ mod tests {
             application_root: None,
             application_node: None,
             plan,
+            scenarios: Vec::new(),
+            scenario_revision: None,
             ttl_seconds: 300,
             schema_people: Vec::new(),
             breg_authority: Some(BregAuthority {

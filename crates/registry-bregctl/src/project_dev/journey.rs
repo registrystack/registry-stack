@@ -15,7 +15,7 @@ use std::{
 use super::{
     clock,
     issuer::Issuer,
-    plan::{self, Capture, CapturedHeader, Check, Product, Step},
+    plan::{self, Capture, CapturedHeader, Check, Journey, Product, Step},
     RunInput,
 };
 
@@ -63,6 +63,7 @@ pub(super) fn run(
     input: &RunInput,
     issuer: &Issuer,
     urls: &BTreeMap<Product, String>,
+    journey: &Journey,
     active: impl Fn() -> Result<()>,
 ) -> Result<JourneyReport> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -73,7 +74,6 @@ pub(super) fn run(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(5))
         .build()?;
-    let journey = &input.plan.journey;
     let mut report = JourneyReport {
         id: journey.id.clone(),
         result: "passed",
@@ -143,10 +143,14 @@ fn execute_step(
     attempts: &mut usize,
 ) -> Result<StepOutcome> {
     let lookup = |name: &str| {
-        captures
-            .get(name)
-            .cloned()
-            .context("missing journey capture")
+        if name == "run.issuer" {
+            Ok(Value::String(input.plan.issuer.clone()))
+        } else {
+            captures
+                .get(name)
+                .cloned()
+                .context("missing journey capture")
+        }
     };
     let path = expand_text(&step.path, lookup)?;
     let mut url = request_url(&urls[&step.product], &path)?;
@@ -728,6 +732,8 @@ mod tests {
             application_root: None,
             application_node: None,
             plan,
+            scenarios: Vec::new(),
+            scenario_revision: None,
             ttl_seconds: 300,
             schema_people: Vec::new(),
             breg_authority: Some(super::super::BregAuthority {
@@ -756,7 +762,14 @@ mod tests {
         let input = polling_input(1000, 50);
         let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
 
-        let report = run(&input, &issuer, &urls, || Ok(())).unwrap();
+        let report = run(
+            &input,
+            &issuer,
+            &urls,
+            input.plan.journey.as_ref().unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(report.result, "failed");
         assert_eq!(report.steps[0].status, 202);
@@ -778,7 +791,14 @@ mod tests {
         let input = polling_input(1000, 1000);
         let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
 
-        let report = run(&input, &issuer, &urls, || Ok(())).unwrap();
+        let report = run(
+            &input,
+            &issuer,
+            &urls,
+            input.plan.journey.as_ref().unwrap(),
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(report.result, "failed");
         assert_eq!(report.steps[0].status, 202);

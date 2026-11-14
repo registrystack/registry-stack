@@ -1,0 +1,428 @@
+{
+  "$defs": {
+    "Capture": {
+      "description": "A value remembered from a response, selected by `type`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Remember the value at a JSON pointer in the response body.",
+          "properties": {
+            "pointer": {
+              "description": "JSON pointer into the response body: empty for the whole body, otherwise starting with `/`.",
+              "type": "string"
+            },
+            "type": {
+              "const": "pointer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pointer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Remember a response header.",
+          "properties": {
+            "header": {
+              "$ref": "#/$defs/CapturedHeader",
+              "description": "The response header to remember."
+            },
+            "type": {
+              "const": "header",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "header"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Remember a value from the one array item that matches a condition. The step fails if no item or more than one item matches.",
+          "properties": {
+            "find": {
+              "description": "JSON pointer to the array in the response body to search.",
+              "type": "string"
+            },
+            "pointer": {
+              "description": "JSON pointer, relative to the matching item, of the value to remember.",
+              "type": "string"
+            },
+            "type": {
+              "const": "find",
+              "type": "string"
+            },
+            "where": {
+              "$ref": "#/$defs/FindWhere",
+              "description": "The condition an item must meet."
+            }
+          },
+          "required": [
+            "type",
+            "find",
+            "where",
+            "pointer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Remember the value at a JSON pointer, optionally reading one query parameter from a URL found there.",
+          "properties": {
+            "pointer": {
+              "description": "JSON pointer into the response body: empty for the whole body, otherwise starting with `/`.",
+              "type": "string"
+            },
+            "query": {
+              "description": "Name of a query parameter. When set, the value at the pointer must be a URL or relative reference, and the parameter's value is remembered instead. At most 256 characters without whitespace or control characters.",
+              "type": "string"
+            },
+            "type": {
+              "const": "value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pointer"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CapturedHeader": {
+      "const": "etag",
+      "description": "The entity tag, usable as an `If-Match` value in a later step.",
+      "type": "string"
+    },
+    "Check": {
+      "additionalProperties": false,
+      "description": "An assertion about one value in the response body. Set exactly one of `equals`, `length` or `contains`.",
+      "properties": {
+        "contains": {
+          "description": "The array at the pointer must hold this item, the string must contain this text, or the object must have this key. String values may contain `{{name}}` references to earlier captures."
+        },
+        "equals": {
+          "description": "The value at the pointer must equal this. String values may contain `{{name}}` references to earlier captures."
+        },
+        "length": {
+          "description": "The array, object or string at the pointer must have this many items, entries or characters, at most 1048576.",
+          "format": "uint",
+          "maximum": 1048576,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pointer": {
+          "description": "JSON pointer to the value to test: empty for the whole body, otherwise starting with `/`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pointer"
+      ],
+      "type": "object"
+    },
+    "DerivedId": {
+      "description": "A dotted development journey step identifier whose segments are local identifiers.",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+      "type": "string"
+    },
+    "Expected": {
+      "additionalProperties": false,
+      "description": "The conditions a response must meet.",
+      "properties": {
+        "checks": {
+          "default": [],
+          "description": "Further assertions about the response body, at most 32. Each one tests a single JSON pointer.",
+          "items": {
+            "$ref": "#/$defs/Check"
+          },
+          "type": "array"
+        },
+        "code": {
+          "description": "Problem code the error response must carry, 1 to 256 characters without whitespace or control characters. It may contain `{{name}}` references to earlier captures.",
+          "type": "string"
+        },
+        "json": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Exact values the response body must hold, keyed by JSON pointer (empty for the whole body, otherwise starting with `/`). String values may contain `{{name}}` references to earlier captures.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-passthrough": "Expected values are compared with the product response at the named JSON pointers."
+        },
+        "status": {
+          "$ref": "#/$defs/ExpectedStatus",
+          "description": "Accepted HTTP status: one status, or a list of 1 to 16 distinct statuses, each from 200 to 599."
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "ExpectedStatus": {
+      "anyOf": [
+        {
+          "description": "A single accepted status from 200 to 599.",
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 200,
+          "type": "integer"
+        },
+        {
+          "description": "Several accepted statuses, each from 200 to 599; the response may carry any one of them.",
+          "items": {
+            "format": "uint32",
+            "maximum": 599,
+            "minimum": 200,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "One accepted HTTP status or a list of them."
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FindWhere": {
+      "additionalProperties": false,
+      "description": "The condition a `find` capture uses to pick an array item.",
+      "properties": {
+        "equals": {
+          "description": "The value an item must hold at the pointer to match. String values may contain `{{name}}` references to earlier captures."
+        },
+        "pointer": {
+          "description": "JSON pointer, relative to each array item, of the value to compare.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pointer",
+        "equals"
+      ],
+      "type": "object"
+    },
+    "Journey": {
+      "additionalProperties": false,
+      "description": "An ordered list of requests the run sends and checks.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Local identifier naming this journey."
+        },
+        "steps": {
+          "description": "The steps, run in order. Include 1 to 32 with distinct identifiers. A step may refer to captures from earlier steps only.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Method": {
+      "description": "An HTTP request method.",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ],
+      "type": "string"
+    },
+    "Poll": {
+      "additionalProperties": false,
+      "description": "How long and how often to repeat a GET request. The wait divided by the interval, rounded up, must be below 250 attempts.",
+      "properties": {
+        "maximumWaitMilliseconds": {
+          "description": "Longest total wait in milliseconds, from 1 to 60000.",
+          "format": "uint64",
+          "maximum": 60000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pollIntervalMilliseconds": {
+          "description": "Pause between attempts in milliseconds, from 50 to 5000 and not above the maximum wait.",
+          "format": "uint64",
+          "maximum": 5000,
+          "minimum": 50,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumWaitMilliseconds",
+        "pollIntervalMilliseconds"
+      ],
+      "type": "object"
+    },
+    "Product": {
+      "description": "A product the development run can start.",
+      "enum": [
+        "breg",
+        "casework"
+      ],
+      "type": "string"
+    },
+    "RawBody": {
+      "additionalProperties": false,
+      "description": "A request body sent as given, without JSON encoding.",
+      "properties": {
+        "base64": {
+          "description": "The body as standard base64, at most 1 MiB once decoded.",
+          "type": "string"
+        },
+        "contentType": {
+          "description": "HTTP media type for the Content-Type header, containing a slash, 1 to 256 ASCII characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contentType",
+        "base64"
+      ],
+      "type": "object"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "description": "One HTTP request, what to expect back, and what to remember from the response.",
+      "properties": {
+        "as": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The test person who sends the request. The person needs a grant for this step's product."
+        },
+        "body": {
+          "description": "JSON request body, at most 1 MiB once encoded. String values may contain `{{name}}` references to earlier captures. Do not combine with `raw`."
+        },
+        "capture": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Capture"
+          },
+          "default": {},
+          "description": "Values to remember from the response, keyed by a capture name. Later steps refer to a capture as `{{name}}` in paths, headers, bodies and expectations. Names are unique across the journey.",
+          "propertyNames": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/ExternalId"
+              },
+              {
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$",
+                "type": "string"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        "expect": {
+          "$ref": "#/$defs/Expected",
+          "description": "What the response must look like for the step to pass."
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Extra request headers, keyed by header name. Only `If-Match`, `Idempotency-Key` and `Registry-Source-Profile` are supported. Values may contain `{{name}}` references to earlier captures.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "$ref": "#/$defs/DerivedId"
+            }
+          ],
+          "description": "Unique step identifier: a local identifier, or a dotted sequence of local identifiers, at most 64 characters."
+        },
+        "method": {
+          "$ref": "#/$defs/Method",
+          "description": "The HTTP method."
+        },
+        "path": {
+          "description": "Request path, starting with `/v1/`, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.",
+          "type": "string"
+        },
+        "poll": {
+          "$ref": "#/$defs/Poll",
+          "description": "Repeat a GET request until it passes or the wait runs out. Allowed only for GET."
+        },
+        "product": {
+          "$ref": "#/$defs/Product",
+          "description": "The product that receives the request."
+        },
+        "raw": {
+          "$ref": "#/$defs/RawBody",
+          "description": "Non-JSON request body. Allowed only for methods other than GET. Do not combine with `body`."
+        }
+      },
+      "required": [
+        "id",
+        "product",
+        "as",
+        "method",
+        "path",
+        "expect"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Authored HTTP scenarios shared by standalone rstack dev and Studio.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "kind": {
+      "const": "RStackScenarios",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    },
+    "scenarios": {
+      "description": "Ordered scenarios. Each uses the development runner's Journey, Step, Expected and Capture contract.",
+      "items": {
+        "$ref": "#/$defs/Journey"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "scenarios"
+  ],
+  "title": "Registry Stack authored development scenarios",
+  "type": "object"
+}

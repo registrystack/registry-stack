@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: smoke
+    steps:
+      - id: read
+        product: breg
+        as: operator
+        method: GET
+        path: /v1/records/records
+        expect: {status: 200}
