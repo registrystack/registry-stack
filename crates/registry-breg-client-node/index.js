@@ -874,6 +874,7 @@ module.exports.BRegTombstoneBinding = nativeBinding.BRegTombstoneBinding
 module.exports.TombstoneBinding = nativeBinding.TombstoneBinding
 module.exports.PrivateKeyJwt = nativeBinding.PrivateKeyJwt
 module.exports.PrivateKeyJwtBinding = nativeBinding.PrivateKeyJwtBinding
+module.exports.ReadCancellation = nativeBinding.ReadCancellation
 module.exports.encodeIngestionChunk = nativeBinding.encodeIngestionChunk
 module.exports.eventRecordView = nativeBinding.eventRecordView
 module.exports.verifyHookDelivery = nativeBinding.verifyHookDelivery

@@ -2,6 +2,8 @@
 
 const { types: { isProxy, isSharedArrayBuffer } } = require('node:util');
 const native = require('./index');
+const { addAbortListener } = require('node:events');
+const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
 
 const MAX_JSON_DEPTH = 128;
 const MAX_JSON_NODES = 100_000;
@@ -203,13 +205,70 @@ function sanitizeArguments(args, jsonIndexes, requiredIndexes) {
   });
 }
 
+// Arity before the optional invocation control. Wire/query objects remain JSON-only.
+const cancellableReads = Object.freeze({
+  "registryMetadata": 1,
+  "registryContract": 1,
+  "recordSchema": 2,
+  "recordRevisions": 3,
+  "getRecordRevision": 4,
+  "eventRecordCreationRevision": 3,
+  "getRecord": 3,
+  "listRecords": 2,
+  "continueList": 1,
+  "getRecordJson": 3,
+  "listRecordsJson": 2,
+  "continueListJson": 1,
+  "lookupRecord": 4,
+  "lookupRecordJson": 4,
+  "getProposal": 2,
+  "readProposal": 1,
+  "readProposalSubmission": 2,
+  "listProposals": 2,
+  "listProposalsJson": 2,
+  "readProposalReviewById": 2,
+  "readProposalReviewStatus": 1,
+  "readProposalReviewStatusWithProgress": 1,
+  "readProposalReviewContext": 1,
+  "readProposalReviewContextBatch": 2,
+  "actionAvailability": 3,
+  "actionAvailabilityJson": 3
+});
+
+function readSignal(request) {
+  if (request === undefined) return undefined;
+  if (request === null || typeof request !== 'object' || isProxy(request)) throw inputError('invalid-request');
+  const fields = Reflect.ownKeys(request);
+  const options = plainDataObject(request, fields.length === 0 ? [] : ['signal']);
+  if (options.signal === undefined) return undefined;
+  // Invoke the built-in brand check, never a caller-supplied getter or reason.
+  if (isProxy(options.signal)) throw inputError('invalid-request');
+  try { signalAborted.call(options.signal); }
+  catch { throw inputError('invalid-request'); }
+  return options.signal;
+}
+
 function wrapAsync(name, jsonIndexes = [], requiredIndexes = []) {
   const original = native.BaseRegistryClient.prototype[name];
   native.BaseRegistryClient.prototype[name] = function (...args) {
+    let listener;
     try {
       const sanitized = sanitizeArguments(args, new Set(jsonIndexes), new Set(requiredIndexes));
-      return original.apply(this, sanitized).catch((error) => { throw normalize(error); });
+      const arity = cancellableReads[name];
+      if (arity !== undefined) {
+        const signal = readSignal(args[arity]);
+        sanitized[arity] = undefined;
+        if (signal !== undefined) {
+          const cancellation = new native.ReadCancellation();
+          if (signalAborted.call(signal)) cancellation.cancel();
+          else listener = addAbortListener(signal, () => cancellation.cancel());
+          sanitized[arity] = cancellation;
+        }
+      }
+      const result = original.apply(this, sanitized).catch((error) => { throw normalize(error); });
+      return listener ? result.finally(() => listener[Symbol.dispose]()) : result;
     } catch (error) {
+      listener?.[Symbol.dispose]();
       throw normalize(error, 'invalid-request');
     }
   };
