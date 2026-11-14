@@ -20,58 +20,74 @@ const SCHEMA_ID_BASE: &str = "https://id.registrystack.org/schemas/";
 
 /// One published tool schema.
 struct Tool {
-    /// The format's name in the format registry, after `breg/`.
+    /// The format's name in the format registry, after its namespace.
+    namespace: &'static str,
     format: &'static str,
     title: &'static str,
     spec: FormatSpec<'static>,
     members: fn() -> schemars::Schema,
 }
 
-fn tools() -> [Tool; 8] {
+fn tools() -> [Tool; 9] {
     [
         Tool {
+            namespace: "breg",
             format: "journeys",
             title: "Base Registry Engine acceptance journeys",
             spec: fixtures::JOURNEYS_FORMAT,
             members: fixtures::journeys_schema,
         },
         Tool {
+            namespace: "breg",
             format: "schema-test-credentials",
             title: "Base Registry Engine schema test credentials",
             spec: test_lifecycle::CREDENTIALS_FORMAT,
             members: test_lifecycle::credentials_schema,
         },
         Tool {
+            namespace: "breg",
             format: "model-selection",
             title: "Base Registry Engine model selection",
             spec: init_from_model::SELECTION_FORMAT,
             members: init_from_model::selection_schema,
         },
         Tool {
+            namespace: "breg",
             format: "dev-clients",
             title: "Base Registry Engine development clients",
             spec: dev::config::DEV_CLIENTS_FORMAT,
             members: dev::config::clients_schema,
         },
         Tool {
+            namespace: "breg",
             format: "project-dev",
             title: "Registry Stack project development plan",
             spec: project_dev::plan::FORMAT,
             members: project_dev::plan::schema,
         },
         Tool {
+            namespace: "rstack",
+            format: "scenarios",
+            title: "Registry Stack authored development scenarios",
+            spec: project_dev::plan::SCENARIOS_FORMAT,
+            members: project_dev::plan::scenarios_schema,
+        },
+        Tool {
+            namespace: "breg",
             format: "example-scenarios",
             title: "Base Registry Engine example scenarios",
             spec: dev::examples::EXAMPLE_SCENARIOS_FORMAT,
             members: dev::examples::catalogue_schema,
         },
         Tool {
+            namespace: "breg",
             format: "backup-binding",
             title: "Base Registry Engine external backup binding",
             spec: migration_plan::BACKUP_BINDING_FORMAT,
             members: migration_plan::backup_binding_schema,
         },
         Tool {
+            namespace: "breg",
             format: "migration-descriptor",
             title: "Base Registry Engine reviewed migration descriptor",
             spec: migration_plan::MIGRATION_DESCRIPTOR_FORMAT,
@@ -89,7 +105,7 @@ pub fn documents() -> Result<BTreeMap<String, String>, serde_json::Error> {
             let api_version = current_api_version(&tool.spec);
             let version = api_version.rsplit('/').next().unwrap_or(api_version);
             let file = format!("{}.{version}.schema.json", tool.format);
-            let identifier = format!("{SCHEMA_ID_BASE}breg/{}/{file}", tool.format);
+            let identifier = format!("{SCHEMA_ID_BASE}{}/{}/{file}", tool.namespace, tool.format);
             let mut derived = serde_json::to_value((tool.members)())?;
             registry_breg::schema::refuse_null(&mut derived, "");
             let published = published(

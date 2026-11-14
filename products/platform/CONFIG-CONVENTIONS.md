@@ -106,7 +106,7 @@ CFG-SCHEMA-3).
 **CFG-ENV-2 (MUST). `apiVersion` is
 `id.registrystack.org/formats/<product>/<format>/<version>`.** `<product>` is
 the product token (CFG-ENV-3). `kind` matches
-`^(BReg|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Adapter|Platform)([A-Z][a-z0-9]+)+$`,
+`^(BReg|RStack|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Adapter|Platform)([A-Z][a-z0-9]+)+$`,
 with acronyms written as words (`Mcp`, `Oid4vci`). `<format>` derives from
 `kind`: remove the product prefix; remove a trailing `Config`; split the rest
 before each uppercase letter; lowercase each word and join with `-`. The

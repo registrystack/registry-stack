@@ -646,6 +646,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The development plan: the products to start, the test people who call them, and the journey to run.",
+  "oneOf": [
+    {
+      "required": [
+        "journey"
+      ]
+    },
+    {
+      "required": [
+        "scenarioFile"
+      ]
+    }
+  ],
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
@@ -674,7 +686,7 @@
     },
     "journey": {
       "$ref": "#/$defs/Journey",
-      "description": "The ordered sequence of HTTP requests the run sends to the started products."
+      "description": "One inline journey, retained for existing development plans. Use scenarioFile for authored scenarios."
     },
     "kind": {
       "const": "BRegProjectDev",
@@ -697,6 +709,10 @@
         "$ref": "#/$defs/ProductPlan"
       },
       "type": "array"
+    },
+    "scenarioFile": {
+      "description": "Project-relative path to the authored Stack scenarios file. Exactly one of journey and scenarioFile is required.",
+      "type": "string"
     },
     "schemaTestPeople": {
       "additionalProperties": {
@@ -728,8 +744,7 @@
     "kind",
     "issuer",
     "products",
-    "people",
-    "journey"
+    "people"
   ],
   "title": "Registry Stack project development plan",
   "type": "object"

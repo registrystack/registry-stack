@@ -13,6 +13,8 @@ locale: en
 standards_referenced: []
 ---
 
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
 If you are writing a registry project and want to see Base Registry Engine (BReg) and Registry
 Casework serve it together, `rstack dev` starts both from your project directory, runs a short
 journey against them, and removes everything when you stop. It does not start PostgreSQL and does
@@ -115,7 +117,7 @@ cp -R path/to/registry-stack/products/platform/examples/licensing ./licensing
 ```
 
 The directory holds a BReg project (`registry/`), a Casework project (`casework/`) and the plan
-`dev.yaml`. Open `dev.yaml`: `rstack dev` reads only this file to decide what to start. Product
+`dev.yaml`. Open `dev.yaml`: `rstack dev` reads it and any authored scenario file it names. Product
 files stay byte-for-byte unchanged, and generated settings, keys and packages live in the run's
 owner-only scratch directory.
 
@@ -126,11 +128,15 @@ To adapt the plan to your own project, change these parts and leave the structur
 - `people` declares synthetic test people, each with a subject and one grant per product. A grant
   selects an access profile of that product's project, its scopes, and extra claims. A BReg grant
   must name a profile the BReg project declares.
-- `journey` is the sequence of requests the run makes before it reports ready. Each step names a
-  person, a product, a method, a path starting with `/v1/`, and what it expects back.
+- `journey` is the existing inline sequence of requests the run makes before it reports ready.
+  For an authored pack, replace it with `scenarioFile: tests/scenarios.yaml` and put one or more
+  scenarios in that project-relative file. Each step names a person, a product, a method, a path
+  starting with `/v1/`, and what it expects back.
 
 The [`rstack dev` reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
 describes every key, capture type and limit.
+
+<ConfigurationFormatChecks product="rstack" />
 
 ## Check, then start
 
@@ -205,7 +211,8 @@ curl -sS --header @"$HEADERS" "http://127.0.0.1:64931/v1/review-tasks?queue=appl
 A BReg project with encrypted fields runs without extra setup: each run gets its own development
 data key, removed when the run ends, so encrypted data does not outlive its run. A step in the
 project's `tests/journeys.yaml` that touches an encrypted Record type fails the pre-activation
-test, because that test has no key. Exercise those Record types in the plan's `journey` instead.
+test, because that test has no key. Exercise those Record types in an authored Stack scenario
+file, or in an existing plan's inline `journey`, instead.
 
 {/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev. */}
 
