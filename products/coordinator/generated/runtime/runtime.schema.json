@@ -93,7 +93,8 @@
       "additionalProperties": false,
       "properties": {
         "clientAssertionAudience": {
-          "$ref": "#/$defs/ExternalId"
+          "$ref": "#/$defs/ExternalId",
+          "description": "The authorization server's issuer identifier, exactly as its metadata\npublishes it. The client assertion names it as its only audience\n(RFC 10070 section 4)."
         },
         "clientId": {
           "$ref": "#/$defs/ExternalId",
@@ -124,6 +125,7 @@
       "required": [
         "tokenEndpoint",
         "clientId",
+        "clientAssertionAudience",
         "signingKeyRef",
         "resource",
         "scopes"

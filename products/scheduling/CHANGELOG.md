@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: Appointment detail (`GET /v1/appointments/{id}`) rests on how the
+  caller was admitted. A token that holds the reads scope reads the appointments
+  it owns, as before. A token that holds no reads scope and is admitted only
+  through an `appointment.read` task grant is held to that grant (service,
+  location, current status), even for an appointment its own subject booked.
+  Migration: a client that read its own bookings with a grant-only token must
+  also carry the reads scope.
+
 ## 0.46.0 - 2026-11-08
 
 - A holiday set's `label` is optional, as in the Casework holiday-set file; the id names a set that writes none.

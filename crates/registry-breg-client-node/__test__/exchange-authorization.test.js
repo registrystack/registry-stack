@@ -13,7 +13,7 @@ function key() {
   return { ...crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ format: 'jwk' }), alg: 'ES256', kid: 'synthetic-test' };
 }
 function clientConfig(endpoint, resource, scopes) {
-  return { tokenEndpoint: endpoint, clientId: 'agent-client', clientKey: key(), resource, scopes };
+  return { tokenEndpoint: endpoint, audience: new URL(endpoint).origin, clientId: 'agent-client', clientKey: key(), resource, scopes };
 }
 function jwt(claims) {
   return `${Buffer.from(JSON.stringify({ alg: 'ES256', kid: 'authority-key', typ: 'JWT' })).toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
@@ -45,6 +45,41 @@ test('exchange configuration rejects null, retired keys, and unsafe integers bef
     assert.throws(
       () => new BaseRegistryClient({ baseUrl: 'https://registry.example', authorization: { exchange: changed } }),
       (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration',
+    );
+  }
+});
+
+test('an exchange client states its client assertion audience', () => {
+  // RFC 10070 section 4: the client assertion names the authorization
+  // server's issuer identifier as its audience, so each client states it.
+  const deadline = Math.floor(Date.now() / 1000) + 120;
+  const firstParty = {
+    client: clientConfig('https://issuer.example/token', 'urn:records', ['records:get']),
+    context: { issuer: 'https://portal.example', subject: 'person-1', audience: 'https://issuer.example', generation: 'verified-1', deadlineSeconds: deadline },
+    firstParty: { key: key(), attributes: { registry_actor_kind: 'human' } },
+  };
+  const remote = {
+    client: clientConfig('https://issuer.example/token', 'urn:records', ['records:get']),
+    context: { issuer: 'https://casework.example', subject: 'agent-1', audience: 'https://issuer.example', generation: 'grant-1', deadlineSeconds: deadline, grantId: GRANT },
+    remote: { endpoint: `https://casework.example/v1/task-grants/${GRANT}/assertion`,
+      bootstrap: clientConfig('https://issuer.example/token', 'urn:casework', ['casework:grants:assert']),
+      bootstrapResource: 'urn:casework', bootstrapScope: 'casework:grants:assert' },
+  };
+  assert.equal(firstParty.client.audience, 'https://issuer.example');
+  assert.ok(new BaseRegistryClient({ baseUrl: 'https://registry.example', authorization: { exchange: firstParty } }));
+  assert.ok(new BaseRegistryClient({ baseUrl: 'https://registry.example', authorization: { exchange: remote } }));
+  const { audience: _client, ...clientWithoutAudience } = firstParty.client;
+  const { audience: _bootstrap, ...bootstrapWithoutAudience } = remote.remote.bootstrap;
+  for (const changed of [
+    { ...firstParty, client: clientWithoutAudience },
+    { ...firstParty, client: { ...clientWithoutAudience, audience: null } },
+    { ...remote, remote: { ...remote.remote, bootstrap: bootstrapWithoutAudience } },
+  ]) {
+    assert.throws(
+      () => new BaseRegistryClient({ baseUrl: 'https://registry.example', authorization: { exchange: changed } }),
+      (error) => error instanceof BaseRegistryClientError
+        && error.kind === 'configuration'
+        && error.message.includes('audience'),
     );
   }
 });

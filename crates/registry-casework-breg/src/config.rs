@@ -90,8 +90,9 @@ pub struct BregBinding {
         schemars(with = "registry_platform_config::SecretReference")
     )]
     pub client_assertion_key_ref: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_assertion_audience: Option<String>,
+    /// The authorization server's issuer identifier: the client assertion's
+    /// sole audience. It has no default.
+    pub client_assertion_audience: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,10 +156,7 @@ impl BregBinding {
                 ));
             }
         }
-        check_client(
-            &self.token_endpoint,
-            self.client_assertion_audience.as_deref(),
-        )?;
+        check_client(&self.token_endpoint, &self.client_assertion_audience)?;
         if self
             .resource
             .as_deref()
@@ -185,11 +183,13 @@ impl BregBinding {
 
 /// The identity and transport checks a private-key JWT client runs before it
 /// holds a key. The client identifier is a secret, so a stand-in takes its place.
-fn check_client(token_endpoint: &str, audience: Option<&str>) -> Result<(), BindingRefusal> {
+/// The endpoint is checked first with a stand-in audience, so each refusal
+/// names its own member.
+fn check_client(token_endpoint: &str, audience: &str) -> Result<(), BindingRefusal> {
     use registry_platform_httputil::PrivateKeyJwtConfig;
     let token_endpoint = url::Url::parse(token_endpoint)
         .map_err(|_| BindingRefusal::new("/tokenEndpoint", "the token endpoint must be a URL"))?;
-    PrivateKeyJwtConfig::check_identity(&token_endpoint, "offline-check", None)
+    PrivateKeyJwtConfig::check_identity(&token_endpoint, "offline-check", "offline-check")
         .map_err(|error| BindingRefusal::new("/tokenEndpoint", token_rule(error)))?;
     PrivateKeyJwtConfig::check_identity(&token_endpoint, "offline-check", audience)
         .map_err(|error| BindingRefusal::new("/clientAssertionAudience", token_rule(error)))
@@ -272,8 +272,9 @@ pub struct DelegatedDisplayExchangeBinding {
         schemars(with = "registry_platform_config::SecretReference")
     )]
     pub client_assertion_key_ref: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_assertion_audience: Option<String>,
+    /// The authorization server's issuer identifier: the client assertion's
+    /// sole audience. It has no default.
+    pub client_assertion_audience: String,
     pub resource: String,
     pub scopes: Vec<String>,
     pub generation: String,
@@ -296,10 +297,7 @@ impl DelegatedDisplayExchangeBinding {
     pub fn check_offline(&self) -> Result<(), BindingRefusal> {
         use registry_platform_httputil::{valid_resource_uri, validate_requested_scopes};
         check_exchange_values(&self.resource, &self.scopes, &self.generation)?;
-        check_client(
-            &self.token_endpoint,
-            self.client_assertion_audience.as_deref(),
-        )?;
+        check_client(&self.token_endpoint, &self.client_assertion_audience)?;
         if !valid_resource_uri(&self.resource) {
             return Err(BindingRefusal::new("/resource", RESOURCE_URI_RULE));
         }
@@ -370,10 +368,8 @@ pub fn build_provider(
         url::Url::parse(&binding.token_endpoint).map_err(|_| ReviewContextError::Invalid)?;
     let mut token = PrivateKeyJwtConfig::new(endpoint, client_id, key)
         .with_attempt_timeout(Duration::from_secs(30))
-        .with_connect_timeout(Duration::from_secs(10));
-    if let Some(audience) = &binding.client_assertion_audience {
-        token = token.with_audience(audience);
-    }
+        .with_connect_timeout(Duration::from_secs(10))
+        .with_audience(&binding.client_assertion_audience);
     if let Some(resource) = &binding.resource {
         token = token.with_resource(resource);
     }
@@ -470,6 +466,7 @@ mod tests {
             "tokenEndpoint": "http://127.0.0.1:31003/oauth2/token",
             "clientIdRef": "secret:file/source-client-id",
             "clientAssertionKeyRef": "secret:file/source-client-key",
+            "clientAssertionAudience": "https://idp.example.test",
             "resource": "urn:example:registry",
             "scopes": ["registry:proposal:review"],
             "generation": "casework-source-v1"
@@ -599,6 +596,35 @@ mod tests {
     }
 
     #[test]
+    fn the_client_assertion_audience_is_required_with_no_default() {
+        let mut binding = offline_binding();
+        binding
+            .as_object_mut()
+            .unwrap()
+            .remove("clientAssertionAudience");
+        let error = serde_json::from_value::<BregBinding>(binding)
+            .expect_err("a binding without an assertion audience was accepted");
+        assert!(
+            error.to_string().contains("`clientAssertionAudience`"),
+            "{error}"
+        );
+
+        let mut exchange = delegated_exchange();
+        exchange
+            .as_object_mut()
+            .unwrap()
+            .remove("clientAssertionAudience");
+        let mut binding = offline_binding();
+        binding["delegatedDisplayExchange"] = exchange;
+        let error = serde_json::from_value::<BregBinding>(binding)
+            .expect_err("an exchange without an assertion audience was accepted");
+        assert!(
+            error.to_string().contains("`clientAssertionAudience`"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn delegated_display_exchange_is_explicit_and_redacted() {
         let binding: BregBinding = serde_json::from_value(json!({
             "baseUrl": "https://breg.example.test",
@@ -606,6 +632,7 @@ mod tests {
             "tokenEndpoint": "https://idp.example.test/token",
             "clientIdRef": "secret:file/status-client-id",
             "clientAssertionKeyRef": "secret:file/status-client-key",
+            "clientAssertionAudience": "https://idp.example.test",
             "delegatedDisplayExchange": {
                 "tokenEndpoint": "https://idp.example.test/token",
                 "clientIdRef": "secret:file/source-client-id",

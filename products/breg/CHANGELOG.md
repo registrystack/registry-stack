@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- BREAKING: A bearer token that carries a Casework task grant
+  (`registry_grant_*` claims) must carry `iat` and `exp`, and `exp - iat` must be
+  at most 900 seconds, and `iat` must not be later than BReg's clock plus
+  `authentication.oidc.leewayMilliseconds`. A longer token, one without `iat`,
+  or one whose `iat` is later than that is refused with
+  `401 authentication.refused`, whatever time it has left. Tokens without a task
+  grant keep the `authentication.oidc.maximumTokenLifetimeSeconds` ceiling.
+  Migration: confirm the exchange issuer issues task-grant tokens for at most
+  900 seconds (Casework's documented exchange step uses 300) and that its clock
+  agrees with BReg's within the configured leeway; nothing changes in the BReg
+  configuration.
+- BREAKING: Record reads, read paths, statistics and the Proposal review-record
+  read admit a task grant only when the grant names the request's principal (the
+  value of `authentication.authorityClaims.principal`) and purpose (the value of
+  `authentication.authorityClaims.purpose`), and only before the grant's
+  deadline. Immediate Actions and Proposals already required this. A mismatch
+  answers the ordinary `404` read refusal. Migration: none for a deployment
+  whose principal claim is `sub` and whose purpose claim is the contextual
+  purpose claim; otherwise issue the exchanged token with the profile's
+  principal and purpose claims.
+- BREAKING: a private-key JWT client assertion names the authorization
+  server's issuer identifier as its only audience and has the header
+  `typ: client-authentication+jwt` (RFC 10070 section 4); the audience has no
+  default. The runtime configuration requires
+  `evidenceProviders.<id>.privateKeyJwt.assertionAudience`, the BReg MCP
+  gateway runtime configuration requires `assertionAudience` on its token
+  exchange, and a configuration without either fails to load.
+  The Node.js and Python clients require `audience` in `privateKeyJwt`
+  (`private_key_jwt`), the exchange `client` and the remote `bootstrap`, and
+  refuse a configuration without it at construction with kind `configuration`.
+  Migration: set the audience member to the authorization server's issuer
+  identifier, exactly as its metadata publishes it.
+- The `bregctl project-dev` token endpoint accepts a client assertion typed
+  `client-authentication+jwt` or `JWT` whose only audience is its issuer
+  identifier, as one string. It refuses any other type, its token endpoint URL
+  as the audience, and an audience array.
+
 - `bregctl project-dev` runs BReg projects, including spatial projects, from a
   `breg/project-dev` v1alpha1 plan. It is an alpha format and may change.
   `rstack dev` is its entry point.

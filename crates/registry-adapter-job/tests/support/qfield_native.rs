@@ -255,6 +255,9 @@ impl QfieldSource {
                 "tokenEndpoint": token_endpoint,
                 "clientId": "adapter-field-ingestion",
                 "privateKeyRef": "secret:file/breg-private-key",
+                "clientAssertionAudience": token_endpoint
+                    .strip_suffix("/token")
+                    .expect("the test issuer serves its token endpoint at /token"),
                 "scopes": ["registry:write"],
                 "resource": "urn:example:applications",
                 "attemptTimeoutMilliseconds": 3000

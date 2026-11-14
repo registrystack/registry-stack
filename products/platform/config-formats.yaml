@@ -131,7 +131,7 @@ formats:
     example: products/platform/examples/mcp-runtime/runtime.example.yaml
     conformance:
       requiredText: /name
-      optionalText: /bindings/0/provider/exchange/assertionAudience
+      optionalText: /resourceServer/scopeClaim
       integer: /rateLimits/perPrincipal/requestsPerMinute
       boolean: /resourceServer/allowInsecureHttp
       idList: none

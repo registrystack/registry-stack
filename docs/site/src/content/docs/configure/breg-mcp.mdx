@@ -197,7 +197,7 @@ The chat host's token is an RFC 9068 `at+jwt` whose audience is exactly the gate
 
 For the gateway, the issuer must support:
 
-- `private_key_jwt` authentication for the exchange client.
+- `private_key_jwt` authentication for the exchange client, with the issuer as assertion audience.
 - A `client_credentials` grant that honours the RFC 8707 `resource` parameter, so the actor token
   is issued for the gateway and never for BReg.
 - RFC 8693 exchange of the chat host's token. The issued token names the citizen in `sub`, carries
@@ -284,6 +284,7 @@ exchange:
   tokenEndpoint: https://login.example.com/token
   clientId: <gateway-exchange-client-id>
   privateKeyRef: secret:file/gateway-key
+  assertionAudience: https://login.example.com
 service:
   name: Address correction
   description: Correct the postal address the registry holds for you.

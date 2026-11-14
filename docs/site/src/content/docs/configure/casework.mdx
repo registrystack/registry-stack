@@ -59,7 +59,11 @@ the next step to take.
 
 Each [access profile](../../reference/glossary/#access-profile) admits a token that carries its `requiredScopes`, takes the caller's identity
 from `principalClaim`, and gives the caller one `actsAs` value: `staff`, `supervisor`, `administrator`, or
-`requester`. The project declares one of each:
+`requester`. Casework trusts one issuer, so every profile a person uses must name the same
+`principalClaim`; otherwise one person would appear as two principals, and Casework refuses the
+project with `casework.access-profile.mixed-principal-claims`. Profiles a trusted producer uses are
+services and share one claim among themselves, which may differ from the people's. The project
+declares one of each:
 
 ```yaml title="casework.yaml" test-excerpt="casework.yaml"
 accessProfiles:

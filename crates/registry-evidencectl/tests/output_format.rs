@@ -59,6 +59,8 @@ const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
             "https://evidence.example",
             "--client-id",
             "client",
+            "--client-assertion-audience",
+            "https://issuer.example",
             "--output",
             "client.json",
             "--private-key-file",

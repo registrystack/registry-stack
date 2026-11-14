@@ -369,7 +369,7 @@ pub(crate) mod tests {
                 client_id_ref: secret("CLIENT_ID"),
                 client_assertion_key_ref: SecretReference::new("secret:file/assertion-key.pem")
                     .expect("secret reference"),
-                client_assertion_audience: None,
+                client_assertion_audience: "https://token.example.invalid".to_owned(),
                 scope: None,
                 audience: None,
                 resource: None,

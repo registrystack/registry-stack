@@ -1179,6 +1179,7 @@ impl CaseworkProject {
                 }
             }
         }
+        self.principal_claim_findings(findings);
         for (role, name) in [
             (CaseworkActsAs::Staff, "staff"),
             (CaseworkActsAs::Supervisor, "supervisor"),
@@ -1207,6 +1208,77 @@ impl CaseworkProject {
                 "every scope this profile requires is also required by another profile at the same or a lower role, so their credentials could select this profile",
                 "Require a scope that no other profile at the same or a lower role requires.",
             );
+        }
+    }
+
+    /// A deployment trusts one issuer, so profiles that name different
+    /// principal claims would make one person two principals there, and
+    /// separation-of-duties and one-seat checks compare principals. People
+    /// (reviewers, initiators and requesters) share one claim; producers,
+    /// which are services, share another. The two groups are not compared.
+    fn principal_claim_findings(&self, findings: &mut Findings) {
+        let is_producer = |profile: &AccessProfile| {
+            profile.acts_as == CaseworkActsAs::Requester
+                && self
+                    .trusted_producers
+                    .iter()
+                    .any(|producer| producer.profile == profile.id)
+        };
+        for (producers, group) in [(false, "people"), (true, "producers")] {
+            let members: Vec<&AccessProfile> = self
+                .access_profiles
+                .iter()
+                .filter(|profile| is_producer(profile) == producers)
+                .collect();
+            // The reference is the claim most members use; on a tie, the
+            // claim of the first member by profile id (profiles are read
+            // sorted by id, not in the order the file writes them).
+            let mut counts: Vec<(&str, usize)> = Vec::new();
+            for member in &members {
+                match counts
+                    .iter_mut()
+                    .find(|(claim, _)| *claim == member.principal_claim)
+                {
+                    Some((_, count)) => *count += 1,
+                    None => counts.push((member.principal_claim.as_str(), 1)),
+                }
+            }
+            let Some(&(reference, _)) =
+                counts
+                    .iter()
+                    .reduce(|best, next| if next.1 > best.1 { next } else { best })
+            else {
+                continue;
+            };
+            let Some(anchor) = members
+                .iter()
+                .find(|member| member.principal_claim == reference)
+            else {
+                continue;
+            };
+            for outlier in members
+                .iter()
+                .filter(|member| member.principal_claim != reference)
+            {
+                findings.add(
+                    ConfigFinding::new(
+                        "casework.access-profile.mixed-principal-claims",
+                        format!("{}/principalClaim", keyed("accessProfiles", &outlier.id)),
+                        format!(
+                            "access profile '{}' names the principal claim \"{}\" and '{}' names \"{}\"; the {group} of one issuer must share one claim, or one person appears as two principals",
+                            outlier.id, outlier.principal_claim, anchor.id, reference
+                        ),
+                        format!(
+                            "Use one principal claim per issuer: set principalClaim to \"{reference}\" on '{}' to match the other {group}.",
+                            outlier.id
+                        ),
+                    )
+                    .with_related(
+                        format!("{}/principalClaim", keyed("accessProfiles", &anchor.id)),
+                        "the claim to match is written here",
+                    ),
+                );
+            }
         }
     }
 

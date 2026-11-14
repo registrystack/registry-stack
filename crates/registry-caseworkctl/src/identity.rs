@@ -492,12 +492,11 @@ mod tests {
     #[test]
     fn a_profile_whose_principal_is_a_named_claim_requires_it_on_every_token() {
         let mut project = crate::project::load_and_check_policy(&manifest(EXAMPLE)).unwrap();
-        let staff = project
-            .access_profiles
-            .iter_mut()
-            .find(|profile| profile.id == "staff")
-            .unwrap();
-        staff.principal_claim = "casework_officer".to_owned();
+        // Every profile names the same claim, as the project check requires of
+        // people profiles.
+        for profile in &mut project.access_profiles {
+            profile.principal_claim = "casework_officer".to_owned();
+        }
         let facts = facts(&Inputs {
             issuer: "https://identity.example.test",
             audience: "urn:example:casework",
@@ -513,8 +512,7 @@ mod tests {
             .map(|profile| (profile.id.as_str(), profile.required_claims.clone()))
             .collect();
         assert_eq!(required["staff"], ["casework_officer"]);
-        // A profile read by subject requires nothing beyond the subject.
-        assert!(required["supervisor"].is_empty());
+        assert_eq!(required["supervisor"], ["casework_officer"]);
         let yaml = facts.to_yaml().unwrap();
         identity_facts::read("facts", yaml.as_bytes()).unwrap();
     }

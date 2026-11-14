@@ -117,7 +117,7 @@ impl EvidenceIssuer {
         })?;
         let mut provider_config =
             PrivateKeyJwtConfig::new(token_endpoint, config.token_client.client_id.clone(), key)
-                .with_audience(config.token_client.client_assertion_audience().to_owned());
+                .with_audience(config.token_client.client_assertion_audience.clone());
         if let Some(resource) = config.token_client.resource.as_deref() {
             provider_config = provider_config.with_resource(resource.to_owned());
         }
@@ -232,7 +232,7 @@ mod tests {
         let mut config = valid_config();
         config.evidence.base_url = origin.clone();
         config.token_client.token_endpoint = format!("{origin}/oauth2/token");
-        config.token_client.client_assertion_audience = Some(origin);
+        config.token_client.client_assertion_audience = origin;
         config.token_client.resource = Some("urn:registry:evidence".to_owned());
         config.token_client.scopes = Some(vec!["evidence:invoke".to_owned()]);
         let issuer = EvidenceIssuer::new(&config, &private_jwk("delivery-client"))

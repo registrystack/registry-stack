@@ -107,7 +107,8 @@ class ProfileExchangeTest(unittest.TestCase):
                     "clientId": "profile-staff",
                     "privateKey": {"type": "environment", "variable": "UNUSED_PROFILE_EXCHANGE_KEY"},
                     "trust": {"type": "local-loopback-discovery"}, "contracts": {"type": "published"},
-                    "oauth": {"resource": "urn:registry:evidence", "scopes": ["evidence:invoke"]},
+                    "oauth": {"clientAssertionAudience": origin, "resource": "urn:registry:evidence",
+                              "scopes": ["evidence:invoke"]},
                     "expected": {"definitions": {"farmer-status": {
                         "configurationRevision": revision[0], "evidenceType": CONTRACTS["definitions"][0]["evidenceType"],
                         "purpose": CONTRACTS["definitions"][0]["purpose"],
@@ -119,7 +120,8 @@ class ProfileExchangeTest(unittest.TestCase):
                 def authorization(resource):
                     return {"exchange": {
                         "client": {"token_endpoint": f"{origin}/token", "client_id": "profile-staff",
-                                   "client_key": KEY, "resource": resource, "scopes": ["evidence:invoke"]},
+                                   "client_key": KEY, "audience": origin, "resource": resource,
+                                   "scopes": ["evidence:invoke"]},
                         "context": {"issuer": "https://portal.example", "subject": "person-1",
                                     "audience": origin, "generation": "verified-1",
                                     "deadline_seconds": int(time.time()) + 120},

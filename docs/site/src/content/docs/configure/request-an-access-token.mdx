@@ -24,7 +24,8 @@ Get these values from the issuer administrator and the service's operator:
 - The HTTPS token endpoint
 - Your registered client identifier
 - Your client's private JWK, with a `kid` and an `alg` the issuer accepts
-- The client-assertion audience, if not the token endpoint URL
+- The issuer identifier, exactly as the issuer's metadata publishes it: it is the client-assertion
+  audience
 - The RFC 8707 resource identifier of the service you call
 - The scopes that service's deployment requires
 
@@ -46,8 +47,8 @@ client = EvidenceClient(
 )
 ```
 
-`private_key_jwt` holds `token_endpoint`, `client_id`, `client_key`, and optionally `audience`,
-`resource`, and `scopes`; the [client API reference](../../reference/client-api/#token-configurations)
+`private_key_jwt` holds `token_endpoint`, `client_id`, `client_key`, `audience` (the issuer
+identifier, with no default), and optionally `resource` and `scopes`; the [client API reference](../../reference/client-api/#token-configurations)
 has the rest. The client builds and signs each client assertion for you.
 
 {/* Evidence: crates/registry-evidence-client-py/src/convert.rs, private_key_jwt_provider_from_json; crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi, EvidenceClient. */}
@@ -74,12 +75,13 @@ The client assertion is a compact JWT signed with your private key. Its protecte
 
 - `alg`: the algorithm your key signs with, one of `EdDSA`, `ES256`, `RS256`, `ES384`, or `RS384`
 - `kid`: your key's identifier, which the issuer uses to select your registered public key
-- `typ`: `JWT`
+- `typ`: `client-authentication+jwt`
 
 Its claims carry:
 
 - `iss` and `sub`: your client identifier
-- `aud`: the token endpoint URL, or the audience the issuer names instead
+- `aud`: the issuer identifier, exactly as the issuer's metadata publishes it, as the only audience;
+  an issuer that follows RFC 10070 section 4 refuses any other value, its token endpoint URL included
 - `iat`: the current Unix time
 - `exp`: `iat` plus a short lifetime, at most 300 seconds and no longer than your issuer accepts
   (the maintained clients default to 60)
@@ -89,7 +91,7 @@ Its claims carry:
 An issuer checks `iat` and `exp` against its own clock, so keep yours synchronized.
 
 {/* Evidence: crates/registry-platform-authcommon/src/client_assertion.rs, sign_client_assertion,
-    DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS;
+    CLIENT_ASSERTION_TYP, DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS;
     crates/registry-platform-httputil/src/client/private_key_jwt.rs, PrivateKeyJwtConfig,
     with_audience, with_scopes, CLIENT_ASSERTION_TYPE;
     crates/registry-evidencectl/src/client.rs, client_assertion_audience;

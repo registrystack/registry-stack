@@ -330,10 +330,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                         exchange.private_key_ref.as_str(),
                         provider_field("authorization/exchange/privateKeyRef"),
                     )?,
-                    assertion_audience: exchange
-                        .assertion_audience
-                        .as_ref()
-                        .map(|value| value.as_str().to_owned()),
+                    assertion_audience: exchange.assertion_audience.as_str().to_owned(),
                     gateway_resource: resource.resource.to_string(),
                     downstream_resource: authorization.audience.to_string(),
                     downstream_scopes: authorization

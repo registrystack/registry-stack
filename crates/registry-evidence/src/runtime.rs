@@ -1338,6 +1338,7 @@ impl EvidenceRuntime {
             .authenticate(access_token)
             .await
             .map_err(|_| failure(ProblemCode::AuthenticationFailed, "authentication"))?;
+        let grant_deadline = grant_release_deadline(&context);
         let rate_scope = rate_limit_scope(&self.bundle().config.service.trust_domain);
         let request_limit_key = self
             .audit
@@ -1664,14 +1665,9 @@ impl EvidenceRuntime {
         // boundary. Once admitted, the append remains deliberately outside
         // the acquisition timeout: durability cannot be cancelled halfway,
         // and the audited bytes may return after expiry.
-        if tokio::time::Instant::now() >= release_deadline {
+        if let Err(error) = release_admission(release_deadline, grant_deadline) {
             return self
-                .abort_request_batch(
-                    &audit_material,
-                    operation,
-                    started,
-                    failure(ProblemCode::DependencyUnavailable, "acquisition-budget"),
-                )
+                .abort_request_batch(&audit_material, operation, started, error)
                 .await;
         }
 
@@ -1815,6 +1811,7 @@ impl EvidenceRuntime {
             .authenticate(access_token)
             .await
             .map_err(|_| failure(ProblemCode::AuthenticationFailed, "authentication"))?;
+        let grant_deadline = grant_release_deadline(&context);
         let rate_scope = rate_limit_scope(&self.bundle().config.service.trust_domain);
         let request_limit_key = self
             .audit
@@ -2493,21 +2490,21 @@ impl EvidenceRuntime {
         // append itself is not wrapped in the acquisition timeout: once
         // admitted it must complete, and its exact audited bytes may return
         // after expiry.
-        if tokio::time::Instant::now() >= acquisition_deadline {
+        // The release record has no closed decision for a refused grant, so
+        // the failure is a `DependencyFailure` and its `safeErrorCategory`
+        // (`grant-expired` or `acquisition-budget`) is the distinguishing field.
+        if let Err(error) = release_admission(acquisition_deadline, grant_deadline) {
             self.append_failure(
                 &material,
                 operation,
                 AuditDecision::DependencyFailure,
-                "acquisition-budget",
+                error.category(),
                 &source_id,
                 &adapter_id,
                 started,
             )
             .await?;
-            return Err(failure(
-                ProblemCode::DependencyUnavailable,
-                "acquisition-budget",
-            ));
+            return Err(error);
         }
 
         self.audit
@@ -4065,6 +4062,35 @@ fn selector_input_subject<'a>(
 
 fn selector_contract_failure() -> RuntimeFailure {
     failure(ProblemCode::ServiceUnavailable, "selector-contract")
+}
+
+/// The instant a task grant stops authorizing release, or `None` when the
+/// caller holds no grant or the expiry lies beyond any representable instant.
+fn grant_release_deadline(context: &AuthenticatedContext) -> Option<tokio::time::Instant> {
+    let expires_at_millis = i128::from(context.grant().ok().flatten()?.exp()) * 1_000;
+    let remaining_millis = (expires_at_millis - i128::from(Utc::now().timestamp_millis())).max(0);
+    let remaining = Duration::from_millis(u64::try_from(remaining_millis).ok()?);
+    tokio::time::Instant::now().checked_add(remaining)
+}
+
+/// Admission to a release: the acquisition deadline and any task-grant expiry
+/// must both lie ahead. An expired grant is refused as an expired grant is at
+/// authentication, even when the acquisition deadline has not yet passed.
+pub(crate) fn release_admission(
+    acquisition_deadline: tokio::time::Instant,
+    grant_deadline: Option<tokio::time::Instant>,
+) -> Result<(), RuntimeFailure> {
+    let now = tokio::time::Instant::now();
+    if grant_deadline.is_some_and(|deadline| now >= deadline) {
+        return Err(failure(ProblemCode::NotAuthorized, "grant-expired"));
+    }
+    if now >= acquisition_deadline {
+        return Err(failure(
+            ProblemCode::DependencyUnavailable,
+            "acquisition-budget",
+        ));
+    }
+    Ok(())
 }
 
 fn failure(problem: ProblemCode, category: &'static str) -> RuntimeFailure {

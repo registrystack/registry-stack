@@ -60,7 +60,9 @@ Write the runtime and migration database URLs, with `sslmode=require`, into owne
 Coordinator verifies the database certificate against the system roots, or against
 `database.trustedRootCertificateRef` for a private root. A
 connection's `signingKeyRef` names a private JWK whose public half you register at the issuer, one
-client and key per downstream authority. The runbook gives the commands and the SQL for the roles:
+client and key per downstream authority. Its required `clientAssertionAudience` is the issuer
+identifier, exactly as the issuer's metadata publishes it, which the client assertion carries as
+its only audience (RFC 10070 section 4). The runbook gives the commands and the SQL for the roles:
 [Create the keys and secrets](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#create-the-keys-and-secrets) and
 [Create the database and roles](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#create-the-database-and-roles).
 
@@ -190,8 +192,8 @@ coordinator --runtime-config /etc/registry-coordinator/runtime.yaml
 State schema version 4 is required, and an earlier layout is refused; settle that work with its
 matching binary and start a fresh namespace and database identity.
 
-Startup refuses when a runtime file change alters a live run's endpoint, identity, scopes, or task
-authority. Restore the original binding, or investigate with `--recovery-only`, which admits and
+Startup refuses when a runtime file change alters a live run's endpoint, client assertion audience,
+identity, scopes, or task authority. Restore the original binding, or investigate with `--recovery-only`, which admits and
 dispatches nothing.
 
 While the database is unreachable the service logs `store-unavailable`, answers `/ready` with 503,

@@ -961,6 +961,294 @@ async fn a_status_link_survives_restart_under_the_same_artifact_and_caller() {
     );
 }
 
+/// The warning a held asynchronous row writes on each lookup.
+const HELD_WARNING: &str = "is not polled";
+
+fn succeeded_status() -> Response {
+    Response::json(
+        200,
+        &json!({
+            "state": "succeeded",
+            "result": {
+                "tracked_entity_type": "cQWYtUfH6Vx",
+                "org_unit": "qfg4XUDJtgS",
+                "created_at": "2026-03-01T12:00:00.000",
+                "updated_at": "2026-03-01T12:00:00.000"
+            }
+        })
+        .to_string(),
+    )
+}
+
+#[tokio::test]
+async fn a_status_link_is_polled_only_at_the_receiver_its_write_reached() {
+    let original = UpstreamDouble::start();
+    original.respond_with(vec![
+        Response::json(202, &json!({"operationId": "source-receiver"}).to_string()),
+        succeeded_status(),
+    ]);
+    let directory = tempfile::tempdir().expect("an asynchronous project directory");
+    async_project(directory.path());
+    let first =
+        Served::start_for_deployment(&original.url(""), directory.path(), "async-receiver", None)
+            .await;
+    let accepted = post(
+        &first,
+        &first.token("records.write"),
+        "async-create-receiver",
+        &request_body(),
+    );
+    assert_eq!(
+        accepted.status,
+        202,
+        "{}",
+        String::from_utf8_lossy(&accepted.body)
+    );
+    let accepted_json: Value = serde_json::from_slice(&accepted.body).expect("accepted JSON");
+    let status_path = accepted_json["statusLink"]
+        .as_str()
+        .expect("status link")
+        .to_owned();
+    let database = first.database.clone();
+    drop(first);
+
+    // The same artifact under a runtime file whose endpoint names another
+    // receiver: the artifact digest is unchanged, the source origin is not.
+    let other = UpstreamDouble::start();
+    other.respond_with(vec![succeeded_status()]);
+    let rebound = Served::start_for_deployment(
+        &other.url(""),
+        directory.path(),
+        "async-receiver",
+        Some(&database),
+    )
+    .await;
+    let held = rebound.get(&status_path, Some(&rebound.token("records.write")));
+    assert_eq!(held.0, 202, "{}", held.2);
+    assert_eq!(held.2, accepted_json, "a held link answers its stored 202");
+    assert_eq!(
+        other.request_count(),
+        0,
+        "a receiver configured after the write is never consulted"
+    );
+    assert!(
+        rebound.stderr_text().contains(HELD_WARNING),
+        "a held row is reported: {}",
+        rebound.stderr_text()
+    );
+    drop(rebound);
+
+    // Configuring the original receiver again lets the write settle there.
+    let restored = Served::start_for_deployment(
+        &original.url(""),
+        directory.path(),
+        "async-receiver",
+        Some(&database),
+    )
+    .await;
+    let terminal = restored.get(&status_path, Some(&restored.token("records.write")));
+    assert_eq!(terminal.0, 201, "{}", terminal.2);
+    assert!(terminal.1.contains(&accepted.request_id));
+    assert_eq!(
+        original.request_count(),
+        2,
+        "one mutation and one status check, both at the original receiver"
+    );
+}
+
+#[tokio::test]
+async fn an_uncertain_effect_is_checked_only_at_the_receiver_its_write_reached() {
+    let original = UpstreamDouble::start();
+    original.respond_with(vec![
+        Response::json(500, &json!({"error": "outcome unknown"}).to_string()),
+        Response::json(200, &json!({"state": "pending"}).to_string()),
+    ]);
+    let directory = tempfile::tempdir().expect("an uncertainty recovery project directory");
+    uncertainty_project(directory.path());
+    let first = Served::start_for_deployment(
+        &original.url(""),
+        directory.path(),
+        "async-uncertain-receiver",
+        None,
+    )
+    .await;
+    let request = request_body();
+    let unknown = post(
+        &first,
+        &first.token("records.write"),
+        "async-uncertain-receiver",
+        &request,
+    );
+    assert_eq!(
+        unknown.status,
+        409,
+        "{}",
+        String::from_utf8_lossy(&unknown.body)
+    );
+    assert_eq!(unknown.retry_after.as_deref(), Some("5"));
+    let database = first.database.clone();
+    drop(first);
+
+    let other = UpstreamDouble::start();
+    other.respond_with(vec![succeeded_status()]);
+    let rebound = Served::start_for_deployment(
+        &other.url(""),
+        directory.path(),
+        "async-uncertain-receiver",
+        Some(&database),
+    )
+    .await;
+    let held = post(
+        &rebound,
+        &rebound.token("records.write"),
+        "async-uncertain-receiver",
+        &request,
+    );
+    assert_eq!(held.status, 409, "{}", String::from_utf8_lossy(&held.body));
+    assert_eq!(
+        held.retry_after, None,
+        "no check under this configuration can prove the effect"
+    );
+    assert_eq!(
+        other.request_count(),
+        0,
+        "a receiver configured after the write is never consulted"
+    );
+    assert_eq!(
+        original.request_count(),
+        2,
+        "the mutation plus one safe check"
+    );
+    assert!(
+        rebound.stderr_text().contains(HELD_WARNING),
+        "a held row is reported: {}",
+        rebound.stderr_text()
+    );
+}
+
+#[tokio::test]
+async fn an_async_write_without_a_receiver_pin_is_never_polled_and_expires() {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![
+        Response::json(202, &json!({"operationId": "source-unpinned"}).to_string()),
+        succeeded_status(),
+    ]);
+    let directory = tempfile::tempdir().expect("an asynchronous project directory");
+    async_project(directory.path());
+    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
+    let writer = served.token("records.write");
+    let accepted = post(&served, &writer, "async-create-unpinned", &request_body());
+    assert_eq!(
+        accepted.status,
+        202,
+        "{}",
+        String::from_utf8_lossy(&accepted.body)
+    );
+    let accepted_json: Value = serde_json::from_slice(&accepted.body).expect("accepted JSON");
+    let status_path = accepted_json["statusLink"].as_str().expect("status link");
+
+    // A row written before receiver pins existed carries none.
+    served
+        .execute_sql(
+            "UPDATE adapter_idempotency_entries SET async_source_digest = NULL \
+             WHERE state = 'accepted'",
+        )
+        .await;
+    let held = served.get(status_path, Some(&writer));
+    assert_eq!(held.0, 202, "{}", held.2);
+    assert_eq!(held.2, accepted_json, "a held link answers its stored 202");
+    assert_eq!(
+        upstream.request_count(),
+        1,
+        "an unpinned row is never polled, even at an unchanged receiver"
+    );
+    assert!(
+        served.stderr_text().contains(HELD_WARNING),
+        "a held row is reported: {}",
+        served.stderr_text()
+    );
+
+    served
+        .execute_sql(
+            "UPDATE adapter_idempotency_entries \
+             SET async_expires_at = CURRENT_TIMESTAMP - interval '1 second' \
+             WHERE state = 'accepted'",
+        )
+        .await;
+    let expired = served.get(status_path, Some(&writer));
+    assert_eq!(expired.0, 404, "{}", expired.2);
+    assert_eq!(
+        upstream.request_count(),
+        1,
+        "an expired row is never polled"
+    );
+}
+
+#[tokio::test]
+async fn a_status_link_settles_at_an_unchanged_receiver_after_a_credential_rotation() {
+    const CREDENTIAL: &str = "      type: basic
+      usernameRef: secret:env/TEST_UPSTREAM_USERNAME
+      passwordRef: secret:env/TEST_UPSTREAM_PASSWORD
+";
+    const ROTATED_CREDENTIAL: &str = "      type: basic
+      usernameRef: secret:env/TEST_UPSTREAM_PASSWORD
+      passwordRef: secret:env/TEST_UPSTREAM_USERNAME
+";
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![
+        Response::json(202, &json!({"operationId": "source-rotated"}).to_string()),
+        succeeded_status(),
+    ]);
+    let directory = tempfile::tempdir().expect("an asynchronous project directory");
+    async_project(directory.path());
+    let first = Served::start_with_pack_endpoint_and_credential(
+        &upstream.url(""),
+        directory.path(),
+        &Served::example_pack(),
+        "tracker",
+        CREDENTIAL,
+    )
+    .await;
+    let accepted = post(
+        &first,
+        &first.token("records.write"),
+        "async-create-rotated",
+        &request_body(),
+    );
+    assert_eq!(
+        accepted.status,
+        202,
+        "{}",
+        String::from_utf8_lossy(&accepted.body)
+    );
+    let accepted_json: Value = serde_json::from_slice(&accepted.body).expect("accepted JSON");
+    let status_path = accepted_json["statusLink"]
+        .as_str()
+        .expect("status link")
+        .to_owned();
+    let database = first.database.clone();
+    drop(first);
+
+    let rotated = Served::start_with_pack_endpoint_credential_and_database(
+        &upstream.url(""),
+        directory.path(),
+        &Served::example_pack(),
+        "tracker",
+        ROTATED_CREDENTIAL,
+        &database,
+    )
+    .await;
+    let terminal = rotated.get(&status_path, Some(&rotated.token("records.write")));
+    assert_eq!(terminal.0, 201, "{}", terminal.2);
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 2, "one mutation and one status check");
+    assert_ne!(
+        requests[0].header("authorization"),
+        requests[1].header("authorization"),
+        "the status check ran under the rotated credential"
+    );
+}
+
 #[tokio::test]
 async fn a_synchronous_successor_starts_and_answers_the_older_artifacts_status_link_as_unknown() {
     let upstream = UpstreamDouble::start();

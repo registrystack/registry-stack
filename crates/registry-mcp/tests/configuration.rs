@@ -10,7 +10,7 @@ fn citizen() -> Value {
         "resourceServer":{"resource":"http://127.0.0.1:8110/mcp","issuer":"http://127.0.0.1:8111/","jwksSource":{"type":"static","documentRef":"secret:env/MCP_TEST_JWKS"},"algorithms":["EdDSA"],"allowedClients":["chat-host"],"requiredScopes":["citizen:self"]},
         "audit":{"hashKeyRef":"secret:env/MCP_TEST_AUDIT_KEY","destination":"stdout"},
         "rateLimits":{"perPrincipal":{"requestsPerMinute":30,"burst":10},"perClient":{"requestsPerMinute":600,"burst":100}},
-        "bindings":[{"name":"citizen","tools":["get_my_details"],"provider":{"type":"breg","registry":{"baseUrl":"http://127.0.0.1:8112/","accessProfile":"citizen-agent","audience":"urn:fixture:breg","scopes":["citizen:self"]},"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"citizen-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY"},"service":{"name":"Synthetic address correction","description":"Correct a synthetic record.","disclosure":"The assistant sees the values you authorize.","details":{"recordType":"person-address"},"application":{"action":"correct-address","targetInput":"address"},"reviewBaseUrl":"http://127.0.0.1:8113/"}}}]
+        "bindings":[{"name":"citizen","tools":["get_my_details"],"provider":{"type":"breg","registry":{"baseUrl":"http://127.0.0.1:8112/","accessProfile":"citizen-agent","audience":"urn:fixture:breg","scopes":["citizen:self"]},"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"citizen-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY","assertionAudience":"http://127.0.0.1:8111/"},"service":{"name":"Synthetic address correction","description":"Correct a synthetic record.","disclosure":"The assistant sees the values you authorize.","details":{"recordType":"person-address"},"application":{"action":"correct-address","targetInput":"address"},"reviewBaseUrl":"http://127.0.0.1:8113/"}}}]
     })
 }
 fn check(value: &Value) -> registry_platform_yaml::Report {
@@ -124,13 +124,44 @@ fn breg_binding_refusals_name_the_exact_member() {
 fn staff() -> Value {
     let mut config = citizen();
     config["bindings"][0]["tools"] = json!(["list_my_review_tasks", "get_review_task_context"]);
-    config["bindings"][0]["provider"] = json!({"type":"casework","authority":"delegated-staff-read","baseUrl":"http://127.0.0.1:8120/","readerPolicy":"assistant-reader","sourceProfile":"assistant-source","pageSize":20,"authorization":{"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"staff-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY"},"audience":"urn:fixture:casework","scopes":["casework:staff","casework:assistant-read"]}});
+    config["bindings"][0]["provider"] = json!({"type":"casework","authority":"delegated-staff-read","baseUrl":"http://127.0.0.1:8120/","readerPolicy":"assistant-reader","sourceProfile":"assistant-source","pageSize":20,"authorization":{"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"staff-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY","assertionAudience":"http://127.0.0.1:8111/"},"audience":"urn:fixture:casework","scopes":["casework:staff","casework:assistant-read"]}});
     config
 }
 #[test]
 fn explicit_casework_delegated_read_configuration_passes_offline_without_credentials() {
     let report = check(&staff());
     assert!(!report.has_errors(), "{}", report.render_human());
+}
+
+#[test]
+fn an_exchange_without_an_assertion_audience_is_refused_naming_the_member() {
+    for (mut config, exchange) in [
+        (citizen(), "/bindings/0/provider/exchange"),
+        (staff(), "/bindings/0/provider/authorization/exchange"),
+    ] {
+        config
+            .pointer_mut(exchange)
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .remove("assertionAudience")
+            .expect("the fixture states an assertion audience");
+        let report = check(&config);
+        assert!(
+            report
+                .to_json_value()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["code"] == "config.missing-key"
+                    && finding["path"].as_str().unwrap_or("").starts_with(exchange)
+                    && finding["message"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("assertionAudience")),
+            "expected a missing assertionAudience at {exchange}: {}",
+            report.render_human()
+        );
+    }
 }
 
 #[test]

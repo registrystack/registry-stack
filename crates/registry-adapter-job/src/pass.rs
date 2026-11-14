@@ -69,7 +69,8 @@ pub const RABBITMQ_HELD: &str = "adapter.job.rabbitmq-held";
 /// it is never delivered or acknowledged automatically.
 pub const RABBITMQ_EVENT_CHANGED: &str = "adapter.job.rabbitmq-event-changed";
 
-/// A pending signed delivery selected a receiver other than the public
+/// A pending signed delivery, or a rescan of a refused revision whose revised
+/// event may have been admitted, selected a receiver other than the public
 /// authority/configuration frozen for the sequence, or predates that fence.
 /// The pass stops before any recipient call and leaves the position unchanged.
 pub const COORDINATOR_RECEIVER_CHANGED: &str = "adapter.job.coordinator-receiver-changed";
@@ -81,8 +82,10 @@ pub const COORDINATOR_RECEIVER_CHANGED: &str = "adapter.job.coordinator-receiver
 /// staged it.
 pub const COORDINATOR_IDENTITY_UNRECORDED: &str = "adapter.job.coordinator-identity-unrecorded";
 
-/// A pending signed delivery would now be built with a different event body
-/// (the job version or the projection changed since it was first attempted).
+/// A pending signed delivery, or a rescan of a refused revision whose revised
+/// event may have been admitted, would now be built with a different event
+/// body (the job version or the projection changed since it was first
+/// attempted).
 /// The pass stops before any recipient call, because a new body could start a
 /// second Run for the same item; restoring the previous definition lets the
 /// pending item settle.
@@ -698,12 +701,15 @@ pub async fn run_pass(
                 // The row records its refusal before the limit is
                 // evaluated: a pass that stops at the limit still leaves
                 // the refused row its code, and only a rescan retries it.
+                // A refusal of a retry whose first answer was lost keeps
+                // the item possibly admitted.
                 if !options.dry_run {
                     if let Err(error) = store::record_refused(
                         &mut client,
                         job_id,
                         &staged.key,
                         &code,
+                        staged.receipt_uncertain,
                         SystemTime::now(),
                         lease_token,
                         lease_ttl(program),

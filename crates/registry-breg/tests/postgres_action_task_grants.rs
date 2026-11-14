@@ -127,7 +127,7 @@ async fn task_action_scope_subjects_replay_and_fresh_revocation_are_enforced() {
         "registry_actor_kind":"agent","registry_purpose":"directory-administration","scope":"contact:create",
         "registry_grant_id":"00000000-0000-4000-8000-000000000001","registry_approver":"h:approver",
         "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
-        "registry_grant_resource":audience,"registry_grant_exp":now+600,
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,"exp":now+900,
         "registry_grant_bounds":{"type":"breg","permissions":[{"collection":"action:create-contact","operations":["invoke"]},{"collection":"contacts","operations":["get"]}]},
         "identity":{"jurisdiction":"zone-a"},"jurisdiction":"zone-b"});
     let caller = auth
@@ -491,7 +491,7 @@ async fn task_record_read_is_bound_to_the_grant_identity_by_the_profile_row_boun
         "registry_actor_kind":"agent","registry_purpose":"directory-administration","scope":"contact:create",
         "registry_grant_id":"00000000-0000-4000-8000-000000000001","registry_approver":"h:approver",
         "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
-        "registry_grant_resource":audience,"registry_grant_exp":now+600,
+        "registry_grant_resource":audience,"registry_grant_exp":now+600,"exp":now+900,
         "registry_grant_bounds":{"type":"breg","permissions":[{"collection":"contacts","operations":["get"]}]},
         "identity":{"jurisdiction":"zone-a"},"jurisdiction":"zone-b"});
     let editor = |zone: &str| {

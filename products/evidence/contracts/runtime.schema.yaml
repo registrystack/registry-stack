@@ -386,12 +386,13 @@ properties:
     description: >-
       Finite operational budget shared by every pack-route call in one acquisition.
       Omission uses 5 data operations, 30000 milliseconds and 1048576 response bytes.
+      The deadline has a maximum of 300000 milliseconds.
     type: object
     additionalProperties: false
     required: [maximumDataOperations, acquisitionDeadlineMilliseconds, maximumResponseBytes]
     properties:
       maximumDataOperations: {type: integer, minimum: 1, maximum: 18446744073709551615}
-      acquisitionDeadlineMilliseconds: {type: integer, minimum: 1, maximum: 18446744073709551615}
+      acquisitionDeadlineMilliseconds: {type: integer, minimum: 1, maximum: 300000}
       maximumResponseBytes: {type: integer, minimum: 1, maximum: 18446744073709551615}
   sourceExtracts:
     description: >-
@@ -552,7 +553,7 @@ $defs:
           assumedLifetimeSeconds: {type: integer, minimum: 1, maximum: 86400}
       - type: object
         additionalProperties: false
-        required: [type, tokenEndpoint, clientIdRef, clientAssertionKeyRef, maximumCacheSeconds]
+        required: [type, tokenEndpoint, clientIdRef, clientAssertionKeyRef, clientAssertionAudience, maximumCacheSeconds]
         properties:
           type: {const: oauth2-private-key-jwt}
           tokenEndpoint: {$ref: '#/$defs/Url'}

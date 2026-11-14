@@ -47,13 +47,15 @@ set stays available for rollback.
 
 Pass the set to `rstack evidence client profile create` with `--pinned-jwks`, a path relative to the
 profile file. The other values are the ones your deployment's operator gave you; the private key is
-the one your client registered with the issuer:
+the one your client registered with the issuer, and `--client-assertion-audience` is that issuer's
+identifier, exactly as its metadata publishes it:
 
 ```sh
 rstack evidence client profile create \
   --base-url https://evidence.example.com \
   --client-id age-check-app \
   --private-key-file app-key/client-assertion-p384-private-jwk \
+  --client-assertion-audience https://issuer.example.com \
   --pinned-jwks trusted-jwks.json \
   --output age-check-client.json
 ```

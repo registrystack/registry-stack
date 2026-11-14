@@ -104,7 +104,7 @@ pub fn write_runtime(
                         "tokenEndpoint": token_endpoint,
                         "clientId": "citizen-gateway",
                         "privateKeyRef": "secret:file/exchange-key.json",
-                        "assertionAudience": token_endpoint
+                        "assertionAudience": issuer
                     },
                     "service": {
                         "name": "Citizen details",

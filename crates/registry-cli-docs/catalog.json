@@ -2421,7 +2421,7 @@
                 },
                 {
                   "display": "--assertion-audience <ASSERTION_AUDIENCE>",
-                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "description": "Client assertion audience: the authorization server's issuer identifier",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -10915,7 +10915,7 @@
                 },
                 {
                   "display": "--assertion-audience <ASSERTION_AUDIENCE>",
-                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "description": "Client assertion audience: the authorization server's issuer identifier",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11732,7 +11732,7 @@
                 },
                 {
                   "display": "--assertion-audience <ASSERTION_AUDIENCE>",
-                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "description": "Client assertion audience: the authorization server's issuer identifier",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -19294,7 +19294,7 @@
                 },
                 {
                   "display": "--assertion-audience <ASSERTION_AUDIENCE>",
-                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "description": "Client assertion audience: the authorization server's issuer identifier",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -19743,7 +19743,7 @@
                     },
                     {
                       "display": "--client-assertion-audience <AUDIENCE>",
-                      "description": "Audience of the client assertion presented at the token endpoint, when the issuer expects one other than the token endpoint URL (ThunderID v1.0.1 expects the issuer string). This is not the token request's resource",
+                      "description": "Required. Audience of the client assertion presented at the token endpoint: the authorization server's issuer identifier, exactly as its metadata publishes it (RFC 10070 section 4). It has no default. This is not the token request's resource",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -23686,7 +23686,7 @@
                 },
                 {
                   "display": "--assertion-audience <ASSERTION_AUDIENCE>",
-                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "description": "Client assertion audience: the authorization server's issuer identifier",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -26926,7 +26926,7 @@
                 },
                 {
                   "display": "--assertion-audience <ASSERTION_AUDIENCE>",
-                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "description": "Client assertion audience: the authorization server's issuer identifier",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

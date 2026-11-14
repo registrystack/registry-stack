@@ -606,6 +606,7 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
             "privateKey": {"type": "file", "path": "unused-by-in-memory-key.jwk"},
             "trust": {"type": "local-loopback-discovery"},
             "contracts": {"type": "published"},
+            "oauth": {"clientAssertionAudience": issuer.origin},
             "verification": {
                 "maximumAssertionLifetimeSeconds": MAXIMUM_ASSERTION_LIFETIME_SECONDS,
                 "clockSkewSeconds": CLOCK_SKEW_SECONDS
@@ -779,6 +780,7 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
             "privateKey": {"type": "file", "path": "unused-by-in-memory-key.jwk"},
             "trust": {"type": "local-loopback-discovery"},
             "contracts": {"type": "reviewed", "file": "reviewed-contracts.json"},
+            "oauth": {"clientAssertionAudience": issuer.origin},
             "verification": {
                 "maximumAssertionLifetimeSeconds": MAXIMUM_ASSERTION_LIFETIME_SECONDS,
                 "clockSkewSeconds": CLOCK_SKEW_SECONDS
@@ -895,7 +897,11 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
             "privateKey": {"type":"environment", "variable":"UNUSED_EXCHANGE_PROFILE_KEY"},
             "trust": {"type":"local-loopback-discovery"},
             "contracts": {"type":"published"},
-            "oauth": {"resource":TOKEN_AUDIENCE, "scopes":["evidence:invoke"]},
+            "oauth": {
+                "clientAssertionAudience":issuer.origin,
+                "resource":TOKEN_AUDIENCE,
+                "scopes":["evidence:invoke"]
+            },
             "expected": {"definitions": {"adult-status": {
                 "configurationRevision":definition["configurationRevision"],
                 "evidenceType":definition["evidenceType"],
@@ -914,6 +920,7 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
                 CLIENT_ID,
                 issuer.client_key.clone(),
             )
+            .with_audience(issuer.origin.clone())
             .with_resource(resource)
             .with_scopes(["evidence:invoke"]),
         )
@@ -957,7 +964,8 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
     };
     let before = issuer.issued_credential_count();
     let mut unpinned = profile.clone();
-    unpinned.oauth = None;
+    unpinned.oauth.resource = None;
+    unpinned.oauth.scopes = None;
     assert!(matches!(
         EvidenceClient::from_profile_with_authorization(unpinned, exchange(TOKEN_AUDIENCE)),
         Err(EvidenceClientError::Configuration { .. })
@@ -1819,6 +1827,7 @@ impl TokenIssuer {
     ) -> Arc<PrivateKeyJwt> {
         let mut config =
             PrivateKeyJwtConfig::new(self.token_endpoint.clone(), CLIENT_ID, client_key)
+                .with_audience(self.origin.clone())
                 .with_resource(TOKEN_AUDIENCE)
                 .with_scopes(["evidence:invoke".to_owned()]);
         if let Some(seconds) = refresh_margin_seconds {
@@ -1849,7 +1858,6 @@ impl TokenIssuer {
 #[derive(Clone)]
 struct ClientCredentialsResponder {
     origin: String,
-    token_endpoint: String,
     client_keys: BTreeMap<String, PublicJwk>,
     signing_key: PrivateJwk,
     issued: Arc<AtomicUsize>,
@@ -1925,6 +1933,11 @@ impl ClientCredentialsResponder {
         else {
             return false;
         };
+        // The fixture holds the client to the explicit type RFC 10070 section
+        // 4 defines, so the suite proves what the client sends.
+        if header["typ"] != "client-authentication+jwt" {
+            return false;
+        }
         let Some(key) = header["kid"]
             .as_str()
             .and_then(|kid| self.client_keys.get(kid))
@@ -1952,9 +1965,11 @@ impl ClientCredentialsResponder {
             return false;
         };
         let now = Utc::now().timestamp();
+        // RFC 10070 section 4: the sole audience is this server's issuer
+        // identifier, compared as a string.
         claims["iss"] == CLIENT_ID
             && claims["sub"] == CLIENT_ID
-            && claims["aud"] == self.token_endpoint
+            && claims["aud"] == self.origin
             && claims["iat"].as_i64().is_some_and(|iat| iat <= now)
             && claims["exp"]
                 .as_i64()
@@ -2044,7 +2059,6 @@ async fn start_token_issuer() -> TokenIssuer {
         .and(path("/token"))
         .respond_with(ClientCredentialsResponder {
             origin: origin.clone(),
-            token_endpoint: token_endpoint.to_string(),
             client_keys: BTreeMap::from([
                 (CLIENT_KEY_ID.to_owned(), client_key.public()),
                 (ES256_CLIENT_KEY_ID.to_owned(), es256_client_key.public()),

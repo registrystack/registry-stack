@@ -107,6 +107,13 @@ or the `remote` authority variant. The shared exchange parser checks the
 verified context and credential binding before any token request. Exactly one
 of `token` and `authorization` must be present.
 
+`token["private_key_jwt"]`, the exchange `client` and the `remote` variant's
+`bootstrap` client each require `audience`:
+the authorization server's issuer identifier, exactly as its metadata
+publishes it. It is the client assertion's sole audience (RFC 10070 section
+4) and has no default; the assertion carries `typ: client-authentication+jwt`.
+A client profile states the same value as `oauth.clientAssertionAudience`.
+
 For a progressive procedure, use
 `EvidenceClient.from_profile_with_authorization(profile_path, {"exchange": config})`.
 The profile must pin `oauth.resource` and `oauth.scopes`; its client ID,

@@ -32,6 +32,10 @@ binding must use. A direct export defaults to `static-authorization`; select
 `--authentication oauth2-private-key-jwt` when the reviewed Evidence target uses
 that flow. The guided native `evidencectl source add` path selects
 `oauth2-private-key-jwt` together with its dedicated BReg development client.
+Under `oauth2-private-key-jwt` the Evidence target states
+`clientAssertionAudience`: the authorization server's issuer identifier,
+exactly as its metadata publishes it, which the client assertion carries as
+its only audience (RFC 10070 section 4). It has no default.
 Changing the selection changes the pack version and export provenance, so an
 import or update cannot treat different authentication-contract bytes as the
 same immutable pack.

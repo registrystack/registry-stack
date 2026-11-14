@@ -95,8 +95,9 @@ const MAXIMUM_CONTRACT_DEFINITIONS: usize = 16_384;
 /// with [`EvidenceClientProfile::from_file`] to resolve them against the
 /// profile's own directory.
 pub fn read_client_profile(file: &str, bytes: &[u8]) -> Result<EvidenceClientProfile, Report> {
-    let Decoded { value, document } =
-        Reader::new(file).decode::<ProfileDocument>(bytes, &Expect::one(&PROFILE_FORMAT))?;
+    let Decoded { value, document } = Reader::new(file)
+        .decode::<ProfileDocument>(bytes, &Expect::one(&PROFILE_FORMAT))
+        .map_err(name_the_assertion_audience)?;
     let findings = value.base_url_findings(&document);
     if !findings.is_empty() {
         return Err(report(findings));
@@ -112,6 +113,34 @@ pub fn read_client_profile(file: &str, bytes: &[u8]) -> Result<EvidenceClientPro
         )]));
     }
     Ok(profile)
+}
+
+/// A profile without `oauth` lacks the one member of it every profile
+/// states, so the fix names `oauth.clientAssertionAudience` rather than the
+/// bare parent.
+fn name_the_assertion_audience(report: Report) -> Report {
+    let files_checked = report.files_checked();
+    let mut named = Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                if diagnostic.code == "config.missing-key"
+                    && diagnostic.path.is_empty()
+                    && diagnostic.message.contains("`oauth`")
+                {
+                    diagnostic.suggested_action =
+                        "Add `oauth` with `clientAssertionAudience` set to the authorization server's issuer identifier."
+                            .to_owned();
+                }
+                diagnostic
+            })
+            .collect(),
+    );
+    if let Some(files_checked) = files_checked {
+        named.set_files_checked(files_checked);
+    }
+    named
 }
 
 /// Read a reviewed contracts file: the contracts, or every finding with its
@@ -238,12 +267,11 @@ pub(crate) struct ProfileDocument {
     /// the definitions it requests.
     #[serde(default)]
     pub(crate) expected: Option<ExpectedMember>,
-    /// Fixed OAuth request parameters for the token acquisition, for issuers
-    /// whose client-assertion audience, resource indicator, or requested
-    /// scopes are not derivable from discovery. Omitted members keep the
+    /// Fixed OAuth request parameters for the token acquisition: the client
+    /// assertion audience, always, and the resource indicator and requested
+    /// scopes for issuers that need them. Omitted optional members keep the
     /// discovery-driven behavior.
-    #[serde(default)]
-    pub(crate) oauth: Option<OauthMember>,
+    pub(crate) oauth: OauthMember,
     /// How long the client keeps the service's discovery metadata, in
     /// seconds. Omitted, it is 600.
     #[serde(default)]
@@ -348,10 +376,10 @@ impl ProfileDocument {
                     .map(|(handle, pin)| (handle.0, pin.into_profile()))
                     .collect(),
             },
-            oauth: self.oauth.map(|oauth| OauthProfile {
-                client_assertion_audience: oauth.client_assertion_audience.map(|value| value.0),
-                resource: oauth.resource.map(|value| value.0),
-                scopes: oauth.scopes.map(|scopes| {
+            oauth: OauthProfile {
+                client_assertion_audience: self.oauth.client_assertion_audience.0,
+                resource: self.oauth.resource.map(|value| value.0),
+                scopes: self.oauth.scopes.map(|scopes| {
                     scopes
                         .0
                         .into_vec()
@@ -359,7 +387,7 @@ impl ProfileDocument {
                         .map(|scope| scope.0)
                         .collect()
                 }),
-            }),
+            },
             maximum_metadata_cache_seconds: self
                 .maximum_metadata_cache_seconds
                 .map_or(DEFAULT_METADATA_CACHE_SECONDS, BoundedU64::get),
@@ -515,16 +543,18 @@ pub(crate) enum ExpectedResponseFormat {
 
 /// Fixed OAuth request parameters for the token acquisition.
 ///
-/// `clientAssertionAudience` is who checks the client's authentication JWT;
-/// `resource` is the RFC 8707 resource indicator the token's audience must
-/// name. Neither is `expected.audience`, the Evidence assertion's audience.
+/// `clientAssertionAudience` is the authorization server's issuer identifier,
+/// the sole audience RFC 10070 section 4 allows on the client's
+/// authentication JWT; `resource` is the RFC 8707 resource indicator the
+/// token's audience must name. Neither is `expected.audience`, the Evidence
+/// assertion's audience.
 #[derive(Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct OauthMember {
-    /// The audience of the client's authentication JWT.
-    #[serde(default)]
-    pub(crate) client_assertion_audience: Option<UriIdentity>,
+    /// The authorization server's issuer identifier, exactly as it publishes
+    /// it: the audience of the client's authentication JWT.
+    pub(crate) client_assertion_audience: UriIdentity,
     /// The resource indicator the token request carries.
     #[serde(default)]
     pub(crate) resource: Option<ResourceIndicator>,
@@ -960,7 +990,8 @@ mod tests {
             "kind": EVIDENCE_CLIENT_PROFILE_KIND,
             "baseUrl": "https://evidence.example.org",
             "clientId": "relying-party",
-            "privateKey": {"type": "environment", "variable": "EVIDENCE_CLIENT_KEY"}
+            "privateKey": {"type": "environment", "variable": "EVIDENCE_CLIENT_KEY"},
+            "oauth": {"clientAssertionAudience": "https://issuer.example.org"}
         })
     }
 
@@ -1035,8 +1066,50 @@ mod tests {
             profile.maximum_metadata_cache_seconds,
             DEFAULT_METADATA_CACHE_SECONDS
         );
-        assert!(profile.oauth.is_none());
+        assert_eq!(
+            profile.oauth.client_assertion_audience,
+            "https://issuer.example.org"
+        );
+        assert!(profile.oauth.resource.is_none());
+        assert!(profile.oauth.scopes.is_none());
         assert!(profile.expected.definitions.is_empty());
+    }
+
+    /// RFC 10070 section 4 makes a client assertion's audience the
+    /// authorization server's issuer identifier. Nothing else in the profile
+    /// supplies it, so a profile that does not state it is refused and the
+    /// finding names the member.
+    #[test]
+    fn a_profile_that_states_no_client_assertion_audience_is_refused() {
+        let mut without_oauth = profile();
+        without_oauth
+            .as_object_mut()
+            .expect("the profile is an object")
+            .remove("oauth");
+        let Err(report) = read_profile(&without_oauth) else {
+            panic!("a profile without an assertion audience was accepted");
+        };
+        let diagnostics = report.into_diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, "config.missing-key");
+        assert!(
+            diagnostics[0]
+                .suggested_action
+                .contains("clientAssertionAudience"),
+            "the fix does not name the member: {}",
+            diagnostics[0].suggested_action
+        );
+
+        let mut without_member = profile();
+        without_member["oauth"] = json!({"resource": "urn:registry:evidence"});
+        let Err(report) = read_profile(&without_member) else {
+            panic!("an oauth object without an assertion audience was accepted");
+        };
+        let diagnostics = report.into_diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, "config.missing-key");
+        assert_eq!(diagnostics[0].path, "/oauth");
+        assert!(diagnostics[0].message.contains("clientAssertionAudience"));
     }
 
     #[test]
@@ -1120,7 +1193,11 @@ mod tests {
                 "expected",
                 json!({"issuer": "evidence.example.org"}),
             ),
-            ("/oauth/scopes", "oauth", json!({"scopes": []})),
+            (
+                "/oauth/scopes",
+                "oauth",
+                json!({"clientAssertionAudience": "https://issuer.example.org", "scopes": []}),
+            ),
             (
                 "/maximumMetadataCacheSeconds",
                 "maximumMetadataCacheSeconds",
@@ -1184,11 +1261,16 @@ mod tests {
             br#"{"apiVersion":"id.registrystack.org\/formats\/evidence\/client-profile\/v1",
             "kind":"EvidenceClientProfile",
             "baseUrl":"https:\/\/evidence.example.org","clientId":"rp",
-            "privateKey":{"type":"file","path":"keys\/rp.jwk.json"}}"#;
+            "privateKey":{"type":"file","path":"keys\/rp.jwk.json"},
+            "oauth":{"clientAssertionAudience":"https:\/\/issuer.example.org"}}"#;
         let profile = read_client_profile("profile.json", escaped).unwrap();
         assert_eq!(profile.client_id, "rp");
+        assert_eq!(
+            profile.oauth.client_assertion_audience,
+            "https://issuer.example.org"
+        );
 
-        let tabbed = b"{\n\t\"apiVersion\": \"id.registrystack.org/formats/evidence/client-profile/v1\",\n\t\"kind\": \"EvidenceClientProfile\",\n\t\"baseUrl\": \"https://evidence.example.org\",\n\t\"clientId\": \"rp\",\n\t\"privateKey\": {\"type\": \"environment\", \"variable\": \"KEY\"}\n}\n";
+        let tabbed = b"{\n\t\"apiVersion\": \"id.registrystack.org/formats/evidence/client-profile/v1\",\n\t\"kind\": \"EvidenceClientProfile\",\n\t\"baseUrl\": \"https://evidence.example.org\",\n\t\"clientId\": \"rp\",\n\t\"privateKey\": {\"type\": \"environment\", \"variable\": \"KEY\"},\n\t\"oauth\": {\"clientAssertionAudience\": \"https://issuer.example.org\"}\n}\n";
         read_client_profile("profile.json", tabbed).unwrap();
 
         let contracts = serde_json::to_vec(&contracts(vec![definition("adult-status")])).unwrap();
@@ -1272,7 +1354,8 @@ mod tests {
             "kind": "EvidenceClientProfile",
             "baseUrl": "https://evidence.example.org",
             "clientId": "relying-party",
-            "privateKey": {"type": "environment", "variable": "EVIDENCE_CLIENT_KEY"}
+            "privateKey": {"type": "environment", "variable": "EVIDENCE_CLIENT_KEY"},
+            "oauth": {"clientAssertionAudience": "https://issuer.example.org"}
         });
         let read = read_profile(&enveloped).expect("the enveloped profile reads");
         assert_eq!(

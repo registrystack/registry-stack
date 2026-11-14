@@ -43,5 +43,6 @@ bindings:
           tokenEndpoint: https://login.example.invalid/token
           clientId: staff-gateway
           privateKeyRef: secret:file/gateway-key
+          assertionAudience: https://login.example.invalid
         audience: urn:example:casework
         scopes: [casework:staff]

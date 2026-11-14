@@ -23,7 +23,7 @@ struct DelegatedDisplayExchange {
     token_endpoint: Url,
     client_id: String,
     key: PrivateJwk,
-    assertion_audience: Option<String>,
+    assertion_audience: String,
     resource: String,
     scopes: Vec<String>,
     generation: String,
@@ -36,7 +36,7 @@ impl DelegatedDisplayExchange {
         token_endpoint: Url,
         client_id: String,
         key: PrivateJwk,
-        assertion_audience: Option<String>,
+        assertion_audience: String,
         resource: String,
         scopes: Vec<String>,
         generation: String,
@@ -48,19 +48,14 @@ impl DelegatedDisplayExchange {
                 &token_endpoint,
                 &client_id,
                 &key,
-                assertion_audience.as_deref(),
+                &assertion_audience,
             ))
             .map_err(|_| ReviewContextError::Invalid)?,
         );
         PrivateKeyJwt::new(
-            Self::client_config(
-                &token_endpoint,
-                &client_id,
-                &key,
-                assertion_audience.as_deref(),
-            )
-            .with_resource(resource.clone())
-            .with_scopes(scopes.iter().cloned()),
+            Self::client_config(&token_endpoint, &client_id, &key, &assertion_audience)
+                .with_resource(resource.clone())
+                .with_scopes(scopes.iter().cloned()),
         )
         .map_err(|_| ReviewContextError::Invalid)?;
         Ok(Self {
@@ -79,15 +74,12 @@ impl DelegatedDisplayExchange {
         token_endpoint: &Url,
         client_id: &str,
         key: &PrivateJwk,
-        assertion_audience: Option<&str>,
+        assertion_audience: &str,
     ) -> PrivateKeyJwtConfig {
-        let config = PrivateKeyJwtConfig::new(token_endpoint.clone(), client_id, key.clone())
+        PrivateKeyJwtConfig::new(token_endpoint.clone(), client_id, key.clone())
             .with_attempt_timeout(Duration::from_secs(30))
-            .with_connect_timeout(Duration::from_secs(10));
-        match assertion_audience {
-            Some(audience) => config.with_audience(audience),
-            None => config,
-        }
+            .with_connect_timeout(Duration::from_secs(10))
+            .with_audience(assertion_audience)
     }
 
     async fn bearer(
@@ -100,7 +92,7 @@ impl DelegatedDisplayExchange {
                 &self.token_endpoint,
                 &self.client_id,
                 &self.key,
-                self.assertion_audience.as_deref(),
+                &self.assertion_audience,
             )
             .with_resource(self.resource.clone())
             .with_scopes(self.scopes.iter().cloned()),
@@ -870,7 +862,7 @@ mod version_tests {
             server.token_endpoint().parse().unwrap(),
             SOURCE_CLIENT.into(),
             source_key,
-            None,
+            server.issuer(),
             BREG_RESOURCE.into(),
             vec!["registry:proposal:review".into()],
             "test-generation".into(),
@@ -938,7 +930,7 @@ mod version_tests {
                 "https://idp.example.test/token".parse().unwrap(),
                 "casework-source-reader".into(),
                 fixtures::ed25519_pair().0,
-                None,
+                "https://idp.example.test".into(),
                 resource.into(),
                 scopes.into_iter().map(str::to_owned).collect(),
                 generation.into(),

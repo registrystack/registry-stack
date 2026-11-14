@@ -4564,7 +4564,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
-        "sha256": "d68323a93d34904b5bc49870512e03baf519fd86b2a88078df69e68ee417242f",
+        "sha256": "4db6b51ced4a4b7ba3ec5b20cf0f79cd299987c8ce2ada01cd7754650b3b0d53",
         "mediaType": "application/schema+json"
       }
     },
@@ -4690,7 +4690,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "4a62c7dd8399bd3a5991efb203a34310918bad17a95b8a74c7784e6486ae6f21",
+        "sha256": "90c2b9624ecac05c4d71aac1c65da871b84a5d5994820da38ff224a376f700f8",
         "mediaType": "application/schema+json"
       }
     },
@@ -4906,7 +4906,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "34d05bd2adc4b41a65becd76fa288943d2636b7b60e4cfaf17c026dbd962b0f1",
+        "sha256": "f760f95858307c972c65cda16b659021c608afefff75854c25bafdb975d9505b",
         "mediaType": "application/schema+json"
       }
     },
@@ -4974,7 +4974,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "72890db9bee57302bf2dcca70dd6629c24bcd9634414fc507e218fd52daed9f9"
+        "sha256": "75a327e465bdbe1c4890d166138db1c0cf78c6a7e29f47e0a196d1711d5b1a3e"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
@@ -5010,7 +5010,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "72890db9bee57302bf2dcca70dd6629c24bcd9634414fc507e218fd52daed9f9"
+        "sha256": "75a327e465bdbe1c4890d166138db1c0cf78c6a7e29f47e0a196d1711d5b1a3e"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
@@ -5100,11 +5100,11 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "72890db9bee57302bf2dcca70dd6629c24bcd9634414fc507e218fd52daed9f9"
+        "sha256": "75a327e465bdbe1c4890d166138db1c0cf78c6a7e29f47e0a196d1711d5b1a3e"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "398ad6bb55a2e60eeb10758c3aaeeeff078805f2dfd3ba62c49e81ee0479ac68",
+        "sha256": "6a30e2df442d69c53839de942656364635e36ca26d761deaa57b0c78dd576610",
         "mediaType": "application/schema+json"
       }
     },
@@ -5140,7 +5140,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
-        "sha256": "2481544f84d61d0bd21ba44e31e7bdefcbf9e10b12d3b103fc100ebead1e346e",
+        "sha256": "bbd9b5773cc0e14713e8de1ec953827d99a8ae425f2bf4c3ee480eb4b2163d22",
         "mediaType": "application/schema+json"
       }
     },
@@ -5226,11 +5226,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "47d65004647fa541fef411bd213072d25a35384d5e48d03f8fdb51e5569e1bf8"
+        "sha256": "429bb0eff36b65f8cc0e76b13155828664b2c8284320a11fafa08ec17e8bd65f"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "ef82e91c0f0c3366bd62967be8453e90920341c246a6d05f56e4b4b4b8eb85b0",
+        "sha256": "fc354a2f7e72e97902502f8c3b42eeab5f91db59ed6b0be1ee2f1f345ef4bc47",
         "mediaType": "application/schema+json"
       }
     },
@@ -5262,11 +5262,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "e544e9afbc39d84d18936d8ea1fffd903ebd94121db10d142394fa5d02ec5916"
+        "sha256": "557622b966f74f4543e943fb828d7accbe5fc0e5a0248933b0794aa5f53c0a6e"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "9d68a7c21821319603e16c3fb1a381e206a4f488a3eae95c9544180004ae2ea3",
+        "sha256": "264c95638a427789585a112891e85cdc0d73db142ce72fac622e7eb0e9c0c0b4",
         "mediaType": "application/schema+json"
       }
     },
@@ -5478,11 +5478,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "89428c7c4d08555b71f3d7476a45e2439fd0d2ba4b97eae6ee18be78fcbf8e3e"
+        "sha256": "53758ed115099de8f41b2060f7c3eb9442f0bdb8e89c5f1f6b3612702171c7b3"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "89428c7c4d08555b71f3d7476a45e2439fd0d2ba4b97eae6ee18be78fcbf8e3e",
+        "sha256": "53758ed115099de8f41b2060f7c3eb9442f0bdb8e89c5f1f6b3612702171c7b3",
         "mediaType": "application/yaml"
       }
     },
@@ -5496,7 +5496,7 @@
       "description": "Reviewed Evidence client contracts JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-client/src/schema.rs",
-        "sha256": "b28e799ebc6f2da79fb99e53af3b117aef9bc6d544a89c9fac1935572d6f0508"
+        "sha256": "98fb9a75e176849d41c4545940fcc06e2e4911e89decba0ba1c685d88de5a341"
       },
       "artifact": {
         "path": "products/evidence/generated/client-contracts/client-contracts.schema.json",
@@ -5514,11 +5514,11 @@
       "description": "Evidence relying-party client profile JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-client/src/schema.rs",
-        "sha256": "b28e799ebc6f2da79fb99e53af3b117aef9bc6d544a89c9fac1935572d6f0508"
+        "sha256": "98fb9a75e176849d41c4545940fcc06e2e4911e89decba0ba1c685d88de5a341"
       },
       "artifact": {
         "path": "products/evidence/generated/client-profile/client-profile.schema.json",
-        "sha256": "67cddb577791407b017c46465860c1a1674b45d3b7ed4005a2ea12cea3bb61d5",
+        "sha256": "fdad2c2932c02034b4597e34a705114f8850bb1ff8f8d25922b3af5cb936c142",
         "mediaType": "application/schema+json"
       }
     },
@@ -5604,11 +5604,11 @@
       "description": "Evidence OID4VCI delivery runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-oid4vci/src/schema.rs",
-        "sha256": "9e58fd6d09d319ddeffec54795a92fc910a0a9ccb361734ea8f7ce698c043540"
+        "sha256": "125b016b53f655674e43bf478018ef753f985a7dca26a935d6be62e8b45ee429"
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "fb01195c02d6b94784e17ea07f6de45f56370df8af933a2bb2142a3fd18c9146",
+        "sha256": "d236d44b53a95512464e67dd0b3d2037518b1920b1d454d8a43a8cda438719b3",
         "mediaType": "application/schema+json"
       }
     },
@@ -5658,11 +5658,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "24b19bc056dd4048d1f02b3270743d3c30c052cb5875b240e8d9b5d06029ecfb"
+        "sha256": "209cb6f6bc92f1891711648feaec2ff8083e1ecfe0de7ec2dbaf3e78b4f49005"
       },
       "artifact": {
         "path": "products/evidence/contracts/runtime.schema.yaml",
-        "sha256": "24b19bc056dd4048d1f02b3270743d3c30c052cb5875b240e8d9b5d06029ecfb",
+        "sha256": "209cb6f6bc92f1891711648feaec2ff8083e1ecfe0de7ec2dbaf3e78b4f49005",
         "mediaType": "application/yaml"
       }
     },
@@ -5716,7 +5716,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target.schema.json",
-        "sha256": "bb19696ad1cf4f6c89de72d1b50da9f8897761cd15066c4281500836306ea09e",
+        "sha256": "4a7eda2beb3dda9cb10d7abc34d36b9ee4de798259ecbdf01c783be0374df1f4",
         "mediaType": "application/schema+json"
       }
     },
@@ -5914,7 +5914,7 @@
       },
       "artifact": {
         "path": "crates/registry-cli-api/schema/connections.schema.json",
-        "sha256": "5ea2b8f0276de7b574efc392e72672179ce8e1ccea923dc62f10cbb115274099",
+        "sha256": "259fec0a491aad88d6055aa0251b6a6baf7d7fdddab1429a04daa73feada8c2e",
         "mediaType": "application/schema+json"
       }
     },
@@ -5964,11 +5964,11 @@
       "description": "Configurable Registry Stack MCP gateway runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-mcp/src/schema.rs",
-        "sha256": "92b053026e128997664c3981e09347cb4d2f1bd1c34dd96f646db0b37bdb4d7c"
+        "sha256": "ec292c540bcc51f2cd9a332fe067b4d6a0496aa8927375ba17047685d09b64b3"
       },
       "artifact": {
         "path": "products/platform/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "28757cb955ea96d628ff2442cc9dd7ce4f11998edada848a834ef9dfbc3c5c3e",
+        "sha256": "663f3c356b9df64ae410244797eac2abb488fa3ca87454f21c9618aab4fc0817",
         "mediaType": "application/schema+json"
       }
     },
@@ -5986,7 +5986,7 @@
       },
       "artifact": {
         "path": "products/platform/schemas/task-connection.schema.json",
-        "sha256": "706e5506bf8bb44d7717ff00e841af2f862502437f3502c3eeadde91a0465030",
+        "sha256": "aa5644178df3a358a1bf2a8c4db0e8e489dcdb142c68ff1d0286e39501729ddf",
         "mediaType": "application/schema+json"
       }
     },

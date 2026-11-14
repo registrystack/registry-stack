@@ -6916,7 +6916,7 @@ async fn apply_receipt_replay_refuses_a_task_grant_expiring_at_the_idempotency_l
         "registry_purpose":"registry-administration","scope":"proposal:manage",
         "registry_grant_id":"00000000-0000-4000-8000-000000000071","registry_approver":"h:approver",
         "registry_grant_source_issuer":"https://casework.example","registry_grant_client":"agent-client",
-        "registry_grant_resource":"urn:example:breg","registry_grant_exp":expiry,
+        "registry_grant_resource":"urn:example:breg","registry_grant_exp":expiry,"exp":expiry+600,
         "registry_grant_bounds":{"type":"breg","permissions":[{"collection":format!("proposal:{}",submitted.id()),"operations":["get","apply"]}]},
         "identity":{"jurisdiction":"zone-a"},"jurisdiction":"zone-b"});
     let caller = auth.authenticate(&idp.mint_token(token)).await.unwrap();

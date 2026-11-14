@@ -46,7 +46,10 @@ pub struct EvidencePrivateKeyJwtConfig {
     pub token_endpoint: String,
     pub client_id: String,
     pub private_key_ref: SecretReference,
-    pub assertion_audience: Option<String>,
+    /// The authorization server's issuer identifier, exactly as its metadata
+    /// publishes it. The client assertion names it as its only audience
+    /// (RFC 10070 section 4).
+    pub assertion_audience: String,
     pub resource: Option<String>,
     #[serde(default)]
     pub scopes: Vec<String>,
@@ -182,10 +185,8 @@ fn token_provider(
                 endpoint,
                 source.client_id.clone(),
                 key,
-            );
-            if let Some(audience) = &source.assertion_audience {
-                token_config = token_config.with_audience(audience.clone());
-            }
+            )
+            .with_audience(source.assertion_audience.clone());
             if let Some(resource) = &source.resource {
                 token_config = token_config.with_resource(resource.clone());
             }
@@ -290,7 +291,7 @@ mod tests {
             token_endpoint: "https://issuer.example.org/token".into(),
             client_id: "action-client".into(),
             private_key_ref: SecretReference::parse("secret:file/key").unwrap(),
-            assertion_audience: Some("https://issuer.example.org".into()),
+            assertion_audience: "https://issuer.example.org".into(),
             resource: Some("https://evidence.example.org".into()),
             scopes: vec!["evidence.read".into()],
         });

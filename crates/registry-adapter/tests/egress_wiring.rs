@@ -403,7 +403,7 @@ async fn a_private_key_jwt_kind_posts_its_assertion_without_an_authorization_hea
                 .expect("token endpoint"),
             client_id_ref: secret("EGR_C4B_PKJWT_ID"),
             client_assertion_key_ref: secret("EGR_C4B_PKJWT_KEY"),
-            client_assertion_audience: None,
+            client_assertion_audience: upstream.url(""),
             scope: None,
             audience: None,
             resource: None,

@@ -371,6 +371,8 @@ def activate_evidence(h, source_project, source, origin):
             "--private-key-file",
             "secrets/client-key",
             "--local-loopback-discovery",
+            "--client-assertion-audience",
+            h.issuer_url,
             "--expected-audience",
             "urn:example:audience:local-evidence",
             "--expected-provider",

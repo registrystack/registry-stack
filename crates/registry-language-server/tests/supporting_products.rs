@@ -255,6 +255,7 @@ tokenClient:
   tokenEndpoint: https://identity.example.test/token
   clientId: delivery
   privateKeyRef: secret:file/<|key|>private-key.yaml
+  clientAssertionAudience: https://identity.example.test
 offers:
   issuer: https://identity.example.test
   jwksUri: https://identity.example.test/jwks

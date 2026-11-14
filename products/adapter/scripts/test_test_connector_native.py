@@ -211,6 +211,14 @@ class NativeRunnerTests(unittest.TestCase):
 
 
 class JobPostgresGateTests(unittest.TestCase):
+    @staticmethod
+    def without_caller_database():
+        """The owned-fixture cases must not inherit a database URL from the caller's shell."""
+        return {
+            key: value for key, value in os.environ.items()
+            if key != "ADAPTER_TEST_DATABASE_URL"
+        }
+
     def fixture_bin(self, root):
         binary = root / ".cargo" / "bin"
         binary.mkdir(parents=True)
@@ -270,7 +278,7 @@ class JobPostgresGateTests(unittest.TestCase):
             log = root / "probes"
             target = root / "target"
             environment = {
-                **os.environ,
+                **self.without_caller_database(),
                 "MOCK_CARGO": str(binary / "cargo"),
                 "BASH_FUNC_cargo%%": '() { "$MOCK_CARGO" "$@";\n}',
                 "PATH": f"{binary}:{os.environ['PATH']}",
@@ -319,7 +327,7 @@ class JobPostgresGateTests(unittest.TestCase):
             binary = self.fixture_bin(root)
             log = root / "probes"
             environment = {
-                **os.environ,
+                **self.without_caller_database(),
                 "MOCK_CARGO": str(binary / "cargo"),
                 "BASH_FUNC_cargo%%": '() { "$MOCK_CARGO" "$@";\n}',
                 "PATH": f"{binary}:{os.environ['PATH']}",

@@ -19,6 +19,7 @@ connections:
     profile: follow-up-reader
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: coordinator-application-reader
       signingKeyRef: secret:file/application-reader-jwk
       resource: urn:example:applications
@@ -30,6 +31,7 @@ connections:
     producer: coordinator
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: coordinator-review-producer
       signingKeyRef: secret:file/review-jwk
       resource: urn:example:casework
@@ -43,6 +45,7 @@ connections:
     baseUrl: https://messaging.example.org
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
+      clientAssertionAudience: https://issuer.example.org
       clientId: coordinator-notices
       signingKeyRef: secret:file/notices-jwk
       resource: urn:example:messaging

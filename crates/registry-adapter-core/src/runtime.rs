@@ -206,8 +206,9 @@ pub enum EvidenceAuthenticationPolicy {
     },
     Oauth2PrivateKeyJwt {
         token_endpoint: Url,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        client_assertion_audience: Option<String>,
+        /// The authorization server's issuer identifier, the sole client
+        /// assertion audience RFC 10070 section 4 allows.
+        client_assertion_audience: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -515,6 +516,22 @@ mod tests {
                 "tokenEndpoint": "https://issuer.example.invalid/token"
             }))
             .is_err()
+        );
+    }
+
+    /// The reviewed policy states the client assertion audience, the
+    /// authorization server's issuer identifier RFC 10070 section 4 makes
+    /// its sole value, and a policy without it is refused, naming the member.
+    #[test]
+    fn a_reviewed_private_key_jwt_policy_states_its_assertion_audience() {
+        let error = serde_json::from_value::<EvidenceAuthenticationPolicy>(serde_json::json!({
+            "type": "oauth2-private-key-jwt",
+            "tokenEndpoint": "https://issuer.example.invalid/token"
+        }))
+        .expect_err("a policy without an assertion audience is refused");
+        assert!(
+            error.to_string().contains("clientAssertionAudience"),
+            "{error}"
         );
     }
 

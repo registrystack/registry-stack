@@ -302,22 +302,13 @@ pub struct TokenClientConfig {
     /// The caller's own private JWK, as a secret reference. Resolved when the
     /// outbound client is built, never logged and never rendered.
     pub private_key_ref: SecretReference,
-    /// The value the endpoint expects as the client assertion `aud`. Defaults
-    /// to the token endpoint, which is the usual registration.
-    pub client_assertion_audience: Option<String>,
+    /// The authorization server's issuer identifier: the client assertion's
+    /// sole audience.
+    pub client_assertion_audience: String,
     /// The fixed RFC 8707 resource identifier of the Evidence API.
     pub resource: Option<String>,
     /// The exact scopes requested from the issuer for Evidence access.
     pub scopes: Option<Vec<String>>,
-}
-
-impl TokenClientConfig {
-    #[must_use]
-    pub fn client_assertion_audience(&self) -> &str {
-        self.client_assertion_audience
-            .as_deref()
-            .unwrap_or(&self.token_endpoint)
-    }
 }
 
 /// Which values a gate admits: any value, or exactly the listed ones.
@@ -362,12 +353,13 @@ pub struct OfferAuthorizationConfig {
     pub audiences: Vec<String>,
     pub algorithms: Vec<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers. Unrestricted accepts any
-    /// client the issuer vouched for, which is the usual single-adopter
-    /// deployment.
+    /// client the issuer vouched for and loads only in supervised local
+    /// development.
     pub allowed_clients: Restriction,
     /// Scopes every offer token must carry, checked against the verified
-    /// token's scope set. Unrestricted applies no scope gate; generated
-    /// configurations state `oid4vci:offer`.
+    /// token's scope set. Unrestricted applies no scope gate and loads only in
+    /// supervised local development; generated configurations state
+    /// `oid4vci:offer`.
     pub required_scopes: Restriction,
     pub maximum_token_lifetime_seconds: u64,
 }
@@ -736,10 +728,9 @@ pub struct TokenClientDocument {
     /// `secretProviders.file.root` or `secret:env/<NAME>`. Resolved when the
     /// outbound client is built, never logged and never rendered.
     pub private_key_ref: SecretReference,
-    /// The value the endpoint expects as the client assertion `aud`. Absent
-    /// means the token endpoint, which is the usual registration.
-    #[serde(default)]
-    pub client_assertion_audience: Option<Url>,
+    /// The authorization server's issuer identifier, exactly as its metadata
+    /// publishes it: the client assertion's sole audience. It has no default.
+    pub client_assertion_audience: Url,
     /// The fixed RFC 8707 resource identifier of the Evidence API: an
     /// absolute URI with no fragment or user information.
     #[serde(default)]
@@ -814,7 +805,7 @@ impl<'de> Deserialize<'de> for UnrestrictedKeyword {
         } else {
             Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
-                "Write unrestricted to admit any value, or list the admitted values.",
+                "List the admitted values; unrestricted is accepted only with validationMode: supervised-local-development.",
             )
             .into_error())
         }
@@ -850,7 +841,7 @@ impl<'de> Deserialize<'de> for ListedIdentifiers {
         if items.is_empty() {
             return Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
-                "Write unrestricted to admit any value, or list the admitted values.",
+                "List the admitted values; unrestricted is accepted only with validationMode: supervised-local-development.",
             )
             .into_error());
         }
@@ -948,10 +939,12 @@ pub struct OffersDocument {
     )]
     pub algorithms: UniqueList<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers, each at most 128 bytes,
-    /// or `unrestricted` for any client the issuer vouched for.
+    /// or `unrestricted` for any client the issuer vouched for, which loads
+    /// only with `validationMode: supervised-local-development`.
     pub allowed_clients: IdentifierRestriction,
     /// Scopes every offer token must carry, each an RFC 6749 scope token of at
-    /// most 256 bytes, or `unrestricted` for no scope gate. Generated
+    /// most 256 bytes, or `unrestricted` for no scope gate, which loads only
+    /// with `validationMode: supervised-local-development`. Generated
     /// configurations state `oid4vci:offer`.
     pub required_scopes: IdentifierRestriction,
     /// The longest lifetime an offer token may carry, in seconds.
@@ -1119,6 +1112,7 @@ impl DeliveryDocument {
         self.audit_findings(&mut findings);
         self.token_client.findings(&mut findings);
         self.offers.findings(&mut findings);
+        self.offer_gate_findings(&mut findings);
         if self.store.nonce_lifetime_seconds.get() > self.store.access_token_lifetime_seconds.get()
         {
             // A nonce that remains valid after the access token window can
@@ -1139,19 +1133,19 @@ impl DeliveryDocument {
 
     /// The origins this service calls, each with the member that states it.
     fn called_origins(&self) -> Vec<(&'static str, &Url)> {
-        let mut origins = vec![
+        vec![
             ("/evidence/baseUrl", &self.evidence.base_url),
             (
                 "/tokenClient/tokenEndpoint",
                 &self.token_client.token_endpoint,
             ),
-        ];
-        if let Some(audience) = &self.token_client.client_assertion_audience {
-            origins.push(("/tokenClient/clientAssertionAudience", audience));
-        }
-        origins.push(("/offers/issuer", &self.offers.issuer));
-        origins.push(("/offers/jwksUri", &self.offers.jwks_uri));
-        origins
+            (
+                "/tokenClient/clientAssertionAudience",
+                &self.token_client.client_assertion_audience,
+            ),
+            ("/offers/issuer", &self.offers.issuer),
+            ("/offers/jwksUri", &self.offers.jwks_uri),
+        ]
     }
 
     fn transport_findings(&self, findings: &mut Vec<Finding>) {
@@ -1233,6 +1227,38 @@ impl DeliveryDocument {
                     )
                     .reading(TRANSPORT_READS),
                 );
+            }
+        }
+    }
+
+    /// An unrestricted gate admits every client or scope the offer-token
+    /// issuer vouches for, and the subject of an offer comes from the request,
+    /// so only the supervised local development profile may state one.
+    fn offer_gate_findings(&self, findings: &mut Vec<Finding>) {
+        if self.validation_mode == ValidationMode::SupervisedLocalDevelopment {
+            return;
+        }
+        for (pointer, message, action, restriction) in [
+            (
+                "/offers/allowedClients",
+                "offers.allowedClients is unrestricted, which only validationMode: supervised-local-development accepts",
+                "List the clients that may create offers, for example allowedClients: [back-office-issuer], or set validationMode: supervised-local-development for a supervised local run.",
+                &self.offers.allowed_clients,
+            ),
+            (
+                "/offers/requiredScopes",
+                "offers.requiredScopes is unrestricted, which only validationMode: supervised-local-development accepts",
+                "List the scopes an offer token must carry, for example requiredScopes: [oid4vci:offer], or set validationMode: supervised-local-development for a supervised local run.",
+                &self.offers.required_scopes,
+            ),
+        ] {
+            if matches!(restriction, IdentifierRestriction::Unrestricted(_)) {
+                findings.push(Finding::error(
+                    "evidence.oid4vci.offer-gate-unrestricted",
+                    pointer,
+                    message,
+                    action,
+                ));
             }
         }
     }
@@ -1350,7 +1376,7 @@ impl DeliveryDocument {
                 client_assertion_audience: self
                     .token_client
                     .client_assertion_audience
-                    .map(Url::into_string),
+                    .into_string(),
                 resource: self.token_client.resource.map(ExternalId::into_string),
                 scopes: self.token_client.scopes.map(|scopes| {
                     scopes
@@ -1506,7 +1532,7 @@ impl OffersDocument {
                         "evidence.oid4vci.wildcard-spelled-item",
                         format!("{list}/{index}"),
                         "this item is compared as a literal value and admits nothing else",
-                        "Write unrestricted in place of the list to admit any value, or remove the item.",
+                        "Remove the item and list the real client or scope names.",
                     ));
                 }
             }
@@ -1809,6 +1835,7 @@ tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyRef: secret:file/delivery-client.jwk.json
+  clientAssertionAudience: https://mint.example.org
 offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
@@ -2056,22 +2083,28 @@ store:
         assert!(load_from(&with("  unknownLimit: 1\n")).is_err());
     }
 
+    /// The assertion audience is the authorization server's issuer identifier
+    /// as the operator writes it; nothing stands in for it when it is absent.
     #[test]
-    fn the_client_assertion_audience_defaults_to_the_token_endpoint() {
-        let config = load_from(VALID).expect("the configuration loads");
-        assert_eq!(
-            config.token_client.client_assertion_audience(),
-            "https://mint.example.org/token"
+    fn the_client_assertion_audience_is_required_with_no_default() {
+        let without = VALID.replace("  clientAssertionAudience: https://mint.example.org\n", "");
+        assert_ne!(without, VALID, "the reference states an assertion audience");
+        let error = load_from(&without)
+            .expect_err("a token client without an assertion audience is refused");
+        assert!(
+            error.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "config.missing-key"
+                    && diagnostic.path.starts_with("/tokenClient")
+                    && diagnostic.message.contains("clientAssertionAudience")
+            }),
+            "expected a missing clientAssertionAudience: {:?}",
+            error.diagnostics()
         );
 
-        let text = VALID.replace(
-            "clientId: evidence-oid4vci",
-            "clientId: evidence-oid4vci\n  clientAssertionAudience: https://mint.example.org/other",
-        );
-        let config = load_from(&text).expect("the configuration loads");
+        let config = load_from(VALID).expect("the configuration loads");
         assert_eq!(
-            config.token_client.client_assertion_audience(),
-            "https://mint.example.org/other"
+            config.token_client.client_assertion_audience,
+            "https://mint.example.org"
         );
     }
 
@@ -2385,19 +2418,51 @@ store:
         ] {
             assert_eq!(refused(&VALID.replace(removed, "")), ["config.missing-key"]);
         }
-        let text = VALID
-            .replace(
+        let unrestricted = |text: &str| {
+            text.replace(
                 "  allowedClients: [adopter-front-end]",
                 "  allowedClients: unrestricted",
             )
             .replace(
                 "  requiredScopes: [oid4vci:offer]",
                 "  requiredScopes: unrestricted",
-            );
-        let config = load_from(&text).expect("unrestricted gates load");
+            )
+        };
+        let text = unrestricted(&supervised());
+        let config = load_from(&text).expect("unrestricted gates load in supervised development");
         assert_eq!(config.offers.allowed_clients, Restriction::Unrestricted);
         assert_eq!(config.offers.required_scopes, Restriction::Unrestricted);
         assert!(config.offers.allowed_clients.items().is_empty());
+    }
+
+    /// An unrestricted gate admits every client or scope the issuer vouches
+    /// for, so only the supervised local development profile may state one.
+    #[test]
+    fn unrestricted_offer_gates_are_refused_outside_supervised_development() {
+        for (from, to, pointer) in [
+            (
+                "  allowedClients: [adopter-front-end]",
+                "  allowedClients: unrestricted",
+                "/offers/allowedClients",
+            ),
+            (
+                "  requiredScopes: [oid4vci:offer]",
+                "  requiredScopes: unrestricted",
+                "/offers/requiredScopes",
+            ),
+        ] {
+            let text = VALID.replace(from, to);
+            let error = load_from(&text).expect_err("a strict configuration refuses unrestricted");
+            let diagnostic = error
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "evidence.oid4vci.offer-gate-unrestricted")
+                .unwrap_or_else(|| panic!("no unrestricted finding for {pointer}"));
+            assert_eq!(diagnostic.path, pointer);
+            assert!(diagnostic
+                .suggested_action
+                .contains("supervised-local-development"));
+        }
     }
 
     #[test]
@@ -2592,7 +2657,7 @@ store:
             .source
             .as_ref()
             .expect("the finding is positioned");
-        assert_eq!(source.line, Some(30));
+        assert_eq!(source.line, Some(31));
     }
 
     #[test]

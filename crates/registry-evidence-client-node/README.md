@@ -55,7 +55,8 @@ const current = verifyRetained(result.retainedVerification, result.assertion);
 
 // A staff procedure can use the same pinned profile with a context-bound
 // exchange. The profile must state oauth.resource and oauth.scopes; its
-// clientId and the discovered issuer/token endpoint must match this provider.
+// clientId, oauth.clientAssertionAudience and the discovered issuer/token
+// endpoint must match this provider.
 const staffClient = EvidenceClient.fromProfileWithAuthorization('client.json', {
   exchange: { client: exchangeClient, context: verifiedStaffContext,
     firstParty: { key: assertionKey, attributes: { registry_actor_kind: 'human' } } },
@@ -234,10 +235,15 @@ workspace-wide forbid would reject outright.
   overrides a matching key even when it remains in `trustedJwks` or in an
   older prepared request's policy.
 - Configure one credential path: `token: { static: "..." }`,
-  `token: { privateKeyJwt: { tokenEndpoint, clientId, clientKey, ... } }`, or
+  `token: { privateKeyJwt: { tokenEndpoint, clientId, clientKey, audience, ... } }`, or
   `authorization: { exchange: { client, context, firstParty } }` (with `remote`
   instead of `firstParty` for a grant authority). The shared exchange parser
   validates the bounded context and credential binding before a token request.
+- `audience`, in `privateKeyJwt` and in an exchange `client`, is required: the
+  authorization server's issuer identifier, exactly as its metadata publishes
+  it. It is the client assertion's sole audience (RFC 10070 section 4), and
+  the assertion carries `typ: client-authentication+jwt`. A client profile
+  states the same value as `oauth.clientAssertionAudience`.
 - Holder-bound issuance is supported: `prepare` accepts public `holderKeys`,
   and `SdJwtVcBatchResponse` parses the ordered credential envelope returned
   for them. The binding stops at issuance. It exposes no traceId for a

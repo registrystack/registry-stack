@@ -99,7 +99,9 @@ pub struct DelegationOptions {
     pub token_endpoint: Url,
     pub client_id: String,
     pub private_key: PrivateJwk,
-    pub assertion_audience: Option<String>,
+    /// The authorization server's issuer identifier: the client assertion's
+    /// sole audience.
+    pub assertion_audience: String,
     pub gateway_resource: String,
     pub downstream_resource: String,
     pub downstream_scopes: Vec<String>,
@@ -112,7 +114,7 @@ pub struct Delegation {
     token_endpoint: Url,
     client_id: String,
     key: PrivateJwk,
-    assertion_audience: Option<String>,
+    assertion_audience: String,
     gateway_resource: String,
     downstream_resource: String,
     downstream_scopes: Vec<String>,
@@ -136,7 +138,7 @@ impl Delegation {
             client_config(
                 &options.token_endpoint,
                 &options.client_id,
-                options.assertion_audience.as_deref(),
+                &options.assertion_audience,
                 &options.private_key,
                 options.attempt_timeout,
             )
@@ -164,7 +166,7 @@ impl Delegation {
             client_config(
                 &self.token_endpoint,
                 &self.client_id,
-                self.assertion_audience.as_deref(),
+                &self.assertion_audience,
                 &self.key,
                 self.attempt_timeout,
             )
@@ -237,14 +239,11 @@ impl AuthorizationFactory for Delegation {
 fn client_config(
     token_endpoint: &Url,
     client_id: &str,
-    assertion_audience: Option<&str>,
+    assertion_audience: &str,
     key: &PrivateJwk,
     timeout: Duration,
 ) -> PrivateKeyJwtConfig {
-    let config = PrivateKeyJwtConfig::new(token_endpoint.clone(), client_id, key.clone())
-        .with_attempt_timeout(timeout);
-    match assertion_audience {
-        Some(audience) => config.with_audience(audience),
-        None => config,
-    }
+    PrivateKeyJwtConfig::new(token_endpoint.clone(), client_id, key.clone())
+        .with_attempt_timeout(timeout)
+        .with_audience(assertion_audience)
 }

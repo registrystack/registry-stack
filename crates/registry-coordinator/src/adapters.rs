@@ -112,7 +112,8 @@ fn tokens(
     resource: &str,
     scopes: &[String],
 ) -> std::result::Result<PrivateKeyJwt, TokenError> {
-    let mut config = PrivateKeyJwtConfig::new(auth.token_endpoint.clone(), &auth.client_id, key)
+    let config = PrivateKeyJwtConfig::new(auth.token_endpoint.clone(), &auth.client_id, key)
+        .with_audience(&auth.client_assertion_audience)
         .with_resource(resource)
         .with_scopes(scopes.iter().cloned())
         .with_fetch_url_policy(configured_endpoint_policy(&auth.token_endpoint))
@@ -120,9 +121,6 @@ fn tokens(
         .with_connect_timeout(Duration::from_millis(
             crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
         ));
-    if let Some(audience) = &auth.client_assertion_audience {
-        config = config.with_audience(audience);
-    }
     PrivateKeyJwt::new(config)
 }
 

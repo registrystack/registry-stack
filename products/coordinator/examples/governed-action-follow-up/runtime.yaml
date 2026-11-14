@@ -18,6 +18,7 @@ connections:
     profile: workflow-actions
     authorization:
       tokenEndpoint: http://127.0.0.1:8090/token
+      clientAssertionAudience: http://127.0.0.1:8090
       clientId: application-agent
       signingKeyRef: secret:file/client-key
       resource: urn:example:applications
@@ -27,6 +28,7 @@ connections:
     baseUrl: http://127.0.0.1:8101
     authorization:
       tokenEndpoint: http://127.0.0.1:8090/token
+      clientAssertionAudience: http://127.0.0.1:8090
       clientId: case-system
       signingKeyRef: secret:file/client-key
       resource: urn:example:messaging

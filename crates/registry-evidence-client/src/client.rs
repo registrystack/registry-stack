@@ -383,10 +383,7 @@ impl EvidenceClient {
     ) -> Result<Self, EvidenceClientError> {
         profile.validate()?;
         if matches!(&authorization, ProgressiveAuthorization::Exchange(_))
-            && !profile
-                .oauth
-                .as_ref()
-                .is_some_and(|oauth| oauth.resource.is_some() && oauth.scopes.is_some())
+            && !(profile.oauth.resource.is_some() && profile.oauth.scopes.is_some())
         {
             return Err(EvidenceClientError::configuration(
                 "an exchange-backed profile must pin OAuth resource and scopes",
@@ -710,15 +707,20 @@ impl EvidenceClient {
         ) {
             return Err(metadata_protocol_failure());
         }
+        // The issuer identifier is the only audience a client assertion names
+        // (RFC 10070 section 4), and the profile fixed that audience before
+        // discovery. Discovery that names another issuer is refused before
+        // any provider is built or kept, whichever authorization signs.
+        if authorization.value.issuer != state.profile.oauth.client_assertion_audience {
+            return Err(EvidenceClientError::configuration(
+                "the discovered authorization server issuer must equal the client profile's clientAssertionAudience exactly",
+            ));
+        }
         let token_endpoint = Url::parse(&authorization.value.token_endpoint)
             .map_err(|_| metadata_protocol_failure())?;
         validate_metadata_url(&token_endpoint, &state.profile.trust)?;
         if let ProgressiveAuthorization::Exchange(exchange) = &state.authorization {
-            let oauth = state.profile.oauth.as_ref().ok_or_else(|| {
-                EvidenceClientError::configuration(
-                    "an exchange-backed profile must pin OAuth resource and scopes",
-                )
-            })?;
+            let oauth = &state.profile.oauth;
             let resource = oauth.resource.as_deref().ok_or_else(|| {
                 EvidenceClientError::configuration(
                     "an exchange-backed profile must pin OAuth resource and scopes",
@@ -736,7 +738,7 @@ impl EvidenceClient {
                 &state.profile.client_id,
                 &token_endpoint,
                 &authorization.value.issuer,
-                oauth.client_assertion_audience.as_deref(),
+                &oauth.client_assertion_audience,
                 resource,
                 scopes,
             ) {
@@ -788,24 +790,21 @@ impl EvidenceClient {
         } else {
             match &state.authorization {
                 ProgressiveAuthorization::PrivateKey(private_key) => {
+                    // Profile-owned request parameters never come from the
+                    // catalog or an untrusted caller request.
+                    let oauth = &state.profile.oauth;
                     let mut config = PrivateKeyJwtConfig::new(
                         token_endpoint,
                         state.profile.client_id.clone(),
                         private_key.as_ref().clone(),
                     )
-                    .with_fetch_url_policy(fetch_policy);
-                    if let Some(oauth) = &state.profile.oauth {
-                        // Profile-owned request parameters never come from
-                        // the catalog or an untrusted caller request.
-                        if let Some(audience) = &oauth.client_assertion_audience {
-                            config = config.with_audience(audience.clone());
-                        }
-                        if let Some(resource) = &oauth.resource {
-                            config = config.with_resource(resource.clone());
-                        }
-                        if let Some(scopes) = &oauth.scopes {
-                            config = config.with_scopes(scopes.iter().cloned());
-                        }
+                    .with_fetch_url_policy(fetch_policy)
+                    .with_audience(oauth.client_assertion_audience.clone());
+                    if let Some(resource) = &oauth.resource {
+                        config = config.with_resource(resource.clone());
+                    }
+                    if let Some(scopes) = &oauth.scopes {
+                        config = config.with_scopes(scopes.iter().cloned());
                     }
                     Arc::new(PrivateKeyJwt::new(config)?) as Arc<dyn TokenProvider>
                 }
@@ -3755,7 +3754,8 @@ mod tests {
                     "type": "environment",
                     "variable": "UNUSED_PROGRESSIVE_TEST_KEY"
                 },
-                "trust": {"type": "local-loopback-discovery"}
+                "trust": {"type": "local-loopback-discovery"},
+                "oauth": {"clientAssertionAudience": server.uri()}
             })
             .to_string()
             .as_bytes(),
@@ -3797,6 +3797,272 @@ mod tests {
                 .expect("the server records requests")
                 .is_empty(),
             "unsupported local input must not trigger discovery or token exchange"
+        );
+    }
+
+    /// The P-256 key a key-holding progressive test profile signs its client
+    /// assertions with.
+    const PROGRESSIVE_CLIENT_KEY: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
+
+    /// The refusal a progressive acquisition gives when the discovered issuer
+    /// is not the profile's client assertion audience.
+    const ISSUER_IS_NOT_THE_ASSERTION_AUDIENCE: &str =
+        "the discovered authorization server issuer must equal the client profile's clientAssertionAudience exactly";
+
+    /// A key-holding progressive client for `server`, whose profile names the
+    /// server's origin as the client assertion audience.
+    fn key_holding_progressive_client(server: &MockServer) -> EvidenceClient {
+        let profile = EvidenceClientProfile::from_slice(
+            serde_json::json!({
+                "apiVersion": crate::EVIDENCE_CLIENT_PROFILE_API_VERSION,
+                "kind": crate::EVIDENCE_CLIENT_PROFILE_KIND,
+                "baseUrl": server.uri(),
+                "clientId": "progressive-test-client",
+                "privateKey": {
+                    "type": "environment",
+                    "variable": "UNUSED_PROGRESSIVE_TEST_KEY"
+                },
+                "trust": {"type": "local-loopback-discovery"},
+                "oauth": {"clientAssertionAudience": server.uri()}
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .expect("the local progressive profile parses");
+        EvidenceClient::from_profile_with_key(
+            profile,
+            PrivateJwk::parse(PROGRESSIVE_CLIENT_KEY).expect("the test key parses"),
+        )
+        .expect("the progressive client builds")
+    }
+
+    /// Serve progressive discovery on `server` for one authorization server.
+    /// Its issuer identifier is the server's origin followed by `issuer_path`,
+    /// and its token endpoint is that issuer followed by `/token`. Every
+    /// metadata document asks to be revalidated on each use, so the next
+    /// acquisition reads it again and no retained copy answers instead.
+    async fn mount_progressive_discovery(server: &MockServer, issuer_path: &str) {
+        let origin = server.uri();
+        let issuer = format!("{origin}{issuer_path}");
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-protected-resource"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "max-age=0")
+                    .set_body_json(serde_json::json!({
+                        "resource": origin,
+                        "authorization_servers": [issuer],
+                        "jwks_uri": format!("{origin}/{JWKS_PATH}"),
+                        "bearer_methods_supported": ["header"],
+                    })),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/.well-known/oauth-authorization-server{issuer_path}"
+            )))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "max-age=0")
+                    .set_body_json(serde_json::json!({
+                        "issuer": issuer,
+                        "token_endpoint": format!("{issuer}/token"),
+                        "grant_types_supported": [CLIENT_CREDENTIALS_GRANT_TYPE],
+                        "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+                    })),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/{JWKS_PATH}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "max-age=0")
+                    .set_body_raw(br#"{"keys":[]}"#.to_vec(), JWKS_MEDIA_TYPE),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{issuer_path}/token")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "progressive-test-credential",
+                "token_type": "Bearer",
+                "expires_in": 300,
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// Requests `server` recorded, since it started or was last reset, whose
+    /// path satisfies `selected`.
+    async fn recorded_requests(server: &MockServer, selected: impl Fn(&str) -> bool) -> usize {
+        server
+            .received_requests()
+            .await
+            .expect("the server records requests")
+            .iter()
+            .filter(|request| selected(request.url.path()))
+            .count()
+    }
+
+    async fn token_requests(server: &MockServer) -> usize {
+        recorded_requests(server, |request_path| request_path.ends_with("/token")).await
+    }
+
+    /// The issuer identifier is the only audience a client assertion names, and
+    /// the profile states that audience before any discovery. An announced
+    /// authorization server whose issuer is another identifier receives no
+    /// client assertion, whichever progressive operation asked.
+    #[tokio::test]
+    async fn a_first_load_refuses_an_issuer_that_is_not_the_assertion_audience() {
+        let server = MockServer::start().await;
+        mount_progressive_discovery(&server, "/tenant-b").await;
+        let client = key_holding_progressive_client(&server);
+        let request =
+            || AudienceScopedRequest::new("status-check", std::collections::BTreeMap::new());
+
+        let request_failure = match client.request(request()).await {
+            Ok(_) => panic!("request accepted an issuer other than the assertion audience"),
+            Err(failure) => failure,
+        };
+        let prepare_failure = match client.prepare_progressive(request()).await {
+            Ok(_) => panic!("prepare accepted an issuer other than the assertion audience"),
+            Err(failure) => failure,
+        };
+        for failure in [request_failure, prepare_failure] {
+            assert!(
+                matches!(
+                    failure,
+                    EvidenceClientError::Configuration {
+                        reason: ISSUER_IS_NOT_THE_ASSERTION_AUDIENCE
+                    }
+                ),
+                "{failure:?}"
+            );
+        }
+        assert_eq!(
+            token_requests(&server).await,
+            0,
+            "no client assertion is sent to the announced issuer's token endpoint"
+        );
+        assert_eq!(
+            recorded_requests(&server, |request_path| request_path.starts_with("/v1/")).await,
+            0,
+            "the refused issuer leads to no Evidence request"
+        );
+    }
+
+    /// Revalidated metadata that moves the service to another issuer is
+    /// refused as a first load would be. The provider built for the earlier
+    /// issuer, and the access token it holds, are not carried to the moved one.
+    #[tokio::test]
+    async fn a_refresh_that_moves_the_issuer_away_from_the_assertion_audience_is_refused() {
+        let server = MockServer::start().await;
+        mount_progressive_discovery(&server, "").await;
+        let client = key_holding_progressive_client(&server);
+        let state = client
+            .progressive_state()
+            .expect("the client holds a profile");
+        let first = client
+            .progressive_service_snapshot(state)
+            .await
+            .unwrap_or_else(|error| panic!("the profile's own issuer is accepted: {error:?}"));
+        first
+            .token_provider
+            .bearer_token()
+            .await
+            .expect("the accepted issuer issues an access token");
+        assert_eq!(token_requests(&server).await, 1);
+
+        server.reset().await;
+        mount_progressive_discovery(&server, "/tenant-b").await;
+
+        let Err(refreshed) = client.progressive_service_snapshot(state).await else {
+            panic!("a refresh accepted an issuer other than the assertion audience");
+        };
+        let Err(reacquired) = client.acquire_service_snapshot(state, Some(&first)).await else {
+            panic!("the earlier snapshot's provider was carried to the moved issuer");
+        };
+        let prepare_failure = match client
+            .prepare_progressive(AudienceScopedRequest::new(
+                "status-check",
+                std::collections::BTreeMap::new(),
+            ))
+            .await
+        {
+            Ok(_) => panic!("prepare presented a credential after the issuer moved"),
+            Err(failure) => failure,
+        };
+        for failure in [refreshed, reacquired, prepare_failure] {
+            assert!(
+                matches!(
+                    failure,
+                    EvidenceClientError::Configuration {
+                        reason: ISSUER_IS_NOT_THE_ASSERTION_AUDIENCE
+                    }
+                ),
+                "{failure:?}"
+            );
+        }
+        assert_eq!(
+            token_requests(&server).await,
+            0,
+            "no client assertion is sent to any token endpoint after the issuer moved"
+        );
+        assert_eq!(
+            recorded_requests(&server, |request_path| request_path.starts_with("/v1/")).await,
+            0,
+            "the moved issuer leads to no Evidence request"
+        );
+    }
+
+    /// Metadata that asks for immediate revalidation and comes back naming the
+    /// same issuer and token endpoint keeps the provider, and the access token
+    /// it already holds, instead of asking the authorization server again.
+    #[tokio::test]
+    async fn a_same_issuer_refresh_keeps_the_provider_and_its_token() {
+        let server = MockServer::start().await;
+        mount_progressive_discovery(&server, "").await;
+        let client = key_holding_progressive_client(&server);
+        let state = client
+            .progressive_state()
+            .expect("the client holds a profile");
+        let first = client
+            .progressive_service_snapshot(state)
+            .await
+            .unwrap_or_else(|error| panic!("the profile's own issuer is accepted: {error:?}"));
+        first
+            .token_provider
+            .bearer_token()
+            .await
+            .expect("the accepted issuer issues an access token");
+
+        let second = client
+            .progressive_service_snapshot(state)
+            .await
+            .unwrap_or_else(|error| panic!("a same-issuer refresh is accepted: {error:?}"));
+        assert_eq!(
+            recorded_requests(&server, |request_path| {
+                request_path == "/.well-known/oauth-protected-resource"
+            })
+            .await,
+            2,
+            "the refresh revalidated the metadata"
+        );
+        assert!(
+            Arc::ptr_eq(&first.token_provider, &second.token_provider),
+            "a same-issuer refresh keeps the provider"
+        );
+        second
+            .token_provider
+            .bearer_token()
+            .await
+            .expect("the kept provider presents its access token");
+        assert_eq!(
+            token_requests(&server).await,
+            1,
+            "the kept provider did not ask the authorization server again"
         );
     }
 

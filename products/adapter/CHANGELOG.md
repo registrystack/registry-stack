@@ -5,6 +5,55 @@
 - PostgreSQL jobs can project bounded JSONB values, including the geometry
   and related rows in the [QField PostGIS example](examples/qfield-postgis/README.md).
   Item keys and query parameters keep their existing scalar contract.
+- BREAKING: an ingestion job counts an item as possibly admitted when its
+  BReg or Coordinator answer was lost and the retry was then refused,
+  because that refusal says nothing about the first attempt. A later source
+  edit or `rescan` of the item goes to the job's revised trigger, or is held
+  as `adapter.job.revised-item` on a direct BReg job or a Coordinator job
+  without one. An item whose first attempt never arrived is held the same
+  way: correcting its source record does not deliver it, and no Adapter
+  command releases a held item. A Coordinator item with no revised trigger
+  to select is held instead of stopping the pass as
+  `adapter.job.coordinator-receiver-changed`, and restoring the trigger does
+  not resend it. A `rescan` of a refused item sends it to the receiver
+  selected at that time, so adding a revised trigger after a refusal does
+  not stop the pass. A refused item whose revised event may have been
+  admitted is the exception: a `rescan` sends that event only to the same
+  revised receiver with the same body, and a changed revised trigger,
+  binding, `job.version` or projection stops the pass as
+  `adapter.job.coordinator-receiver-changed` or
+  `adapter.job.coordinator-body-changed` before any request. Store schema
+  104 treats every refused revised event already in the store this way; run
+  `init-store` once. Items refused this way by an earlier version carry no
+  mark: before you edit or rescan one, check BReg or Coordinator for an
+  admission of that item.
+- BREAKING: an asynchronous write is polled only at the source origin it was
+  sent to. Before the send, its store row pins the configured `baseUrl` of
+  every endpoint its write, status and uncertainty routes reach. A status GET,
+  a bounded wait and a same-key retry poll only while the runtime
+  configuration still gives those endpoints the same `baseUrl`; rotating a
+  credential changes nothing. After a `baseUrl` change, an unfinished write is
+  held and never polled: its status link answers the stored 202 and a retry
+  answers 409 without `Retry-After`, until the original `baseUrl` is restored
+  or the write expires. Each held poll logs a value-free warning. Let async
+  writes settle before upgrading; rows written by an earlier version are
+  quarantined and expire.
+- BREAKING: an `oauth2-private-key-jwt` runtime credential and an adapter job's
+  `direct-breg` destination require `clientAssertionAudience`, with no
+  default. The client assertion carries it as its only audience and has the
+  header `typ: client-authentication+jwt` (RFC 10070 section 4). A configuration
+  without it fails to load with a refusal that names the member. Migration:
+  set the audience member to the authorization server's issuer identifier,
+  exactly as its metadata publishes it. The direct BReg receiver identity
+  includes `clientAssertionAudience`, so a direct BReg item left pending by a
+  previous binary whose stored receiver identity did not include it stops the
+  pass as `adapter.job.breg-receiver-changed`
+  before any BReg call, with the job position unchanged, and no configuration
+  under this version releases it: run passes with the previous binary until
+  `adapter-job status` lists no pending items, and take a database backup,
+  before upgrading. After `init-store` the store is at schema 104, which the
+  previous binary refuses: restore that backup, settle the items with the
+  previous binary, then upgrade and run `init-store` again.
 
 ## 0.46.0 - 2026-11-08
 

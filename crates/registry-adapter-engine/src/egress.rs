@@ -1109,7 +1109,9 @@ impl EndpointEgress {
                     token_endpoint: token_endpoint()?,
                     client_id_ref: secret(),
                     client_assertion_key_ref: secret(),
-                    client_assertion_audience: None,
+                    // Replay never signs an assertion; the loopback origin
+                    // the transcript plays stands as its issuer.
+                    client_assertion_audience: "http://127.0.0.1".to_owned(),
                     scope: None,
                     audience: None,
                     resource: None,
