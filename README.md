@@ -92,12 +92,13 @@ of releases.
   packs. Binaries and installer ship from v0.46.0.
   Docs: [Registry Adapter](products/adapter/README.md).
 
-Evidence Gateway can use a fixed Base Registry Engine route or another bounded
-HTTP endpoint as a source, and keeps its own authorization either way. The stack also
+Evidence Gateway reads its sources through reviewed Adapter pack routes, such
+as a fixed Base Registry Engine route or another bounded HTTP endpoint, and
+keeps its own authorization either way. The stack also
 includes Registry Platform shared primitives, the `bregctl`, `caseworkctl`,
-`schedulingctl`, `messagingctl`, `evidencectl`, and `discoveryctl`
-adopter tools, unified Node.js and Python clients, and release tooling for validating the
-public source model.
+`schedulingctl`, `messagingctl`, `coordinatorctl`, `adapterctl`,
+`evidencectl`, and `discoveryctl` adopter tools, unified Node.js and Python
+clients, and release tooling for validating the public source model.
 
 ### Explore individual and combined examples
 
@@ -175,14 +176,22 @@ flowchart LR
 
 - `crates/`: Rust crates and runnable binaries for Base Registry Engine,
   Evidence Gateway, Registry Casework, Registry Scheduling,
-  Registry Messaging, Registry Discovery, Registry Manifest, Registry Platform,
+  Registry Messaging, Registry Coordinator, Registry Adapter, Registry Render,
+  the Document Store, Registry Discovery, Registry Manifest, Registry Platform,
   and the `bregctl`, `caseworkctl`, `schedulingctl`, `messagingctl`,
-  `evidencectl`, and `discoveryctl` adopter tools. Base Registry Engine lives in `crates/registry-breg` with one
-  `breg` binary, Evidence Gateway in `crates/registry-evidence` with one
-  `evidence` binary, Registry Casework in `crates/registry-casework` with one
-  `casework` binary, Registry Scheduling in `crates/registry-scheduling`
-  with one `scheduling` binary, and Registry Messaging in
-  `crates/registry-messaging` with one `messaging` binary. The Base Registry
+  `coordinatorctl`, `adapterctl`, `documentsctl`, `evidencectl`, and
+  `discoveryctl` adopter tools. Base Registry Engine lives in
+  `crates/registry-breg` with one `breg` binary, Evidence Gateway in
+  `crates/registry-evidence` with one `evidence` binary, Registry Casework in
+  `crates/registry-casework` with one `casework` binary, Registry Scheduling
+  in `crates/registry-scheduling` with one `scheduling` binary, Registry
+  Messaging in `crates/registry-messaging` with one `messaging` binary,
+  Registry Coordinator in `crates/registry-coordinator` with the
+  `coordinator` and `coordinatorctl` binaries, Registry Adapter in
+  `crates/registry-adapter` (`adapter`) and `crates/registry-adapter-job`
+  (`adapter-job`), Registry Render in `crates/registry-render` with one
+  `registry-render` binary, and the Document Store in
+  `crates/registry-documents` with one `documents` binary. The Base Registry
   Engine citizen services live in `crates/registry-breg-mcp` (`breg-mcp`) and
   `crates/registry-breg-review` (`breg-review`).
 - `products/`: product-owned docs, examples, Docker inputs, specs, security

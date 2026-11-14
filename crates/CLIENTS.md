@@ -1,6 +1,6 @@
 # Registry Stack client guidance
 
-This guide covers the seven product clients, the Node.js and Python bindings
+This guide covers the eight product clients, the Node.js and Python bindings
 maintained for each of them, `registry-stack-client`, the unified
 native-package facades, and shared `registry-record` DTOs. Apply the owning
 product guide as well.
@@ -14,11 +14,11 @@ that every checkout or release ships it.
 
 | Area | Owns |
 |---|---|
-| `registry-{breg,casework,coordinator,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
+| `registry-{breg,casework,coordinator,discovery,evidence,messaging,render,scheduling}-client` | Canonical Rust product HTTP and response contract |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
 | `registry-documents-client` | Rust Document Store HTTP and response contract; no language binding and not part of the unified packages or the Rust facade |
-| BReg, Casework, Coordinator, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
-| `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
+| BReg, Casework, Coordinator, Discovery, Evidence, Messaging, Render, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
+| `registry-stack-client` | Curated Rust facade for BReg, Casework, Coordinator, Discovery, Evidence, Messaging, Render, and Scheduling, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `registry-stack-client-py` | Public `registry-stack-client` Python metadata and `registry_client` facade, assembled with all native bindings |
 | `registry-record` | Neutral Registry Record DTOs and strict envelope decoding, without product authorization semantics |
@@ -152,13 +152,13 @@ tree. `build:debug` builds the addon without writing the committed `index.js`
 or `index.d.ts`, and `check:types` generates both into ignored `.check` files and
 requires them to match the committed ones byte for byte. When a napi-rs CLI bump
 changes that output, `check:types` fails. Run `npm ci && npm run build` in each
-of the seven `-client-node` directories, which rewrites both files with the
+of the eight `-client-node` directories, which rewrites both files with the
 pinned CLI (Discovery's loader normalizer included), and commit every
 `index.js` and `index.d.ts` together with the bump.
 
 For Python bindings, run from the changed `-client-py` directory, replacing
 `<product>` with `breg`, `casework`, `coordinator`, `discovery`, `evidence`,
-`messaging`, or `scheduling`:
+`messaging`, `render`, or `scheduling`:
 
 ```sh
 cargo build --locked -p registry-<product>-client-py --lib --features registry-<product>-client-py/extension-module

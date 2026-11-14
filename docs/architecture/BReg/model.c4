@@ -1,6 +1,6 @@
 // Application structure and public integration boundaries.
 // Components inside breg are responsibilities in one Rust runtime, not services.
-// Source links follow main; the audit model describes the unreleased shared writer.
+// Source links follow main; the audit model describes the shared writer.
 model {
   application = external 'Application' {
     description 'An institutional application using product HTTP APIs or maintained Rust, Node.js and Python clients. The active BReg package determines available records, actions, routes and fields. As an Evidence relying party, the application separately chooses credentials, pins verification trust and verifies assertions.'
@@ -27,9 +27,9 @@ model {
   }
   postgres = database 'BReg PostgreSQL' {
     technology 'Registry-owned database'
-    description 'Holds configured records, change requests, immutable proposal-bound task authority, revision history, erasure coverage, transactional events and delivery state. Runtime access and migration authority use separate roles.'
+    description 'Holds configured records, Proposals, immutable proposal-bound task authority, revision history, erasure coverage, transactional events and delivery state. Runtime access and migration authority use separate roles.'
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/postgres/mod.rs 'Database services'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/request_store.rs 'Retained proposal authority'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/proposal_store.rs 'Retained proposal authority'
   }
   bregAuditStore = database 'BReg audit stream' {
     technology 'Per-process JSONL file or stdout'
@@ -41,7 +41,7 @@ model {
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/startup.rs 'Runtime assembly and startup'
 
     api = component 'Configured HTTP API' {
-      description 'Serves package-defined records, lookups, actions and change requests, plus caller-filtered metadata, schemas and OpenAPI.'
+      description 'Serves package-defined records, lookups, actions and Proposals, plus caller-filtered metadata, schemas and OpenAPI.'
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/api/mod.rs 'Router'
     }
     access = component 'Authentication and access' {
@@ -62,13 +62,13 @@ model {
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/postgres/revision_read.rs 'Revision reads'
     }
     writes = component 'Governed mutations' {
-      description 'Applies configured record operations, immediate actions and reviewed change requests. Coordinates pre-I/O request audit, transactional writes, retained original task authority, grant-bound idempotency, history and declared events, followed by response audit after commit. A task-grant profile permits reads and governed change-request work, never direct mutation of target records.'
+      description 'Applies configured record operations, immediate actions and reviewed Proposals. Coordinates pre-I/O request audit, transactional writes, retained original task authority, grant-bound idempotency, history and declared events, followed by response audit after commit. A task-grant profile permits reads and governed Proposal work, never direct mutation of target records.'
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/mutation.rs 'Mutation kernel'
     }
     events = component 'Event projection' {
-      description 'Builds declared record-change or request-lifecycle events and their permitted field projections inside the owning database transaction.'
+      description 'Builds declared record-change or Proposal lifecycle events and their permitted field projections inside the owning database transaction.'
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/outbox.rs 'Record events'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/request_events.rs 'Request lifecycle events'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/proposal_events.rs 'Proposal lifecycle events'
     }
     webhooks = component 'Webhook delivery' {
       description 'Claims committed deliveries and sends authenticated CloudEvents to explicitly bound destinations, with bounded retries, retained delivery status and operator replay.'

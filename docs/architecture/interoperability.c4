@@ -30,9 +30,9 @@ model {
   }
   bregEvidenceExport = artifact 'Evidence source export' {
     #optional
-    technology 'Optional authoring / YAML, JSON Schema, Rhai'
-    description 'Lookup source, selector and fact schemas, and prepare/extract scripts for import into an Evidence project. The export grants no BReg access and includes no credentials or Evidence question authority.'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/evidence_source.rs 'Source export'
+    technology 'Optional authoring / Adapter pack, YAML, JSON Schema, Rhai'
+    description 'A reviewed Adapter pack and thin Source contract for one selected lookup, with selector and fact schemas and named preparation and extraction Functions, for import into an Evidence project. The export grants no BReg access and includes no credentials or Evidence question authority.'
+    link https://github.com/registrystack/registry-stack/blob/f4817a95e61208067c3032848f86fff3f51f9e77/crates/registry-breg/src/evidence_source.rs 'Source export'
   }
   signer = external 'External package signer' {
     technology 'Production signing authority'
@@ -50,7 +50,7 @@ model {
     technology 'HTTPS / authenticated producer protocol'
     navigateTo casework_source_action
   }
-  evidence.acquisition .call breg.api 'Reads a fixed, authorized lookup' {
+  evidence.acquisition .call breg.api 'Reads a fixed, authorized lookup through a pinned pack route' {
     #optional
     technology 'HTTPS / configured source authentication'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/EVIDENCE.md 'BReg as an Evidence source'

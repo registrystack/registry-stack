@@ -59,7 +59,7 @@ model {
   taskAgent .call breg.api 'Uses exact task-bound profile permissions' {
     #optional #taskAuthority
     technology 'HTTPS / exchanged access token'
-    description 'BReg matches the profile source issuer, an admitted requester client, one required purpose and exactly the compiled permissions, and verifies the token client and BReg audience against the grant. Task profiles can read without a Casework status check. Task writes use governed change requests; direct target-record mutations are forbidden.'
+    description 'BReg matches the profile source issuer, an admitted requester client, one required purpose and exactly the compiled permissions, and verifies the token client and BReg audience against the grant. Task profiles can read without a Casework status check. Task writes use governed Proposals; direct target-record mutations are forbidden.'
     navigateTo breg_task_write
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/TASK_GRANTS.md 'BReg task authority'
   }

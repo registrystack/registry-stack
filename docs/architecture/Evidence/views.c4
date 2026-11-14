@@ -4,14 +4,17 @@ views {
     description '''
       An application uses the native clients or HTTP API to request and verify a
       minimum-disclosure assertion. Evidence is one process over one immutable bundle
-      and one operator-controlled trust domain. It can read a fixed HTTPS source or a
-      mounted read-only SQLite publication and writes only privacy-safe native audit.
+      and one operator-controlled trust domain. It reads sources only through reviewed,
+      digest-pinned Adapter pack routes run in the linked Adapter engine: a fixed HTTPS
+      source, a mounted read-only SQLite publication, another Evidence provider\'s signed
+      answer, or a credential a holder presented through the OID4VP front end. It writes
+      only privacy-safe native audit.
       Runtime bindings, audit storage and assertion signing are distinct from BReg
       packages, PostgreSQL state and package signing. Signer configuration selects
       Transit for production or evidence-grade assurance, or a local JWK for local
       assurance, never both.
     '''
-    include application, issuer, evidence, evidenceHttpSource, evidenceSqliteExtract, evidenceAuditStore, evidenceTransitSigner, evidenceLocalSigningKey
+    include application, issuer, evidence, evidenceAdapterEngine, evidenceHttpSource, evidenceSqliteExtract, evidenceUpstreamProvider, evidenceOid4vp, evidenceAuditStore, evidenceTransitSigner, evidenceLocalSigningKey
     global predicate evidence_application
   }
 
@@ -22,11 +25,14 @@ views {
       supports singular assertions, audience-scoped request batches and holder-bound
       issuance batches without creating a credential lifecycle. Rust owns authority,
       source effects, limits, validation, response construction, signing and audit.
-      Rhai receives only bounded deterministic inputs and cannot perform I/O.
+      Pack routes own provider interaction and normalization inside the linked Adapter
+      engine; Evidence keeps authorization, input minimization and host-protocol
+      verification. Derivation Functions receive only bounded deterministic inputs and
+      cannot perform I/O.
       Startup selects the external Transit path or the in-process local JWK path
       according to assurance; the two signer kinds are mutually exclusive.
     '''
-    include evidence.*, application, issuer, evidenceHttpSource, evidenceSqliteExtract, evidenceAuditStore, evidenceTransitSigner, evidenceLocalSigningKey, evidenceVerifier
+    include evidence.*, application, issuer, evidenceAdapterEngine, evidenceHttpSource, evidenceSqliteExtract, evidenceUpstreamProvider, evidenceOid4vp, evidenceAuditStore, evidenceTransitSigner, evidenceLocalSigningKey, evidenceVerifier
   }
 
   view evidence_audit_release {
@@ -48,7 +54,7 @@ views {
       appear as value-free outcomes inside that successful envelope; any other failure aborts
       it. Holder-bound issuance uses its separate atomic batch response.
     '''
-    include application, evidence.api, evidence.authority, evidence.acquisition, evidence.assertions, evidence.signing, evidence.audit, evidenceAuditStore, evidenceHttpSource, evidenceSqliteExtract
+    include application, evidence.api, evidence.authority, evidence.acquisition, evidence.assertions, evidence.signing, evidence.audit, evidenceAuditStore, evidenceAdapterEngine, evidenceHttpSource, evidenceSqliteExtract
   }
 
   dynamic view evidence_assertion {
@@ -56,8 +62,8 @@ views {
     description '''
       Illustrative successful production singular request using Transit signing. Complete
       authority, request limits and exact selectors are resolved before the first source effect. Access
-      audit is durable before request preparation, credentials and the fixed source operation.
-      Source values remain transient. The kernel validates declared concepts and constructs
+      audit is durable before request preparation, credentials and the pinned pack route\'s
+      source operations. Source values remain transient. The kernel validates declared concepts and constructs
       the unsigned payload; the response boundary signs protected formats and serializes the
       exact final bytes before durable disclosure audit. Those same bytes,
       and no source or selector material, are returned to the relying application.
@@ -71,10 +77,11 @@ views {
     evidence.authority -> evidence.acquisition 'Dispatches the one authorized bundle-fixed acquisition plan'
     evidence.acquisition -> evidence.audit 'Durably appends the source-access attempt'
     evidence.audit -> evidenceAuditStore 'Syncs the privacy-safe access event'
-    evidence.acquisition -> evidence.scripts 'Builds and validates the bounded request parts'
-    evidence.acquisition -> evidenceHttpSource 'Performs the fixed bounded source request'
-    evidence.acquisition -> evidence.scripts 'Projects the response and extracts a closed lookup result'
-    evidence.acquisition -> evidence.scripts 'Derives only the declared concepts from authorized selectors and facts'
+    evidence.acquisition -> evidence.acquisition 'Maps only authorized selector fields into the route\'s closed inputs'
+    evidence.acquisition -> evidenceAdapterEngine 'Runs the pinned pack route'
+    evidenceAdapterEngine -> evidenceHttpSource 'Performs the route\'s bounded source requests'
+    evidenceAdapterEngine -> evidence.acquisition 'Returns the projection as a schema-validated private FactSet'
+    evidence.acquisition -> evidence.scripts 'Derives only the declared outputs from the facts and declared selector inputs'
     evidence.scripts -> evidence.assertions 'Returns declared typed values for payload construction'
     evidence.assertions -> evidence.signing 'Supplies the validated payload for exact serialization and protected-format signing'
     evidence.signing -> evidenceTransitSigner 'Signs with the governed active Transit key'
@@ -110,7 +117,7 @@ views {
     evidence.authority -> evidence.acquisition 'Dispatches the one completely authorized bundle-fixed plan'
     evidence.acquisition -> evidence.audit 'Durably appends access before credentials or source I/O'
     evidence.audit -> evidenceAuditStore 'Syncs plain requirement and purpose, scoped contextual pseudonyms and no raw identity, task subjects or selector values'
-    evidence.acquisition -> evidenceHttpSource 'Performs the fixed request, then follows the existing signed release path'
+    evidence.acquisition -> evidenceAdapterEngine 'Runs the pinned pack route, then follows the existing signed release path'
   }
 
   view evidence_interoperability {
@@ -119,13 +126,16 @@ views {
       The SDKs call Evidence and verify through the portable verifier. An application may
       search Registry Discovery first, but its accepted selection is inert metadata: the
       application still establishes trust, credentials and native Evidence invocation.
-      Evidence can use BReg or another HTTPS API only as a fixed independently
-      authorized source; each product retains its own access and audit boundary. BReg\'s
+      Evidence can use BReg or another HTTPS API only as an independently authorized
+      source through a pinned Adapter pack route; each product retains its own access
+      and audit boundary. Another Evidence provider can be a source over the signed
+      Evidence protocol, and a holder can present a wallet credential through the
+      OID4VP front end; Evidence verifies both itself. BReg\'s
       reverse trial integration is a separate relying-party call. Authenticated
       requester-scoped definitions reveal complete authorized request shapes, while the
       public provider advertisement and JWKS grant neither access nor key trust.
     '''
-    include application, taskAgent, issuer, evidence, evidenceClient, evidenceVerifier, evidenceDiscovery, evidenceHttpSource, evidenceSqliteExtract, evidenceTransitSigner, evidenceLocalSigningKey, breg
+    include application, taskAgent, issuer, evidence, evidenceClient, evidenceVerifier, evidenceDiscovery, evidenceAdapterEngine, evidenceHttpSource, evidenceSqliteExtract, evidenceUpstreamProvider, evidenceOid4vp, evidenceWallet, evidenceTransitSigner, evidenceLocalSigningKey, breg
     include taskAgent with { navigateTo evidence_task_assertion }
     global predicate evidence_application
     exclude breg -> issuer
@@ -192,7 +202,7 @@ views {
     title 'Evidence / 09. Authoring and deployment contracts'
     description '''
       An authoring project is compiled into a create-only candidate bundle and generated
-      contracts. A BReg source export can supply lookup-side schemas and adapter stubs,
+      contracts. A BReg source export can supply a reviewed Adapter pack and Source contract,
       but grants neither BReg access nor Evidence question authority. Evidence validates
       the complete bundle and fixtures through the real binary. Operators independently
       provision the closed runtime file, source credentials, audit material, TLS roots
