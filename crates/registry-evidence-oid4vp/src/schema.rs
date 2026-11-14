@@ -159,13 +159,15 @@ mod tests {
                 "allowedClient": "evidence",
                 "requiredScope": "oid4vp:read-result"
             },
-            "clientIdentifier": {
+            "clientIdentifiers": [{
+                "id": "haip",
                 "type": "x509-san-dns",
                 "certificateChainRef": "secret:file/verifier-chain.pem",
                 "signingKeyRef": "secret:file/verifier-signing.jwk.json"
-            },
+            }],
             "policies": [{
                 "id": "national-id",
+                "clientIdentifier": "haip",
                 "credentials": [{
                     "id": "national_id",
                     "format": "dc+sd-jwt",
@@ -211,10 +213,10 @@ mod tests {
             &|document| document["policies"] = serde_json::json!([])
         ));
         assert!(refused(&|document| {
-            document["clientIdentifier"]["type"] = Value::from("x509SanDns")
+            document["clientIdentifiers"][0]["type"] = Value::from("x509SanDns")
         }));
         assert!(refused(&|document| {
-            document["clientIdentifier"]["signingKeyRef"] = Value::from("/run/secrets/key.jwk")
+            document["clientIdentifiers"][0]["signingKeyRef"] = Value::from("/run/secrets/key.jwk")
         }));
         assert!(refused(&|document| {
             document["policies"][0]["credentials"][0]["format"] = Value::from("mso_mdoc")
@@ -223,7 +225,7 @@ mod tests {
             document["sessions"] = serde_json::json!({"sessionTtlSeconds": 5})
         }));
         assert!(!refused(&|document| {
-            document["clientIdentifier"]["type"] = Value::from("x509-hash")
+            document["clientIdentifiers"][0]["type"] = Value::from("x509-hash")
         }));
     }
 
