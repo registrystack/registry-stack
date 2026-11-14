@@ -425,13 +425,13 @@ a `Refusal`, which is reported with the structural problems. A substituted
 ## Parser choice
 
 The reader parses with [`saphyr-parser`](https://crates.io/crates/saphyr-parser)
-`=0.1.0`, pinned exactly in the workspace `Cargo.toml`. It was chosen over
+`=0.3.3`, pinned exactly in the workspace `Cargo.toml`. It was chosen over
 `unsafe-libyaml-norway` 0.2.15 (the libyaml translation `serde_norway`
 already pulls in) on these criteria:
 
-| Criterion | `saphyr-parser` 0.1.0 | `unsafe-libyaml-norway` 0.2.15 |
+| Criterion | `saphyr-parser` 0.3.3 | `unsafe-libyaml-norway` 0.2.15 |
 |---|---|---|
-| Unsafe code | none in the crate (5,352 lines). Its one dependency with unsafe code, `arraydeque` 0.5.1, backs `BufferedInput` only; the reader parses through `Parser::new_from_str`, which does not use it. | a C-to-Rust translation: 241 `unsafe` mentions in 11,871 lines; the workspace forbids `unsafe_code`, so the reader would need its own lint table and a module of `SAFETY` comments |
+| Unsafe code | none in the crate (5,496 lines). Its one dependency with unsafe code, `arraydeque` 0.5.1, backs `BufferedInput` only; the reader parses through `Parser::new_from_str` and its `StrInput`, which do not use it. | a C-to-Rust translation: 241 `unsafe` mentions in 11,871 lines; the workspace forbids `unsafe_code`, so the reader would need its own lint table and a module of `SAFETY` comments |
 | Events against the suite | matches the vendored yaml-test-suite cases (below) | not run: excluded on the unsafe criterion |
 | Marks | char-accurate line and column on every event, correct across CRLF | line, column, and byte index on every event |
 | Refusal hooks | anchor ids, alias events, tags, collection events in key position, document starts, and scalar styles are all exposed | the same, through raw pointers |
@@ -468,11 +468,20 @@ What the reader adds on top of the parser, and why:
   input.
 - **Syntax messages.** The reader classifies parser errors into the closed
   syntax codes and appends saphyr's text as a note only when it is one of
-  the parser's fixed strings. In 0.1.0 the only error text built from input
+  the parser's fixed strings. In 0.3.3 the only error text built from input
   is "unexpected character" (`scanner.rs`), which the reader drops. **On
   any version bump, re-audit every `ScanError::new` call site for text
   built from input**, rerun the suite comparison, and re-check the depth and
   empty-value behavior above.
+
+The 0.3.3 audit also covered the behavior changes since 0.1.0. The parser
+now refuses raw NUL characters, guards recursive alias expansion, preserves
+flow mappings inside compatibility pairs, and represents an empty block
+scalar at end of input as empty text instead of a line feed. The reader
+continues to refuse aliases, and reader-level regressions pin the raw-NUL
+diagnostic, the empty-text result, empty-value placement, and the 128-level
+depth bound. The raw-NUL error also proves that tab classification matches
+whole words rather than the `tab` letters inside `unprintable`.
 
 ## Project check acceptances
 

@@ -717,6 +717,24 @@ fn cfg_val_1_a_control_character_in_a_text_value_is_refused() {
 }
 
 #[test]
+fn cfg_val_1_a_raw_nul_is_refused_without_repeating_the_value() {
+    let report = scan_refusal(&format!("a: {MARKER}\0suffix\n"));
+    assert_eq!(only(&report).code, "yaml.syntax", "{report}");
+    assert_no_marker(&report);
+}
+
+#[test]
+fn cfg_val_1_an_empty_block_scalar_at_end_of_input_is_empty_text() {
+    let NodeValue::Mapping(entries) = scan_ok("a: |") else {
+        panic!("a mapping");
+    };
+    assert!(matches!(
+        &entries[0].value.value,
+        NodeValue::String(text) if text.text.is_empty()
+    ));
+}
+
+#[test]
 fn cfg_val_1_delete_and_a_c1_control_character_in_a_text_value_are_refused() {
     let report = scan_refusal(
         "a: \"x\\x7fy\"\nb: \"x\\x80y\"\nc: \"x\\Ny\"\nd: \"x\\u009fy\"\ne: \"x\u{7f}y\"\nf: \"x\u{85}y\"\ng: \"x\u{9b}y\"\n",
