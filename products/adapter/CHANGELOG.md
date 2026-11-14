@@ -2,19 +2,26 @@
 
 ## Unreleased
 
-- `adapter serve --payments-config` hosts typed synthetic payment collection
+- `adapter serve --payments-config` hosts typed collection and disbursement
   operations on the shared listener and PostgreSQL store, including without
   a record project. Connections bind institution/service scope, admitted
   callers, provider tenant/biller and separate BReg reporting credentials.
   Retained attempts preserve their original binding and exact commands across
   response loss and restart. Only a confirmed, correlated receipt can mark
   the authoritative bill paid. One attempt is permitted per bill version,
-  including after definitive failure; live providers, replacement attempts,
-  refunds and settlement are outside this slice.
+  including after definitive failure; live collection providers, replacement
+  attempts, refunds and settlement are outside this slice.
+- The pinned Mifos Payment Hub EE disbursement profile signs the exact Bulk
+  request, verifies its acknowledgement and reads status under a separate
+  bearer credential. An uncertain send stays held; a confirmed provider
+  report is not proof of beneficiary credit or settlement.
 - `adapterctl payments check` validates connections offline and
   `adapterctl payments contract` exports their typed HTTP contract. Generated
   schemas, a native Coordinator workflow, the restricted BReg fee fixture,
   and a joined native acceptance runner accompany the payment host.
+- PostgreSQL jobs can project bounded JSONB values, including the geometry
+  and related rows in the [QField PostGIS example](examples/qfield-postgis/README.md).
+  Item keys and query parameters keep their existing scalar contract.
 
 ## 0.46.0 - 2026-11-08
 

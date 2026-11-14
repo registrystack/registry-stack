@@ -761,6 +761,28 @@ formats:
     securityMembers:
       - pointer: /issuer
         whenOmitted: refused
+      - pointer: /application
+        whenOmitted: closed
+      - pointer: /application/client
+        whenOmitted: refused
+      - pointer: /application/callbackPath
+        whenOmitted: refused
+      - pointer: /application/healthPath
+        whenOmitted: refused
+      - pointer: /application/entry
+        whenOmitted: refused
+      - pointer: /application/prepare
+        whenOmitted: refused
+      - pointer: /application/checker
+        whenOmitted: refused
+      - pointer: /application/deployment
+        whenOmitted: refused
+      - pointer: /application/configSchema
+        whenOmitted: refused
+      - pointer: /application/configEnvironment
+        whenOmitted: refused
+      - pointer: /application/prepareVersion
+        whenOmitted: refused
       - pointer: /products/*/audience
         whenOmitted: refused
       - pointer: /people/*/grants/breg/profile
@@ -777,7 +799,7 @@ formats:
         whenOmitted: closed
       - pointer: /people/*/caseworkContext
         whenOmitted: closed
-    restrictingMembers: [/issuer, /products/*/audience, /people/*/grants/breg/profile, /people/*/grants/casework/profile, /people/*/caseworkContext]
+    restrictingMembers: [/issuer, /application/client, /application/callbackPath, /products/*/audience, /people/*/grants/breg/profile, /people/*/grants/casework/profile, /people/*/caseworkContext]
   - id: breg/example-scenarios
     product: breg
     title: Example scenarios

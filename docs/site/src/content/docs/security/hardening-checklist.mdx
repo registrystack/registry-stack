@@ -47,8 +47,8 @@ Use this checklist after product configuration is valid and before exposing a de
   active JWK and pinned Transit key version. Retain the old public key for at least the maximum
   assertion validity plus allowed clock skew. Follow
   [Rotate Registry Evidence signing keys](../../tutorials/rotate-evidence-signing-keys/).
-- Use a workload-local Vault or OpenBao Transit proxy over a Unix socket for production Evidence
-  Gateway signing. Require P-256, signing enabled, non-exportable key material, plaintext backup
+- Use a workload-local Vault or OpenBao Transit proxy over a Unix socket for Registry Evidence
+  signing. Require P-256, signing enabled, non-exportable key material, plaintext backup
   disabled, and an exact governed public-key match. Local JWK signing is for local assurance. See
   [Configure Transit signing](../../tutorials/move-evidence-to-production-signing/).
 - Escrow the Base Registry Engine (BReg) Transit key before the first encrypted field goes live. The
@@ -165,8 +165,8 @@ Correct the responsible policy, grants, or credentials and rerun it before expos
   enforce per-client quotas at the gateway.
 - Keep every Evidence source hop on a private network where possible. Give Registry Evidence a
   dedicated source credential scoped to the exact operation the bundle performs.
-- Keep hostname and fixed-origin verification enabled for every Evidence HTTP source. Evidence
-  Gateway ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`, follows no redirect, and
+- Keep hostname and fixed-origin verification enabled for every Evidence HTTP source. Registry Evidence
+  ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`, follows no redirect, and
   has no application proxy setting.
 
 ## Authorization and disclosure

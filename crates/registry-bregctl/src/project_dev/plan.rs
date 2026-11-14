@@ -110,6 +110,16 @@ fn schema_test_people_schema(generator: &mut schemars::SchemaGenerator) -> schem
 }
 
 #[cfg(feature = "schema")]
+fn display_name_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "allOf": [generator.subschema_for::<registry_platform_yaml::DisplayText>()],
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+    })
+}
+
+#[cfg(feature = "schema")]
 fn claims_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "type": "object",
@@ -139,6 +149,13 @@ fn expected_json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::
     })
 }
 
+#[cfg(feature = "schema")]
+fn issuer_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [generator.subschema_for::<PlatformUrl>(), {"const": "run"}],
+    })
+}
+
 /// A product the development run can start.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -162,8 +179,8 @@ impl Product {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Plan {
-    /// HTTPS URL, at most 512 characters and without credentials, query or fragment, that the run's tokens name as their issuer.
-    #[cfg_attr(feature = "schema", schemars(with = "PlatformUrl"))]
+    /// HTTPS URL for an existing issuer, or `run` when a declared application uses this run's loopback browser issuer.
+    #[cfg_attr(feature = "schema", schemars(schema_with = "issuer_schema"))]
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
@@ -185,6 +202,38 @@ pub(super) struct Plan {
         schemars(schema_with = "schema_test_people_schema")
     )]
     pub schema_test_people: BTreeMap<String, BTreeMap<String, String>>,
+    /// A built local application this run prepares, starts, checks and stops. Its artifact root is supplied to `rstack dev start`.
+    #[serde(default)]
+    pub application: Option<ApplicationPlan>,
+}
+
+/// A generic Node application and its configuration command. All artifact paths are relative to the supplied built root.
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ApplicationPlan {
+    /// Confidential browser client identifier admitted by the selected product profiles.
+    pub client: String,
+    /// Exact loopback callback path registered with the run issuer.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    pub callback_path: String,
+    /// Local readiness path served by the application.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    pub health_path: String,
+    /// Built application entry, relative to the supplied artifact root.
+    pub entry: PathBuf,
+    /// Built configuration command, invoked with --deployment, --run and --out.
+    pub prepare: PathBuf,
+    /// Built configuration checker, invoked with the generated config path.
+    pub checker: PathBuf,
+    /// Configuration source file, relative to the development project.
+    pub deployment: PathBuf,
+    /// Closed run-input schema name understood by the declared configuration command.
+    pub config_schema: String,
+    /// Environment variable naming the generated host configuration for the child.
+    pub config_environment: String,
+    /// Exact one-line response of the configuration command's --version flag.
+    pub prepare_version: String,
 }
 
 /// One product to start and where its project lives.
@@ -209,6 +258,14 @@ pub(super) struct TestPerson {
     /// Subject claim of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub subject: String,
+    /// Name shown in the synthetic browser sign-in picker; it grants no authority.
+    #[serde(
+        default,
+        rename = "displayName",
+        deserialize_with = "registry_platform_yaml::optional_display_text"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "display_name_schema"))]
+    pub display_name: Option<String>,
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
@@ -538,6 +595,53 @@ pub(super) fn reserved_claim(claim: &str) -> bool {
     ) || claim.starts_with("registry_grant_")
 }
 
+fn browser_host_claim(claim: &str) -> bool {
+    matches!(claim, "name" | "registry_scopes")
+}
+
+pub(super) fn validate_application_authority(
+    plan: &Plan,
+    inspection: &super::products::ProductInspection,
+) -> SemanticResult<()> {
+    if plan.application.is_none() {
+        return Ok(());
+    }
+    if let Some(authority) = &inspection.breg_authority {
+        if browser_host_claim(&authority.principal) {
+            let index = plan
+                .products
+                .iter()
+                .position(|entry| entry.product == Product::Breg)
+                .expect("an application plan has a BReg product");
+            return refuse(
+                &format!("/products/{index}/project"),
+                "The BReg project selects a principal claim reserved by the browser host.",
+                "Choose `sub`, `registry_principal`, or another principal claim that is neither `name` nor `registry_scopes`.",
+            );
+        }
+    }
+    for (name, person) in &plan.people {
+        let Some(grant) = person.grants.get(&Product::Casework) else {
+            continue;
+        };
+        if inspection
+            .casework_principals
+            .get(&grant.profile)
+            .is_some_and(|principal| browser_host_claim(principal))
+        {
+            return refuse(
+                &format!(
+                    "/people/{}/grants/casework/profile",
+                    registry_platform_yaml::escape_pointer_segment(name)
+                ),
+                "The Casework profile selects a principal claim reserved by the browser host.",
+                "Choose a profile whose principal claim is `sub`, `registry_principal`, or another claim that is neither `name` nor `registry_scopes`.",
+            );
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("dev.yaml {field}: {reason} Next: {remedy}")]
 pub(super) struct SemanticRefusal {
@@ -646,12 +750,17 @@ pub(crate) fn check(root: &Path) -> Result<Report> {
         return Err(refusal_report(&decoded, &refusal).into());
     }
     let terminate = super::signals()?;
-    if let Err(error) = super::products::inspect(root, &decoded.value, &terminate) {
-        return match error.downcast::<SemanticRefusal>() {
-            Ok(refusal) => Err(refusal_report(&decoded, &refusal).into()),
-            Err(error) => Err(error),
-        };
-    }
+    let inspection = match super::products::inspect(root, &decoded.value, &terminate) {
+        Ok(inspection) => inspection,
+        Err(error) => {
+            return match error.downcast::<SemanticRefusal>() {
+                Ok(refusal) => Err(refusal_report(&decoded, &refusal).into()),
+                Err(error) => Err(error),
+            }
+        }
+    };
+    validate_application_authority(&decoded.value, &inspection)
+        .map_err(|refusal| refusal_report(&decoded, &refusal))?;
     Ok(decoded.document.report_with(Vec::new()))
 }
 
@@ -671,7 +780,7 @@ impl Plan {
 
     fn validate(&self, root: &Path) -> SemanticResult<()> {
         require(
-            ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
+            self.issuer == "run" || ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
                 url.scheme() == "https"
                     && url.host().is_some()
                     && url.username().is_empty()
@@ -681,9 +790,83 @@ impl Plan {
                     && self.issuer.len() <= 512
             }),
             "/issuer",
-            "The issuer must be the project's bounded HTTPS URL without credentials, query, or fragment.",
-            "Set issuer to an HTTPS URL with a host and no credentials, query, or fragment.",
+            "The issuer must be `run` or a bounded HTTPS URL without credentials, query, or fragment.",
+            "Set issuer to `run` for a declared application, or to an HTTPS URL with a host and no credentials, query, or fragment.",
         )?;
+        require(
+            (self.issuer == "run") == self.application.is_some(),
+            "/issuer",
+            "A declared application requires the run issuer, and the run issuer requires an application.",
+            "Declare application with issuer `run`, or remove application and set an HTTPS issuer.",
+        )?;
+        if let Some(application) = &self.application {
+            require(
+                bounded_atom(&application.client),
+                "/application/client",
+                "The browser client must be bounded text without whitespace or control characters.",
+                "Set client to the application's declared OIDC client identifier.",
+            )?;
+            for (field, path) in [
+                ("callbackPath", &application.callback_path),
+                ("healthPath", &application.health_path),
+            ] {
+                require(
+                    path.len() <= 256 && super::products::valid_health_path(path),
+                    &format!("/application/{field}"),
+                    "The path must be a bounded local absolute path without a query or fragment.",
+                    "Use a single-slash path of at most 256 bytes on the application origin.",
+                )?;
+            }
+            for (field, path) in [
+                ("entry", &application.entry),
+                ("prepare", &application.prepare),
+                ("checker", &application.checker),
+                ("deployment", &application.deployment),
+            ] {
+                require(
+                    !path.as_os_str().is_empty()
+                        && path
+                            .components()
+                            .all(|part| matches!(part, Component::Normal(_))),
+                    &format!("/application/{field}"),
+                    "The path must be relative and stay inside its declared root.",
+                    "Use normal relative path components without `.` or `..`.",
+                )?;
+            }
+            require(
+                root.join(&application.deployment)
+                    .canonicalize()
+                    .is_ok_and(|path| path.starts_with(root) && path.is_file()),
+                "/application/deployment",
+                "The deployment file must be inside the development project.",
+                "Provide the declared deployment file in the development project.",
+            )?;
+            require(
+                bounded_atom(&application.config_schema),
+                "/application/configSchema",
+                "The configuration input schema name must be bounded text.",
+                "Set configSchema to the configuration command's schema name.",
+            )?;
+            require(
+                !application.config_environment.is_empty()
+                    && application.config_environment.len() <= 128
+                    && application.config_environment.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+                    && !application.config_environment.starts_with("RSTACK_")
+                    && !application.config_environment.as_bytes()[0].is_ascii_digit(),
+                "/application/configEnvironment",
+                "The configuration environment name must be uppercase and cannot use the runner namespace.",
+                "Set configEnvironment to the application's uppercase configuration-file variable.",
+            )?;
+            require(
+                (1..=128).contains(&application.prepare_version.len())
+                    && !application.prepare_version.chars().any(char::is_control),
+                "/application/prepareVersion",
+                "The configuration command version line must be bounded visible text.",
+                "Set prepareVersion to the exact one-line --version output.",
+            )?;
+        }
         require(
             !self.products.is_empty(),
             "/products",
@@ -731,6 +914,14 @@ impl Plan {
                 format!("Create {manifest} at this project path inside the development project directory."),
             )?;
         }
+        if self.application.is_some() {
+            require(
+                products.contains(&Product::Breg),
+                "/application",
+                "The declared application needs a BReg product.",
+                "Add the BReg product or remove application.",
+            )?;
+        }
         require(
             (1..=32).contains(&self.people.len()),
             "/people",
@@ -751,6 +942,16 @@ impl Plan {
                 "The test person's subject must be bounded text without whitespace or control characters.",
                 "Set subject to at most 256 characters without whitespace or control characters.",
             )?;
+            if let Some(name) = &person.display_name {
+                require(
+                    !name.is_empty()
+                        && name.chars().count() <= 128
+                        && !name.chars().any(char::is_control),
+                    &format!("{field}/displayName"),
+                    "The test person's display name must be 1 to 128 visible characters.",
+                    "Set displayName to short text without control characters.",
+                )?;
+            }
             require(
                 bounded_atom(&person.client),
                 &format!("{field}/client"),
@@ -787,6 +988,13 @@ impl Plan {
                     "Remove duplicate or excess scopes, and keep each scope within 256 characters without whitespace or control characters.",
                 )?;
                 for claim in grant.claims.keys() {
+                    if self.application.is_some() && browser_host_claim(claim) {
+                        return refuse(
+                            &format!("{field}/claims"),
+                            "The grant authors a claim reserved by the browser host.",
+                            "Remove `name` and `registry_scopes`; the browser issuer supplies them from the selected identity and narrowed scopes.",
+                        );
+                    }
                     require(
                         bounded_atom(claim) && !reserved_claim(claim),
                         &format!("{field}/claims"),
@@ -1208,6 +1416,204 @@ mod tests {
 
     fn canonical(root: &tempfile::TempDir) -> PathBuf {
         root.path().canonicalize().unwrap()
+    }
+
+    fn application_plan() -> (tempfile::TempDir, Plan) {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        fs::write(root.path().join("deployment.json"), "{}").unwrap();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["issuer"] = json!("run");
+        value["application"] = json!({
+            "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
+            "entry": "dist/main.js", "prepare": "dist/prepare.js",
+            "checker": "dist/check.js", "deployment": "deployment.json",
+            "configSchema": "example/host-run/v1", "configEnvironment": "HOST_CONFIG",
+            "prepareVersion": "example-prepare 1.0"
+        });
+        (root, serde_json::from_value(value).unwrap())
+    }
+
+    #[test]
+    fn display_name_is_presentation_only_and_bounded() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["people"]["operator"]["displayName"] = json!("A person");
+        let valid: Plan = serde_json::from_value(value.clone()).unwrap();
+        assert!(valid.validate(&canonical(&root)).is_ok());
+        value["people"]["operator"]["displayName"] = json!("control\ncharacter");
+        let invalid: Plan = serde_json::from_value(value).unwrap();
+        assert!(invalid
+            .validate(&canonical(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("displayName"));
+    }
+
+    #[test]
+    fn display_name_refuses_bidi_override_and_isolate_controls() {
+        let (_, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let valid = serde_json::to_value(plan).unwrap();
+        for display_name in ["unsafe\u{202e}name", "unsafe\u{2066}name"] {
+            let mut value = valid.clone();
+            value["people"]["operator"]["displayName"] = json!(display_name);
+            assert!(
+                serde_json::from_value::<Plan>(value).is_err(),
+                "display name {display_name:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn display_name_schema_matches_display_text_and_length_bounds() {
+        let documents = crate::tool_schema::documents().unwrap();
+        let document: Value =
+            serde_json::from_str(&documents["project-dev.v1alpha1.schema.json"]).unwrap();
+        let schema = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&document)
+            .unwrap();
+        let valid = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project-dev/v1alpha1",
+            "kind": "BRegProjectDev",
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "breg", "project": ".", "audience": "registry"}],
+            "people": {"operator": {
+                "subject": "operator", "client": "operator-client",
+                "grants": {"breg": {"profile": "operator", "scopes": []}}
+            }},
+            "journey": {"id": "smoke", "steps": [{
+                "id": "read", "product": "breg", "as": "operator",
+                "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+            }]}
+        });
+        for display_name in [
+            "unsafe\u{202e}name".to_owned(),
+            "unsafe\u{2066}name".to_owned(),
+            String::new(),
+            "x".repeat(129),
+        ] {
+            let mut value = valid.clone();
+            value["people"]["operator"]["displayName"] = json!(display_name);
+            assert!(!schema.is_valid(&value), "display name {display_name:?}");
+        }
+        for display_name in ["Visible name".to_owned(), "é".repeat(128)] {
+            let mut value = valid.clone();
+            value["people"]["operator"]["displayName"] = json!(display_name);
+            assert!(schema.is_valid(&value), "display name {display_name:?}");
+        }
+    }
+
+    #[test]
+    fn run_issuer_requires_a_bounded_declared_application() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        fs::write(root.path().join("deployment.json"), "{}").unwrap();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["issuer"] = json!("run");
+        let without_application: Plan = serde_json::from_value(value.clone()).unwrap();
+        assert!(without_application.validate(&canonical(&root)).is_err());
+        value["application"] = json!({
+            "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
+            "entry": "dist/main.js", "prepare": "dist/prepare.js",
+            "checker": "dist/check.js", "deployment": "deployment.json",
+            "configSchema": "example/host-run/v1", "configEnvironment": "HOST_CONFIG",
+            "prepareVersion": "example-prepare 1.0"
+        });
+        let valid: Plan = serde_json::from_value(value.clone()).unwrap();
+        assert!(valid.validate(&canonical(&root)).is_ok());
+        let mut conflicting = value.clone();
+        conflicting["people"]["operator"]["grants"]["breg"]["claims"]["registry_scopes"] =
+            json!("unreviewed:scope");
+        let conflicting: Plan = serde_json::from_value(conflicting).unwrap();
+        assert!(conflicting
+            .validate(&canonical(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("reserved"));
+        value["application"]["callbackPath"] = json!("//other-host/callback");
+        let invalid: Plan = serde_json::from_value(value).unwrap();
+        assert!(invalid
+            .validate(&canonical(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("callbackPath"));
+    }
+
+    #[test]
+    fn application_grants_cannot_author_browser_host_claims() {
+        for claim in ["name", "registry_scopes"] {
+            let (root, plan) = application_plan();
+            let mut value = serde_json::to_value(plan).unwrap();
+            value["people"]["operator"]["grants"]["breg"]["claims"][claim] =
+                json!("authority-value");
+            let plan: Plan = serde_json::from_value(value).unwrap();
+
+            let refusal = plan.validate(&canonical(&root)).unwrap_err();
+            assert_eq!(refusal.field, "/people/operator/grants/breg/claims");
+            assert!(refusal.reason.contains("browser host"));
+        }
+    }
+
+    #[test]
+    fn application_products_cannot_select_browser_host_principal_claims() {
+        for principal in ["name", "registry_scopes"] {
+            let (_, plan) = application_plan();
+            let inspection = super::super::products::ProductInspection {
+                breg_authority: Some(super::super::BregAuthority {
+                    principal: principal.to_owned(),
+                    purpose: false,
+                    requires_postgis: false,
+                    encrypts_fields: false,
+                    named_clients: BTreeSet::new(),
+                }),
+                casework_principals: BTreeMap::new(),
+            };
+
+            let refusal = validate_application_authority(&plan, &inspection).unwrap_err();
+            assert_eq!(refusal.field, "/products/0/project");
+            assert!(refusal.reason.contains("BReg"));
+        }
+
+        for principal in ["name", "registry_scopes"] {
+            let (_, plan) = application_plan();
+            let mut value = serde_json::to_value(plan).unwrap();
+            value["products"].as_array_mut().unwrap().push(json!({
+                "product": "casework", "project": "casework", "audience": "casework-service"
+            }));
+            value["people"]["operator"]["grants"]["casework"] = json!({
+                "profile": "reviewer", "scopes": ["casework.read"]
+            });
+            let plan: Plan = serde_json::from_value(value).unwrap();
+            let inspection = super::super::products::ProductInspection {
+                breg_authority: Some(super::super::BregAuthority {
+                    principal: "registry_principal".to_owned(),
+                    purpose: false,
+                    requires_postgis: false,
+                    encrypts_fields: false,
+                    named_clients: BTreeSet::new(),
+                }),
+                casework_principals: BTreeMap::from([(
+                    "reviewer".to_owned(),
+                    principal.to_owned(),
+                )]),
+            };
+
+            let refusal = validate_application_authority(&plan, &inspection).unwrap_err();
+            assert_eq!(refusal.field, "/people/operator/grants/casework/profile");
+            assert!(refusal.reason.contains("Casework"));
+        }
     }
 
     #[test]

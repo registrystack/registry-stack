@@ -314,9 +314,8 @@ fn failure(class: ErrorClass, message: &'static str) -> RouteFailure {
     }
 }
 
-/// One scalar the engine hands the host or receives from it: the
-/// closed value form both sides of the seam speak, so the client's
-/// column types never enter the engine.
+/// A query parameter or a result column in the engine's closed value form.
+/// The client's column types stay in the host.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceScalar {
     Text(String),
@@ -326,12 +325,19 @@ pub enum SourceScalar {
     /// A numeric as its text, so precision never crosses the seam
     /// through a float.
     Numeric(String),
+    /// A bounded JSONB result. It is never a parameter or a key.
+    Jsonb(JsonbColumn),
     /// A SQL NULL column value. It never binds as a parameter and never
     /// serves as an item key.
     Null,
 }
 
-/// One row the host read: columns in order, each a name and a scalar.
+/// A result decoded under the PostgreSQL field budget and strict JSON parser.
+/// Its value stays private so callers cannot bypass the parser's nesting bound.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonbColumn(Value);
+
+/// One row the host read, with named columns in result order.
 #[derive(Debug, Clone)]
 pub struct SourceRow {
     pub columns: Vec<(String, SourceScalar)>,
@@ -377,11 +383,24 @@ impl PostgresRowBudget {
     /// Check a borrowed column name or string value before the host
     /// gives it an owned allocation.
     pub fn check_field(&self, value: &str) -> Result<(), PostgresReadFault> {
-        if value.len() > self.bounds.maximum_field_bytes {
+        self.check_field_bytes(value.len())
+    }
+
+    fn check_field_bytes(&self, bytes: usize) -> Result<(), PostgresReadFault> {
+        if bytes > self.bounds.maximum_field_bytes {
             Err(PostgresReadFault::TooLarge)
         } else {
             Ok(())
         }
+    }
+
+    /// Decode the JSON portion of a native JSONB result. Check the borrowed
+    /// bytes before parsing allocates, then admit the encoded value separately.
+    pub fn decode_jsonb(&self, bytes: &[u8]) -> Result<SourceScalar, PostgresReadFault> {
+        self.check_field_bytes(bytes.len())?;
+        let value = registry_platform_canonical_json::parse_json_strict(bytes)
+            .map_err(|_| PostgresReadFault::Malformed)?;
+        Ok(SourceScalar::Jsonb(JsonbColumn(value)))
     }
 
     /// Admit one row before a host retains it. Duplicate column names
@@ -401,6 +420,9 @@ impl PostgresRowBudget {
                 SourceScalar::Text(value) | SourceScalar::Numeric(value) => {
                     self.check_field(value)?;
                 }
+                SourceScalar::Jsonb(value) => {
+                    bounded_json_bytes(&value.0, self.bounds.maximum_field_bytes)?;
+                }
                 SourceScalar::Float(value) if !value.is_finite() => {
                     return Err(PostgresReadFault::Malformed);
                 }
@@ -410,7 +432,7 @@ impl PostgresRowBudget {
                 | SourceScalar::Null => {}
             }
         }
-        let row_bytes = serialized_row_bytes(row, self.bounds.maximum_row_bytes)?;
+        let row_bytes = bounded_json_bytes(&SerializableRow(row), self.bounds.maximum_row_bytes)?;
         let separator = usize::from(self.rows != 0);
         let response_bytes = self
             .response_bytes
@@ -442,6 +464,7 @@ impl serde::Serialize for SerializableRow<'_> {
                 SourceScalar::Integer(value) => map.serialize_entry(name, value)?,
                 SourceScalar::Float(value) => map.serialize_entry(name, value)?,
                 SourceScalar::Boolean(value) => map.serialize_entry(name, value)?,
+                SourceScalar::Jsonb(value) => map.serialize_entry(name, &value.0)?,
                 SourceScalar::Null => map.serialize_entry(name, &())?,
             }
         }
@@ -449,16 +472,16 @@ impl serde::Serialize for SerializableRow<'_> {
     }
 }
 
-fn serialized_row_bytes(
-    row: &SourceRow,
-    maximum_row_bytes: usize,
+fn bounded_json_bytes(
+    value: &impl serde::Serialize,
+    maximum: usize,
 ) -> Result<usize, PostgresReadFault> {
     let mut writer = BoundedCountingWriter {
-        maximum: maximum_row_bytes,
+        maximum,
         written: 0,
         exceeded: false,
     };
-    if serde_json::to_writer(&mut writer, &SerializableRow(row)).is_err() {
+    if serde_json::to_writer(&mut writer, value).is_err() {
         return Err(if writer.exceeded {
             PostgresReadFault::TooLarge
         } else {
@@ -482,7 +505,7 @@ impl io::Write for BoundedCountingWriter {
             .filter(|written| *written <= self.maximum)
         else {
             self.exceeded = true;
-            return Err(io::Error::other("postgres row bound exceeded"));
+            return Err(io::Error::other("postgres JSON byte bound exceeded"));
         };
         self.written = written;
         Ok(bytes.len())
@@ -536,13 +559,13 @@ pub enum PostgresReadFault {
     Connection,
     /// The source refused the transaction, the bound, or the statement.
     Statement,
-    /// The source returned a scalar outside the closed JSON value form.
+    /// The source returned a value outside the closed result form.
     Malformed,
     /// A field, row, row count, or aggregate response exceeded its
     /// authored source bound.
     TooLarge,
     /// The one-based result column has a type outside the closed
-    /// scalar form. A column's type is the same on every row, so the
+    /// result form. A column's type is the same on every row, so the
     /// first row of the page is the one that refuses.
     UnsupportedColumn { column: u32 },
 }
@@ -693,10 +716,12 @@ fn validate_source_rows(
     Ok(())
 }
 
-/// The closed code of a result column whose type has no scalar form.
+/// The closed code of an unsupported PostgreSQL result column type.
 pub const POSTGRES_COLUMN_TYPE_CODE: &str = "adapter.job.postgres-column-type";
 /// The closed code of a row whose key column is NULL.
 pub const POSTGRES_KEY_NULL_CODE: &str = "adapter.job.postgres-key-null";
+/// The closed code of a JSONB column configured as a scalar item key.
+pub const POSTGRES_KEY_TYPE_CODE: &str = "adapter.job.postgres-key-type";
 
 /// `offset` is the page's first row ordinal, so a column fault, which the
 /// page's first row raises, is located at it.
@@ -715,7 +740,7 @@ fn read_failure(fault: PostgresReadFault, offset: u64) -> RouteFailure {
         }
         PostgresReadFault::Malformed => failure(
             ErrorClass::UpstreamMalformed,
-            "the source returned a scalar outside the closed result form",
+            "the source returned a value outside the closed result form",
         ),
         PostgresReadFault::TooLarge => failure(
             ErrorClass::UpstreamTooLarge,
@@ -725,7 +750,7 @@ fn read_failure(fault: PostgresReadFault, offset: u64) -> RouteFailure {
             message: Some(format!(
                 "result column {column} has a PostgreSQL type the source cannot read; cast it in \
                  the query to text, an integer, double precision, boolean, numeric, date, \
-                 timestamp, timestamptz or uuid"
+                 timestamp, timestamptz, uuid or jsonb"
             )),
             code: Some(POSTGRES_COLUMN_TYPE_CODE),
             record: Some(Box::new(registry_adapter_core::RecordLocator {
@@ -776,12 +801,26 @@ fn row_item(
 ) -> Result<Value, RouteFailure> {
     let mut members = serde_json::Map::new();
     let mut key = None;
-    for (name, value) in &row.columns {
-        let scalar = scalar_value(value)?;
-        if name == key_column {
-            key = Some(scalar.clone());
+    for (index, (name, value)) in row.columns.iter().enumerate() {
+        let is_key = name == key_column;
+        if is_key && matches!(value, SourceScalar::Jsonb(_)) {
+            return Err(RouteFailure {
+                code: Some(POSTGRES_KEY_TYPE_CODE),
+                record: Some(Box::new(registry_adapter_core::RecordLocator {
+                    ordinal,
+                    column: Some(u32::try_from(index + 1).unwrap_or(u32::MAX)),
+                })),
+                ..failure(
+                    ErrorClass::UpstreamMalformed,
+                    "a row's key column is JSONB; select a stable scalar key column",
+                )
+            });
         }
-        members.insert(name.clone(), scalar);
+        let value = result_value(value)?;
+        if is_key {
+            key = Some(value.clone());
+        }
+        members.insert(name.clone(), value);
     }
     let key = key.ok_or_else(|| {
         failure(
@@ -824,7 +863,7 @@ fn row_item(
     }))
 }
 
-fn scalar_value(value: &SourceScalar) -> Result<Value, RouteFailure> {
+fn result_value(value: &SourceScalar) -> Result<Value, RouteFailure> {
     Ok(match value {
         SourceScalar::Text(text) => Value::String(text.clone()),
         SourceScalar::Integer(value) => serde_json::json!(value),
@@ -837,6 +876,7 @@ fn scalar_value(value: &SourceScalar) -> Result<Value, RouteFailure> {
         }
         SourceScalar::Boolean(value) => serde_json::json!(value),
         SourceScalar::Numeric(text) => Value::String(text.clone()),
+        SourceScalar::Jsonb(value) => value.0.clone(),
         SourceScalar::Null => Value::Null,
     })
 }
@@ -895,6 +935,43 @@ mod tests {
         };
         assert_eq!(
             validate_source_rows(2, aggregate_bounds, &aggregate),
+            Err(PostgresReadFault::TooLarge)
+        );
+    }
+
+    #[test]
+    fn jsonb_result_must_fit_the_engine_budget_and_cannot_be_a_key() {
+        let host = PostgresRowBudget::new(
+            1,
+            PostgresReadBounds {
+                maximum_response_bytes: 256,
+                maximum_row_bytes: 128,
+                maximum_field_bytes: 64,
+            },
+        )
+        .expect("host budget");
+        let value = host
+            .decode_jsonb(br#"{"label":"wide contact label"}"#)
+            .expect("host can read this result");
+        let row = SourceRow {
+            columns: vec![("id".to_owned(), value)],
+        };
+        let error = row_item("sites", "id", &row, 0).expect_err("a JSONB key is refused");
+        assert_eq!(error.code, Some(POSTGRES_KEY_TYPE_CODE));
+        let bounds = PostgresReadBounds {
+            maximum_response_bytes: 256,
+            maximum_row_bytes: 128,
+            maximum_field_bytes: 16,
+        };
+        assert_eq!(
+            validate_source_rows(
+                1,
+                bounds,
+                &PostgresRows {
+                    rows: vec![row],
+                    complete: true
+                }
+            ),
             Err(PostgresReadFault::TooLarge)
         );
     }

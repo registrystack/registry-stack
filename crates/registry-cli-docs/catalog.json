@@ -26411,6 +26411,15 @@
               ],
               "options": [
                 {
+                  "display": "--application-root <DIRECTORY>",
+                  "description": "Root of an already-built local application when dev.yaml declares one",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--database-url <URL>",
                   "description": "TLS PostgreSQL administrator URL. Defaults to RSTACK_DEV_DATABASE_URL",
                   "always_required": false,

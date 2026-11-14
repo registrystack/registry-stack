@@ -37,6 +37,54 @@ or reports the run ID if cleanup is pending. The TTL starts at readiness and
 defaults to 30 minutes.
 Supply one whole-number value from `1s` to `24h` with an `s`, `m`, or `h` suffix.
 
+### Start a declared application
+
+An optional `application` block starts one already-built local Node 24 host
+beside the products. Set `issuer: run` for this mode and pass its built root at
+start with `--application-root DIRECTORY`; omit both for the existing
+product-only run. `check` validates the declaration and deployment file without
+requiring the built root. The application block names a browser `client`, exact
+`callbackPath`, local `healthPath`, built `entry`, configuration `prepare` and
+`checker` files, a `deployment` file relative to the development project, the
+configuration command's `configSchema` and exact `prepareVersion` line, and the
+`configEnvironment` variable through which the host reads its generated file.
+The built files must stay inside the supplied root; the deployment file must
+stay inside the development project. The entry is explicit, including when the
+application uses its own default entry.
+
+Before provisioning, `start` checks Node 24, the built files and the
+configuration command's `--version` output. The runner picks a loopback issuer
+and application port. After the product journey, it writes an owner-only run
+input with the declared schema name, real addresses, product audiences, and
+paths to a fresh browser-client secret and optional Casework recovery key. It
+requests separate resource grants when Casework is present, invokes the declared
+command with `--deployment`, `--run` and `--out`, then
+invokes the checker with the generated configuration path. The child receives
+only the declared configuration-file environment variable and runs in the
+built root. The ready report adds `issuer` and `application` URLs. `status`
+repeats them, and `stop`, expiry, or a crashed child stops the issuer and app
+alongside the products. Configuration commands and built hosts are trusted
+local code supplied by the operator; the runner does not fetch or build them.
+A later `start` creates a fresh disposable run and databases; it does not
+restore unfinished application work.
+
+The browser issuer presents only the plan's synthetic test people. It issues
+one resource-bound token per product after a confidential authorization-code
+exchange with S256 PKCE. It grants the intersection of the requested scopes and
+the selected person's scopes for that product; a request with no overlap is
+refused. Browser tokens carry the same grant in `scope` and `registry_scopes`.
+In application mode, `name` is presentation-only and `registry_scopes` carries
+the selected person's narrowed host scopes. Do not use either as a BReg or
+Casework principal claim or as an additional authored grant claim; `check` and
+`start` refuse those configurations.
+One browser session can obtain a second product grant for the same person;
+`prompt=login` opens the person picker again. The authored
+BReg and Casework profiles still decide which client and person can use each
+operation. Declare the browser client in the relevant BReg requester profiles;
+the runner adds it to the runtime's accepted-client list but does not change
+the authored package. Browser tokens last at most 15 minutes and expire with
+the run; `rstack dev token` continues to issue five-minute CLI tokens.
+
 The [licensing example](examples/licensing/dev.yaml) creates an application in
 BReg, requests approval of the captured application in Casework, and checks the
 reviewer's decision. Point `start` at the directory containing `dev.yaml`.
@@ -282,8 +330,12 @@ identifier and maintenance database before dropping any resources. It waits for
 the process guards to finish, then drops the databases and roles and removes
 the run directory. If any step fails, the report gives the reason and the
 resources you can check before retrying.
-For runs from an older development build without recovery metadata, use the
-manual cleanup steps below.
+An abrupt machine restart can stop a guard before it writes its completed
+cleanup receipt. In that case `--recover` refuses to claim the guarded workload
+was reaped, even if the process no longer exists. Verify ownership and finish
+cleanup with the manual steps below. The same manual path applies to runs from
+an older development build without recovery metadata. Recovery releases the
+disposable run; it does not resume its application or pending work.
 
 A successful recovery reports `status` `stopped` and a `recovered` object with
 `stopped_process_groups` and `databases_and_roles`.
@@ -322,7 +374,8 @@ When a journey assertion fails, `start` exits 1 and prints the regular
   failure of the run's supervisor. An interrupted `start` is `domain`.
   `error.message` is the human-readable reason.
 - `run_id` is present when the failure concerns a run that still has
-  resources to release. Use it with `stop --recover`.
+  resources to release. Try `stop --recover`; an incomplete guard receipt
+  requires the verified manual cleanup above.
 - `recovery` accompanies `run_id` when the resources are known. It has `kind`
   (`lost-supervisor` or `cleanup-pending`), `run_directory`, `processes`,
   `objects` or `databases_and_roles`, `field_encryption_key` when the run

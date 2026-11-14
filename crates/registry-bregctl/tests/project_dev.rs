@@ -1,7 +1,106 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+use std::{
+    fs,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+struct GuardFixture {
+    guard: Child,
+    workload: Option<rustix::process::Pid>,
+}
+
+impl Drop for GuardFixture {
+    fn drop(&mut self) {
+        if let Some(pid) = self.workload {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
+        let _ = self.guard.kill();
+        let _ = self.guard.wait();
+    }
+}
+
+#[test]
+fn hidden_project_dev_guard_dispatch_reaps_workload_when_controller_closes() {
+    let scratch = tempfile::tempdir().unwrap();
+    let lock = scratch.path().join("guard.lock");
+    let pid_file = scratch.path().join("guard.pid");
+    let state_file = scratch.path().join("guard.state");
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&lock)
+        .unwrap();
+    let sleep = system_binary("sleep");
+    let guard = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("project-dev-guard")
+        .arg("--lock")
+        .arg(&lock)
+        .arg("--pid-file")
+        .arg(&pid_file)
+        .arg("--state-file")
+        .arg(&state_file)
+        .arg("--")
+        .arg(&sleep)
+        .arg("60")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut fixture = GuardFixture {
+        guard,
+        workload: None,
+    };
+
+    let launch_deadline = Instant::now() + Duration::from_secs(5);
+    let workload = loop {
+        match fs::read_to_string(&pid_file) {
+            Ok(raw) => {
+                let raw: i32 = raw.trim().parse().unwrap();
+                break rustix::process::Pid::from_raw(raw).unwrap();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("cannot read guard workload PID: {error}"),
+        }
+        assert!(
+            fixture.guard.try_wait().unwrap().is_none(),
+            "hidden guard exited before publishing its workload PID"
+        );
+        assert!(
+            Instant::now() < launch_deadline,
+            "hidden guard did not publish its workload PID"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    fixture.workload = Some(workload);
+    assert_eq!(fs::read(&state_file).unwrap(), b"launching\n");
+
+    drop(fixture.guard.stdin.take());
+    let stop_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if fixture.guard.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(
+            Instant::now() < stop_deadline,
+            "hidden guard did not stop after its controller closed"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    assert_eq!(fs::read(&state_file).unwrap(), b"complete\n");
+    assert_eq!(
+        rustix::process::test_kill_process_group(workload),
+        Err(rustix::io::Errno::SRCH)
+    );
+    fixture.workload = None;
+}
 
 fn project(root: &std::path::Path, extra: &str) {
     fs::write(
@@ -144,6 +243,43 @@ fn every_helper_failure_prints_the_error_envelope() {
             assert!(report.get("run_id").is_none(), "{name}: {report}");
         }
     }
+}
+
+#[test]
+fn declared_application_requires_a_built_root_before_allocating_a_run() {
+    let scratch = tempfile::tempdir().unwrap();
+    project(scratch.path(), "");
+    let plan_file = scratch.path().join("dev.yaml");
+    let plan = fs::read_to_string(&plan_file)
+        .unwrap()
+        .replace("issuer: https://issuer.example.invalid", "issuer: run");
+    fs::write(
+        &plan_file,
+        format!(
+            "{plan}\napplication:\n  client: browser-client\n  callbackPath: /callback\n  healthPath: /health\n  entry: dist/main.js\n  prepare: dist/prepare.js\n  checker: dist/check.js\n  deployment: deployment.json\n  configSchema: example/host-run/v1\n  configEnvironment: HOST_CONFIG\n  prepareVersion: example-prepare 1.0\n"
+        ),
+    )
+    .unwrap();
+    fs::write(scratch.path().join("deployment.json"), "{}").unwrap();
+    let state = scratch.path().join("state");
+    let checked = helper(
+        serde_json::json!({"action":"check", "project":scratch.path(), "deny_warnings":false, "json":true}),
+        &state,
+    );
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(!state.exists());
+    let result = helper(
+        serde_json::json!({"action":"start", "project":scratch.path(), "json":true}),
+        &state,
+    );
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_error_envelope(&report, "domain");
+    assert!(report["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("--application-root"));
+    assert!(!state.exists());
 }
 
 #[test]

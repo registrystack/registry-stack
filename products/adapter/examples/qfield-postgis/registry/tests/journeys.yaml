@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: field-site-ingestion
+    steps:
+      - id: invoke-registration
+        action: register-site
+        accessProfile: ingestion
+        claims:
+          principal: adapter-field-ingestion
+          scopes: [registry:write]
+          actorKind: service
+          requesterClient: adapter-field-ingestion
+          directClaims: {sub: adapter-field-ingestion}
+        request:
+          type: invoke
+          idempotencyKey: register-site-immediate
+          input:
+            sourceSubmissionId: 44444444-4444-4444-8444-444444444444
+            siteName: Synthetic immediate field site
+            position: {type: Point, coordinates: [100.55, 13.75]}
+            boundary:
+              type: Polygon
+              coordinates:
+                - [[100.54, 13.74], [100.56, 13.74], [100.56, 13.76], [100.54, 13.76], [100.54, 13.74]]
+            contacts:
+              - {id: 55555555-5555-4555-8555-555555555555, name: Synthetic immediate contact}
+              - {id: 55555555-5555-4555-8555-555555555556, name: Second synthetic immediate contact}
+        expect: {outcome: success, status: 200}
+        captureResults: {field-site: immediate-site}
+
+      - id: reconcile-immediate-registration
+        recordType: field-site
+        accessProfile: reconciliation
+        claims:
+          principal: field-site-observer
+          scopes: [registry:reconcile]
+          purpose: field-intake-reconciliation
+          actorKind: service
+          requesterClient: field-site-observer
+          directClaims: {field_collection_owner: adapter-field-ingestion}
+        request:
+          type: lookup
+          selector: by-source-submission
+          values: {sourceSubmissionId: 44444444-4444-4444-8444-444444444444}
+        expect:
+          outcome: success
+          status: 200
+          fields: {sourceSubmissionId: 44444444-4444-4444-8444-444444444444}
+
+      - id: conceal-registration-outside-owner
+        recordType: field-site
+        accessProfile: reconciliation
+        claims:
+          principal: field-site-observer
+          scopes: [registry:reconcile]
+          purpose: field-intake-reconciliation
+          actorKind: service
+          requesterClient: field-site-observer
+          directClaims: {field_collection_owner: another-collection}
+        request:
+          type: lookup
+          selector: by-source-submission
+          values: {sourceSubmissionId: 44444444-4444-4444-8444-444444444444}
+        expect: {outcome: refusal, status: 404, problemCode: lookup.unresolved}
+
+      - id: start-proposal
+        action: propose-site
+        accessProfile: ingestion
+        claims:
+          principal: adapter-field-ingestion
+          scopes: [registry:write]
+          actorKind: service
+          requesterClient: adapter-field-ingestion
+          directClaims: {sub: adapter-field-ingestion}
+        request:
+          type: proposal
+          transition: start
+          input:
+            sourceSubmissionId: 66666666-6666-4666-8666-666666666666
+            siteName: Synthetic proposed field site
+            position: {type: Point, coordinates: [100.60, 13.80]}
+            boundary:
+              type: Polygon
+              coordinates:
+                - [[100.59, 13.79], [100.61, 13.79], [100.61, 13.81], [100.59, 13.81], [100.59, 13.79]]
+            contacts:
+              - {id: 77777777-7777-4777-8777-777777777777, name: Synthetic proposal contact}
+              - {id: 77777777-7777-4777-8777-777777777778, name: Second synthetic proposal contact}
+        expect: {outcome: success, status: 201, fields: {state: draft}}
+        capture: proposed-site
+
+      - id: submit-proposal
+        action: propose-site
+        accessProfile: ingestion
+        claims:
+          principal: adapter-field-ingestion
+          scopes: [registry:write]
+          actorKind: service
+          requesterClient: adapter-field-ingestion
+          directClaims: {sub: adapter-field-ingestion}
+        request:
+          type: proposal
+          transition: submit
+          proposalCapture: proposed-site
+          idempotencyKey: propose-site-submit
+        expect: {outcome: success, status: 200, fields: {state: submitted}}

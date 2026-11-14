@@ -375,20 +375,20 @@ fn source_row(
     let mut columns = Vec::with_capacity(row.len());
     for (index, column) in row.columns().iter().enumerate() {
         budget.check_field(column.name())?;
-        let scalar = column_scalar(row, index, column.type_(), budget)?;
-        columns.push((column.name().to_owned(), scalar));
+        let value = column_value(row, index, column.type_(), budget)?;
+        columns.push((column.name().to_owned(), value));
     }
     Ok(SourceRow { columns })
 }
 
-/// Read one column as its closed scalar. Every supported type reads as
+/// Read one result column as its closed value. Every supported type reads as
 /// an `Option`, so a SQL NULL of any of them is [`SourceScalar::Null`].
 /// Dates, times and UUIDs cross as canonical text: DATE as `YYYY-MM-DD`,
 /// TIMESTAMP as ISO 8601 without an offset, TIMESTAMPTZ as RFC 3339 in
 /// UTC, and UUID in lowercase hyphenated form. NUMERIC crosses as its
-/// exact decimal text. Any other type refuses with its one-based column
-/// position, never its value.
-fn column_scalar(
+/// exact decimal text. JSONB crosses as bounded JSON. Any other type
+/// refuses with its one-based column position.
+fn column_value(
     row: &tokio_postgres::Row,
     index: usize,
     column_type: &Type,
@@ -439,6 +439,8 @@ fn column_scalar(
         Type::UUID => column::<uuid::Uuid>(row, index)?.map_or(SourceScalar::Null, |value| {
             SourceScalar::Text(value.hyphenated().to_string())
         }),
+        Type::JSONB => column::<JsonbBytes<'_>>(row, index)?
+            .map_or(Ok(SourceScalar::Null), |value| budget.decode_jsonb(value.0))?,
         _ => {
             return Err(PostgresReadFault::UnsupportedColumn {
                 column: u32::try_from(index + 1).unwrap_or(u32::MAX),
@@ -455,6 +457,23 @@ fn column<'a, T: FromSql<'a>>(
 ) -> Result<Option<T>, PostgresReadFault> {
     row.try_get::<_, Option<T>>(index)
         .map_err(|_| PostgresReadFault::Malformed)
+}
+
+/// PostgreSQL's JSONB wire value starts with a version byte and then JSON.
+/// Borrow the bytes so the field budget applies before decoding the JSON.
+struct JsonbBytes<'a>(&'a [u8]);
+
+impl<'a> FromSql<'a> for JsonbBytes<'a> {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        match raw.split_first() {
+            Some((&1, bytes)) => Ok(Self(bytes)),
+            _ => Err("unsupported PostgreSQL JSONB wire version".into()),
+        }
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        *ty == Type::JSONB
+    }
 }
 
 /// A NUMERIC value as its exact decimal text, decoded from the binary wire
@@ -548,10 +567,8 @@ impl NativeParameter {
             SourceScalar::Integer(value) => Ok(Self::Integer(*value)),
             SourceScalar::Float(value) => Ok(Self::Float(*value)),
             SourceScalar::Boolean(value) => Ok(Self::Boolean(*value)),
-            // The engine currently emits Numeric only for a host-returned
-            // value. Refuse rather than invent an imprecise binary encoding
-            // if it ever crosses into a parameter.
-            SourceScalar::Numeric(_) => Err(PostgresReadFault::Statement),
+            // These result-only types do not extend the parameter contract.
+            SourceScalar::Numeric(_) | SourceScalar::Jsonb(_) => Err(PostgresReadFault::Statement),
             // The engine refuses a null parameter before the read, so a
             // NULL here is a seam fault, never a value to bind.
             SourceScalar::Null => Err(PostgresReadFault::Statement),

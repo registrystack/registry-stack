@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
     fs,
     io::{Read, Seek, SeekFrom},
     net::{Ipv4Addr, TcpListener},
@@ -23,12 +24,13 @@ use std::{
 
 use super::{
     bindings::{Bindings, RuntimeBindings},
+    browser::BrowserClient,
     clock,
     database::{Database, DatabaseUrls},
     guard,
     issuer::Issuer,
     operational,
-    plan::{self, Plan, Product},
+    plan::{self, ApplicationPlan, Plan, Product},
     private_directory, stopping, write_private, BregAuthority, Operational, RunInput, POLL,
 };
 
@@ -36,8 +38,185 @@ use super::{
 /// directory and removed with it.
 pub(super) const FIELD_KEY: &str = "field-key";
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RuntimeKind {
+    Product(Product),
+    Application,
+}
+
+impl RuntimeKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Product(product) => product.name(),
+            Self::Application => "application",
+        }
+    }
+}
+
 /// How long a started product has to answer `/ready`.
 const READINESS_WAIT: Duration = Duration::from_secs(30);
+
+/// A locally built application process. Its configuration and environment are
+/// prepared by the caller before the run starts a guarded child.
+pub(super) struct ApplicationLaunch {
+    pub(super) program: PathBuf,
+    pub(super) arguments: Vec<OsString>,
+    pub(super) workdir: PathBuf,
+    pub(super) environment: BTreeMap<String, String>,
+    pub(super) reservation: TcpListener,
+    pub(super) health_path: String,
+}
+
+pub(super) struct PreparedApplication {
+    pub(super) launch: ApplicationLaunch,
+    pub(super) client: BrowserClient,
+}
+
+fn application_run_input(
+    input: &RunInput,
+    urls: &BTreeMap<Product, String>,
+    origin: &str,
+    port: u16,
+    client_secret_file: &Path,
+    recovery_file: Option<&Path>,
+) -> Value {
+    let plan = input
+        .plan
+        .application
+        .as_ref()
+        .expect("declared application");
+    let mut oidc = json!({
+        "issuer": input.plan.issuer,
+        "clientSecretFile": client_secret_file,
+        "accessTokenSigningAlgorithm": "ES256",
+    });
+    let mut run = json!({
+        "schema": plan.config_schema,
+        "origin": origin,
+        "port": port,
+        "insecureLocal": true,
+        "cookieNamespace": input.run_id,
+        "oidc": oidc,
+        "breg": {
+            "baseUrl": urls[&Product::Breg],
+            "audience": input.plan.product(Product::Breg).audience,
+        }
+    });
+    if let Some(base_url) = urls.get(&Product::Casework) {
+        oidc["recoveryKeyFile"] = json!(recovery_file.expect("Casework recovery key"));
+        oidc["separateResourceGrants"] = json!(true);
+        run["oidc"] = oidc;
+        run["casework"] = json!({
+            "baseUrl": base_url,
+            "audience": input.plan.product(Product::Casework).audience,
+        });
+    }
+    run
+}
+
+pub(super) fn application_file(root: &Path, relative: &Path) -> Result<PathBuf> {
+    let root = root
+        .canonicalize()
+        .context("built application root is missing")?;
+    let path = root
+        .join(relative)
+        .canonicalize()
+        .context("built application file is missing")?;
+    ensure!(
+        path.starts_with(root) && path.is_file(),
+        "built application file must be inside its root"
+    );
+    Ok(path)
+}
+
+pub(super) fn preflight_application(root: &Path, plan: &ApplicationPlan) -> Result<PathBuf> {
+    preflight_application_with(root, plan, || {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+            .map(|directory| directory.join("node"))
+            .find(|path| path.is_file())
+            .context("Node 24 is required to start the declared application")?
+            .canonicalize()
+            .map_err(Into::into)
+    })
+}
+
+fn preflight_application_with(
+    root: &Path,
+    plan: &ApplicationPlan,
+    node: impl FnOnce() -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    for relative in [&plan.entry, &plan.prepare, &plan.checker] {
+        application_file(root, relative)?;
+    }
+    let node = node()?;
+    let node_version = bounded_version(&node, None)?;
+    ensure!(
+        node_version.starts_with("v24."),
+        "declared application requires Node 24"
+    );
+    let prepare = application_file(root, &plan.prepare)?;
+    ensure!(
+        bounded_version(&node, Some(&prepare))? == plan.prepare_version,
+        "application configuration command version differs from dev.yaml"
+    );
+    Ok(node)
+}
+
+#[cfg(test)]
+fn preflight_application_with_node(
+    root: &Path,
+    plan: &ApplicationPlan,
+    node: &Path,
+) -> Result<PathBuf> {
+    preflight_application_with(root, plan, || Ok(node.canonicalize()?))
+}
+
+fn bounded_version(node: &Path, script: Option<&Path>) -> Result<String> {
+    let mut command = Command::new(node);
+    if let Some(script) = script {
+        command.arg(script);
+    }
+    command
+        .arg("--version")
+        .env_remove("RSTACK_DEV_DATABASE_URL")
+        .env_remove("RSTACK_PROJECT_DEV_REQUEST")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .context("cannot inspect application toolchain")?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            ensure!(
+                status.success(),
+                "application toolchain version command failed"
+            );
+            let mut output = Vec::new();
+            child
+                .stdout
+                .take()
+                .context("missing version output")?
+                .take(256)
+                .read_to_end(&mut output)?;
+            let line = std::str::from_utf8(&output)?.trim_end_matches('\n');
+            ensure!(
+                !line.contains('\n') && !line.contains('\r'),
+                "application version output must be one line"
+            );
+            return Ok(line.to_owned());
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            bail!("application toolchain version command timed out");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
 
 /// The run's field-encryption key file, when the run wrote one, so recovery
 /// can name it for removal.
@@ -53,7 +232,7 @@ pub(super) struct ProductRunner<'a> {
     deadline: Instant,
     runtime: tokio::runtime::Runtime,
     http: reqwest::Client,
-    children: Vec<(Product, guard::Child)>,
+    children: Vec<(RuntimeKind, guard::Child)>,
     bindings: Option<RuntimeBindings>,
 }
 
@@ -171,11 +350,183 @@ impl<'a> ProductRunner<'a> {
                 .spawn()
                 .with_context(|| format!("cannot start {}", product.name()))
                 .map_err(operational)?;
-            self.children.push((product, child));
+            self.children.push((RuntimeKind::Product(product), child));
             self.record_processes()?;
-            self.ready(product, url, READINESS_WAIT)?;
+            self.ready(RuntimeKind::Product(product), url, "/ready", READINESS_WAIT)?;
         }
         Ok(urls)
+    }
+
+    pub(super) fn start_application(&mut self, launch: ApplicationLaunch) -> Result<String> {
+        self.ensure_active()?;
+        ensure!(
+            launch.program.is_absolute() && launch.program.is_file(),
+            "application program must be a built local file"
+        );
+        ensure!(
+            launch.workdir.is_absolute() && launch.workdir.is_dir(),
+            "application working directory is unavailable"
+        );
+        ensure!(
+            valid_health_path(&launch.health_path),
+            "application health path must be a local absolute path"
+        );
+        let origin = format!("http://{}", launch.reservation.local_addr()?);
+        let mut command = guard::Command::isolated(
+            self.root,
+            "runtime-application",
+            &launch.program,
+            &launch.workdir,
+            &launch.environment,
+        )?;
+        command.args(&launch.arguments);
+        let log = open_log(self.root, "application-runtime")?;
+        command.stdout(log.try_clone()?).stderr(log);
+        drop(launch.reservation);
+        let child = command
+            .spawn()
+            .context("cannot start application")
+            .map_err(operational)?;
+        self.children.push((RuntimeKind::Application, child));
+        self.record_processes()?;
+        self.ready(
+            RuntimeKind::Application,
+            &origin,
+            &launch.health_path,
+            READINESS_WAIT,
+        )?;
+        Ok(origin)
+    }
+
+    pub(super) fn prepare_application(
+        &self,
+        urls: &BTreeMap<Product, String>,
+    ) -> Result<PreparedApplication> {
+        self.ensure_active()?;
+        let plan = self
+            .input
+            .plan
+            .application
+            .as_ref()
+            .context("application is not declared")?;
+        let root = self
+            .input
+            .application_root
+            .as_ref()
+            .context("built application root is missing")?;
+        let node = self
+            .input
+            .application_node
+            .as_ref()
+            .context("application Node executable is missing")?;
+        let entry = application_file(root, &plan.entry)?;
+        let prepare = application_file(root, &plan.prepare)?;
+        let checker = application_file(root, &plan.checker)?;
+        let deployment = self.input.project.join(&plan.deployment).canonicalize()?;
+        ensure!(
+            deployment.starts_with(&self.input.project) && deployment.is_file(),
+            "application deployment file is unavailable"
+        );
+        let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .context("reserve application loopback listener")
+            .map_err(operational)?;
+        let address = reservation.local_addr()?;
+        let origin = format!("http://{address}");
+        let secret = random_secret()?;
+        let client_secret_file = self.root.join("application-client-secret");
+        write_private(&client_secret_file, secret.as_bytes())?;
+        let recovery_file = if urls.contains_key(&Product::Casework) {
+            let recovery_key = random_secret()?;
+            let recovery_file = self.root.join("application-recovery-key");
+            write_private(&recovery_file, recovery_key.as_bytes())?;
+            Some(recovery_file)
+        } else {
+            None
+        };
+        let run = application_run_input(
+            &self.input,
+            urls,
+            &origin,
+            address.port(),
+            &client_secret_file,
+            recovery_file.as_deref(),
+        );
+        let run_file = self.root.join("application-run.json");
+        let config_file = self.root.join("application-host.json");
+        write_private(&run_file, &serde_json::to_vec(&run)?)?;
+        self.application_tool(
+            "application-prepare",
+            node,
+            root,
+            &prepare,
+            &[
+                "--deployment".as_ref(),
+                deployment.as_os_str(),
+                "--run".as_ref(),
+                run_file.as_os_str(),
+                "--out".as_ref(),
+                config_file.as_os_str(),
+            ],
+        )?;
+        let metadata = fs::symlink_metadata(&config_file)
+            .context("application configuration was not written")?;
+        ensure!(
+            metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() <= 1024 * 1024,
+            "application configuration must be a bounded regular file"
+        );
+        self.application_tool(
+            "application-check",
+            node,
+            root,
+            &checker,
+            &[config_file.as_os_str()],
+        )?;
+        let mut environment = BTreeMap::new();
+        environment.insert(
+            plan.config_environment.clone(),
+            config_file.to_string_lossy().into_owned(),
+        );
+        Ok(PreparedApplication {
+            launch: ApplicationLaunch {
+                program: node.clone(),
+                arguments: vec![entry.into_os_string()],
+                workdir: root.clone(),
+                environment,
+                reservation,
+                health_path: plan.health_path.clone(),
+            },
+            client: BrowserClient {
+                id: plan.client.clone(),
+                secret,
+                redirect_uri: format!("{origin}{}", plan.callback_path),
+            },
+        })
+    }
+
+    fn application_tool(
+        &self,
+        name: &str,
+        node: &Path,
+        root: &Path,
+        entry: &Path,
+        arguments: &[&std::ffi::OsStr],
+    ) -> Result<()> {
+        let mut command = guard::Command::isolated(self.root, name, node, root, &BTreeMap::new())?;
+        command.arg(entry).args(arguments);
+        let log = open_log(self.root, name)?;
+        command.stdout(log.try_clone()?).stderr(log);
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("cannot start {name}"))
+            .map_err(operational)?;
+        let status = wait_for_guarded_tool(&mut child, || self.ensure_active())?;
+        ensure!(
+            status.success(),
+            "{name} refused the declared application; inspect the owner-only run log"
+        );
+        Ok(())
     }
 
     fn activate_breg(
@@ -393,7 +744,11 @@ impl<'a> ProductRunner<'a> {
                 oidc["allowedAlgorithm"] = json!("ES256");
                 oidc["accessTokenType"] = json!("at+jwt");
                 oidc["scopeSeparator"] = json!(" ");
-                oidc["maximumTokenLifetimeSeconds"] = json!(300);
+                oidc["maximumTokenLifetimeSeconds"] = json!(if plan.application.is_some() {
+                    super::issuer::BROWSER_TOKEN_LIFETIME_SECONDS
+                } else {
+                    300
+                });
                 oidc["leewayMilliseconds"] = json!(1000);
                 oidc["jwksCache"] = json!({
                     "cacheTtlSeconds": 600, "negativeCacheTtlSeconds": 60,
@@ -478,30 +833,30 @@ impl<'a> ProductRunner<'a> {
         let entries: Vec<_> = self
             .children
             .iter()
-            .map(|(product, child)| (*product, child.id()))
+            .map(|(kind, child)| (*kind, child.id()))
             .collect();
         write_processes(self.root, &entries)
     }
 
-    fn ready(&mut self, product: Product, base: &str, wait: Duration) -> Result<()> {
+    fn ready(&mut self, kind: RuntimeKind, base: &str, path: &str, wait: Duration) -> Result<()> {
         let end = Instant::now() + wait;
-        let url = format!("{base}/ready");
+        let url = format!("{base}{path}");
         loop {
             self.ensure_active()?;
-            self.ensure_alive(product)?;
+            self.ensure_alive(kind)?;
             if self
                 .runtime
                 .block_on(async { self.http.get(&url).send().await })
                 .is_ok_and(|response| response.status().is_success())
             {
-                self.ensure_alive(product)?;
+                self.ensure_alive(kind)?;
                 return Ok(());
             }
             if Instant::now() >= end {
                 return Err(operational(anyhow::anyhow!(
                     "{} did not become ready{}",
-                    product.name(),
-                    self.runtime_log_tail(product)
+                    kind.name(),
+                    self.runtime_log_tail(kind)
                 )));
             }
             thread::sleep(POLL);
@@ -509,16 +864,16 @@ impl<'a> ProductRunner<'a> {
     }
 
     /// Fail while waiting on `waiting`, naming whichever child exited.
-    fn ensure_alive(&self, waiting: Product) -> Result<()> {
-        for (product, child) in &self.children {
+    fn ensure_alive(&self, waiting: RuntimeKind) -> Result<()> {
+        for (kind, child) in &self.children {
             if child.exited()? {
-                let detail = self.runtime_log_tail(*product);
-                if *product == waiting {
-                    bail!("{} exited before readiness{detail}", product.name());
+                let detail = self.runtime_log_tail(*kind);
+                if *kind == waiting {
+                    bail!("{} exited before readiness{detail}", kind.name());
                 }
                 bail!(
                     "{} exited while {} was starting{detail}",
-                    product.name(),
+                    kind.name(),
                     waiting.name()
                 );
             }
@@ -526,8 +881,8 @@ impl<'a> ProductRunner<'a> {
         Ok(())
     }
 
-    fn runtime_log_tail(&self, product: Product) -> String {
-        failure_detail(&log_path(self.root, &format!("{}-runtime", product.name())))
+    fn runtime_log_tail(&self, kind: RuntimeKind) -> String {
+        failure_detail(&log_path(self.root, &format!("{}-runtime", kind.name())))
     }
 
     pub(super) fn services_alive(&self) -> Result<bool> {
@@ -554,9 +909,9 @@ impl<'a> ProductRunner<'a> {
 
     pub(super) fn stop(&mut self) -> Result<()> {
         let mut failures = Vec::new();
-        self.children.retain_mut(|(product, child)| {
+        self.children.retain_mut(|(kind, child)| {
             if child.stop().is_err() {
-                failures.push(product.name());
+                failures.push(kind.name());
                 true
             } else {
                 false
@@ -587,6 +942,13 @@ impl<'a> ProductRunner<'a> {
 
 fn log_path(root: &Path, name: &str) -> PathBuf {
     root.join("logs").join(format!("{name}.log"))
+}
+
+pub(super) fn valid_health_path(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains(['?', '#', '\\'])
+        && !path.chars().any(char::is_control)
 }
 
 /// Open the owner-only log for one product stage, appending to earlier output.
@@ -683,8 +1045,8 @@ fn logged_tool_result(
 }
 
 /// Exercise the log/result boundary in unit tests without routing a shell
-/// through the Rust test harness as if it were the bregctl binary. The native
-/// lifecycle test covers the real hidden guard dispatch.
+/// through the Rust test harness as if it were the bregctl binary. The
+/// `project_dev` integration test covers the real hidden guard dispatch.
 #[cfg(test)]
 fn run_logged_tool_direct(
     binary: &Path,
@@ -706,16 +1068,19 @@ fn run_logged_tool_direct(
 /// Record each runtime process group and the start time of its leader for
 /// diagnostics and an operator's manual cleanup decision. Children start as
 /// group leaders, so the group ID is the PID.
-fn write_processes(root: &Path, children: &[(Product, u32)]) -> Result<()> {
+fn write_processes(root: &Path, children: &[(RuntimeKind, u32)]) -> Result<()> {
     let table = super::recovery::process_table()?;
     let entries: Vec<_> = children
         .iter()
-        .map(|(product, pid)| {
+        .map(|(kind, pid)| {
             let started = table
                 .iter()
                 .find(|row| row.pid == *pid)
                 .map(|row| &row.started);
-            json!({"product": product.name(), "pid": pid, "pgid": pid, "started": started})
+            match kind {
+                RuntimeKind::Product(product) => json!({"product": product.name(), "pid": pid, "pgid": pid, "started": started}),
+                RuntimeKind::Application => json!({"application": "application", "pid": pid, "pgid": pid, "started": started}),
+            }
         })
         .collect();
     write_private(&root.join("processes.json"), &serde_json::to_vec(&entries)?)
@@ -742,6 +1107,11 @@ fn shared_config(
         .values()
         .filter(|person| person.grants.contains_key(&product))
         .map(|person| person.client.as_str())
+        .chain(
+            plan.application
+                .iter()
+                .map(|application| application.client.as_str()),
+        )
         .chain(extra_clients.iter().map(String::as_str))
         .collect();
     let oidc = json!({
@@ -1318,6 +1688,9 @@ fn check_casework_binding(
             "dev-check-casework",
             CHECK_BIND,
         );
+        if plan.issuer == "run" {
+            config["authentication"]["oidc"]["issuer"] = json!(super::bindings::CHECK_ORIGIN);
+        }
         super::bindings::render_for_check(plan, Product::Casework, &mut config);
         let path = root.join("casework-runtime.yaml");
         write_private(&path, &serde_json::to_vec(&config)?)?;
@@ -2350,11 +2723,15 @@ mod tests {
     }
 
     #[test]
-    fn spawned_processes_are_recorded_as_product_pid_and_group() {
+    fn spawned_processes_record_products_and_application_groups() {
         let scratch = tempfile::tempdir().unwrap();
         write_processes(
             scratch.path(),
-            &[(Product::Breg, 4242), (Product::Casework, 4343)],
+            &[
+                (RuntimeKind::Product(Product::Breg), 4242),
+                (RuntimeKind::Product(Product::Casework), 4343),
+                (RuntimeKind::Application, 4444),
+            ],
         )
         .unwrap();
         let path = scratch.path().join("processes.json");
@@ -2362,12 +2739,293 @@ mod tests {
             serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
             json!([
                 {"product": "breg", "pid": 4242, "pgid": 4242, "started": null},
-                {"product": "casework", "pid": 4343, "pgid": 4343, "started": null}
+                {"product": "casework", "pid": 4343, "pgid": 4343, "started": null},
+                {"application": "application", "pid": 4444, "pgid": 4444, "started": null}
             ])
         );
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn application_health_path_cannot_change_request_authority() {
+        assert!(valid_health_path("/health"));
+        for path in [
+            "//other.invalid",
+            "/\\other.invalid",
+            "/health?next=other",
+            "/health#part",
+            "health",
+        ] {
+            assert!(!valid_health_path(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn application_run_input_binds_each_service_and_references_secrets() {
+        let mut input = breg_input(false);
+        let mut plan = serde_json::to_value(&input.plan).unwrap();
+        plan["issuer"] = json!("http://127.0.0.1:4200");
+        plan["application"] = json!({
+            "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
+            "entry": "dist/main.js", "prepare": "dist/prepare.js", "checker": "dist/check.js",
+            "deployment": "deployment.json", "configSchema": "example/host-run/v1",
+            "configEnvironment": "HOST_CONFIG", "prepareVersion": "example-prepare 1.0"
+        });
+        input.plan = serde_json::from_value(plan.clone()).unwrap();
+        let urls = BTreeMap::from([(Product::Breg, "http://127.0.0.1:4201".to_owned())]);
+        let run = application_run_input(
+            &input,
+            &urls,
+            "http://127.0.0.1:4202",
+            4202,
+            Path::new("/private/client-secret"),
+            None,
+        );
+        assert_eq!(run["schema"], "example/host-run/v1");
+        assert_eq!(run["origin"], "http://127.0.0.1:4202");
+        assert_eq!(run["port"], 4202);
+        assert_eq!(run["oidc"]["issuer"], "http://127.0.0.1:4200");
+        assert_eq!(run["oidc"]["accessTokenSigningAlgorithm"], "ES256");
+        assert_eq!(run["oidc"]["clientSecretFile"], "/private/client-secret");
+        assert!(run["oidc"].get("recoveryKeyFile").is_none());
+        assert!(run["oidc"].get("separateResourceGrants").is_none());
+        assert_eq!(run["breg"]["audience"], "registry");
+        assert!(run.get("casework").is_none());
+        assert!(!run.to_string().contains("browser-client"));
+
+        plan["products"].as_array_mut().unwrap().push(json!({
+            "product": "casework", "project": "casework", "audience": "review"
+        }));
+        input.plan = serde_json::from_value(plan).unwrap();
+        let urls = BTreeMap::from([
+            (Product::Breg, "http://127.0.0.1:4201".to_owned()),
+            (Product::Casework, "http://127.0.0.1:4203".to_owned()),
+        ]);
+        let run = application_run_input(
+            &input,
+            &urls,
+            "http://127.0.0.1:4202",
+            4202,
+            Path::new("/private/client-secret"),
+            Some(Path::new("/private/recovery-key")),
+        );
+        assert_eq!(run["casework"]["baseUrl"], "http://127.0.0.1:4203");
+        assert_eq!(run["casework"]["audience"], "review");
+        assert_eq!(run["oidc"]["recoveryKeyFile"], "/private/recovery-key");
+        assert_eq!(run["oidc"]["separateResourceGrants"], true);
+    }
+
+    #[test]
+    fn built_application_file_cannot_escape_its_root_through_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("entry.js"), "entry").unwrap();
+        fs::write(outside.path().join("other.js"), "other").unwrap();
+        assert_eq!(
+            application_file(root.path(), Path::new("entry.js")).unwrap(),
+            root.path().join("entry.js").canonicalize().unwrap()
+        );
+        std::os::unix::fs::symlink(
+            outside.path().join("other.js"),
+            root.path().join("linked.js"),
+        )
+        .unwrap();
+        assert!(application_file(root.path(), Path::new("linked.js")).is_err());
+    }
+
+    #[test]
+    fn application_preflight_checks_node_and_exact_prepare_version() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["entry.js", "prepare.js", "check.js"] {
+            fs::write(root.path().join(name), "fixture").unwrap();
+        }
+        let node = root.path().join("node");
+        fs::write(
+            &node,
+            "#!/usr/bin/env bash\nset -euo pipefail\nif [[ $1 == --version ]]; then\n  printf 'v24.11.0\\n'\nelse\n  printf 'fixture-prepare 1.0\\n'\nfi\n",
+        )
+        .unwrap();
+        fs::set_permissions(&node, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut plan: ApplicationPlan = serde_json::from_value(json!({
+            "client": "browser-client", "callbackPath": "/callback",
+            "healthPath": "/health", "entry": "entry.js", "prepare": "prepare.js",
+            "checker": "check.js", "deployment": "deployment.json",
+            "configSchema": "fixture/run/v1", "configEnvironment": "FIXTURE_CONFIG",
+            "prepareVersion": "fixture-prepare 1.0"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            preflight_application_with_node(root.path(), &plan, &node).unwrap(),
+            node.canonicalize().unwrap()
+        );
+        plan.prepare_version = "fixture-prepare 2.0".to_owned();
+        let error = preflight_application_with_node(root.path(), &plan, &node).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "application configuration command version differs from dev.yaml"
+        );
+    }
+
+    const APPLICATION_FIXTURE_PORT: &str = "APPLICATION_FIXTURE_PORT";
+    const APPLICATION_FIXTURE_EXIT: &str = "APPLICATION_FIXTURE_EXIT";
+    const APPLICATION_FIXTURE_IGNORE_TERM: &str = "APPLICATION_FIXTURE_IGNORE_TERM";
+
+    /// The guarded child used by `a_guarded_application_exit_stops_restarts_and_reaps`.
+    /// An ordinary unit-test run has no fixture environment and returns at once.
+    #[test]
+    fn guarded_application_fixture() {
+        let Some(port) = std::env::var_os(APPLICATION_FIXTURE_PORT) else {
+            return;
+        };
+        let term_received = Arc::new(AtomicBool::new(false));
+        if std::env::var_os(APPLICATION_FIXTURE_IGNORE_TERM).is_some() {
+            signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_received))
+                .unwrap();
+        }
+        let exit = PathBuf::from(std::env::var_os(APPLICATION_FIXTURE_EXIT).unwrap());
+        let listener = TcpListener::bind((
+            Ipv4Addr::LOCALHOST,
+            port.to_string_lossy().parse::<u16>().unwrap(),
+        ))
+        .unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            request.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        use std::io::Write as _;
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        while !exit.exists() {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn application_fixture_launch(
+        root: &Path,
+        exit: &Path,
+        ignore_term: bool,
+    ) -> (ApplicationLaunch, u16) {
+        let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        let mut environment = BTreeMap::from([
+            (APPLICATION_FIXTURE_PORT.to_owned(), port.to_string()),
+            (
+                APPLICATION_FIXTURE_EXIT.to_owned(),
+                exit.to_string_lossy().into_owned(),
+            ),
+        ]);
+        if ignore_term {
+            environment.insert(APPLICATION_FIXTURE_IGNORE_TERM.to_owned(), "1".to_owned());
+        }
+        for name in ["DYLD_FALLBACK_LIBRARY_PATH", "LD_LIBRARY_PATH"] {
+            if let Ok(value) = std::env::var(name) {
+                environment.insert(name.to_owned(), value);
+            }
+        }
+        (
+            ApplicationLaunch {
+                program: std::env::current_exe().unwrap(),
+                arguments: vec![
+                    "project_dev::products::tests::guarded_application_fixture".into(),
+                    "--exact".into(),
+                    "--nocapture".into(),
+                ],
+                workdir: root.to_path_buf(),
+                environment,
+                reservation,
+                health_path: "/health".to_owned(),
+            },
+            port,
+        )
+    }
+
+    #[test]
+    fn a_guarded_application_exit_stops_restarts_and_reaps() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let terminate = AtomicBool::new(false);
+        let mut runner =
+            ProductRunner::new(Arc::new(breg_input(false)), &root, &terminate).unwrap();
+        let first_exit = root.join("application-exit-first");
+        let (first_launch, first_port) = application_fixture_launch(&root, &first_exit, false);
+
+        let origin = runner.start_application(first_launch).unwrap();
+        assert_eq!(origin, format!("http://127.0.0.1:{first_port}"));
+        assert!(runner.services_alive().unwrap());
+
+        fs::write(&first_exit, "stop").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runner.services_alive().unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "the guarded application did not exit"
+            );
+            thread::sleep(POLL);
+        }
+
+        runner.stop().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(root.join("processes.json")).unwrap())
+                .unwrap(),
+            json!([])
+        );
+        assert!(guard::incomplete_launches(&root).unwrap().is_empty());
+        let first_states: Vec<_> = fs::read_dir(root.join(guard::DIRECTORY))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "state")
+            })
+            .collect();
+        assert_eq!(first_states.len(), 1, "{first_states:?}");
+        assert_eq!(fs::read(&first_states[0]).unwrap(), b"complete\n");
+
+        let second_exit = root.join("application-exit-second");
+        let (second_launch, second_port) = application_fixture_launch(&root, &second_exit, true);
+        let origin = runner.start_application(second_launch).unwrap();
+        assert_eq!(origin, format!("http://127.0.0.1:{second_port}"));
+        assert!(runner.services_alive().unwrap());
+
+        let stop_started = Instant::now();
+        runner.stop().unwrap();
+        let stop_elapsed = stop_started.elapsed();
+        assert!(
+            stop_elapsed >= Duration::from_secs(2) && stop_elapsed < Duration::from_secs(10),
+            "TERM-ignoring application stop took {stop_elapsed:?}"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(root.join("processes.json")).unwrap())
+                .unwrap(),
+            json!([])
+        );
+        assert!(guard::incomplete_launches(&root).unwrap().is_empty());
+        let states: Vec<_> = fs::read_dir(root.join(guard::DIRECTORY))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "state")
+            })
+            .collect();
+        assert_eq!(states.len(), 2, "{states:?}");
+        assert!(
+            states
+                .iter()
+                .all(|state| fs::read(state).unwrap() == b"complete\n"),
+            "{states:?}"
         );
     }
 
@@ -2378,7 +3036,11 @@ mod tests {
             .arg("60")
             .spawn()
             .unwrap();
-        write_processes(scratch.path(), &[(Product::Breg, child.id())]).unwrap();
+        write_processes(
+            scratch.path(),
+            &[(RuntimeKind::Product(Product::Breg), child.id())],
+        )
+        .unwrap();
         let recorded: Value =
             serde_json::from_slice(&fs::read(scratch.path().join("processes.json")).unwrap())
                 .unwrap();
@@ -2473,6 +3135,8 @@ mod tests {
         RunInput {
             run_id: "0123456789abcdef0123456789abcdef".to_owned(),
             project: PathBuf::from("/tmp/project"),
+            application_root: None,
+            application_node: None,
             plan: serde_json::from_value(json!({
                 "issuer": "https://issuer.example.invalid",
                 "products": [{"product": "breg", "project": ".", "audience": "registry"}],
@@ -2642,8 +3306,9 @@ mod tests {
 
         let not_ready = runner
             .ready(
-                Product::Breg,
+                RuntimeKind::Product(Product::Breg),
                 &format!("http://127.0.0.1:{unused}"),
+                "/ready",
                 Duration::ZERO,
             )
             .unwrap_err();

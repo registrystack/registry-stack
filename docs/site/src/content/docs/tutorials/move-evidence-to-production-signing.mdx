@@ -124,8 +124,8 @@ listener "unix" {
 Keep `use_auto_auth_token = "force"`: the proxy replaces any token on an incoming request with its
 own, so the proxy identity is the only one that reaches the provider through this socket. Under
 `true`, a token supplied by whatever reached the socket would be used instead. `num_retries = -1`
-makes one signing attempt one provider request, and the socket group admits only the Evidence
-Gateway identity. The
+makes one signing attempt one provider request, and the socket group admits only the Registry Evidence
+identity. The
 [Vault API proxy documentation](https://developer.hashicorp.com/vault/docs/agent-and-proxy/proxy/apiproxy)
 and the [OpenBao Agent configuration](https://openbao.org/docs/agent-and-proxy/agent/) describe
 the rest.

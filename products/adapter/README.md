@@ -264,6 +264,10 @@ BReg. The [`postgres-source` example](examples/postgres-source/README.md) ships
 the view SQL, the paged query, the pack, the job and the runtime binding, and
 says how to adapt them to your own table.
 
+The [QField PostGIS example](examples/qfield-postgis/README.md) reads a completed
+offline submission from its original collection database and maps its point,
+polygon and repeated rows into a BReg Action or Proposal.
+
 ## Operate a RabbitMQ job source
 
 The default-off `job-rabbitmq` host reads one message at a time with the

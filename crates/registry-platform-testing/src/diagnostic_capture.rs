@@ -28,6 +28,12 @@ impl CapturedDiagnosticLogs {
     /// future with `tracing::instrument::WithSubscriber`.
     #[must_use]
     pub fn subscriber(&self) -> tracing::Dispatch {
+        self.subscriber_with_max_level(tracing::Level::INFO)
+    }
+
+    /// A JSON subscriber with an explicit maximum level for scoped diagnostics.
+    #[must_use]
+    pub fn subscriber_with_max_level(&self, level: tracing::Level) -> tracing::Dispatch {
         // While only one dispatcher is registered, tracing-core computes a
         // newly reached callsite's interest and the global level limit from
         // the reaching thread's default alone. A parallel test thread with no
@@ -43,6 +49,7 @@ impl CapturedDiagnosticLogs {
                 .json()
                 .without_time()
                 .with_ansi(false)
+                .with_max_level(level)
                 .with_writer(move || writer.clone())
                 .finish(),
         )

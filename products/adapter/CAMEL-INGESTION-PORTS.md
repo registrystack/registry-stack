@@ -155,12 +155,20 @@ Each result column crosses as one JSON value, by its PostgreSQL type:
 | `timestamp` | string, ISO 8601 without an offset, such as `2026-11-03T10:15:30` |
 | `timestamptz` | string, RFC 3339 in UTC, such as `2026-11-03T08:15:30.250Z` |
 | `uuid` | string, lowercase hyphenated |
+| `jsonb` | bounded JSON value, including objects and arrays |
 | SQL `NULL` of any type above | `null` |
 
 Any other type stops the page with `adapter.job.postgres-column-type` and a record locator that
 names the one-based column, never its value; cast that column in the query to a type above.
 A `NULL` key column stops the page with `adapter.job.postgres-key-null` and the row's zero-based
 ordinal.
+A JSONB key column stops the page with `adapter.job.postgres-key-type`.
+Select a stable scalar such as a UUID for the key.
+JSONB is a result type only.
+The job checks the raw JSONB content against the field limit before parsing, then checks the
+encoded field, row and page sizes.
+JSONB numbers follow the strict canonical JSON boundary, including refusal of an inexact
+plain integer. Return exact decimals as `numeric` columns or decimal strings.
 
 Every page runs in its own read-only, read-committed transaction with a local statement timeout and
 bounded rows, row bytes, field bytes, and response bytes.

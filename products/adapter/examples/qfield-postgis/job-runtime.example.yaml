@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/job-runtime/job-runtime.v1alpha1.schema.json
+# Bind an institution's reviewed projection and a separate BReg service client.
+apiVersion: id.registrystack.org/formats/adapter/job-runtime/v1alpha1
+kind: AdapterJobRuntimeConfig
+id: qfield-postgis-example
+endpoints: []
+sources:
+  postgres:
+    qfield-sites:
+      host: source-db.example.invalid
+      port: 5432
+      database: field_collection
+      user: qfield_adapter_reader
+      passwordRef: secret:env/SOURCE_DB_PASSWORD
+      namespace: qfield-sites-v1
+      tls:
+        type: system-roots
+allowedPrivateCidrs:
+  - 10.0.0.0/8
+destinations:
+  field-site-registry:
+    type: direct-breg
+    baseUrl: https://breg.example.invalid
+    tokenEndpoint: https://identity.example.invalid/oauth2/token
+    clientId: adapter-field-ingestion
+    privateKeyRef: secret:env/BREG_PRIVATE_KEY
+    scopes: [registry:write]
+    resource: urn:example:base-registry
+    attemptTimeoutMilliseconds: 5000
+store:
+  runtimeUrlRef: secret:env/ADAPTER_JOB_DB

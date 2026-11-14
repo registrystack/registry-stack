@@ -415,6 +415,13 @@ PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapter-job \
   --runtime products/adapter/examples/postgres-source/job-runtime.example.yaml \
   --profile products/adapter/examples/postgres-source/profile.yaml \
   --project products/adapter/examples/postgres-source/project.yaml >/dev/null
+qfield_example=products/adapter/examples/qfield-postgis
+for qfield_job in job.yaml job.proposal.yaml; do
+  "$adapterctl_bin" job check "$qfield_example/pack.yaml" "$qfield_example/$qfield_job" \
+    --runtime "$qfield_example/job-runtime.example.yaml" \
+    --profile "$qfield_example/profile.yaml" \
+    --project "$qfield_example/project.yaml" >/dev/null
+done
 printf 'Job example checks passed\n'
 
 # The bad-authoring corpus: every discovered bad/ member refuses with its

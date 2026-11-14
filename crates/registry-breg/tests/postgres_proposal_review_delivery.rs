@@ -30,6 +30,7 @@ use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegRecordFormat,
 };
+use registry_platform_testing::CapturedDiagnosticLogs;
 use registry_review_client::{
     BearerToken, PolicyBinding, ReviewCancelRequest, ReviewCancelResponse, ReviewClient,
     ReviewClientConfig, ReviewCompletion, ReviewCompletionType, ReviewCreateRequest,
@@ -38,7 +39,6 @@ use registry_review_client::{
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{self, Write},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -46,6 +46,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Notify;
+use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -458,24 +459,6 @@ async fn result_count(fixture: &client_http::ClientFixture) -> i64 {
         .await
         .unwrap()
         .get(0)
-}
-
-#[derive(Clone, Default)]
-struct Logs(Arc<Mutex<Vec<u8>>>);
-impl Write for Logs {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Logs {
-    type Writer = Self;
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
 }
 
 #[tokio::test]
@@ -1122,13 +1105,8 @@ async fn submission_logs_identify_first_delivery_retry_and_settlement_without_va
     let authority = Authority::start(false, false).await;
     let fixture = fixture(&authority).await;
     let id = submitted(&fixture, "delivery-log-canary").await;
-    let logs = Logs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_max_level(tracing::Level::INFO)
-        .with_writer(logs.clone())
-        .finish();
-    let capture = tracing::subscriber::set_default(subscriber);
+    let logs = CapturedDiagnosticLogs::default();
+    let subscriber = logs.subscriber();
     let client = fixture.pool.get_for_test().await.unwrap();
     for _ in 0..2 {
         assert!(run_one_submission(
@@ -1139,6 +1117,7 @@ async fn submission_logs_identify_first_delivery_retry_and_settlement_without_va
             &BearerToken::new(OUTGOING_TOKEN).unwrap(),
             30,
         )
+        .with_subscriber(subscriber.clone())
         .await
         .unwrap());
         fixture.database.admin.execute(
@@ -1146,9 +1125,8 @@ async fn submission_logs_identify_first_delivery_retry_and_settlement_without_va
             &[&id],
         ).await.unwrap();
     }
-    drop(capture);
     drop(client);
-    let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let output = logs.text();
     let entries = output
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -1300,22 +1278,17 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
         .await
         .unwrap();
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_completions SET received_at=transaction_timestamp()-interval '2 days',expires_at=transaction_timestamp()-interval '1 day' WHERE event_id IN ($1,$2,$3,$4)", &[&completion.event_id, &pending.event_id, &late.event_id, &expired_unmatched.event_id]).await.unwrap();
-    let logs = Logs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(logs.clone())
-        .finish();
-    let capture = tracing::subscriber::set_default(subscriber);
+    let logs = CapturedDiagnosticLogs::default();
+    let subscriber = logs.subscriber_with_max_level(tracing::Level::DEBUG);
     assert!(run_review_authority_once_for_test(
         &fixture.pool,
         &authority.registry,
         &fixture.mutations
     )
+    .with_subscriber(subscriber)
     .await
     .unwrap());
-    drop(capture);
-    let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let output = logs.text();
     assert!(output.contains("BReg review completion retention pass erased expired rows"));
     assert!(output.contains("\"erased\":4"));
     for canary in [
@@ -2023,13 +1996,8 @@ async fn native_submission_remote_refusal_warns_the_operator_without_values() {
         .unwrap();
     });
     let refusing = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
-    let logs = Logs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(logs.clone())
-        .finish();
-    let capture = tracing::subscriber::set_default(subscriber);
+    let logs = CapturedDiagnosticLogs::default();
+    let subscriber = logs.subscriber_with_max_level(tracing::Level::DEBUG);
     let client = fixture.pool.get_for_test().await.unwrap();
     assert!(run_one_submission(
         &**client,
@@ -2039,14 +2007,14 @@ async fn native_submission_remote_refusal_warns_the_operator_without_values() {
         &BearerToken::new(OUTGOING_TOKEN).unwrap(),
         30
     )
+    .with_subscriber(subscriber)
     .await
     .unwrap());
-    drop(capture);
     server.abort();
     let delivered = job(&fixture, id).await;
     assert_eq!(delivered["state"], "failed");
     assert_eq!(delivered["error"], "remote-refused");
-    let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let output = logs.text();
     let warning = output
         .lines()
         .find(|line| line.contains("\"level\":\"WARN\"") && line.contains("refused"))

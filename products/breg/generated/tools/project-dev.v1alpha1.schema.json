@@ -1,5 +1,68 @@
 {
   "$defs": {
+    "ApplicationPlan": {
+      "additionalProperties": false,
+      "description": "A generic Node application and its configuration command. All artifact paths are relative to the supplied built root.",
+      "properties": {
+        "callbackPath": {
+          "description": "Exact loopback callback path registered with the run issuer.",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "checker": {
+          "description": "Built configuration checker, invoked with the generated config path.",
+          "type": "string"
+        },
+        "client": {
+          "description": "Confidential browser client identifier admitted by the selected product profiles.",
+          "type": "string"
+        },
+        "configEnvironment": {
+          "description": "Environment variable naming the generated host configuration for the child.",
+          "type": "string"
+        },
+        "configSchema": {
+          "description": "Closed run-input schema name understood by the declared configuration command.",
+          "type": "string"
+        },
+        "deployment": {
+          "description": "Configuration source file, relative to the development project.",
+          "type": "string"
+        },
+        "entry": {
+          "description": "Built application entry, relative to the supplied artifact root.",
+          "type": "string"
+        },
+        "healthPath": {
+          "description": "Local readiness path served by the application.",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "prepare": {
+          "description": "Built configuration command, invoked with --deployment, --run and --out.",
+          "type": "string"
+        },
+        "prepareVersion": {
+          "description": "Exact one-line response of the configuration command's --version flag.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "client",
+        "callbackPath",
+        "healthPath",
+        "entry",
+        "prepare",
+        "checker",
+        "deployment",
+        "configSchema",
+        "configEnvironment",
+        "prepareVersion"
+      ],
+      "type": "object"
+    },
     "Bindings": {
       "additionalProperties": false,
       "description": "Run-local connections between BReg and Casework. Configuring either one requires both products, with BReg listed before Casework.",
@@ -194,6 +257,13 @@
       "description": "A dotted development journey step identifier whose segments are local identifiers.",
       "maxLength": 64,
       "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63})+$",
+      "type": "string"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
       "type": "string"
     },
     "Expected": {
@@ -528,6 +598,17 @@
           "$ref": "#/$defs/ExternalId",
           "description": "Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters."
         },
+        "displayName": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            }
+          ],
+          "description": "Name shown in the synthetic browser sign-in picker; it grants no authority.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
         "grants": {
           "additionalProperties": false,
           "description": "The authority this person holds in each product, keyed by `breg` or `casework`. Give at least one grant, only for products listed in `products`.",
@@ -571,14 +652,25 @@
       "description": "The format and version this file is written in.",
       "type": "string"
     },
+    "application": {
+      "$ref": "#/$defs/ApplicationPlan",
+      "description": "A built local application this run prepares, starts, checks and stops. Its artifact root is supplied to `rstack dev start`."
+    },
     "bindings": {
       "$ref": "#/$defs/Bindings",
       "default": {},
       "description": "Run-local connections between BReg and Casework. Leave empty when the products do not call each other."
     },
     "issuer": {
-      "$ref": "#/$defs/Url",
-      "description": "HTTPS URL, at most 512 characters and without credentials, query or fragment, that the run's tokens name as their issuer."
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Url"
+        },
+        {
+          "const": "run"
+        }
+      ],
+      "description": "HTTPS URL for an existing issuer, or `run` when a declared application uses this run's loopback browser issuer."
     },
     "journey": {
       "$ref": "#/$defs/Journey",
