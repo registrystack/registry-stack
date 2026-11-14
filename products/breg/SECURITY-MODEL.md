@@ -536,3 +536,25 @@ records until it can release them.
 ## 5. Reporting
 
 Report vulnerabilities privately as described in [SECURITY.md](../../SECURITY.md).
+
+### Synthetic run producer source preparation
+
+A BReg and Casework pair may explicitly select `runIssuerBinding` on its
+existing Casework review authority, with or without an application. The runner supplies that exact person's existing
+subject and Casework grant profile to the owning Casework CLI, which checks
+old producer pins before preparing a new private source closure. Initiator
+issuer binding is independently explicit and acknowledges existing issuer-level
+trust, not a subject allowlist. The runner captures checked source bytes before
+spawning and checks their digest before preparing or activating a new package.
+Original source and old packages are never rewritten. BReg package verification,
+schema-test receipts, activation, separate product grants and downstream
+application authority remain unchanged. See the Casework security model for
+source preparation refusal and receipt boundaries.
+
+A product-only paired run reserves a loopback logical issuer identifier but
+starts no browser server, client, session or application. It uses the same
+run-local signing key, static JWKS and separately served machine token endpoint
+as ordinary product-only tokens. The exact selected producer/person/grant
+checks precede provisioning. The exception does not admit BReg-only run plans,
+fixed HTTP issuers or arbitrary unbound `issuer: run` plans; browser admission
+continues to depend on an existing declared application.

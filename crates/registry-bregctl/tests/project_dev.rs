@@ -1966,3 +1966,88 @@ fn start_reports_an_unreachable_postgresql_server_as_operational() {
         assert!(!String::from_utf8_lossy(output).contains(canary));
     }
 }
+
+#[test]
+#[ignore = "requires an independently built matching Casework CLI, no database"]
+fn normal_check_uses_owning_casework_tool_for_exact_run_producer_chain() {
+    let tool = std::path::PathBuf::from(
+        std::env::var_os("RSTACK_TEST_CASEWORKCTL_BIN").expect("set matching Casework CLI"),
+    );
+    let scratch = tempfile::tempdir().unwrap();
+    fn copy(source: &std::path::Path, dest: &std::path::Path) {
+        fs::create_dir(dest).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let target = dest.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/reviewed-evidence-journey");
+    let project = scratch.path().join("project");
+    copy(&source, &project);
+    let plan_path = project.join("dev.yaml");
+    let mut plan = registry_platform_yaml::Reader::new("dev.yaml")
+        .scan(&fs::read(&plan_path).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    plan["issuer"] = serde_json::json!("run");
+    plan["application"] = serde_json::json!({"client":"browser-client","callbackPath":"/callback","healthPath":"/health","entry":"dist/main.js","prepare":"dist/prepare.js","checker":"dist/check.js","deployment":"deployment.json","configSchema":"example/host-run/v1","configEnvironment":"HOST_CONFIG","prepareVersion":"example-prepare 1.0"});
+    plan["bindings"]["bregReviewAuthority"]["runIssuerBinding"] = serde_json::json!({"producer":{"expectedIssuer":"https://issuer.example.test","expectedProfile":"requester","expectedSubject":"producer"},"initiator":{"expectedIssuer":"https://issuer.example.test","trust":"run-test-people"}});
+    fs::write(&plan_path, serde_norway::to_string(&plan).unwrap()).unwrap();
+    fs::write(project.join("deployment.json"), "{}").unwrap();
+    let original = fs::read(project.join("casework/casework.yaml")).unwrap();
+    let state = scratch.path().join("state");
+    let checked = check_with_casework_tool(&project, &state, &tool);
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(!state.exists());
+    // The downloaded product API path needs no application, host build or
+    // browser client. It still reaches the same real source/actor validation.
+    plan.as_object_mut().unwrap().remove("application");
+    fs::write(&plan_path, serde_norway::to_string(&plan).unwrap()).unwrap();
+    let product_only = check_with_casework_tool(&project, &state, &tool);
+    assert!(product_only.status.success(), "{product_only:?}");
+    let started = start_with_casework_tool(&project, &state, &tool);
+    let start_report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    assert_eq!(started.status.code(), Some(1));
+    assert!(
+        start_report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("RSTACK_DEV_DATABASE_URL"),
+        "{start_report}"
+    );
+    assert!(!start_report.to_string().contains("--application-root"));
+    assert!(!state.exists());
+    let extra_root = helper(
+        serde_json::json!({"action":"start","project":project,"application_root":scratch.path(),"json":true}),
+        &state,
+    );
+    let root_report: serde_json::Value = serde_json::from_slice(&extra_root.stdout).unwrap();
+    assert_eq!(extra_root.status.code(), Some(1));
+    assert!(root_report["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("--application-root"));
+    assert!(!state.exists());
+    plan["people"]["producer"]["subject"] = serde_json::json!("mismatched-test-subject");
+    fs::write(&plan_path, serde_norway::to_string(&plan).unwrap()).unwrap();
+    let refused = check_with_casework_tool(&project, &state, &tool);
+    assert_eq!(refused.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(
+        report["diagnostics"][0]["path"],
+        "/bindings/bregReviewAuthority/runIssuerBinding"
+    );
+    assert!(!report.to_string().contains("mismatched-test-subject"));
+    assert!(!state.exists());
+    assert_eq!(
+        original,
+        fs::read(project.join("casework/casework.yaml")).unwrap()
+    );
+}

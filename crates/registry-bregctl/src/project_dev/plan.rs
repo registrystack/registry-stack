@@ -208,7 +208,7 @@ impl Product {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Plan {
-    /// HTTPS URL for an existing issuer, or `run` when a declared application uses this run's loopback browser issuer.
+    /// HTTPS logical issuer, or `run` for an application or an explicitly bound BReg and Casework pair.
     #[cfg_attr(feature = "schema", schemars(schema_with = "issuer_schema"))]
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
@@ -900,6 +900,12 @@ pub(super) fn load(root: &Path) -> Result<LoadedPlan> {
 }
 
 impl Plan {
+    pub(super) fn paired_run_binding(&self) -> bool {
+        self.bindings.binds_run_issuer()
+            && self.products.iter().any(|p| p.product == Product::Breg)
+            && self.products.iter().any(|p| p.product == Product::Casework)
+    }
+
     pub(super) fn product(&self, product: Product) -> &ProductPlan {
         self.products
             .iter()
@@ -946,13 +952,14 @@ impl Plan {
             }),
             "/issuer",
             "The issuer must be `run` or a bounded HTTPS URL without credentials, query, or fragment.",
-            "Set issuer to `run` for a declared application, or to an HTTPS URL with a host and no credentials, query, or fragment.",
+            "Set issuer to `run` for an application or exact paired run issuer binding, or to an HTTPS URL with a host and no credentials, query, or fragment.",
         )?;
         require(
-            (self.issuer == "run") == self.application.is_some(),
+            (self.issuer != "run" || self.application.is_some() || self.paired_run_binding())
+                && ((self.application.is_none() && !self.bindings.binds_run_issuer()) || self.issuer == "run"),
             "/issuer",
-            "A declared application requires the run issuer, and the run issuer requires an application.",
-            "Declare application with issuer `run`, or remove application and set an HTTPS issuer.",
+            "The run issuer requires an application or an explicitly bound BReg and Casework pair; applications and run issuer bindings require issuer run.",
+            "Use issuer `run` with application or the exact paired runIssuerBinding; otherwise remove both and set an HTTPS issuer.",
         )?;
         if let Some(application) = &self.application {
             require(
@@ -1695,6 +1702,58 @@ mod tests {
     }
 
     #[test]
+    fn product_only_run_issuer_requires_the_exact_explicit_paired_binding() {
+        let (root, plan) = plan(
+            json!({"id":"read","product":"breg","as":"operator","method":"GET","path":"/v1/records","expect":{"status":200}}),
+        );
+        fs::create_dir(root.path().join("casework")).unwrap();
+        fs::write(root.path().join("casework/casework.yaml"), "fixture").unwrap();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["issuer"] = json!("run");
+        value["products"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"product":"casework","project":"casework","audience":"urn:test:review"}));
+        value["people"]["operator"]["grants"]["casework"] =
+            json!({"profile":"requester","scopes":["casework:request"]});
+        value["bindings"] = json!({"bregReviewAuthority":{"id":"casework","producer":"registry","identity":"operator","runIssuerBinding":{"producer":{"expectedIssuer":"https://issuer.example.test","expectedProfile":"requester","expectedSubject":"operator"}}}});
+        let valid: Plan = serde_json::from_value(value.clone()).unwrap();
+        valid.validate(&canonical(&root)).unwrap();
+        assert!(valid.application.is_none());
+        for mode in [
+            "no-binding",
+            "breg-only",
+            "fixed-https",
+            "fixed-http",
+            "missing-grant",
+        ] {
+            let mut refused = value.clone();
+            match mode {
+                "no-binding" => {
+                    refused["bindings"] = json!({});
+                }
+                "breg-only" => {
+                    refused["products"].as_array_mut().unwrap().pop();
+                }
+                "fixed-https" => {
+                    refused["issuer"] = json!("https://issuer.example.test");
+                }
+                "fixed-http" => {
+                    refused["issuer"] = json!("http://127.0.0.1:8191");
+                }
+                _ => {
+                    refused["people"]["operator"]["grants"]["casework"] = Value::Null;
+                }
+            }
+            let result = serde_json::from_value::<Plan>(refused);
+            assert!(
+                result.map_or(true, |plan| plan.validate(&canonical(&root)).is_err()),
+                "{mode}"
+            );
+        }
+    }
+
+    #[test]
     fn run_issuer_requires_a_bounded_declared_application() {
         let (root, plan) = plan(json!({
             "id": "read", "product": "breg", "as": "operator",
@@ -1760,6 +1819,7 @@ mod tests {
                     named_clients: BTreeSet::new(),
                 }),
                 casework_principals: BTreeMap::new(),
+                casework_source_digest: None,
             };
 
             let refusal = validate_application_authority(&plan, &inspection).unwrap_err();
@@ -1785,6 +1845,7 @@ mod tests {
                     encrypts_fields: false,
                     named_clients: BTreeSet::new(),
                 }),
+                casework_source_digest: None,
                 casework_principals: BTreeMap::from([(
                     "reviewer".to_owned(),
                     principal.to_owned(),

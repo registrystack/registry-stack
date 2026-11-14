@@ -132,6 +132,8 @@ struct RunInput {
     schema_people: Vec<SchemaPerson>,
     breg_authority: Option<BregAuthority>,
     casework_principals: BTreeMap<String, String>,
+    #[serde(default)]
+    casework_source_digest: Option<String>,
     binaries: BTreeMap<Product, Binaries>,
 }
 
@@ -730,9 +732,11 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         schema_people,
         breg_authority: inspection.breg_authority,
         casework_principals: inspection.casework_principals,
+        casework_source_digest: inspection.casework_source_digest,
         binaries,
     };
     let preparation = (|| {
+        products::capture_casework_source(&input, &root, &signals)?;
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
         private_directory(&root.join(guard::DIRECTORY))?;
         write_private(&root.join(POSTGRES_IDENTITY), b"null")?;
@@ -848,6 +852,37 @@ fn catch_startup<T>(startup: impl FnOnce() -> Result<T>) -> Result<T> {
     })
 }
 
+fn add_run_addresses(report: &mut Value, plan: &plan::Plan, application: Option<(String, &str)>) {
+    if let Some((url, issuer)) = application {
+        report["issuer"] = json!(issuer);
+        report["application"] = json!(url);
+    } else if plan.paired_run_binding() {
+        report["issuer"] = json!(plan.issuer);
+    }
+}
+
+/// Resolve the authored sentinel once. A product-only paired run has no
+/// browser server; its static JWKS and separate machine endpoint retain the
+/// existing product-only signing path while this reservation owns its URI.
+fn reserve_run_issuer(plan: &mut plan::Plan) -> Result<Option<TcpListener>> {
+    if plan.issuer != "run" {
+        ensure!(
+            plan.application.is_none() && !plan.bindings.binds_run_issuer(),
+            "captured run issuer was already resolved"
+        );
+        return Ok(None);
+    }
+    ensure!(
+        plan.application.is_some() || plan.paired_run_binding(),
+        "run issuer requires an application or exact paired binding"
+    );
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .context("reserve run issuer loopback listener")
+        .map_err(operational)?;
+    plan.issuer = format!("http://{}", listener.local_addr()?);
+    Ok(Some(listener))
+}
+
 fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let name = root
         .file_name()
@@ -866,19 +901,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         restored.run_id == name,
         "captured development plan has a different run ID"
     );
-    let issuer_listener = if restored.plan.application.is_some() {
-        ensure!(
-            restored.plan.issuer == "run",
-            "declared application requires the run issuer"
-        );
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .context("reserve browser issuer loopback listener")
-            .map_err(operational)?;
-        restored.plan.issuer = format!("http://{}", listener.local_addr()?);
-        Some(listener)
-    } else {
-        None
-    };
+    let mut issuer_listener = reserve_run_issuer(&mut restored.plan)?;
     let input = Arc::new(restored);
     let signals = signals()?;
     let mut products = ProductRunner::new(input.clone(), root, &signals)?;
@@ -934,7 +957,10 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             "a product exited during the journey"
         );
         let mut application_url = None;
-        if let Some(listener) = issuer_listener {
+        if input.plan.application.is_some() {
+            let listener = issuer_listener
+                .take()
+                .context("missing application issuer reservation")?;
             let prepared = products.prepare_application(&urls)?;
             browser = Some(BrowserServer::start(
                 listener,
@@ -960,10 +986,18 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         } else {
             report["journey"] = json!(journey_reports.into_iter().next().expect("inline journey"));
         }
-        if let Some(url) = application_url {
-            report["issuer"] = json!(browser.as_ref().expect("application issuer").origin);
-            report["application"] = json!(url);
-        }
+        let application = application_url.map(|url| {
+            (
+                url,
+                browser
+                    .as_ref()
+                    .expect("application issuer")
+                    .origin
+                    .as_str(),
+            )
+        });
+        add_run_addresses(&mut report, &input.plan, application);
+
         write_private(&root.join(REPORT), &capture_report(&report)?)?;
         Ok::<_, anyhow::Error>(report)
     });
@@ -1043,6 +1077,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         reply(output, &WorkerReply::failure(error, operational))?;
     }
     removed?;
+    // Product-only runs keep the logical issuer port reserved until cleanup.
+    drop(issuer_listener);
     // If the root is gone, no stale ready report could have survived.
     mark_stopping?;
     Ok(())
@@ -1557,6 +1593,44 @@ mod tests {
     const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
+    fn paired_product_only_reservation_report_and_release_need_no_application() {
+        fn source_plan() -> plan::Plan {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/breg/acceptance/reviewed-evidence-journey")
+                .canonicalize()
+                .unwrap();
+            let mut value = serde_json::to_value(plan::load(&root).unwrap().plan).unwrap();
+            value["issuer"] = json!("run");
+            value["bindings"]["bregReviewAuthority"]["runIssuerBinding"] = json!({"producer":{"expectedIssuer":"https://issuer.example.test","expectedProfile":"requester","expectedSubject":"producer"}});
+            serde_json::from_value(value).unwrap()
+        }
+        let mut plan = source_plan();
+        assert!(plan.application.is_none());
+        let listener = reserve_run_issuer(&mut plan).unwrap().unwrap();
+        let address = listener.local_addr().unwrap();
+        assert_eq!(plan.issuer, format!("http://{address}"));
+        assert!(TcpListener::bind(address).is_err());
+        let mut second = source_plan();
+        let other = reserve_run_issuer(&mut second).unwrap().unwrap();
+        assert_ne!(listener.local_addr().unwrap(), other.local_addr().unwrap());
+        assert!(reserve_run_issuer(&mut plan).is_err());
+        let mut report = json!({"schema_version":SCHEMA,"status":"ready"});
+        add_run_addresses(&mut report, &plan, None);
+        let captured: Value = serde_json::from_slice(&capture_report(&report).unwrap()).unwrap();
+        assert_eq!(captured["issuer"], plan.issuer);
+        assert!(captured.get("application").is_none());
+        assert!(serde_json::to_value(&plan).unwrap()["application"].is_null());
+        drop(listener);
+        assert!(TcpListener::bind(address).is_ok());
+        let mut missing = source_plan();
+        missing.bindings.breg_review_authority = None;
+        assert!(reserve_run_issuer(&mut missing).is_err());
+        let mut single = source_plan();
+        single.products.retain(|p| p.product == Product::Breg);
+        assert!(reserve_run_issuer(&mut single).is_err());
+    }
+
+    #[test]
     fn human_run_report_names_its_browser_and_application_addresses() {
         let mut output = Vec::new();
         emit(
@@ -1898,9 +1972,17 @@ mod tests {
         let doomed = removing_dir(&root).unwrap();
         assert_eq!(doomed.parent(), Some(base.as_path()));
         assert!(run_dir(&doomed.file_name().unwrap().to_string_lossy()).is_err());
+        let original = base.join("original-casework.yaml");
+        fs::write(&original, b"authored-source").unwrap();
+        for name in ["casework-source", "casework-bound", "casework-paired"] {
+            private_directory(&root.join(name)).unwrap();
+            write_private(&root.join(name).join("casework.yaml"), b"private-run-copy").unwrap();
+            write_private(&root.join(name).join("run-source-receipt.json"), b"{}").unwrap();
+        }
         remove_run_dir(&root).unwrap();
         assert!(!root.exists());
-        assert_eq!(fs::read_dir(&base).unwrap().count(), 0);
+        assert_eq!(fs::read(&original).unwrap(), b"authored-source");
+        assert_eq!(fs::read_dir(&base).unwrap().count(), 1);
     }
 
     #[test]

@@ -427,3 +427,62 @@ Without `--json`, the message goes to standard error as `rstack dev: MESSAGE`
 with the same exit code. The reports of `rstack dev check` use `BRegCtlReport`
 instead. A helper started without the launcher's request prints a plain
 message and exits 2.
+
+### Bind an existing Casework producer to a run
+
+A plan for a BReg and Casework pair may explicitly bind the existing review
+producer's issuer on a private source copy before normal packaging. Use
+`issuer: run`; `application` is optional for this exact paired binding. Add
+exact old-value guards to the existing binding:
+
+```yaml
+bindings:
+  bregReviewAuthority:
+    id: casework
+    producer: registry
+    identity: producer
+    runIssuerBinding:
+      producer:
+        expectedIssuer: https://issuer.example.test
+        expectedProfile: requester
+        expectedSubject: producer
+      initiator:
+        expectedIssuer: https://issuer.example.test
+        trust: run-test-people
+```
+
+The selected Casework producer must already have exactly that issuer, profile
+and subject. The existing `people.producer` subject and Casework grant profile
+must match it. No producer, person, profile, client, scope or grant is created.
+`initiator` is separately optional: omission preserves `trustedInitiatorIssuer`,
+including its absence. Opt-in requires an existing exact issuer pin and replaces
+it with this run's issuer. `run-test-people` acknowledges issuer-level initiator
+trust under the admitted producer; it is not a subject allowlist. Existing
+initiator profiles, exclusion and requester-read rules still apply.
+
+`check` calls `caseworkctl generate run-source` for structured validation without
+allocating an issuer or provisioning a database. `start` captures the checked
+Casework source closure privately and refuses drift before activation. The
+worker uses the real allocated issuer, writes a disposable source copy with
+only the selected issuer members changed, then follows normal provider pairing,
+check, new packaging, apply and doctor. The original project is never rewritten.
+Private capture and transform receipts contain source and output file hashes,
+binding digest, actual issuer and changed pointers; normal package/activation
+reports retain the new package identity. Run cleanup removes these run-local
+receipts with the other private files. Each start allocates a reservation and signing key and prepares/packages source
+again instead of loading an old bound package. The kernel may later recycle a
+port; that does not reuse an old key or run. Fixed HTTPS product-only plans
+remain unchanged.
+
+An authored exact Casework policy version/digest selection is never rewritten
+by source binding. If the newly packaged policy no longer matches that
+selection, the ordinary product refusal remains authoritative.
+
+Without `application`, the exact paired binding starts only product APIs. It
+requires no application root, Node or host build and admits no browser client.
+The reserved loopback issuer URL is a logical issuer identifier in this mode,
+not a browser sign-in or discovery endpoint. Products use the pinned static
+JWKS; CLI tokens and the separately served run-local machine token endpoint
+continue to use the same effective issuer. The worker holds the reservation
+until cleanup. `issuer: run` without application and without this exact paired
+binding is refused, including BReg-only plans; fixed HTTP remains refused.

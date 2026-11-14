@@ -669,6 +669,43 @@ impl<'a> ProductRunner<'a> {
         bind: &str,
         breg_package: Option<&Path>,
     ) -> Result<PathBuf> {
+        let original_project = project;
+        let bound;
+        let project = if has_run_source(&self.input.plan) {
+            let expected = self
+                .input
+                .casework_source_digest
+                .as_deref()
+                .context("missing checked Casework source digest")?;
+            let tool = &self.input.binaries[&Product::Casework].tool;
+            // Refuse live source drift, but transform only the captured closure.
+            run_source_report(
+                tool,
+                project,
+                &self.input.plan,
+                self.terminate,
+                None,
+                Some(expected),
+                None,
+            )?;
+            bound = self.root.join("casework-bound");
+            let report = run_source_report(
+                tool,
+                &self.root.join("casework-source"),
+                &self.input.plan,
+                self.terminate,
+                Some(&self.input.plan.issuer),
+                Some(expected),
+                Some(&bound),
+            )?;
+            write_private(
+                &self.root.join("casework-bound-receipt.json"),
+                &serde_json::to_vec(&report)?,
+            )?;
+            bound.as_path()
+        } else {
+            project
+        };
         let paired;
         let project = if let Some(binding) = &self.input.plan.bindings.casework_context_provider {
             let source =
@@ -707,6 +744,22 @@ impl<'a> ProductRunner<'a> {
                 package.as_os_str(),
             ],
         )?;
+        if has_run_source(&self.input.plan) {
+            run_source_report(
+                &self.input.binaries[&Product::Casework].tool,
+                original_project,
+                &self.input.plan,
+                self.terminate,
+                None,
+                Some(
+                    self.input
+                        .casework_source_digest
+                        .as_deref()
+                        .context("missing checked source digest")?,
+                ),
+                None,
+            )?;
+        }
         let urls = database
             .provision("casework", false, false)
             .map_err(operational)?;
@@ -823,6 +876,7 @@ impl<'a> ProductRunner<'a> {
             &arguments,
             self.root,
             (product.name(), stage),
+            product == Product::Casework && has_run_source(&self.input.plan),
             || self.ensure_active(),
         )
     }
@@ -1011,6 +1065,7 @@ fn run_logged_tool(
     args: &[&std::ffi::OsStr],
     root: &Path,
     (product, stage): (&str, &str),
+    retain_receipt: bool,
     active: impl Fn() -> Result<()>,
 ) -> Result<()> {
     let name = format!("{product}-{stage}");
@@ -1025,7 +1080,44 @@ fn run_logged_tool(
         .with_context(|| format!("cannot start {product} {stage}"))
         .map_err(operational)?;
     let status = wait_for_guarded_tool(&mut child, active)?;
-    logged_tool_result(status, &mut output, root, (product, stage))
+    logged_tool_result(status, &mut output, root, (product, stage))?;
+    if retain_receipt {
+        retain_tool_receipt(&mut output, root, product, stage)?;
+    }
+    Ok(())
+}
+
+fn retain_tool_receipt(
+    output: &mut fs::File,
+    root: &Path,
+    product: &str,
+    stage: &str,
+) -> Result<()> {
+    output.rewind()?;
+    let mut bytes = Vec::new();
+    output.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= 4 * 1024 * 1024,
+        "product receipt exceeds the run limit"
+    );
+    let report: Value = serde_json::from_slice(&bytes).context("invalid product receipt")?;
+    let command = if stage == "provider" {
+        "provider-pair"
+    } else {
+        stage
+    };
+    ensure!(
+        report["ok"] == true
+            && report["command"] == command
+            && report["status"] == "complete"
+            && report["kind"] == "CaseworkReport"
+            && report["apiVersion"] == "id.registrystack.org/formats/casework/report/v1alpha2",
+        "product did not return its exact successful receipt"
+    );
+    write_private(
+        &root.join(format!("{product}-{stage}-receipt.json")),
+        &bytes,
+    )
 }
 
 fn logged_tool_result(
@@ -1226,6 +1318,7 @@ fn copy_project(source: &Path, target: &Path) -> Result<()> {
 pub(super) struct ProductInspection {
     pub(super) breg_authority: Option<BregAuthority>,
     pub(super) casework_principals: BTreeMap<String, String>,
+    pub(super) casework_source_digest: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1293,9 +1386,11 @@ pub(super) fn inspect(
     super::bindings::check_with_breg_reader(plan)?;
     let breg_authority = breg_authority(root, plan)?;
     let casework_principals = casework_principals(root, plan, breg_authority.as_ref(), terminate)?;
+    let casework_source_digest = inspect_run_source(root, plan, terminate)?;
     Ok(ProductInspection {
         breg_authority,
         casework_principals,
+        casework_source_digest,
     })
 }
 
@@ -2177,6 +2272,115 @@ pub(super) fn schema_people(
     Ok(bindings)
 }
 
+/// The product CLI owns all source decoding and trust edits. The runner only
+/// supplies the explicitly selected person's existing Casework grant chain.
+fn run_source_report(
+    tool: &Path,
+    project: &Path,
+    plan: &Plan,
+    terminate: &AtomicBool,
+    issuer: Option<&str>,
+    expected: Option<&str>,
+    output: Option<&Path>,
+) -> Result<Value> {
+    let binding = plan
+        .bindings
+        .breg_review_authority
+        .as_ref()
+        .context("missing review authority")?;
+    let guard = binding
+        .run_issuer_binding
+        .as_ref()
+        .context("missing run issuer binding")?;
+    let identity = &plan.people[&binding.identity];
+    let grant = &identity.grants[&Product::Casework];
+    let request = json!({"apiVersion":"id.registrystack.org/formats/casework/run-source/v1alpha1","kind":"CaseworkRunSource","producer":binding.producer,"identityProfile":grant.profile,"identitySubject":identity.subject,"identityScopes":grant.scopes,"binding":guard});
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("run-source.json");
+    write_private(&path, &serde_json::to_vec(&request)?)?;
+    let mut args: Vec<&std::ffi::OsStr> = vec![
+        "run-source".as_ref(),
+        project.as_os_str(),
+        "--binding".as_ref(),
+        path.as_os_str(),
+    ];
+    if let Some(value) = issuer {
+        args.extend([
+            std::ffi::OsStr::new("--issuer"),
+            std::ffi::OsStr::new(value),
+        ]);
+    }
+    if let Some(value) = expected {
+        args.extend([
+            std::ffi::OsStr::new("--expected-source-digest"),
+            std::ffi::OsStr::new(value),
+        ]);
+    }
+    if let Some(value) = output {
+        args.extend([std::ffi::OsStr::new("--output"), value.as_os_str()]);
+    }
+    let (status, report) = casework_report(tool, "generate", &args, terminate)?;
+    if casework_domain_refusal(&report, "generate-run-source") {
+        return Err(plan::SemanticRefusal::new("/bindings/bregReviewAuthority/runIssuerBinding","Casework refuses the exact producer identity, issuer pins or checked source closure.","Restore the selected producer and its exact existing identity/grant chain and issuer guards, then check again.").into());
+    }
+    ensure!(
+        status.success()
+            && report["ok"] == true
+            && report["command"] == "generate-run-source"
+            && report["sourceDigest"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("sha256:") && v.len() == 71),
+        "Casework run source inspection did not complete"
+    );
+    Ok(report)
+}
+fn inspect_run_source(root: &Path, plan: &Plan, terminate: &AtomicBool) -> Result<Option<String>> {
+    if !has_run_source(plan) {
+        return Ok(None);
+    }
+    let project = product_root(root, plan, Product::Casework)?.context("missing Casework")?;
+    let tool = super::product_tool(Product::Casework)?;
+    let report = run_source_report(&tool, &project.root, plan, terminate, None, None, None)?;
+    Ok(Some(
+        report["sourceDigest"]
+            .as_str()
+            .context("missing source digest")?
+            .to_owned(),
+    ))
+}
+fn has_run_source(plan: &Plan) -> bool {
+    plan.bindings.binds_run_issuer()
+}
+pub(super) fn capture_casework_source(
+    input: &RunInput,
+    root: &Path,
+    terminate: &AtomicBool,
+) -> Result<()> {
+    if !has_run_source(&input.plan) {
+        return Ok(());
+    }
+    let project = product_root(&input.project, &input.plan, Product::Casework)?
+        .context("missing Casework")?;
+    let report = run_source_report(
+        &input.binaries[&Product::Casework].tool,
+        &project.root,
+        &input.plan,
+        terminate,
+        None,
+        Some(
+            input
+                .casework_source_digest
+                .as_deref()
+                .context("missing checked source digest")?,
+        ),
+        Some(&root.join("casework-source")),
+    )?;
+    write_private(
+        &root.join("casework-source-receipt.json"),
+        &serde_json::to_vec(&report)?,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2361,6 +2565,7 @@ mod tests {
                 id: "review-authority".to_owned(),
                 producer: "review-producer".to_owned(),
                 identity: "reviewer".to_owned(),
+                run_issuer_binding: None,
             }),
             casework_context_provider: Some(CaseworkContextProvider {
                 id: "proposal-context".to_owned(),
@@ -2610,17 +2815,20 @@ mod tests {
         let fixed_issuer = input.plan.issuer.clone();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let allocated_issuer = format!("http://{}", listener.local_addr().unwrap());
-        for expected in [fixed_issuer, allocated_issuer] {
-            let root = scratch.path().join(if expected.starts_with("https:") {
-                "fixed"
-            } else {
-                "allocated"
-            });
+        for (name, expected, application) in [
+            ("fixed", fixed_issuer.clone(), false),
+            ("browser", allocated_issuer.clone(), true),
+            ("product-only", allocated_issuer, false),
+        ] {
+            let root = scratch.path().join(name);
             super::super::private_directory(&root).unwrap();
             let mut captured: RunInput =
                 serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
             captured.plan.issuer = expected.clone();
             if expected.starts_with("http:") {
+                captured.plan.bindings.breg_review_authority.as_mut().unwrap().run_issuer_binding=Some(serde_json::from_value(json!({"producer":{"expectedIssuer":fixed_issuer,"expectedProfile":"requester","expectedSubject":"producer"}})).unwrap());
+            }
+            if application {
                 captured.plan.application = Some(serde_json::from_value(json!({
                     "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
                     "entry": "dist/main.js", "prepare": "dist/prepare.js", "checker": "dist/check.js",
@@ -2653,6 +2861,20 @@ mod tests {
             let casework: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
             assert_eq!(breg["authentication"]["oidc"]["issuer"], expected);
             assert_eq!(casework["authentication"]["oidc"]["issuer"], expected);
+            if !application {
+                for config in [&breg, &casework] {
+                    assert!(!config["authentication"]["oidc"]["allowedClients"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|client| client == "browser-client"));
+                }
+                assert_eq!(
+                    breg["authentication"]["oidc"]["maximumTokenLifetimeSeconds"],
+                    300
+                );
+            }
+
             assert_eq!(
                 breg["reviewAuthorities"]["casework"]["privateKeyJwt"]["assertionAudience"],
                 expected
@@ -2736,6 +2958,24 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("did not report access profiles"));
+    }
+
+    #[test]
+    fn run_package_receipts_are_exact_and_a_write_failure_stops_the_step() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let mut output = tempfile::tempfile().unwrap();
+        let bytes=br#"{"ok":true,"command":"package","status":"complete","kind":"CaseworkReport","apiVersion":"id.registrystack.org/formats/casework/report/v1alpha2","packageDigest":"sha256:synthetic"}"#;
+        output.write_all(bytes).unwrap();
+        retain_tool_receipt(&mut output, root.path(), "casework", "package").unwrap();
+        assert_eq!(
+            fs::read(root.path().join("casework-package-receipt.json")).unwrap(),
+            bytes
+        );
+        assert!(retain_tool_receipt(&mut output, root.path(), "casework", "apply").is_err());
+        let blocked = tempfile::tempdir().unwrap();
+        fs::create_dir(blocked.path().join("casework-package-receipt.json")).unwrap();
+        assert!(retain_tool_receipt(&mut output, blocked.path(), "casework", "package").is_err());
     }
 
     #[test]
@@ -3236,6 +3476,7 @@ mod tests {
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::new(),
+            casework_source_digest: None,
             binaries: BTreeMap::new(),
         }
     }
