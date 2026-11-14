@@ -11,72 +11,44 @@ locale: en
 standards_referenced: []
 ---
 
-Choose the parts that fit your institution's systems and team. You can configure a register,
-change a page, write an application in your own language, or run a separate module beside selected
-Registry Stack products. These choices combine; none is a prerequisite for another.
+Choose the parts that fit your institution's systems and team. Configure a Base Registry Engine
+(BReg) project, add a small extension, write an application, or run a separate module. These paths
+combine; none is a prerequisite for another.
 
-## Configure a register from a starter
+## Choose an adoption path
 
-Start with an existing registry project when its Records, Actions, and review policies fit your
-work. You own the domain model, access decisions, deployment, data, and acceptance of that project.
-Base Registry Engine (BReg) owns the configured record and transaction behavior; Registry Casework
-owns the human review you explicitly select. Review approval does not itself write a Record.
-
-The starter collection and App Kit are currently private repositories. Request repository access
-from Registry Stack maintainers before following their clone or installation instructions.
-The [reviewed licensing starter guide](https://github.com/registrystack/breg-registry-starters/blob/main/docs/reviewed-licensing.md)
-requires that access. If you want a public first run, use the
-[BReg quickstart](../breg-quickstart/) and [first registry tutorial](../../tutorials/first-breg/).
-
-## Add a small extension
-
-Keep the maintained runtime and add code where its extension contract permits it: a rule, route,
-or ejected page. You own that code and the decision it makes. The host supplies only the session,
-request, or product operation its documented seam promises. A route must still call a product
-with authority that product accepts; moving code into a host does not extend disclosure rights.
-
-For an application UI, follow App Kit's private `project/docs/customization.md` guide after access
-is granted. For registry behavior, follow the maintained
-[BReg extension guidance](../../configure/breg/). Keep an extension small enough to test through
-the actual operation it changes. Choose a separate module when the work needs its own lifecycle.
+| Path | Use it when | You own | Start here |
+| --- | --- | --- | --- |
+| Configure a register | A starter's Records, Actions, and review policy fit | Model, access, deployment, data, and acceptance | [BReg quickstart](../breg-quickstart/) |
+| Add a small extension | A documented rule, route, or page seam fits | Extension code and its decision | [BReg extension guidance](../../configure/breg/) |
+| Build an application | You need your own journey or integration | Interface, credentials, correlation, and recovery | [Client API](../../reference/client-api/) |
+| Run a module | The work needs an independent lifecycle | Service, storage, release, and policy | [Module conventions](../../configure/module-conventions/) |
 
 ## Build an application in your language
 
-Use released clients or the public HTTP contracts from your own application. You own the user
-journey, user interface, credentials, correlation state, and recovery after an uncertain response.
-Each selected product owns its own authorization and persisted effects. The
-[client API reference](../../reference/client-api/) describes the maintained namespaces and the
-[access-token guide](../../configure/request-an-access-token/) describes issuer integration.
+Use released clients or the public HTTP contracts. You own the journey, credentials, correlation,
+and recovery; each selected product keeps its own authorization and effects. The
+[access-token guide](../../configure/request-an-access-token/) covers issuer integration.
 
-A direct BReg and Casework application prepares a Proposal, requests review of that exact version,
-then asks BReg to apply it under independently valid source authority. Coordinator is optional.
-Messaging is optional too; use it when the application needs reviewed delivery through a provider.
-The [module conventions](../../configure/module-conventions/) identify the contracts shared across
-language boundaries and the Python composition example.
+The starter collection and App Kit are private; request maintainer access for their instructions.
+The [reviewed licensing starter guide](https://github.com/registrystack/breg-registry-starters/blob/main/docs/reviewed-licensing.md)
+and App Kit's private `project/docs/customization.md` guide require that access. For a public first
+run, use the [first registry tutorial](../../tutorials/first-breg/). An extension, application, or
+module still needs authority the receiving product accepts. Casework review does not write a BReg
+Record; BReg applies the reviewed Proposal under its own authority. Add Coordinator for a durable
+sequence or Messaging for reviewed delivery only when the journey needs them.
 
-## Run your own module beside selected products
-
-Use an independently deployed service or worker for behavior your application owns. You choose
-its language, storage, release process, and operational policy. Selected Stack products retain
-their own data and authority; your module reaches them through released clients or HTTP.
-A module need not use BReg, Casework, Messaging, or Coordinator unless its work needs that product.
-
-Use the [module conventions](../../configure/module-conventions/) for authentication, problems,
-retries, tracing, and signed delivery. You may publish a static
-[Manifest description](../../products/registry-manifest/reference/#adopter-owned-modules) to help
-others understand the module. Inclusion is optional metadata; it neither certifies availability
-nor enables the module. Real data services use datasets; workers need no fictional dataset.
+A module may publish a static
+[Manifest description](../../products/registry-manifest/reference/#adopter-owned-modules);
+metadata neither enables nor certifies it.
 
 ## Choose what goes in the registry
 
-Put in the facts your law makes you the source of and the decisions you are accountable for.
-Build the smallest version of supporting parts. Leave payroll, document management, and generic
-workflow where they are, and reach them through their own systems.
-
-Spend modeling time and legal review on rules, tables, formulas, and deadlines, because that is
-where policy lives. Keep a rule that an approver signs in a table or formula rather than in code,
-and note the legal basis beside each one in your own project notes. If a rule has no stated basis,
-write "not stated" and raise it for review.
+Hold the facts your law makes you the source of and the decisions you are accountable for. Leave
+payroll, documents, and generic workflow in their owning systems. Review rules, tables, formulas,
+and deadlines with programme and legal colleagues; record an unstated legal basis as "not stated"
+rather than guessing. [Modeling patterns](../../explanation/registry-modeling-patterns/) covers the
+record and authority choices.
 
 ## Working with other institutions
 
@@ -88,51 +60,36 @@ valid answer.
 | Others need a fact about your records | Publish a narrow answer, not the record | [Evidence](../../explanation/how-evidence-works/) |
 | A partner needs to read or change your records | Publish a governed record API | [BReg](../../explanation/configuration-defined-registry/) |
 | You need a fact held by someone else | Ask for the narrowest answer that does the job | [Evidence, as the consumer](../../tutorials/verify-an-assertion-as-a-consumer/) |
-| You must load another system's data | Copy it in through a reviewed translator | [Adapter](https://github.com/registrystack/registry-stack/blob/main/products/adapter/README.md) packs; its ingestion job is not yet released |
+| You must load another system's data | Copy it in through a reviewed translator | [Adapter](https://github.com/registrystack/registry-stack/blob/e05a43a55ba5a9a178e088d6b8c686b0f89b659f/products/adapter/README.md) packs; its ingestion job is not yet released |
 | A standard or national system fixes the wire contract | Serve it at the edge | Adapter facade profile |
 | The person can carry the proof | Let them bring it as a credential | Evidence with [OID4VCI delivery](../../configure/evidence-oid4vci/) |
 | Integration is not justified | Do not integrate, and write down why | None |
 
-Keep a one-page relationship sheet per partner. Write "not stated" for any line the source is
-silent on, and treat that as a finding to raise rather than a blocker.
-
-- The partner.
-- The legal basis.
-- Who defines the question.
-- What crosses.
-- The product that serves it.
-- Who owns changes.
-
-Promise Read first. Promise Write only when the source can refuse a stale update (see `If-Match`
-in the [BReg API](../../reference/breg-api/)), retry a create safely (`Idempotency-Key`), and
-return a version.
+For each partner, record the legal basis, who defines the question, what crosses, the serving
+product, and who owns changes. Write "not stated" for a gap. Promise Read first; promise Write only
+when the source can refuse a stale update, retry a create safely, and return a version. See
+`If-Match` and `Idempotency-Key` in the [BReg API](../../reference/breg-api/).
 
 Point to records another office keeps; do not copy them. Store their identifier with its scheme,
 and ask through Evidence when a decision needs the fact. In BReg an event record's subject or
 source can hold an identifier another system owns, declared with `external: {namespace}`; see the
-[event records guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/event-records.md).
+[event records guide](https://github.com/registrystack/registry-stack/blob/e05a43a55ba5a9a178e088d6b8c686b0f89b659f/products/breg/event-records.md).
 
-Payment and treasury hand-offs are custom code today. Build them as an application or a module
-(the third and fourth paths above); no Registry Stack product sends payments.
+Payment and treasury hand-offs belong in an application or module. The maintained product and
+operation rosters define no payment product or payment-specific operation.
 
 For how much to share, see [the disclosure ladder](../../explanation/data-minimization-and-purpose-limitation/#ask-for-the-weakest-answer-that-does-the-job).
 
-{/* Evidence: products/adapter/README.md, adapter-job; products/adapter/EFFECTIVE-CONTRACT.md, facade;
+{/* Evidence: AGENTS.md, maintained runtime products;
+    crates/registry-coordinator/src/operations.rs, operation_catalog;
+    products/adapter/README.md, adapter-job; products/adapter/EFFECTIVE-CONTRACT.md, facade;
     products/breg/event-records.md, namespace;
     docs/site/src/content/docs/reference/breg-api.mdx, If-Match and Idempotency-Key;
     docs/site/src/content/docs/configure/evidence-oid4vci.mdx, OID4VCI. */}
 
-## Signs part of your work is a process
-
-Any one of these means part of your work is a process, not only a register. Check
-[where each rule lives](../../explanation/where-each-rule-lives/) first; a timer, workflow or
-review policy may already hold it.
-
-- A rule needs facts from more than one record.
-- A matter continues over weeks.
-- Money is owed or paid.
-- The law sets a clock.
-- Two parties must both agree.
+Work that spans records, weeks, money, a legal clock, or agreement between parties is a process,
+not only a register. Check [where each rule lives](../../explanation/where-each-rule-lives/) before
+adding custom workflow.
 
 ## Choose the next step
 
