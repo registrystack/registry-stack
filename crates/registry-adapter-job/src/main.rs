@@ -1312,10 +1312,15 @@ mod tests {
             code: registry_adapter_job::pass::BREG_RECEIVER_CHANGED.to_owned(),
         };
         let next = stop_next_step(&receiver).expect("receiver drift names its recovery");
-        // Every member of the receiver digest (`direct_breg::receiver_identity`).
+        assert!(next.contains("original"), "missing \"original\": {next}");
+        // Every member of the receiver digest (`direct_breg::receiver_identity`),
+        // named in the first sentence; the upgrade sentence repeats one of them.
+        let members = next
+            .split(". ")
+            .next()
+            .expect("the first sentence names the receiver members");
         for step in [
             "BReg",
-            "original",
             "binding",
             "base URL",
             "token endpoint",
@@ -1326,7 +1331,7 @@ mod tests {
             "Action",
             "mode",
         ] {
-            assert!(next.contains(step), "missing {step:?}: {next}");
+            assert!(members.contains(step), "missing {step:?}: {members}");
         }
         // A row pending from a binary whose receiver digest lacked the
         // client assertion audience is not cleared by any configuration.
