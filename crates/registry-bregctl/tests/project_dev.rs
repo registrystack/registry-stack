@@ -1474,6 +1474,54 @@ fn check_and_start_resolve_casework_profiles_and_bindings_with_the_owning_report
 }
 
 #[test]
+fn browser_run_issuer_checks_both_bindings_before_start_requires_application_root() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let tool = casework_reference_project(
+        scratch.path(),
+        "reviewer",
+        concat!(
+            "bindings:\n",
+            "  bregReviewAuthority: {id: local-review, producer: review-producer, identity: reviewer}\n",
+            "  caseworkContextProvider: {id: proposal-context, identity: operator, action: review-action}\n",
+        ),
+    );
+    let dev = scratch.path().join("dev.yaml");
+    let plan = fs::read_to_string(&dev)
+        .unwrap()
+        .replace("issuer: https://issuer.example.invalid", "issuer: run");
+    fs::write(&dev, format!(
+        "{plan}\napplication:\n  client: browser-client\n  callbackPath: /callback\n  healthPath: /health\n  entry: dist/main.js\n  prepare: dist/prepare.js\n  checker: dist/check.js\n  deployment: deployment.json\n  configSchema: example/host-run/v1\n  configEnvironment: HOST_CONFIG\n  prepareVersion: example-prepare 1.0\n"
+    )).unwrap();
+    fs::write(scratch.path().join("deployment.json"), "{}").unwrap();
+    // This double checks the exact runtime input delivered to the owning
+    // Casework CLI; the BReg binding is checked by its real product reader.
+    let script = fs::read_to_string(&tool).unwrap().replace(
+        "  [[ $# -eq 6 && $5 == --runtime-config && -f $6 ]]",
+        concat!(
+            "  [[ $# -eq 6 && $5 == --runtime-config && -f $6 ]]\n",
+            "  grep -q '\"issuer\":\"http://127.0.0.1:1\"' \"$6\"\n",
+            "  grep -q '\"clientAssertionAudience\":\"http://127.0.0.1:1\"' \"$6\"",
+        ),
+    );
+    fs::write(&tool, script).unwrap();
+    let checked = check_with_casework_tool(scratch.path(), &state, &tool);
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(!state.exists());
+    let started = start_with_casework_tool(scratch.path(), &state, &tool);
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    assert_error_envelope(&report, "domain");
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--application-root"),
+        "{report}"
+    );
+    assert!(!state.exists());
+}
+
+#[test]
 fn check_refuses_binding_configuration_the_products_would_refuse_at_the_plan_field() {
     for (plan_edit, from, to, path, product) in [
         (
