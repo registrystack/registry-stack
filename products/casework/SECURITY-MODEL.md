@@ -240,3 +240,28 @@ grants. Casework applies its usual client, profile, and human-identity checks. S
 ## 4. Reporting
 
 Report suspected vulnerabilities as described in [`SECURITY.md`](../../SECURITY.md).
+
+### Explicit synthetic run source binding
+
+`caseworkctl generate run-source` is trusted single-user development tooling.
+A closed request selects one existing producer and asserts its exact old
+issuer, profile and subject, matched to the runner's existing person and
+Casework grant. It may replace only that producer's issuer on a new source
+copy with the allocated loopback run issuer. A separate explicit initiator
+acknowledgement may replace an existing exact `trustedInitiatorIssuer`; it
+never fills an absent pin. This preserves issuer-level initiator trust under
+an admitted producer, not per-subject admission. Runtime exact producer
+profile/issuer/subject, initiator issuer, exclusion and read checks are unchanged.
+
+The tool checks the original closure digest, rejects principal collisions and
+unexpected authority differences, preserves original bytes, and records source,
+request and transformed hashes before ordinary pairing and new packaging.
+Missing pre-pair descriptions are permitted only in this authored source stage;
+production packaging still requires the full provider closure. Receipt write
+failure fails closed; the runner does not proceed to activation. A fresh run
+uses a new issuer/key and new package, never a mutated old package or signature
+exception. Private run files and receipts expire with normal run cleanup.
+Focused executable proofs are `registry-caseworkctl` `run_source::tests` and
+`registry-bregctl` `normal_check_uses_owning_casework_tool_for_exact_run_producer_chain`;
+the latter requires a matching CLI and proves offline inspection, not database
+admission or activation. Full native admission remains a separate database gate.

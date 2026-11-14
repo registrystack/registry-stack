@@ -64,3 +64,11 @@ python3 products/casework/scripts/generate_cli_schemas.py --check
 The generator has no separate hand-maintained field definitions. The focused
 Rust report tests validate actual offline command outputs against this schema
 and reject unknown payload fields before serialization.
+
+`generate-run-source` reports `sourceDigest`, `sourceFiles`, `bindingDigest`,
+`transformedDigest`, `files`, `changedPointers`, optional `issuer` and `output`,
+and false `networkAccess`/`databaseAccess`. Its request is the closed
+`CaseworkRunSource` v1alpha1 format. Output has no producer subjects or secrets.
+Source closure capture precedes provider pairing; it is not a production package
+or an activation receipt. The command fails if its exact guards, source digest,
+policy validation, output creation or receipt write fail.
