@@ -354,14 +354,15 @@ async fn authorize(
     );
     drop(pending);
     let page = format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Choose a test person</title><h1>Choose a test person</h1><p>Synthetic development identities only.</p><form method=\"post\" action=\"/authorize\"><input type=\"hidden\" name=\"transaction\" value=\"{}\">{}<button type=\"submit\">Sign in</button></form></html>", escape_html(&transaction), choices);
+    let callback_origin = authorization.redirect.origin().ascii_serialization();
+    let content_security_policy = format!(
+        "default-src 'none'; form-action 'self' {callback_origin}; base-uri 'none'; frame-ancestors 'none'"
+    );
     (
         [
-            (header::CACHE_CONTROL, "no-store"),
-            (
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-            ),
-            (header::REFERRER_POLICY, "no-referrer"),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+            (header::CONTENT_SECURITY_POLICY, content_security_policy),
+            (header::REFERRER_POLICY, "no-referrer".to_owned()),
         ],
         Html(page),
     )
@@ -1044,8 +1045,18 @@ mod tests {
                 assert_eq!(denied.json::<Value>().await.unwrap()["error"], "access_denied");
             }
             let auth_url = format!("{}/authorize?client_id=app&redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback&response_type=code&code_challenge={}&code_challenge_method=S256&state=state-1&nonce=nonce-1&scope=openid%20registry.read%20registry.other&resource=registry-service", server.origin, pkce_challenge(verifier));
+            let foreign_redirect = http.get(auth_url.replace(
+                "redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback",
+                "redirect_uri=http%3A%2F%2F127.0.0.1%3A4001%2Fcallback",
+            )).send().await.unwrap();
+            assert_eq!(foreign_redirect.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(foreign_redirect.json::<Value>().await.unwrap()["error"], "invalid_request");
             let page = http.get(auth_url).send().await.unwrap();
             assert_eq!(page.status(), StatusCode::OK);
+            assert_eq!(
+                page.headers().get(header::CONTENT_SECURITY_POLICY).unwrap(),
+                "default-src 'none'; form-action 'self' http://127.0.0.1:4000; base-uri 'none'; frame-ancestors 'none'"
+            );
             let page = page.text().await.unwrap();
             assert!(page.contains("Test &lt;Person&gt;"));
             assert!(!page.contains("Test <Person>"));
