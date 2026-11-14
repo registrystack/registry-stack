@@ -32,7 +32,7 @@ model {
     #optional
     technology 'Optional authoring / Adapter pack, YAML, JSON Schema, Rhai'
     description 'A reviewed Adapter pack and thin Source contract for one selected lookup, with selector and fact schemas and named preparation and extraction Functions, for import into an Evidence project. The export grants no BReg access and includes no credentials or Evidence question authority.'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/evidence_source.rs 'Source export'
+    link https://github.com/registrystack/registry-stack/blob/f4817a95e61208067c3032848f86fff3f51f9e77/crates/registry-breg/src/evidence_source.rs 'Source export'
   }
   signer = external 'External package signer' {
     technology 'Production signing authority'
