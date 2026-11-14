@@ -764,6 +764,34 @@ fn check_refuses_a_scenario_file_symlink_escaping_the_project() {
     assert!(!state.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn check_refuses_a_backslash_in_an_existing_scenario_file_name() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    authored_scenarios(
+        scratch.path(),
+        "  - id: read\n    steps:\n      - {id: list, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
+    );
+    let source = scratch.path().join("tests/scenarios.yaml");
+    let backslash = scratch.path().join("tests\\scenarios.yaml");
+    fs::copy(&source, &backslash).unwrap();
+    assert!(backslash.is_file());
+    let dev = fs::read_to_string(scratch.path().join("dev.yaml")).unwrap();
+    fs::write(
+        scratch.path().join("dev.yaml"),
+        dev.replace("tests/scenarios.yaml", "tests\\scenarios.yaml"),
+    )
+    .unwrap();
+
+    let result = check(scratch.path(), &state, true);
+
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(report.to_string().contains("scenarioFile"), "{report}");
+    assert!(!state.exists());
+}
+
 #[test]
 fn check_refuses_ambiguous_or_missing_scenario_selection() {
     let scratch = tempfile::tempdir().unwrap();

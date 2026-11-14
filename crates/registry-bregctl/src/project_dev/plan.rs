@@ -863,7 +863,7 @@ fn read_scenarios(root: &Path, plan: &Plan) -> Result<(Vec<Journey>, Option<Stri
 pub(super) struct LoadedPlan {
     pub plan: Plan,
     pub scenarios: Vec<Journey>,
-    pub scenario_revision: Option<String>,
+    pub scenario_digest: Option<String>,
 }
 
 pub(crate) fn check(root: &Path) -> Result<Report> {
@@ -891,11 +891,11 @@ pub(crate) fn check(root: &Path) -> Result<Report> {
 pub(super) fn load(root: &Path) -> Result<LoadedPlan> {
     let decoded = read_plan(root)?;
     validate_plan(root, &decoded)?;
-    let (scenarios, scenario_revision) = read_scenarios(root, &decoded.value)?;
+    let (scenarios, scenario_digest) = read_scenarios(root, &decoded.value)?;
     Ok(LoadedPlan {
         plan: decoded.value,
         scenarios,
-        scenario_revision,
+        scenario_digest,
     })
 }
 
@@ -917,11 +917,12 @@ impl Plan {
         if let Some(path) = &self.scenario_file {
             require(
                 !path.as_os_str().is_empty()
+                    && !path.to_string_lossy().contains('\\')
                     && path
                         .components()
                         .all(|part| matches!(part, Component::Normal(_))),
                 "/scenarioFile",
-                "The scenario file path must be relative to the project without `.` or `..`.",
+                "The scenario file path must be relative to the project without `.`, `..`, or backslashes.",
                 "Use normal relative path components inside the development project.",
             )?;
             require(

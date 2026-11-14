@@ -733,7 +733,7 @@ mod tests {
             application_node: None,
             plan,
             scenarios: Vec::new(),
-            scenario_revision: None,
+            scenario_digest: None,
             ttl_seconds: 300,
             schema_people: Vec::new(),
             breg_authority: Some(super::super::BregAuthority {
@@ -746,6 +746,43 @@ mod tests {
             casework_principals: BTreeMap::new(),
             binaries: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn separate_scenario_runs_do_not_share_captures() {
+        let server = synthetic_server(vec![(Duration::ZERO, 200, r#"{"id":"record-1"}"#)]);
+        let root = tempfile::tempdir().unwrap();
+        let issuer = Issuer::create(root.path()).unwrap();
+        let input = polling_input(1000, 50);
+        let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
+        let first: Journey = serde_json::from_value(json!({
+            "id": "first", "steps": [{
+                "id": "capture", "product": "breg", "as": "reader", "method": "GET",
+                "path": "/v1/records", "expect": {"status": 200},
+                "capture": {"record": {"type": "pointer", "pointer": "/id"}}
+            }]
+        }))
+        .unwrap();
+        // Plan validation refuses this reference. Execute it directly to prove
+        // that a later run cannot inherit the earlier run's captured value.
+        let second: Journey = serde_json::from_value(json!({
+            "id": "second", "steps": [{
+                "id": "use", "product": "breg", "as": "reader", "method": "GET",
+                "path": "/v1/records/{{record}}", "expect": {"status": 200}
+            }]
+        }))
+        .unwrap();
+
+        let first_report = run(&input, &issuer, &urls, &first, || Ok(())).unwrap();
+        let second_report = run(&input, &issuer, &urls, &second, || Ok(())).unwrap();
+
+        assert_eq!(first_report.result, "passed");
+        assert_eq!(second_report.result, "failed");
+        assert!(second_report.steps[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("missing journey capture")));
+        assert_eq!(server.finish(), 1);
     }
 
     #[test]

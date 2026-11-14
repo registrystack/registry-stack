@@ -553,6 +553,16 @@ def verify_authored_scenarios(root, bin_dir, checkout, state, env):
     scenario = scenario.replace(
         "https://identity.licensing.example.test", "'{{run.issuer}}'"
     )
+    scenario += (
+        "  - id: observe-application\n"
+        "    steps:\n"
+        "      - id: list-created\n"
+        "        product: breg\n"
+        "        as: applicant\n"
+        "        method: GET\n"
+        "        path: /v1/records/applications\n"
+        "        expect: {status: 200, json: {/items/0/domainData/reference: application-001}}\n"
+    )
     scenarios = project / "tests/scenarios.yaml"
     scenarios.parent.mkdir(exist_ok=True)
     scenarios.write_text(
@@ -566,13 +576,18 @@ def verify_authored_scenarios(root, bin_dir, checkout, state, env):
     first = dev(bin_dir, env, project, "start", ".")
     first_run = first["run_id"]
     try:
-        assert first["scenarios"][0]["result"] == "passed", first
-        assert first["scenario_revision"] == first_revision, first
+        assert [item["id"] for item in first["scenarios"]] == [
+            "licensing-approval", "observe-application"
+        ], first
+        assert [item["result"] for item in first["scenarios"]] == ["passed", "passed"], first
+        assert first["scenarioDigest"] == first_revision, first
+        assert "scenario_revision" not in first, first
         changed = scenarios.read_text().replace("expect: {status: 201}", "expect: {status: 202}", 1)
         assert changed != scenarios.read_text()
         scenarios.write_text(changed)
         status = dev(bin_dir, env, project, "status", first_run)
-        assert status["scenario_revision"] == first_revision, status
+        assert status["scenarioDigest"] == first_revision, status
+        assert "scenario_revision" not in status, status
         assert status["scenarios"] == first["scenarios"], status
     finally:
         assert dev(bin_dir, env, project, "stop", first_run)["status"] == "stopped"
@@ -583,8 +598,9 @@ def verify_authored_scenarios(root, bin_dir, checkout, state, env):
     second = dev(bin_dir, env, project, "start", ".", expected=1)
     second_run = second["run_id"]
     try:
-        assert second["status"] == "ready" and second["scenarios"][0]["result"] == "failed", second
-        assert second["scenario_revision"] == second_revision, second
+        assert second["status"] == "ready", second
+        assert [item["result"] for item in second["scenarios"]] == ["failed", "passed"], second
+        assert second["scenarioDigest"] == second_revision, second
         assert all(accepts_connections(url) for url in second["products"].values())
     finally:
         assert dev(bin_dir, env, project, "stop", second_run)["status"] == "stopped"
