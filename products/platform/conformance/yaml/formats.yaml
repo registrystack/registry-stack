@@ -15,6 +15,28 @@ formats:
   breg/journeys:
     project: products/breg/acceptance/asset-site-placement
     init: {command: "bregctl init {directory}", file: tests/journeys.yaml}
+  # The scenario reader needs its enclosing development project, with the
+  # authored file selected instead of the inline journey in that fixture.
+  rstack/scenarios:
+    project: products/platform/conformance/projects/breg-project-dev
+    write:
+      dev.yaml: |
+        apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
+        kind: BRegProjectDev
+        issuer: https://issuer.example.invalid
+        products:
+          - product: breg
+            project: registry
+            audience: urn:example:registry
+        people:
+          operator:
+            subject: operator
+            client: operator-client
+            grants:
+              breg:
+                profile: operator
+                scopes: [registry:read]
+        scenarioFile: tests/scenarios.yaml
   breg/migration-descriptor:
     project: products/breg/examples/formats/reviewed-migrations
   breg/migration-rehearsal-receipt:
