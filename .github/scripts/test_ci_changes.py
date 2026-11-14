@@ -1238,6 +1238,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-adapter/src/lib.rs",
             "crates/registry-adapter-job/src/pass.rs",
             "crates/registry-adapterctl/src/main.rs",
+            "crates/registry-payment-mifos-connector/src/lib.rs",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
@@ -1268,6 +1269,25 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["evidence_contracts"])
         self.assertTrue(outputs["evidence_postgres"])
         self.assertTrue(outputs["adapter_contracts"])
+
+    def test_payment_components_select_their_tests_and_consumers(self) -> None:
+        for package in (
+            "registry-payment-protocol",
+            "registry-payment-client",
+            "registry-payment-simulator-connector",
+        ):
+            with self.subTest(package=package):
+                outputs = classify(self.workspace, (f"crates/{package}/src/lib.rs",))
+                selected = {
+                    name
+                    for row in outputs["rust_matrix"]["include"]
+                    for name in row["packages"]
+                }
+                self.assertIn(package, selected)
+                if package != "registry-payment-client":
+                    self.assertTrue(outputs["adapter_contracts"])
+                if package != "registry-payment-simulator-connector":
+                    self.assertTrue(outputs["coordinator"])
 
     def test_adapter_contract_job_runs_the_facade_recovery_runner(self) -> None:
         steps = self.workflow_jobs["adapter-contracts"]["steps"]
@@ -3801,6 +3821,7 @@ class LockfileSelectionTest(unittest.TestCase):
             change.members,
             frozenset(
                 {
+                    "registry-adapter",
                     "registry-adapter-engine",
                     "registry-breg",
                     "registry-coordinator",
@@ -3814,6 +3835,7 @@ class LockfileSelectionTest(unittest.TestCase):
             ),
         )
         outputs = classify(self.workspace, ("Cargo.lock",), lock_change=change)
+        self.assertTrue(outputs["adapter_contracts"])
         self.assertTrue(outputs["platform"])
         self.assertTrue(outputs["breg_contracts"])
         self.assertTrue(outputs["evidence_contracts"])

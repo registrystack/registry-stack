@@ -150,7 +150,7 @@ deployment writes only a project file.
 
 ### 5.1 Translation, not custody
 
-The facade never stores a record. It holds configuration, audit journal
+The record facade never stores a record. It holds configuration, audit journal
 entries (metadata, digests, outcomes), and idempotency entries (section 9,
 the one place a response body is retained, for a bounded window), and
 nothing else. The source system remains the system of record and keeps its
@@ -164,6 +164,11 @@ and a retry re-reads it. A job writes no payloads. The designed bulk
 hand-off, a file an operator imports with `bregctl data import` and keeps
 in their custody, is not implemented (section 17.3). The adapter still keeps no registry, no warehouse,
 and no analytical copy of any source.
+
+The optional typed payment host has separate attempt custody (section 19).
+It retains exact bill snapshots, original connection bindings, prepared
+restricted BReg commands and verified provider observations for recovery.
+Those bounded payment facts never enter the generic record route engine.
 
 ### 5.2 The declared model is the disclosure boundary
 
@@ -183,7 +188,7 @@ versioned artifact: endpoint declarations, route templates, code maps, and
 scripts at declared seams. Engine capabilities grow only under the
 two-system rule: a capability is added when a second real system needs it,
 otherwise it is pack logic. Components compiled into the engine are named for
-mechanisms (`http`, `graphql`), never for products. `[ingestion]` Two
+mechanisms (`http`, `graphql`), never for products. Three
 scoped exceptions:
 
 1. **Job source components.** `file`, `sftp`, and read-only `postgres`
@@ -209,6 +214,11 @@ scoped exceptions:
    Document Store connector is planned. Coordinator is reached only
    through its published signed-event contract; no Adapter crate links a
    Coordinator crate.
+3. **Typed payment hosting.** The Adapter runtime hosts a dedicated payment
+   module over its authenticated listener and PostgreSQL infrastructure.
+   That module links the public BReg client for restricted bill-binding and
+   receipt Actions and a separate synthetic P2G connector. The generic core
+   and engine retain their source-neutral dependency boundary (section 19).
 
 ### 5.4 Port Camel by default; diverge deliberately and in writing
 
@@ -371,15 +381,17 @@ transformations map its bounded results into declared schema-bound views or
 facts. A generic profile or built-in target owns the outward wire contract.
 The same source pack can serve the facade and Evidence without a GovStack
 Record becoming an Evidence prerequisite. The
-adapter's only link to BReg is test-time: `registry-record` is a
+record facade's envelope link to BReg is test-time: `registry-record` is a
 dev-dependency whose serialization goldens prove the `breg-records`
 profile's envelope byte-compatible (section 13.6); the adapter never
 depends on the `registry-breg` runtime. `[ingestion]` The one runtime
-exception is `registry-adapter-connectors` (section 17.3): it depends on
+ingestion exception is `registry-adapter-connectors` (section 17.3): it depends on
 `registry-breg-client` and no other product client, is compiled only
 behind an off-by-default cargo feature, and is linked by no facade
 binary; the dependency gate of section 17.5 proves that separation
-mechanically. The facade's response-shape promise
+mechanically. The separate payment host also uses the public BReg client,
+with exact Action authority and durable attempt recovery (section 19).
+The record facade's response-shape promise
 above is unchanged.
 
 Payload content is dynamic: request and response schemas and search
@@ -439,6 +451,8 @@ conformance claim.
 - `registry-adapter`: the facade runtime. It adds the Axum listener, inbound
   OIDC, custody, the audit journal (`notifier`), and the idempotency store
   (`idempotent`) to the engine, and owns security for a served facade.
+  Its optional `payments` module owns typed payment operations, exact attempt
+  snapshots and recovery in PostgreSQL, outside generic facade routes.
 - `registry-adapter-job`: the `adapter-job` host. It adds bounded source
   ingestion, item progress, scheduling, hooks, and explicit destination
   delivery to the engine (section 17.2).
@@ -2513,3 +2527,93 @@ also checks the raw `Cache-Control` header on every data response before any
 pack mapping. A `no-store` response leaves the acquisition usable for live
 reads and unavailable for retention. That restriction survives mapping and
 paging. Consultation's protected response headers stay unchanged.
+
+## 19. Typed payment hosting
+
+The optional `registry-adapter::payments` module mounts dedicated collection,
+disbursement, observation and reporting operations on the Adapter listener.
+Coordinator exposes them as native typed steps. Workflows supply the bill or
+instruction record identity and version, then use the accepted attempt ID for
+observation and reporting. Tenant, biller, provider origins, credentials,
+currency policy and restricted BReg Actions are operator-owned connection
+configuration. A payment-only deployment uses these dedicated operations.
+
+BReg owns the authoritative bills and fee policy, approved disbursement
+instructions, recorded receipts and provider confirmations, and the service's
+paid/unused issuance guard. The payment host owns durable attempts, original
+provider and registry binding snapshots, exact prepared commands, correlation
+and verified observations. Coordinator owns workflow progress and waits.
+The provider owns the financial transaction.
+
+### 19.1 Payment collection
+
+Before any provider send, PostgreSQL reserves one attempt per institution,
+service, bill and bill version across workflow command keys. The host
+persists the exact bind Action and key, invokes that restricted Action, and
+verifies the frozen authoritative bill binding. It then persists the first
+dispatch time before sending the original exact provider command. An
+accepted response means provider acceptance has been established, not merely
+that a local row exists. Unknown remains unresolved. The simulator allows an
+exact same-command resend inside the original connection's declared replay
+window. An unknown HTTP provider submission stays held after dispatch.
+
+Provider identifiers derive from a domain-separated digest of the full
+immutable bill and provider origin, producer identity, tenant and biller.
+Independent Adapter databases therefore do not allocate overlapping counter
+identities. Disjoint digest portions fit the provider's request, RTP and bill
+fields; the provider must reject a reused request identifier with a different
+body. Stored commands are checked against that derivation and replayed exactly.
+
+The original-command receipt lookup is a database read. Collection reads may
+observe the provider but never bind, dispatch or record a receipt. Confirmed
+provider observations must match the complete saved request, transfer, bill,
+amount and currency tuple. Pending states, including provider COM/PENDING,
+never authorize a receipt.
+
+The receipt step accepts only a collection identifier. The host derives the
+receipt from its confirmed observation and frozen bill, persists the exact
+restricted BReg report Action/key, and verifies authoritative readback. Lost
+bind or report acknowledgements recover from the saved command or exact
+readback. The numeric-loopback simulator preserves exact decimal JSON and
+requires synthetic response provenance to authorize a synthetic fee receipt.
+Generic provider-pack observations are available as correlated status.
+
+### 19.2 Disbursement
+
+Adapter reads the approved instruction from BReg, including the exact money,
+beneficiary destination and funding account. Adapter prepares the exact
+provider command under the pinned binding and reserves one attempt for the
+authoritative source, instruction identity and version. It commits the
+restricted BReg binding Action and records the first dispatch before sending.
+An uncertain submission stays held. Coordinator can reconcile the original
+acceptance through a read-only lookup for the saved key and instruction.
+
+The `mifos-legacy-signature` host profile signs the exact Bulk request and
+verifies the raw acknowledgement and expected tenant before interpreting it.
+Request signing and response verification use separate pinned Transit keys.
+Operations status uses a separate bearer credential.
+
+The separate confirmation operation accepts only a disbursement ID. Adapter
+reports verified provider completion through its restricted BReg Action,
+using the original instruction facts and a separately keyed exact command.
+The resulting confirmation records what the provider reported. Beneficiary
+credit and settlement require separate authoritative evidence.
+
+### 19.3 Authorization and retained attempts
+
+Every lookup rechecks the current caller, connection and service scope. The
+Adapter identity holds the restricted BReg grants to bind and report attempts.
+Changing connection configuration affects new attempts. Retained attempts use
+their original provider origins, tenant and party bindings, credential
+identities, exact pack pin and registry binding. Load the original pack
+alongside the active pack to resume retained work. A missing pack holds the
+attempt before provider I/O. Bearer credentials can rotate at the same
+configured reference.
+
+Payment attempts and command receipts remain durable without automatic
+expiry. They include restricted bill and instruction facts needed for
+recovery and require protected PostgreSQL storage and backup. Generic
+facade response-retention sweeps do not delete payment attempts. Payment
+audit events are value-free and commit before effects or response release.
+The host's snapshots are a scoped exception to the record facade's
+non-retention rule, not a generic record store.

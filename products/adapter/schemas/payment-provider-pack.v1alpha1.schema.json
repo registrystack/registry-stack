@@ -1,0 +1,199 @@
+{
+  "$defs": {
+    "ConnectorKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "simulator-p2g/v1",
+            "mifos-ph-ee-legacy/v1"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "adapter-payment-http/v1",
+          "description": "One fixed-role HTTP transport whose provider-specific behavior is\nlimited to the pack's pure request and response mappings.",
+          "type": "string"
+        }
+      ]
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PaymentCapability": {
+      "enum": [
+        "collection",
+        "disbursement"
+      ],
+      "type": "string"
+    },
+    "PaymentMappingCall": {
+      "additionalProperties": false,
+      "description": "One pure mapping pair at a reviewed, origin-relative provider path.\nNeither script can select an origin, endpoint role, method, credential, or\nretry behavior.",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/RhaiExpression"
+        },
+        "response": {
+          "$ref": "#/$defs/RhaiExpression"
+        }
+      },
+      "required": [
+        "path",
+        "request",
+        "response"
+      ],
+      "type": "object"
+    },
+    "PaymentOperationMapping": {
+      "additionalProperties": false,
+      "description": "Submit and optional read-only status mappings for one typed payment\ndirection. The host fixes POST for submit and GET for status.",
+      "properties": {
+        "auth": {
+          "$ref": "#/$defs/PaymentProviderAuth",
+          "description": "Host-enforced credential mechanism for every endpoint in this payment\ndirection. Scripts never receive or select credentials."
+        },
+        "status": {
+          "$ref": "#/$defs/PaymentMappingCall"
+        },
+        "submit": {
+          "$ref": "#/$defs/PaymentMappingCall"
+        }
+      },
+      "required": [
+        "auth",
+        "submit"
+      ],
+      "type": "object"
+    },
+    "PaymentProviderAuth": {
+      "description": "Closed credential mechanisms implemented by the fixed-role payment host.",
+      "enum": [
+        "bearer",
+        "mifos-legacy-signature"
+      ],
+      "type": "string"
+    },
+    "PaymentProviderMapping": {
+      "additionalProperties": false,
+      "description": "The complete executable mapping closure of one data-driven provider.\nScripts are reviewed pack files, never deployment values.",
+      "properties": {
+        "collection": {
+          "$ref": "#/$defs/PaymentOperationMapping"
+        },
+        "disbursement": {
+          "$ref": "#/$defs/PaymentOperationMapping"
+        },
+        "scripts": {
+          "description": "Every Rhai file reachable from the operation mappings, exactly once.",
+          "items": {
+            "$ref": "#/$defs/ScriptReference"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "scripts"
+      ],
+      "type": "object"
+    },
+    "RhaiExpression": {
+      "additionalProperties": false,
+      "description": "A Rhai expression reference: the digest-pinned file from the pack's\nscript inventory and the precompiled entrypoint to call\n(`products/adapter/CONCEPT.md` sections 5.6 and 8.5). Inline code is\nrefused (CFG-EMBED-1).",
+      "properties": {
+        "entrypoint": {
+          "description": "The precompiled entrypoint the engine calls.",
+          "type": "string"
+        },
+        "file": {
+          "description": "The script file path, resolved against the pack's script inventory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "entrypoint"
+      ],
+      "type": "object"
+    },
+    "ScriptReference": {
+      "additionalProperties": false,
+      "description": "A script seam: code in its own file beside the pack, referenced by a\nrelative path and pinned by digest (CFG-EMBED-1). Scripts never carry\ncredentials and never construct URLs; the `http` component builds every\nrequest from its declared template\n(`products/adapter/CONCEPT.md` section 5.6).",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "The `sha256:` digest the file must hash to."
+        },
+        "path": {
+          "description": "The script file, relative to the pack document.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "digest"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/payment-provider-pack/payment-provider-pack.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/payment-provider-pack/v1alpha1",
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "$ref": "#/$defs/PaymentCapability"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "connector": {
+      "$ref": "#/$defs/ConnectorKind"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "AdapterPaymentProviderPack",
+      "type": "string"
+    },
+    "mapping": {
+      "$ref": "#/$defs/PaymentProviderMapping",
+      "description": "Pure, digest-pinned provider wire mappings. Compiled connectors omit\nthis member; the generic HTTP connector requires it."
+    },
+    "testedVersions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "capabilities",
+    "connector",
+    "id",
+    "kind",
+    "version"
+  ],
+  "title": "Registry Adapter payment provider pack",
+  "type": "object"
+}

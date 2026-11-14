@@ -13,15 +13,17 @@ steps are in [DEPLOYMENT.md](DEPLOYMENT.md).
 ## 1. Scope and trust boundaries
 
 - **Operator.** Owns the runtime configuration: connection base URLs, the
-  external command path, credentials, issuer settings and the BReg connection
-  profile. Operator configuration is trusted; workflow data is not.
+  external command path, credentials, issuer settings, the BReg connection
+  profile and the Adapter payment connection. Operator configuration is
+  trusted; workflow data is not.
 - **Workflow author.** Authors a project that Coordinator freezes into a
   definition. An author supplies bodies, mappings and pure Functions. An author
   does not choose destinations, headers, credentials or recovery behavior; the
   closed operation catalog does.
-- **Providers.** Casework, Scheduling, BReg and external HTTP providers decide
-  every effect a run requests. Coordinator holds workload identity, not
-  decision authority, and each receiving product still authorizes the call.
+- **Providers.** Casework, Scheduling, BReg, Adapter payments and external HTTP
+  providers decide every effect a run requests. Coordinator holds workload
+  identity, not decision authority, and each receiving product still
+  authorizes the call.
 - **Caller.** Authenticates with an access token verified against the
   configured OIDC issuer. Coordinator authenticates and authorizes every
   protected route and reapplies the caller's owner and workflow scope on every
@@ -658,6 +660,72 @@ unavailable durable audit.
 `a_revision_keeps_due_occurrences_unless_its_schedule_changed` and
 `an_audit_outage_admits_and_reschedules_nothing` (PostgreSQL).
 
+### COORDINATOR-INV-15: payment completion requires exact authoritative evidence
+
+**Threat.** A workflow could supply an amount, provider route, header, receipt or BReg destination;
+reuse an acceptance for another bill, collection, instruction or disbursement; treat pending,
+unknown or a timed-out wait as payment; or start a fresh provider effect after an ambiguous
+response or unresolved receipt.
+
+**Enforcement.** The native payment catalog accepts only `billId` and positive `billVersion` when
+requesting collection, and only `collectionId` when reading a collection or recording its receipt.
+The disbursement catalog accepts only `instructionRecordId` and positive `instructionVersion` when
+requesting a disbursement, and only `disbursementId` when reading it or reporting provider
+confirmation.
+`PaymentConnectionConfig` fixes the Adapter origin, Adapter payment connection and ordinary service
+authorization. The maintained payment client validates strict typed responses against the exact
+bill, collection, instruction or disbursement identity before returning them. A request is durably
+keyed. Reconciliation uses only Adapter's read-only original-request endpoint with that saved key
+and body under current connection authorization. Provider-protocol failures, malformed or
+mismatched success documents, broken post-dispatch exchanges, `recovery-held`, and
+`outcome-unknown` remain uncertain. An unresolved or expired receipt proves no absence and grants
+no fresh effect.
+
+Disbursement request recovery is deliberately narrower than collection recovery. The request
+descriptor exposes Adapter's read-only original-command lookup but declares `hold-after-dispatch`,
+so an uncertain submission cannot use `retry-same` and the worker, recovery store and offline
+scenario runner refuse a later command retry. A later synthetic success is eligible only under
+`reconcile`, where it represents the original-command lookup. Only the separate
+provider-confirmation report is `same-command`, under its own durable key.
+
+The host-owned `collection` completion retains the accepted collection, bill, binding revision and
+simulation marker. Each observation performs a fresh authorized read through the same logical
+payment connection. `accepted`, `pending`, and `unknown` keep the wait pending. `confirmed` and
+`failed` settle only the collection attempt; only Adapter-verified `confirmed` state can satisfy the
+separate, idempotently keyed `payments.record-receipt/v1` call. Coordinator carries no BReg
+bill-binding or receipt grant. A timeout changes none of these facts.
+
+The host-owned `disbursement` completion likewise retains the accepted disbursement, instruction,
+binding revision and simulation marker. `accepted`, `pending`, and `unknown` remain pending;
+`provider-confirmed` and `failed` settle only the provider attempt. Only verified
+`provider-confirmed` state can satisfy the separate keyed
+`payments.record-provider-confirmation/v1` call. That confirmation does not claim end-recipient
+credit or final settlement. Coordinator carries no instruction-registry read or reporting grant.
+
+**Refused.** Workflow-selected amount, paid state, provider destination, header, receipt or BReg
+destination; another command's acceptance; another collection or disbursement observation; receipt
+or provider-confirmation recording for anything Adapter has not verified in the required terminal
+state; replay of an uncertain disbursement submission; any inference that pending, unknown, timeout
+or a missing receipt authorizes release or replacement.
+
+**Tests.** `crates/registry-payment-client/tests/http_boundary.rs`:
+`collection_request_sends_only_authoritative_bill_identity`,
+`original_request_receipt_is_a_read_with_the_exact_key_and_body`,
+`a_response_for_another_command_or_collection_is_a_protocol_failure`,
+`malformed_or_duplicate_payment_evidence_fails_visibly`,
+`typed_problem_codes_preserve_authentication_and_uncertainty_semantics`, and
+`record_receipt_requires_confirmed_exactly_correlated_evidence`.
+`crates/registry-coordinator/tests/payment_adapter.rs`:
+`collection_request_and_recovery_use_the_exact_original_command`,
+`ambiguous_mutation_response_holds_until_read_only_recovery_resolves`,
+`payment_authentication_failure_is_a_value_free_refusal`, and
+`payment_completion_settles_only_terminal_exactly_bound_state`.
+For disbursements in the same files:
+`disbursement_request_and_recovery_use_the_exact_original_command`,
+`uncertain_disbursement_submission_never_becomes_a_fresh_send`,
+`provider_confirmation_report_is_one_exact_keyed_command`, and
+`disbursement_completion_settles_only_terminal_exactly_bound_state`.
+
 ## 3. Operator obligations
 
 1. Provide idempotency for external commands: the provider must deduplicate on
@@ -699,6 +767,9 @@ unavailable durable audit.
     check this.
 12. Run workflows that must not share a Casework producer identity in separate
     deployments: one deployment is one trust domain.
+13. Give Coordinator only the Adapter payment capability. Keep the BReg bill and instruction
+    binding and reporting grants with the authorized Adapter identities. Investigate an unresolved
+    original-request receipt before any same-command recovery or cancellation decision.
 
 ## 4. Accepted residuals
 

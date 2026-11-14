@@ -1,0 +1,212 @@
+{
+  "$defs": {
+    "Direction": {
+      "enum": [
+        "p2g-collection",
+        "g2p-disbursement"
+      ],
+      "type": "string"
+    },
+    "Exchange": {
+      "additionalProperties": false,
+      "properties": {
+        "expected": true,
+        "response": {
+          "$ref": "#/$defs/ProviderResponse"
+        }
+      },
+      "required": [
+        "response",
+        "expected"
+      ],
+      "type": "object"
+    },
+    "FixtureAcceptance": {
+      "additionalProperties": false,
+      "properties": {
+        "correlationId": {
+          "type": "string"
+        },
+        "references": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "correlationId",
+        "references"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "MappedExchange": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance": {
+          "$ref": "#/$defs/FixtureAcceptance"
+        },
+        "expected": true,
+        "expectedRequest": true,
+        "response": {
+          "$ref": "#/$defs/MappedResponse"
+        }
+      },
+      "required": [
+        "expectedRequest",
+        "response",
+        "expected"
+      ],
+      "type": "object"
+    },
+    "MappedResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "bodyJson": {
+          "maxLength": 65536,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 100,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "bodyJson"
+      ],
+      "type": "object"
+    },
+    "ProviderResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "body": true,
+        "httpStatus": {
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 100,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "httpStatus",
+        "body"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/payment-provider-fixture/payment-provider-fixture.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Both the compiled legacy fixture and the reviewed pure-mapping fixture\nshare one authored envelope during the migration to generic providers.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance": {
+          "$ref": "#/$defs/Exchange"
+        },
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/adapter/payment-provider-fixture/v1alpha1",
+          "type": "string"
+        },
+        "command": true,
+        "connectorProfile": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "expectedRequest": true,
+        "kind": {
+          "const": "AdapterPaymentProviderFixture",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/Exchange"
+        },
+        "type": {
+          "const": "compiled",
+          "type": "string"
+        }
+      },
+      "required": [
+        "acceptance",
+        "apiVersion",
+        "command",
+        "connectorProfile",
+        "direction",
+        "expectedRequest",
+        "kind",
+        "status",
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/adapter/payment-provider-fixture/v1alpha1",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "intent": true,
+        "kind": {
+          "const": "AdapterPaymentProviderFixture",
+          "type": "string"
+        },
+        "settings": true,
+        "status": {
+          "$ref": "#/$defs/MappedExchange"
+        },
+        "submit": {
+          "$ref": "#/$defs/MappedExchange"
+        },
+        "type": {
+          "const": "mapped",
+          "type": "string"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "direction",
+        "intent",
+        "kind",
+        "settings",
+        "status",
+        "submit",
+        "type"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/payment-provider-fixture/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "AdapterPaymentProviderFixture",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "title": "Registry Adapter payment provider fixture",
+  "unevaluatedProperties": false
+}

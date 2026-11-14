@@ -1196,7 +1196,17 @@ async fn rehearse_schema_fingerprint_with_connection_config(
         registry,
     )
     .await
-    .map_err(schema_preparation_error)
+    .map_err(schema_rehearsal_error)
+}
+
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+fn schema_rehearsal_error(error: crate::postgres::SchemaRehearsalError) -> StartupError {
+    match error {
+        crate::postgres::SchemaRehearsalError::Connection(cause) => {
+            StartupError::DatabaseConnection(cause)
+        }
+        crate::postgres::SchemaRehearsalError::Kernel(error) => schema_preparation_error(error),
+    }
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling", feature = "postgres-test"))]
@@ -3149,6 +3159,25 @@ mod schema_preparation_error_tests {
             schema_preparation_error(PostgresKernelError::Connection),
             StartupError::DatabaseUnready
         );
+    }
+
+    #[test]
+    fn classified_connection_refusals_keep_their_value_free_cause() {
+        for cause in [
+            DatabaseConnectionCause::Unreachable,
+            DatabaseConnectionCause::Capacity,
+            DatabaseConnectionCause::Tls,
+            DatabaseConnectionCause::Authentication,
+            DatabaseConnectionCause::DatabaseMissing,
+            DatabaseConnectionCause::Timeout,
+            DatabaseConnectionCause::Configuration,
+            DatabaseConnectionCause::Secret,
+        ] {
+            assert_eq!(
+                schema_rehearsal_error(crate::postgres::SchemaRehearsalError::Connection(cause)),
+                StartupError::DatabaseConnection(cause)
+            );
+        }
     }
 
     #[test]

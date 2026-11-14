@@ -1179,12 +1179,16 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             format!("Add recovery.{step} (retry-same or reconcile), or keep only the first reply."),
                         ));
                     }
-                    if index > 0 && prior_unknown && !command.operation.can_retry_after_unknown() {
+                    if index > 0
+                        && prior_unknown
+                        && !command.operation.can_retry_after_unknown()
+                        && !matches!(recovery, Some(Recovery::Reconcile))
+                    {
                         return Err(error(
                             "scenario.recovery",
                             at,
-                            format!("step {step} calls {operation}, which holds the run after an uncertain reply, so no later reply is consumed"),
-                            "End the replies at the uncertain one, as a held run would.",
+                            format!("step {step} calls {operation}, which holds the run after an uncertain reply, so no later command reply is consumed"),
+                            "End the replies at the uncertain one, or use reconcile when the operation exposes an authoritative original-command receipt.",
                         ));
                     }
                     // Receipt observation can resolve an unknown mutation,
@@ -1435,7 +1439,81 @@ fn check_event(
             .map_err(|_| broken("its members do not form a review result".into()))?;
         result.check().map_err(|rule| broken(rule.to_string()))?;
     }
+    if matches!(completion.kind, CompletionKind::PaymentCollection {}) {
+        let status =
+            serde_json::from_value::<registry_payment_client::CollectionStatus>(value.clone())
+                .map_err(|_| {
+                    error(
+                        "scenario.wait-event",
+                        pointer.clone(),
+                        format!("the payment status stated for step {step} is malformed"),
+                        "Correct the stated payment status so the payment protocol accepts it.",
+                    )
+                })?;
+        status.validate().map_err(|_| {
+            error(
+                "scenario.wait-event",
+                pointer.clone(),
+                format!("the payment status stated for step {step} carries inconsistent evidence"),
+                "Keep providerReference only on confirmed and failureReason only on failed status.",
+            )
+        })?;
+        if !payment_completion_settles(status.state) {
+            return Err(error(
+                "scenario.wait-event",
+                pointer,
+                format!("the payment status stated for step {step} is not terminal"),
+                "Use confirmed or failed for an event that settles the wait, or state an explicit timeout.",
+            ));
+        }
+    }
+    if matches!(completion.kind, CompletionKind::PaymentDisbursement {}) {
+        let parsed =
+            serde_json::from_value::<registry_payment_client::DisbursementStatus>(value.clone());
+        let status = parsed.map_err(|_| {
+            error(
+                "scenario.wait-event",
+                pointer.clone(),
+                format!("the disbursement status stated for step {step} is malformed"),
+                "Correct the stated disbursement status so the payment protocol accepts it.",
+            )
+        })?;
+        status.validate().map_err(|_| {
+            error(
+                "scenario.wait-event",
+                pointer.clone(),
+                format!(
+                    "the disbursement status stated for step {step} carries inconsistent evidence"
+                ),
+                "Keep providerReference only on provider-confirmed and failureReason only on failed status.",
+            )
+        })?;
+        if !disbursement_completion_settles(status.state) {
+            return Err(error(
+                "scenario.wait-event",
+                pointer,
+                format!("the disbursement status stated for step {step} is not terminal"),
+                "Use provider-confirmed or failed for an event that settles the wait, or state an explicit timeout.",
+            ));
+        }
+    }
     Ok(())
+}
+
+fn payment_completion_settles(state: registry_payment_client::CollectionState) -> bool {
+    matches!(
+        state,
+        registry_payment_client::CollectionState::Confirmed
+            | registry_payment_client::CollectionState::Failed
+    )
+}
+
+fn disbursement_completion_settles(state: registry_payment_client::DisbursementState) -> bool {
+    matches!(
+        state,
+        registry_payment_client::DisbursementState::ProviderConfirmed
+            | registry_payment_client::DisbursementState::Failed
+    )
 }
 
 /// A stated event belongs to the request its wait names. A review result
@@ -1500,8 +1578,93 @@ fn correlate(
                 format!("Copy proposalId from the success reply to step {request}."),
             ))
         }
+        CompletionKind::PaymentCollection {} => {
+            let accepted = outputs.get(request).and_then(payment_acceptance);
+            let observed =
+                serde_json::from_value::<registry_payment_client::CollectionStatus>(value.clone())
+                    .ok()
+                    .map(|status| status.acceptance());
+            let (Some(accepted), Some(observed)) = (accepted, observed) else {
+                return Err(error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value"),
+                    format!("the payment status stated for step {step} cannot be matched to step {request}"),
+                    format!("Give step {request} a success reply that satisfies its payment operation output."),
+                ));
+            };
+            if observed == accepted {
+                Ok(())
+            } else {
+                Err(error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value/collectionId"),
+                    format!("the payment status stated for step {step} does not retain the exact collection binding step {request} accepted"),
+                    format!("Copy collectionId, billId, billVersion, bindingRevision and simulation from step {request}."),
+                ))
+            }
+        }
+        CompletionKind::PaymentDisbursement {} => {
+            let accepted = outputs.get(request).and_then(disbursement_acceptance);
+            let observed = serde_json::from_value::<registry_payment_client::DisbursementStatus>(
+                value.clone(),
+            )
+            .ok()
+            .map(|status| registry_payment_client::DisbursementAccepted {
+                disbursement_id: status.disbursement_id,
+                instruction_record_id: status.instruction_record_id,
+                instruction_id: status.instruction_id,
+                instruction_version: status.instruction_version,
+                binding_revision: status.binding_revision,
+                simulation: status.simulation,
+            });
+            let (Some(accepted), Some(observed)) = (accepted, observed) else {
+                return Err(error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value"),
+                    format!("the disbursement status stated for step {step} cannot be matched to step {request}"),
+                    format!("Give step {request} a success reply that satisfies its payment operation output."),
+                ));
+            };
+            if observed == accepted {
+                Ok(())
+            } else {
+                Err(error(
+                    "scenario.wait-event",
+                    format!("/waits/{step}/value/disbursementId"),
+                    format!("the disbursement status stated for step {step} does not retain the exact instruction binding step {request} accepted"),
+                    format!("Copy disbursementId, instructionRecordId, instructionId, instructionVersion, bindingRevision and simulation from step {request}."),
+                ))
+            }
+        }
         CompletionKind::BoundedPoll { .. } => Ok(()),
     }
+}
+
+fn payment_acceptance(value: &Value) -> Option<registry_payment_client::CollectionAccepted> {
+    serde_json::from_value::<registry_payment_client::CollectionAccepted>(value.clone())
+        .ok()
+        .or_else(|| {
+            serde_json::from_value::<registry_payment_client::CollectionStatus>(value.clone())
+                .ok()
+                .map(|status| status.acceptance())
+        })
+}
+
+fn disbursement_acceptance(value: &Value) -> Option<registry_payment_client::DisbursementAccepted> {
+    serde_json::from_value::<registry_payment_client::DisbursementAccepted>(value.clone())
+        .ok()
+        .or_else(|| {
+            serde_json::from_value::<registry_payment_client::DisbursementStatus>(value.clone())
+                .ok()
+                .map(|status| registry_payment_client::DisbursementAccepted {
+                    disbursement_id: status.disbursement_id,
+                    instruction_record_id: status.instruction_record_id,
+                    instruction_id: status.instruction_id,
+                    instruction_version: status.instruction_version,
+                    binding_revision: status.binding_revision,
+                    simulation: status.simulation,
+                })
+        })
 }
 
 /// The differences one case lists before it counts the rest.
@@ -1975,4 +2138,43 @@ fn error(
     CoordinatorError::new(code, message)
         .at(SCENARIOS_FILE, pointer)
         .suggest(action)
+}
+
+#[cfg(test)]
+mod payment_tests {
+    use super::*;
+    use registry_payment_client::CollectionState;
+
+    #[test]
+    fn only_terminal_payment_states_settle_a_scenario_wait() {
+        for state in [
+            CollectionState::Accepted,
+            CollectionState::Pending,
+            CollectionState::Unknown,
+        ] {
+            assert!(!payment_completion_settles(state));
+        }
+        for state in [CollectionState::Confirmed, CollectionState::Failed] {
+            assert!(payment_completion_settles(state));
+        }
+    }
+
+    #[test]
+    fn only_terminal_disbursement_states_settle_a_scenario_wait() {
+        use registry_payment_client::DisbursementState;
+
+        for state in [
+            DisbursementState::Accepted,
+            DisbursementState::Pending,
+            DisbursementState::Unknown,
+        ] {
+            assert!(!disbursement_completion_settles(state));
+        }
+        for state in [
+            DisbursementState::ProviderConfirmed,
+            DisbursementState::Failed,
+        ] {
+            assert!(disbursement_completion_settles(state));
+        }
+    }
 }

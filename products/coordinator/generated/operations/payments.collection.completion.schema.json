@@ -1,0 +1,104 @@
+{
+  "$defs": {
+    "CollectionState": {
+      "description": "Provider state. Unknown is unresolved and never authorizes a replacement.",
+      "enum": [
+        "accepted",
+        "pending",
+        "confirmed",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "Money": {
+      "additionalProperties": false,
+      "description": "An exact positive decimal amount. Scale belongs to the configured currency\npolicy; wire amounts are strings so no binary floating-point rounding occurs.",
+      "properties": {
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "scale": {
+          "maximum": 6,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "value": {
+          "maxLength": 24,
+          "minLength": 1,
+          "not": {
+            "pattern": "^0(\\.0{1,6})?$"
+          },
+          "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,6})?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "currency",
+        "scale"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Verified observation, retaining the attempt's original binding and provenance.",
+  "properties": {
+    "billId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "billVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "bindingRevision": {
+      "type": "string"
+    },
+    "collectionId": {
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      },
+      "type": "string"
+    },
+    "failureReason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "money": {
+      "$ref": "#/$defs/Money"
+    },
+    "providerReference": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "simulation": {
+      "type": "boolean"
+    },
+    "state": {
+      "$ref": "#/$defs/CollectionState"
+    }
+  },
+  "required": [
+    "collectionId",
+    "billId",
+    "billVersion",
+    "bindingRevision",
+    "simulation",
+    "state",
+    "money"
+  ],
+  "title": "Payment collection completion",
+  "type": "object"
+}

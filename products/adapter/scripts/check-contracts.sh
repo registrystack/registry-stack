@@ -10,6 +10,7 @@ cd "$repo_root"
 source "$repo_root/products/adapter/scripts/contract-lane-cache.sh"
 python3 -m unittest discover -s products/adapter/scripts -p 'test_contract_lane_cache.py'
 python3 -m unittest discover -s products/adapter/scripts -p 'test_effective_contract_example.py'
+node --test "$repo_root/products/adapter/scripts/payment-native-support.test.mjs"
 node --test "$repo_root"/products/adapter/examples/govstack-wg-demo/test_*.mjs
 
 # The dependency-direction gate runs first, before any cargo build: its
@@ -27,8 +28,8 @@ python3 -m unittest discover -s products/adapter/scripts -p 'test_test_connector
 # the caller's PATH.
 PATH="$HOME/.cargo/bin:$PATH" cargo fmt --all --check
 clear_completed_adapter_lane
-PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl --all-targets -- -D warnings
-PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl --no-fail-fast
+PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl -p registry-payment-protocol -p registry-payment-client -p registry-payment-simulator-connector -p registry-payment-mifos-connector --all-targets -- -D warnings
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl -p registry-payment-protocol -p registry-payment-client -p registry-payment-simulator-connector -p registry-payment-mifos-connector --no-fail-fast
 # The BReg connector is default-off. Compile every connector target with its
 # feature and execute its scripted suites here; the real-runtime scenarios
 # remain isolated under test-connector-native.py because they provision BReg

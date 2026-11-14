@@ -1,0 +1,13 @@
+{
+  "sourceImage" : "docker.io/openmf/ph-ee-bulk-processor@sha256:6d58a33751d458fc96b7fa6bb3388456b17b81ad9d61cadd057a825751472c34",
+  "tenantHeader" : "Platform-TenantId",
+  "tenant" : "pilot",
+  "body" : "{\n  \"batch_id\": \"batch-1\",\n  \"request_id\": \"batch-request-1\",\n  \"status\": \"queued\"\n}",
+  "bodyOnlySha3Hex" : "964c27ce0721f3fb952ff0739220d341f3320250b1023a5a4ce0543217e0ecc7",
+  "uppercaseSha3Hex" : "d3605a0d01176cc43c7bd938d5e9da19e323dacb403236981ae622343080c805",
+  "publicKeySpkiSha256" : "4d30ec6f6876a5564261cac5e3cd709afd5388d21540734a37b1a7795935c714",
+  "publicKeySpkiBase64" : "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA+hpMAHSvw6DuZzNArINktfIonFz2FoRpxRiM8FxAGjrFdxbggmRG4qxFfc0noOF6C09u+JKQ6VkM3HGdeJ6BtBM9BMt+7yKM/0P6yPpRSwy3vopf0hKIKVU+VKi6HUIQEM5bmPkPYXvWXRmS01By+gWw9hTrOUcAf2+mzhTcz8u9bfODeEzug4ymcsQRFcaor3hoUvjUkjpg47cd3RIw1/Co9bLPVcwBzce1tnCwWpIo/KfCWdL0soBD8JsdF228bUyXUirQww5pLIG3bBUFRvhhJp5B/43+Ad8cM3iCQ+adDrUNNrTx0sFX6s4b3ihn3/5tILRWTdbiNvMHBZnh2QIDAQAB",
+  "signatureBase64" : "5n2h3Yw0RXoKadpSCxA4zaF8XqYQE7W92EpePGtgShV6OM4TrvVGXseBCyOKL4HlaCE///Z+yIqkzypp/7OMFyRcJgzhMi4WkvHuPD7+iAYj46s0IUD8W2Y5QlqYNmLQeN1Kex6qwzgpIVad92M2NWDqxOzY+AS7Wq/NB2aoMysE9S3R2Tvyk/zsqHa9fh+Vt0meSqNBMDv5zLY7BUWnHxz+ddQx+KbKOF+LR/I34s0Q8dV5phMOL2I4J2YoD7uBYeMcyEc5MvoRtCxru92y2ukYdCtqiPUKPFpZWxtO+qWwGg0EAxRguWavY7afBOShiMreUwlvhxdOknkqOG4v2A==",
+  "rs256SignatureBase64" : "3Z/KPiTarJY2gKdIviEgXj/GaPq+Fm9EYNQidAmivRkZeAE+NJLJ9ePGoLD1R1kl2Qpad6jnpP/2oBcO3qucYNVXNfSKCzRhHGHtHnArQQNEopqKKKzyRv45Mf85HXujT+oi8w9kOL5sjTYqAwW9xq3DymHyI1yQgCRVZORX8/tBa6W9BSbtWFmyVQ4Vu243zYF/7mEtEowYDUKIH0XMYpl6ctz1gW1Frgi0OhIQVfDbnnfbQfZGbe35CntNbzBs6gmjHPjSbdAEL0Vzb472yGaSeLGv1MzKXoS0MgVkcW9U8XteDysdM91yYzgWj7HkM/00GQbm/xDZBLPgeOxl+g==",
+  "changedBody" : "{\n  \"batch_id\": \"batch-1\",\n  \"request_id\": \"batch-request-1\",\n  \"status\": \"queued\"\n}\n"
+}

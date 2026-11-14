@@ -2109,6 +2109,51 @@ fn test_candidate_command(
     ])
 }
 
+fn test_candidate_command_with_unreachable_database(
+    project: &TestProject,
+    runtime_config: &Path,
+    credentials: &Path,
+    output: &Path,
+) -> Output {
+    bregctl_schema_test_with_unreachable_database(&[
+        "--format",
+        "json",
+        "test",
+        path(project.path()),
+        "--runtime-config",
+        path(runtime_config),
+        "--credentials",
+        path(credentials),
+        "--output",
+        path(output),
+    ])
+}
+
+fn test_candidate_command_with_refused_database_secrets(
+    project: &TestProject,
+    runtime_config: &Path,
+    credentials: &Path,
+    output: &Path,
+) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove(VERIFY_RUNTIME_DATABASE_SECRET_CANARY)
+        .env_remove(VERIFY_MIGRATION_DATABASE_SECRET_CANARY)
+        .args([
+            "--format",
+            "json",
+            "test",
+            path(project.path()),
+            "--runtime-config",
+            path(runtime_config),
+            "--credentials",
+            path(credentials),
+            "--output",
+            path(output),
+        ])
+        .output()
+        .expect("bregctl starts")
+}
+
 fn json_stdout(output: &Output) -> Value {
     let report: Value = serde_json::from_slice(&output.stdout).expect("command stdout is JSON");
     let status = match output.status.code().expect("command exited normally") {
@@ -7442,10 +7487,11 @@ fn test_fingerprint_only_needs_only_the_runtime_configuration() {
     );
 
     // Without credentials or an output, the measurement still reaches the
-    // configured database; the fixture names one that is unavailable.
+    // configured database; both connection secrets resolve to an address
+    // where nothing listens.
     let candidate = packaging_project();
     let candidate_runtime = test_runtime_config(&candidate);
-    let measured = bregctl(&[
+    let measured = bregctl_schema_test_with_unreachable_database(&[
         "--format",
         "json",
         "test",
@@ -7459,7 +7505,7 @@ fn test_fingerprint_only_needs_only_the_runtime_configuration() {
     assert_eq!(report["command"], "test");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "test.database.unavailable"
+        "test.database.unreachable"
     );
     assert!(!candidate.path().join("schema-test-receipt.json").exists());
 }
@@ -7792,14 +7838,15 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
     )
     .expect("credential fixture writes");
     let output = project.path().join("schema-test-receipt.json");
-    let result = test_candidate_command(&project, &runtime, &credentials, &output);
+    let result =
+        test_candidate_command_with_unreachable_database(&project, &runtime, &credentials, &output);
 
     assert_schema_test_refusal(
         result,
         3,
-        "test.database.unavailable",
+        "test.database.unreachable",
         "schema-test-database",
-        "recreate-disposable-database",
+        "prepare-schema-test-database",
         &output,
         &[
             path(project.path()),
@@ -7807,6 +7854,8 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
             path(&credentials),
             "aaa.bbb.ccc",
             "secret:file/operator-token",
+            "postgresql://registry_runtime@127.0.0.1:1/breg",
+            "postgresql://registry_migration@127.0.0.1:1/breg",
             PACKAGE_VALUE_CANARY,
         ],
     );
@@ -7821,6 +7870,45 @@ fn test_valid_credentials_reach_database_and_never_publish_partial_receipts() {
                 .to_string_lossy()
                 .starts_with(".bregctl-test-receipt-")),
         "temporary receipt files are cleaned up"
+    );
+}
+
+#[test]
+fn test_database_secret_refusal_is_value_free_and_never_publishes_a_receipt() {
+    let project = packaging_project();
+    let runtime = test_runtime_config(&project);
+    write_test_secret(&project, "operator-token", b"aaa.bbb.ccc");
+    let credentials = project.path().join("valid-credentials.yaml");
+    fs::write(
+        &credentials,
+        credential_source("type: bearer\n      tokenRef: secret:file/operator-token\n"),
+    )
+    .expect("credential fixture writes");
+    let output = project.path().join("schema-test-receipt.json");
+    let result = test_candidate_command_with_refused_database_secrets(
+        &project,
+        &runtime,
+        &credentials,
+        &output,
+    );
+
+    assert_schema_test_refusal(
+        result,
+        1,
+        "test.database.secret-refused",
+        "schema-test-database",
+        "correct-runtime-configuration",
+        &output,
+        &[
+            path(project.path()),
+            path(&runtime),
+            path(&credentials),
+            "aaa.bbb.ccc",
+            "secret:file/operator-token",
+            PACKAGE_VALUE_CANARY,
+            VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+        ],
     );
 }
 
@@ -8400,10 +8488,28 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
 }
 
 /// Runs bregctl with the fixture's migration credential set to a database
-/// URL nothing listens on, so a refusal that reaches database contact reports
-/// the database as unavailable.
+/// URL nothing listens on, so a refusal that reaches migration database
+/// contact reports the connection as unavailable.
 fn bregctl_with_unreachable_database(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env(
+            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+            "postgresql://registry_migration@127.0.0.1:1/breg",
+        )
+        .args(arguments)
+        .output()
+        .expect("bregctl starts")
+}
+
+/// Schema-test opens both configured database roles. Supply both connection
+/// secrets with addresses where nothing listens so the specific connection
+/// refusal, rather than secret resolution, is exercised.
+fn bregctl_schema_test_with_unreachable_database(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env(
+            VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+            "postgresql://registry_runtime@127.0.0.1:1/breg",
+        )
         .env(
             VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
             "postgresql://registry_migration@127.0.0.1:1/breg",
@@ -10082,6 +10188,14 @@ fn assert_schema_test_refusal(
     }
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(report["command"], "test");
+    assert_eq!(
+        report["status"],
+        match expected_exit {
+            1 => "domain-refusal",
+            3 => "operational-failure",
+            exit => panic!("unsupported refusal exit in test helper: {exit}"),
+        }
+    );
     assert_eq!(report["diagnostics"][0]["code"], expected_code);
     assert_tool_diagnostic(&report["diagnostics"][0], artifact, action);
 }

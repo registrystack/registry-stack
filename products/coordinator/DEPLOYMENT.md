@@ -379,7 +379,38 @@ shows as BReg's refusal of that step.
 
 Use one `connections` map for all logical connections. Each entry selects its complete
 contract with `type`: `breg`, `casework-review-producer`, `messaging`, `scheduling`,
-`external-http`, or `evaluation`. Declare at most sixteen names.
+`payments`, `external-http`, or `evaluation`. Declare at most sixteen names.
+
+For the native payment Operations, use `type: payments`. `baseUrl` names Adapter and
+`paymentConnection` selects one Adapter-owned payment connection. This selection is part of the
+binding identity for an admitted run. The workflow cannot replace either value. Use ordinary
+service authorization without `taskAuthority`; Adapter authorizes the current credential on each
+call. `resultCheckSeconds`, from 60 to 86,400 and 900 by default, spaces authoritative collection
+or disbursement reads while a run waits and is not part of the binding identity.
+
+```yaml
+connections:
+  licence-fees:
+    type: payments
+    baseUrl: https://adapter.example.org
+    paymentConnection: licence-fees
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-payments
+      signingKeyRef: secret:file/payments-jwk
+      resource: https://adapter.example.org
+      scopes: [payments:collect]
+    resultCheckSeconds: 900
+```
+
+Grant Coordinator only the Adapter payment capability. Any BReg grant that binds a bill or records
+a receipt, and any instruction-registry grant that reads an instruction or reports provider
+confirmation, belongs to Adapter's configured reporter identity. An unresolved original-request
+lookup requires inspection; it never licenses a fresh collection or disbursement attempt.
+`payments.request-disbursement/v1` cannot use `retry-same` after uncertainty. Reconcile only through
+its read-only original-command lookup. The separate
+`payments.record-provider-confirmation/v1` report may use `retry-same` because Adapter owns that
+idempotently keyed reporting command.
 
 For `external.get/v1`, use `type: external-http` with `baseUrl`, exact `paths`, optional
 `queryParameters`, optional ordinary service `authorization`, and the required `responseSchema`
@@ -398,17 +429,17 @@ need a different credential or scope than reads.
 
 ```yaml
 connections:
-  payments:
+  legacy-provider:
     type: external-http
-    baseUrl: https://payments.example.org/v1/
-    paths: [bills/status]
-    commandPath: bills
+    baseUrl: https://legacy.example.org/api/
+    paths: [requests/status]
+    commandPath: requests
     authorization:
       tokenEndpoint: https://issuer.example.org/oauth/token
-      clientId: coordinator-payments
-      signingKeyRef: secret:file/payments-jwk
-      resource: https://payments.example.org
-      scopes: [bills:create]
+      clientId: coordinator-legacy-provider
+      signingKeyRef: secret:file/legacy-provider-jwk
+      resource: https://legacy.example.org
+      scopes: [requests:create]
     responseSchema:
       type: object
       required: [status, body]

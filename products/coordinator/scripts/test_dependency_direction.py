@@ -35,6 +35,9 @@ NAMES = {
     "messaging-client": "registry-messaging-client",
     "messaging-client-node": "registry-messaging-client-node",
     "messaging-core": "registry-messaging-core",
+    "payment-client": "registry-payment-client",
+    "payment-protocol": "registry-payment-protocol",
+    "other-protocol": "registry-other-protocol",
     "scheduling": "registry-scheduling",
     "scheduling-client": "registry-scheduling-client",
     "scheduling-core": "registry-scheduling-core",
@@ -52,6 +55,7 @@ INTENDED = {
         "casework-client",
         "messaging-client",
         "messaging-core",
+        "payment-client",
         "scheduling-client",
         "scheduling-core",
         "platform",
@@ -77,6 +81,9 @@ INTENDED = {
     "messaging-client": ["messaging-core", "platform"],
     "messaging-client-node": ["messaging-client"],
     "messaging-core": ["serde"],
+    "payment-client": ["payment-protocol", "platform"],
+    "payment-protocol": ["serde"],
+    "other-protocol": ["serde"],
     "scheduling": ["scheduling-core", "platform"],
     "scheduling-client": ["scheduling-core", "platform"],
     "scheduling-core": ["serde"],
@@ -132,7 +139,8 @@ class RuntimeTests(unittest.TestCase):
             with self.subTest(product=product):
                 self.assertIn(
                     f"registry-coordinator reaches package(s) outside product clients, "
-                    f"product cores, registry-record and registry-platform-*: "
+                    f"named client support, product cores, registry-record and "
+                    f"registry-platform-*: "
                     f"{NAMES[product]}",
                     failures(runtime=[*INTENDED["runtime"], product]),
                 )
@@ -161,7 +169,8 @@ class RuntimeTests(unittest.TestCase):
     def test_a_dev_dependency_of_the_runtime_counts(self):
         self.assertIn(
             "registry-coordinator reaches package(s) outside product clients, "
-            "product cores, registry-record and registry-platform-*: registry-messaging",
+            "named client support, product cores, registry-record and "
+            "registry-platform-*: registry-messaging",
             failures(runtime=[*INTENDED["runtime"], ("messaging", "dev")]),
         )
 
@@ -185,6 +194,53 @@ class RuntimeTests(unittest.TestCase):
             {"registry-review-protocol"},
         )
         self.assertEqual(MODULE.violations(metadata()), [])
+
+    def test_payment_protocol_is_admitted_only_through_its_client(self):
+        self.assertEqual(
+            MODULE.CLIENT_ONLY_SUPPORT,
+            {"registry-payment-protocol": "registry-payment-client"},
+        )
+        self.assertEqual(MODULE.violations(metadata()), [])
+        for kind in (None, "dev", "build"):
+            with self.subTest(kind=kind):
+                self.assertIn(
+                    "registry-coordinator depends on registry-payment-protocol directly; "
+                    "reach it through registry-payment-client",
+                    failures(
+                        runtime=[
+                            *INTENDED["runtime"],
+                            ("payment-protocol", kind),
+                        ]
+                    ),
+                )
+
+    def test_payment_protocol_through_another_client_is_refused(self):
+        without_payment_client = [
+            dependency
+            for dependency in INTENDED["runtime"]
+            if dependency != "payment-client"
+        ]
+        for runtime in (without_payment_client, INTENDED["runtime"]):
+            with self.subTest(payment_client_reached="payment-client" in runtime):
+                self.assertIn(
+                    "registry-coordinator reaches registry-payment-protocol by a path "
+                    "outside registry-payment-client; reach it only through "
+                    "registry-payment-client",
+                    failures(
+                        runtime=runtime,
+                        scheduling_client=[
+                            "scheduling-core",
+                            "platform",
+                            "payment-protocol",
+                        ],
+                    ),
+                )
+
+    def test_an_unlisted_protocol_is_refused(self):
+        self.assertIn(
+            "registry-other-protocol",
+            failures(runtime=[*INTENDED["runtime"], "other-protocol"]),
+        )
 
     def test_a_direct_casework_core_dependency_is_refused(self):
         for kind in (None, "dev", "build"):

@@ -1,0 +1,309 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: exact-fee-before-issuance
+    steps:
+      - id: create-authoritative-bill
+        action: create-fee-bill
+        accessProfile: service-biller
+        claims: {principal: synthetic-issuance-service, scopes: [registry:fee-bill:create], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request:
+          type: invoke
+          idempotencyKey: create-authoritative-bill
+          input: {institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, payerId: payer-001, payerFinancialAddress: "+99123456789", billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, simulation: true}
+        expect: {outcome: success, status: 200}
+        captureResults: {bill: bill}
+
+      - id: capture-bill-condition-after-create
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: bill-condition-after-create
+
+      - id: capture-issue-condition-after-create
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: issue-condition-after-create
+
+      - id: fresh-workflow-cannot-create-another-bill
+        action: create-fee-bill
+        accessProfile: service-biller
+        claims: {principal: synthetic-issuance-service, scopes: [registry:fee-bill:create], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request:
+          type: invoke
+          idempotencyKey: duplicate-service-request-bill
+          input: {institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, payerId: payer-001, payerFinancialAddress: "+99123456789", billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, simulation: true}
+        expect: {outcome: refusal, status: 409, problemCode: mutation.conflict}
+
+      - id: issue-before-payment-is-refused
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request:
+          type: invoke
+          idempotencyKey: issue-before-payment
+          preconditions: {billId: {conditionCapture: issue-condition-after-create}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, requestId: request-001, paymentReceiptId: synthetic-receipt-001, issuanceId: 00000000-0000-4000-8000-000000000201}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: missing-scope-cannot-bind-attempt
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-unauthorized-adapter, scopes: [], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: unauthorized-bind
+          preconditions: {billId: {conditionCapture: bill-condition-after-create}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+
+      - id: changed-version-cannot-bind
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-version-bind
+          preconditions: {billId: {conditionCapture: bill-condition-after-create}}
+          input: {billId: {recordCapture: bill}, billVersion: 2, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: changed-digest-cannot-bind
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-digest-bind
+          preconditions: {billId: {conditionCapture: bill-condition-after-create}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: bind-exact-payment-attempt
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: bind-exact-payment-attempt
+          preconditions: {billId: {conditionCapture: bill-condition-after-create}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1}
+        expect: {outcome: success, status: 200}
+
+      - id: capture-bill-condition-after-bind
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: bill-condition-after-bind
+
+      - id: recover-exact-binding
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: bind-exact-payment-attempt
+          preconditions: {billId: {conditionCapture: bill-condition-after-create}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1}
+        expect: {outcome: success, status: 200}
+
+      - id: capture-bind-condition-after-bind
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: bind-condition-after-bind
+
+      - id: capture-issue-condition-after-bind
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: issue-condition-after-bind
+
+      - id: pending-or-unknown-cannot-bind-second-attempt
+        action: bind-payment-attempt
+        accessProfile: payment-adapter-binder
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-attempt:bind], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: second-payment-attempt
+          preconditions: {billId: {conditionCapture: bind-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000002, providerBindingRevision: synthetic-binding-v1}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: pending-or-unknown-cannot-issue
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request:
+          type: invoke
+          idempotencyKey: issue-while-attempt-bound
+          preconditions: {billId: {conditionCapture: issue-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, requestId: request-001, paymentReceiptId: synthetic-receipt-001, issuanceId: 00000000-0000-4000-8000-000000000201}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: missing-scope-cannot-report-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-unauthorized-adapter, scopes: [], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: unauthorized-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+
+      - id: changed-bill-fact-cannot-report-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-bill-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-b, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: changed-amount-cannot-report-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-amount-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2501, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: changed-attempt-cannot-report-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-attempt-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000002, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: changed-provider-binding-cannot-report-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-provider-binding-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: other-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: simulation-mode-cannot-change-at-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: changed-simulation-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: false, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: record-exact-synthetic-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: record-exact-synthetic-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: success, status: 200}
+
+      - id: recover-exact-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: record-exact-synthetic-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-bind}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+        expect: {outcome: success, status: 200}
+
+      - id: read-exact-receipt-after-lost-acknowledgement
+        recordType: service-fee-bill
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: get, recordCapture: bill}
+        expect:
+          outcome: success
+          status: 200
+          fields: {billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, payerId: payer-001, payerFinancialAddress: "+99123456789", tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentState: paid, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-001, providerReference: SYNTHETIC-PAID-001, receiptDigest: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+
+      - id: capture-bill-condition-after-receipt
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: bill-condition-after-receipt
+
+      - id: capture-receipt-condition-after-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: receipt-condition-after-receipt
+
+      - id: new-request-identity-cannot-replace-receipt
+        action: record-payment-receipt
+        accessProfile: payment-adapter-reporter
+        claims: {principal: synthetic-payment-adapter, scopes: [registry:payment-receipt:report], purpose: payment-processing, actorKind: service, requesterClient: payment-adapter}
+        request:
+          type: invoke
+          idempotencyKey: replacement-receipt
+          preconditions: {billId: {conditionCapture: receipt-condition-after-receipt}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, billDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, institutionId: institution-a, serviceId: licence-issuance, requestId: request-001, tariffId: synthetic-licence-fee, tariffVersion: 1, tariffDigest: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, payerId: payer-001, payerFinancialAddress: "+99123456789", amountMinor: 2500, currency: USD, currencyScale: 2, simulation: true, paymentAttemptId: 00000000-0000-4000-8000-000000000001, providerBindingRevision: synthetic-binding-v1, paymentReceiptId: synthetic-receipt-002, providerReference: SYNTHETIC-PAID-002, receiptDigest: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}
+
+      - id: issue-after-exact-receipt
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request:
+          type: invoke
+          idempotencyKey: issue-after-exact-receipt
+          preconditions: {billId: {conditionCapture: bill-condition-after-receipt}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, requestId: request-001, paymentReceiptId: synthetic-receipt-001, issuanceId: 00000000-0000-4000-8000-000000000201}
+        expect: {outcome: success, status: 200}
+
+      - id: capture-bill-condition-after-issuance
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request: {type: target-conditions, input: {billId: {recordCapture: bill}}}
+        expect: {outcome: success, status: 200}
+        capture: bill-condition-after-issuance
+
+      - id: issuance-is-single-use
+        action: issue-paid-service
+        accessProfile: service-issuer
+        claims: {principal: synthetic-issuance-service, scopes: [registry:paid-service:issue], purpose: service-issuance, actorKind: service, requesterClient: issuance-service}
+        request:
+          type: invoke
+          idempotencyKey: second-issuance
+          preconditions: {billId: {conditionCapture: bill-condition-after-issuance}}
+          input: {billId: {recordCapture: bill}, billVersion: 1, requestId: request-001, paymentReceiptId: synthetic-receipt-001, issuanceId: 00000000-0000-4000-8000-000000000202}
+        expect: {outcome: refusal, status: 412, problemCode: action.guard_failed}

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The generated JSON Schemas of the ten Adapter formats, derived from the
+//! The generated JSON Schemas of the Adapter formats, derived from the
 //! source-neutral model in `registry-adapter-core` with `schemars` or from
-//! the runtime's pure effective-contract projection, and
+//! the runtime's pure effective-contract projection and payment connection model, and
 //! written to `products/adapter/schemas/` (`products/adapter/CONCEPT.md`
 //! sections 6 and 12). The committed files are generated outputs: never
 //! hand-edited, held to their sources by `adapterctl schemas --check`.
@@ -77,6 +77,36 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
         AdapterProject, AdapterRuntimeConfig,
     };
     Ok(vec![
+        Entry {
+            file: "payment-provider-fixture.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(
+                crate::payment_fixtures::FixtureDocument
+            ))?,
+            title: "Registry Adapter payment provider fixture",
+            schema_id: crate::payment_fixtures::SCHEMA_ID,
+            api_version: crate::payment_fixtures::VERSION,
+            kind: crate::payment_fixtures::KIND,
+        },
+        Entry {
+            file: "payment-provider-pack.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(
+                registry_adapter::payments::pack::PaymentProviderPack
+            ))?,
+            title: "Registry Adapter payment provider pack",
+            schema_id: registry_adapter::payments::pack::SCHEMA_ID,
+            api_version: registry_adapter::payments::pack::API_VERSION,
+            kind: registry_adapter::payments::pack::KIND,
+        },
+        Entry {
+            file: "payments.v1alpha1.schema.json",
+            derived: serde_json::to_value(schemars::schema_for!(
+                registry_adapter::payments::config::PaymentsConfig
+            ))?,
+            title: "Registry Adapter payment connections",
+            schema_id: registry_adapter::payments::config::SCHEMA_ID,
+            api_version: registry_adapter::payments::config::API_VERSION,
+            kind: registry_adapter::payments::config::KIND,
+        },
         Entry {
             file: "job.v1alpha1.schema.json",
             derived: serde_json::to_value(schemars::schema_for!(AdapterJob))?,
@@ -154,7 +184,7 @@ fn entries() -> Result<Vec<Entry>, serde_json::Error> {
     ])
 }
 
-/// The ten generated schema documents, keyed by file name. Deterministic:
+/// The generated schema documents, keyed by file name. Deterministic:
 /// the same workspace state renders the same bytes.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let shared: Value =
@@ -171,8 +201,25 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
         // so drop the `null` schemars adds to optional members; the platform
         // shared blocks keep the exact definitions the platform publishes.
         refuse_null_outside_shared_blocks(&mut derived, &shared);
-        set_const(&mut derived, "apiVersion", entry.api_version);
-        set_const(&mut derived, "kind", entry.kind);
+        if entry.file == "payment-provider-fixture.v1alpha1.schema.json" {
+            set_const(&mut derived, "apiVersion", entry.api_version);
+            set_const(&mut derived, "kind", entry.kind);
+            derived
+                .as_object_mut()
+                .expect("the fixture schema is an object")
+                .insert("unevaluatedProperties".to_owned(), Value::Bool(false));
+            for variant in derived
+                .get_mut("oneOf")
+                .and_then(Value::as_array_mut)
+                .expect("the fixture schema is a tagged union")
+            {
+                set_const(variant, "apiVersion", entry.api_version);
+                set_const(variant, "kind", entry.kind);
+            }
+        } else {
+            set_const(&mut derived, "apiVersion", entry.api_version);
+            set_const(&mut derived, "kind", entry.kind);
+        }
         apply_manual_wire_forms(&mut derived, entry.file);
         let mut object = match derived {
             Value::Object(object) => object,
@@ -583,7 +630,7 @@ mod tests {
     fn documents_are_deterministic_and_versioned() {
         let first = documents().unwrap();
         assert_eq!(documents().unwrap(), first);
-        assert_eq!(first.len(), 10);
+        assert_eq!(first.len(), 13);
         let effective: Value =
             serde_json::from_str(&first["effective-contract.v1alpha1.schema.json"])
                 .expect("the effective contract schema is JSON");
@@ -666,6 +713,129 @@ mod tests {
         std::fs::write(&profile, edited).unwrap();
         let drifted = compare(&output, &documents().unwrap()).unwrap();
         assert_eq!(drifted, vec!["profile.v1alpha1.schema.json"]);
+    }
+
+    #[test]
+    fn payment_provider_schemas_accept_mapped_pack_and_raw_response_fixture() {
+        let generated = documents().unwrap();
+        let pack: Value =
+            serde_json::from_str(&generated["payment-provider-pack.v1alpha1.schema.json"]).unwrap();
+        let pack_validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&pack)
+            .unwrap();
+        let mut mapped_pack = serde_json::json!({
+            "apiVersion": registry_adapter::payments::pack::API_VERSION,
+            "kind": registry_adapter::payments::pack::KIND,
+            "id": "sample-payments",
+            "version": "1",
+            "connector": "adapter-payment-http/v1",
+            "capabilities": ["collection"],
+            "mapping": {
+                "collection": {
+                    "auth": "bearer",
+                    "submit": {
+                        "path": "/send",
+                        "request": {"file": "scripts/payment.rhai", "entrypoint": "send_request"},
+                        "response": {"file": "scripts/payment.rhai", "entrypoint": "send_response"}
+                    }
+                },
+                "scripts": [{"path": "scripts/payment.rhai", "digest": format!("sha256:{}", "a".repeat(64))}]
+            }
+        });
+        assert!(pack_validator.validate(&mapped_pack).is_ok());
+        mapped_pack["mapping"]["collection"]["auth"] = serde_json::json!("unknown");
+        assert!(pack_validator.validate(&mapped_pack).is_err());
+
+        let fixture: Value =
+            serde_json::from_str(&generated["payment-provider-fixture.v1alpha1.schema.json"])
+                .unwrap();
+        let fixture_validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&fixture)
+            .unwrap();
+        let mut mapped_fixture = serde_json::json!({
+            "apiVersion": crate::payment_fixtures::VERSION,
+            "kind": crate::payment_fixtures::KIND,
+            "type": "mapped",
+            "direction": "p2g-collection",
+            "intent": {},
+            "settings": {},
+            "submit": {
+                "expectedRequest": {},
+                "response": {"status": 200, "bodyJson": "{\"id\":1.00}"},
+                "expected": {}
+            },
+            "status": {
+                "acceptance": {"correlationId": "payment-1", "references": {"transaction": "tx-1"}},
+                "expectedRequest": {},
+                "response": {"status": 200, "bodyJson": "{\"amount\":25.50}"},
+                "expected": {}
+            }
+        });
+        assert!(fixture_validator.validate(&mapped_fixture).is_ok());
+        let variants = fixture["oneOf"].as_array().unwrap();
+        assert_eq!(variants.len(), 2);
+        assert_eq!(
+            fixture["properties"]["apiVersion"]["const"],
+            crate::payment_fixtures::VERSION
+        );
+        assert_eq!(
+            fixture["properties"]["kind"]["const"],
+            crate::payment_fixtures::KIND
+        );
+        assert_eq!(fixture["unevaluatedProperties"], false);
+        for variant in variants {
+            assert_eq!(variant["additionalProperties"], false);
+            assert!(variant["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|member| member == "type"));
+            assert_eq!(
+                variant["properties"]["apiVersion"]["const"],
+                crate::payment_fixtures::VERSION
+            );
+            assert_eq!(
+                variant["properties"]["kind"]["const"],
+                crate::payment_fixtures::KIND
+            );
+        }
+        let mut compiled_fixture = serde_json::json!({
+            "apiVersion": crate::payment_fixtures::VERSION,
+            "kind": crate::payment_fixtures::KIND,
+            "type": "compiled",
+            "connectorProfile": "mifos-ph-ee-legacy/channel-v1.12.2+bulk-v1.12.1+operations-v1.17.1",
+            "direction": "p2g-collection",
+            "command": {},
+            "expectedRequest": {},
+            "acceptance": {
+                "response": {"httpStatus": 200, "body": {}},
+                "expected": {}
+            },
+            "status": {
+                "response": {"httpStatus": 200, "body": {}},
+                "expected": {}
+            }
+        });
+        assert!(fixture_validator.validate(&compiled_fixture).is_ok());
+        compiled_fixture["intent"] = serde_json::json!({});
+        assert!(fixture_validator.validate(&compiled_fixture).is_err());
+        let mut missing_type = mapped_fixture.clone();
+        missing_type.as_object_mut().unwrap().remove("type");
+        assert!(fixture_validator.validate(&missing_type).is_err());
+        mapped_fixture["connectorProfile"] = serde_json::json!("not-valid-on-mapped");
+        assert!(fixture_validator.validate(&mapped_fixture).is_err());
+        mapped_fixture
+            .as_object_mut()
+            .unwrap()
+            .remove("connectorProfile");
+        let mut invalid_reference = mapped_fixture.clone();
+        invalid_reference["status"]["acceptance"]["references"] =
+            serde_json::json!({"Transfer.ID": "tx-1"});
+        assert!(fixture_validator.validate(&invalid_reference).is_err());
+        mapped_fixture["status"]["response"]["status"] = serde_json::json!(99);
+        assert!(fixture_validator.validate(&mapped_fixture).is_err());
     }
 
     /// The manual wire forms the generator rewrites stay pinned to the

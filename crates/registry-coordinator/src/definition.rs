@@ -410,6 +410,10 @@ pub enum CompletionKind {
     /// The decision on a BReg Proposal the run started, submitted or read,
     /// settled only from the current Proposal Get.
     BregProposal {},
+    /// The authoritative status of the exact collection this call accepted.
+    PaymentCollection {},
+    /// The authoritative status of the exact disbursement this call accepted.
+    PaymentDisbursement {},
     BoundedPoll {
         interpret: String,
         interval_seconds: u32,
@@ -1730,6 +1734,15 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
                         operation.uses,
                         &completion.output,
                     )
+                }
+                CompletionKind::PaymentCollection {} => {
+                    operation.uses.follows_collection()
+                        && completion.output == *crate::contracts::payment_completion_schema()
+                }
+                CompletionKind::PaymentDisbursement {} => {
+                    operation.uses.follows_disbursement()
+                        && completion.output
+                            == *crate::contracts::payment_disbursement_completion_schema()
                 }
                 CompletionKind::BoundedPoll {
                     interpret,

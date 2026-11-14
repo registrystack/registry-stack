@@ -1,0 +1,711 @@
+{
+  "$defs": {
+    "CollectionProvider": {
+      "description": "Closed provider bindings for P2G collections, selected by the authored\n`type` member. The shared tagged-union reader preserves source positions\nfor errors inside either strict variant (CFG-ID-7, CFG-SCHEMA-8).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "$ref": "#/$defs/SimulatorConnection"
+            },
+            "type": {
+              "const": "simulator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "connection"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connection": {
+              "$ref": "#/$defs/MifosConnection"
+            },
+            "payer": {
+              "$ref": "#/$defs/MifosPayerMapping"
+            },
+            "transactionType": {
+              "$ref": "#/$defs/MifosTransactionType"
+            },
+            "type": {
+              "const": "mifos",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "connection",
+            "payer",
+            "transactionType"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "settings": true,
+            "statusBaseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "submitBaseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "type": {
+              "const": "http",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "submitBaseUrl",
+            "statusBaseUrl",
+            "settings"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "G2pConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedClients": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "binding": {
+          "$ref": "#/$defs/G2pConnectionSnapshot"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "requiredScope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "allowedClients",
+        "requiredScope",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "G2pConnectionSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "type": "string"
+        },
+        "currencyScale": {
+          "format": "uint32",
+          "maximum": 6,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fundingAccountId": {
+          "type": "string"
+        },
+        "fundingPartyKey": {
+          "type": "string"
+        },
+        "institutionId": {
+          "type": "string"
+        },
+        "programmeId": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/G2pProviderBinding"
+        },
+        "providerPack": {
+          "$ref": "#/$defs/ProviderPackPin"
+        },
+        "recipientPartyKey": {
+          "type": "string"
+        },
+        "registry": {
+          "$ref": "#/$defs/G2pRegistryBinding"
+        },
+        "serviceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "institutionId",
+        "serviceId",
+        "programmeId",
+        "fundingAccountId",
+        "currency",
+        "currencyScale",
+        "providerPack",
+        "fundingPartyKey",
+        "recipientPartyKey",
+        "provider",
+        "registry"
+      ],
+      "type": "object"
+    },
+    "G2pHttpAuth": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "credentialIdentity": {
+              "type": "string"
+            },
+            "credentialRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "bearer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "credentialIdentity",
+            "credentialRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operationsCredentialIdentity": {
+              "type": "string"
+            },
+            "operationsCredentialRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "responseKey": {
+              "$ref": "#/$defs/G2pTransitRsaNoOidKeyBinding"
+            },
+            "responseKeyIdentity": {
+              "type": "string"
+            },
+            "signingKey": {
+              "$ref": "#/$defs/G2pTransitRsaNoOidKeyBinding"
+            },
+            "signingKeyIdentity": {
+              "type": "string"
+            },
+            "tenant": {
+              "type": "string"
+            },
+            "type": {
+              "const": "mifos-legacy-signature",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tenant",
+            "signingKeyIdentity",
+            "signingKey",
+            "responseKeyIdentity",
+            "responseKey",
+            "operationsCredentialIdentity",
+            "operationsCredentialRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "G2pProviderBinding": {
+      "description": "Deployment-owned provider facts frozen into every attempt.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "auth": {
+              "$ref": "#/$defs/G2pHttpAuth"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "settings": true,
+            "statusBaseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "submitBaseUrl": {
+              "$ref": "#/$defs/Url"
+            },
+            "type": {
+              "const": "http",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "revision",
+            "submitBaseUrl",
+            "statusBaseUrl",
+            "auth",
+            "settings"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "G2pRegistryBinding": {
+      "additionalProperties": false,
+      "description": "BReg route and exact Action authority frozen into an attempt.",
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "bindAction": {
+          "type": "string"
+        },
+        "bindProfile": {
+          "type": "string"
+        },
+        "credentialIdentity": {
+          "type": "string"
+        },
+        "credentialRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "readProfile": {
+          "type": "string"
+        },
+        "recordRoute": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        },
+        "reportAction": {
+          "type": "string"
+        },
+        "reportProfile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "credentialIdentity",
+        "credentialRef",
+        "recordRoute",
+        "recordType",
+        "readProfile",
+        "bindAction",
+        "bindProfile",
+        "reportAction",
+        "reportProfile"
+      ],
+      "type": "object"
+    },
+    "G2pTransitRsaNoOidKeyBinding": {
+      "additionalProperties": false,
+      "description": "Exact Transit RSA key version and SPKI identity retained with an attempt.\nPrivate key bytes never enter Adapter configuration or durable custody.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "format": "uint32",
+          "maximum": 30000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "mount": {
+          "type": "string"
+        },
+        "publicKeyDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "socketPath": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "socketPath",
+        "mount",
+        "key",
+        "version",
+        "publicKeyDigest",
+        "attemptTimeoutMilliseconds"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "MifosConnection": {
+      "additionalProperties": false,
+      "description": "Deployment-owned endpoints and non-secret routing headers. Each component\nhas its own URL because released PH-EE is not a monolith.",
+      "properties": {
+        "bulkBaseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "channelBaseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "operationsBaseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "paymentScheme": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[\\x20-\\x7e]+$",
+          "type": "string"
+        },
+        "tenant": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[\\x20-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelBaseUrl",
+        "bulkBaseUrl",
+        "operationsBaseUrl",
+        "tenant",
+        "paymentScheme"
+      ],
+      "type": "object"
+    },
+    "MifosPayerMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "financialAddressKey": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "payerIdKey": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "financialAddressKey",
+        "payerIdKey"
+      ],
+      "type": "object"
+    },
+    "MifosTransactionType": {
+      "additionalProperties": false,
+      "properties": {
+        "initiator": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "initiatorType": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "scenario": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "subScenario": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scenario",
+        "subScenario",
+        "initiator",
+        "initiatorType"
+      ],
+      "type": "object"
+    },
+    "PaymentBinding": {
+      "additionalProperties": false,
+      "description": "Persisted in full before a provider send. It holds credential references\nand identities, never credential values. Rotation at the same reference is\nsupported; changing a reference does not reroute a retained attempt.",
+      "properties": {
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "currencyScale": {
+          "format": "uint8",
+          "maximum": 6,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider": {
+          "$ref": "#/$defs/CollectionProvider"
+        },
+        "providerCredentialIdentity": {
+          "type": "string"
+        },
+        "providerCredentialRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "providerPack": {
+          "$ref": "#/$defs/ProviderPackPin",
+          "description": "Exact reviewed provider artifact used for new attempts. Older\nsimulator-only configurations omit it; retained attempts keep their\noriginal binding unchanged across an upgrade."
+        },
+        "registry": {
+          "$ref": "#/$defs/RegistryBinding"
+        },
+        "replayWindowSeconds": {
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "simulation": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "simulation",
+        "currency",
+        "currencyScale",
+        "provider",
+        "providerCredentialRef",
+        "providerCredentialIdentity",
+        "replayWindowSeconds",
+        "registry"
+      ],
+      "type": "object"
+    },
+    "PaymentConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedClients": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "binding": {
+          "$ref": "#/$defs/PaymentBinding"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "institutionId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "requiredScope": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "serviceId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "institutionId",
+        "serviceId",
+        "allowedClients",
+        "requiredScope",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "ProviderPackPin": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "RegistryBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "bindAction": {
+          "type": "string"
+        },
+        "bindProfile": {
+          "type": "string"
+        },
+        "credentialIdentity": {
+          "type": "string"
+        },
+        "credentialRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "readProfile": {
+          "type": "string"
+        },
+        "receiptAction": {
+          "type": "string"
+        },
+        "receiptProfile": {
+          "type": "string"
+        },
+        "recordRoute": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "recordType",
+        "recordRoute",
+        "readProfile",
+        "bindProfile",
+        "receiptProfile",
+        "bindAction",
+        "receiptAction",
+        "credentialRef",
+        "credentialIdentity"
+      ],
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "SimulatorConnection": {
+      "additionalProperties": false,
+      "description": "Operator-owned synthetic provider routing. Credentials are supplied only at\nthe send boundary and never belong to a persisted command or connection.",
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "biller": {
+          "maxLength": 20,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "billerName": {
+          "maxLength": 10,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "callbackUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "payerFiBic": {
+          "maxLength": 10,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        },
+        "tenant": {
+          "maxLength": 20,
+          "minLength": 1,
+          "pattern": "^[\\x21-\\x7e]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "tenant",
+        "biller",
+        "billerName",
+        "callbackUrl",
+        "payerFiBic"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/payments/payments.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/payments/v1alpha1",
+      "type": "string"
+    },
+    "connections": {
+      "items": {
+        "$ref": "#/$defs/PaymentConnection"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "disbursements": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/G2pConnection"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "kind": {
+      "const": "AdapterPayments",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "connections",
+    "kind"
+  ],
+  "title": "Registry Adapter payment connections",
+  "type": "object"
+}

@@ -30,6 +30,12 @@ Each catalog operation has an input contract, the type its adapter decodes, and 
 | [`breg.cancel-proposal/v1`](#breg.cancel-proposal/v1) | 1 | `breg` | mutation | required | required | same-command | none | none |
 | [`breg.lookup-record/v1`](#breg.lookup-record/v1) | 1 | `breg` | read | none | none | read-again | none | [`onDeclaredRefusal`](breg.lookup-record.v1.declared-refusal.schema.json) |
 | [`breg.read-record/v2`](#breg.read-record/v2) | 2 | `breg` | read | none | none | read-again | none | none |
+| [`payments.request-collection/v1`](#payments.request-collection/v1) | 1 | `payments` | mutation | required | none | same-command-and-receipt | read | none |
+| [`payments.read-collection/v1`](#payments.read-collection/v1) | 1 | `payments` | read | none | none | read-again | none | none |
+| [`payments.record-receipt/v1`](#payments.record-receipt/v1) | 1 | `payments` | mutation | required | none | same-command | none | none |
+| [`payments.request-disbursement/v1`](#payments.request-disbursement/v1) | 1 | `payments` | mutation | required | none | hold-after-dispatch | read | none |
+| [`payments.read-disbursement/v1`](#payments.read-disbursement/v1) | 1 | `payments` | read | none | none | read-again | none | none |
+| [`payments.record-provider-confirmation/v1`](#payments.record-provider-confirmation/v1) | 1 | `payments` | mutation | required | none | same-command | none | none |
 
 ## breg.read-record/v1
 
@@ -1824,6 +1830,527 @@ Output ([`breg.read-record.v2.output.schema.json`](breg.read-record.v2.output.sc
 | `provenance` | `Provenance` | yes |
 
 Other members are tolerated.
+
+## payments.request-collection/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": {
+    "acceptedBinding": [
+      "collectionId",
+      "billId",
+      "billVersion",
+      "bindingRevision",
+      "simulation"
+    ],
+    "authenticatedWake": false,
+    "authority": "current-bound-payment-connection",
+    "deadline": "original-wait-timeout-within-original-run-deadline",
+    "defaultIntervalSeconds": 900,
+    "maximumRetryAfterSeconds": 86400,
+    "minimumIntervalSeconds": 30,
+    "name": "collection",
+    "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+    "paymentSuccessState": "confirmed",
+    "pendingStates": [
+      "accepted",
+      "pending",
+      "unknown"
+    ],
+    "profile": "payment-collection",
+    "settledStates": [
+      "confirmed",
+      "failed"
+    ],
+    "signalCarriesResult": false,
+    "terminalEvidence": "validated-authoritative-collection-read"
+  },
+  "connectionInterface": "payments",
+  "identity": {
+    "effect": "mutation",
+    "id": "payments.request-collection/v1",
+    "keyRequirement": "required",
+    "product": "payments",
+    "readReceipt": true,
+    "recovery": "same-command-and-receipt",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`payments.request-collection.v1.input.schema.json`](payments.request-collection.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `billId` | string (uuid) | yes |
+| `billVersion` | integer | yes |
+
+No other members are accepted.
+
+Output ([`payments.request-collection.v1.output.schema.json`](payments.request-collection.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `billId` | string (uuid) | yes |
+| `billVersion` | integer | yes |
+| `bindingRevision` | string | yes |
+| `collectionId` | string (uuid) | yes |
+| `simulation` | boolean | yes |
+
+No other members are accepted.
+
+## payments.read-collection/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": {
+    "acceptedBinding": [
+      "collectionId",
+      "billId",
+      "billVersion",
+      "bindingRevision",
+      "simulation"
+    ],
+    "authenticatedWake": false,
+    "authority": "current-bound-payment-connection",
+    "deadline": "original-wait-timeout-within-original-run-deadline",
+    "defaultIntervalSeconds": 900,
+    "maximumRetryAfterSeconds": 86400,
+    "minimumIntervalSeconds": 30,
+    "name": "collection",
+    "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+    "paymentSuccessState": "confirmed",
+    "pendingStates": [
+      "accepted",
+      "pending",
+      "unknown"
+    ],
+    "profile": "payment-collection",
+    "settledStates": [
+      "confirmed",
+      "failed"
+    ],
+    "signalCarriesResult": false,
+    "terminalEvidence": "validated-authoritative-collection-read"
+  },
+  "connectionInterface": "payments",
+  "identity": {
+    "effect": "read",
+    "id": "payments.read-collection/v1",
+    "keyRequirement": "none",
+    "product": "payments",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`payments.read-collection.v1.input.schema.json`](payments.read-collection.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `collectionId` | string (uuid) | yes |
+
+No other members are accepted.
+
+Output ([`payments.read-collection.v1.output.schema.json`](payments.read-collection.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `billId` | string (uuid) | yes |
+| `billVersion` | integer | yes |
+| `bindingRevision` | string | yes |
+| `collectionId` | string (uuid) | yes |
+| `failureReason` | string or null | no |
+| `money` | `Money` | yes |
+| `providerReference` | string or null | no |
+| `simulation` | boolean | yes |
+| `state` | `CollectionState` | yes |
+
+No other members are accepted.
+
+## payments.record-receipt/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "payments",
+  "identity": {
+    "effect": "mutation",
+    "id": "payments.record-receipt/v1",
+    "keyRequirement": "required",
+    "product": "payments",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`payments.record-receipt.v1.input.schema.json`](payments.record-receipt.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `collectionId` | string (uuid) | yes |
+
+No other members are accepted.
+
+Output ([`payments.record-receipt.v1.output.schema.json`](payments.record-receipt.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `billId` | string (uuid) | yes |
+| `billVersion` | integer | yes |
+| `bindingRevision` | string | yes |
+| `collectionId` | string (uuid) | yes |
+| `money` | `Money` | yes |
+| `providerReference` | string | yes |
+| `receiptId` | string | yes |
+| `simulation` | boolean | yes |
+
+No other members are accepted.
+
+## payments.request-disbursement/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": {
+    "acceptedBinding": [
+      "disbursementId",
+      "instructionRecordId",
+      "instructionId",
+      "instructionVersion",
+      "bindingRevision",
+      "simulation"
+    ],
+    "authenticatedWake": false,
+    "authority": "current-bound-payment-connection",
+    "deadline": "original-wait-timeout-within-original-run-deadline",
+    "defaultIntervalSeconds": 900,
+    "maximumRetryAfterSeconds": 86400,
+    "minimumIntervalSeconds": 30,
+    "name": "disbursement",
+    "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+    "paymentSuccessState": "provider-confirmed",
+    "pendingStates": [
+      "accepted",
+      "pending",
+      "unknown"
+    ],
+    "profile": "payment-disbursement",
+    "settledStates": [
+      "provider-confirmed",
+      "failed"
+    ],
+    "signalCarriesResult": false,
+    "terminalEvidence": "validated-authoritative-disbursement-read"
+  },
+  "connectionInterface": "payments",
+  "identity": {
+    "effect": "mutation",
+    "id": "payments.request-disbursement/v1",
+    "keyRequirement": "required",
+    "product": "payments",
+    "readReceipt": true,
+    "recovery": "hold-after-dispatch",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`payments.request-disbursement.v1.input.schema.json`](payments.request-disbursement.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `instructionRecordId` | string (uuid) | yes |
+| `instructionVersion` | integer | yes |
+
+No other members are accepted.
+
+Output ([`payments.request-disbursement.v1.output.schema.json`](payments.request-disbursement.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `bindingRevision` | string | yes |
+| `disbursementId` | string (uuid) | yes |
+| `instructionId` | string (uuid) | yes |
+| `instructionRecordId` | string (uuid) | yes |
+| `instructionVersion` | integer | yes |
+| `simulation` | boolean | yes |
+
+No other members are accepted.
+
+## payments.read-disbursement/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": {
+    "acceptedBinding": [
+      "disbursementId",
+      "instructionRecordId",
+      "instructionId",
+      "instructionVersion",
+      "bindingRevision",
+      "simulation"
+    ],
+    "authenticatedWake": false,
+    "authority": "current-bound-payment-connection",
+    "deadline": "original-wait-timeout-within-original-run-deadline",
+    "defaultIntervalSeconds": 900,
+    "maximumRetryAfterSeconds": 86400,
+    "minimumIntervalSeconds": 30,
+    "name": "disbursement",
+    "observationLimit": "1 + ceil(waitDurationSeconds / effectiveIntervalSeconds)",
+    "paymentSuccessState": "provider-confirmed",
+    "pendingStates": [
+      "accepted",
+      "pending",
+      "unknown"
+    ],
+    "profile": "payment-disbursement",
+    "settledStates": [
+      "provider-confirmed",
+      "failed"
+    ],
+    "signalCarriesResult": false,
+    "terminalEvidence": "validated-authoritative-disbursement-read"
+  },
+  "connectionInterface": "payments",
+  "identity": {
+    "effect": "read",
+    "id": "payments.read-disbursement/v1",
+    "keyRequirement": "none",
+    "product": "payments",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`payments.read-disbursement.v1.input.schema.json`](payments.read-disbursement.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `disbursementId` | string (uuid) | yes |
+
+No other members are accepted.
+
+Output ([`payments.read-disbursement.v1.output.schema.json`](payments.read-disbursement.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `bindingRevision` | string | yes |
+| `disbursementId` | string (uuid) | yes |
+| `failureReason` | string or null | no |
+| `instructionId` | string (uuid) | yes |
+| `instructionRecordId` | string (uuid) | yes |
+| `instructionVersion` | integer | yes |
+| `money` | `Money` | yes |
+| `providerReference` | string or null | no |
+| `simulation` | boolean | yes |
+| `state` | `DisbursementState` | yes |
+
+No other members are accepted.
+
+## payments.record-provider-confirmation/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "payments",
+  "identity": {
+    "effect": "mutation",
+    "id": "payments.record-provider-confirmation/v1",
+    "keyRequirement": "required",
+    "product": "payments",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`payments.record-provider-confirmation.v1.input.schema.json`](payments.record-provider-confirmation.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `disbursementId` | string (uuid) | yes |
+
+No other members are accepted.
+
+Output ([`payments.record-provider-confirmation.v1.output.schema.json`](payments.record-provider-confirmation.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `bindingRevision` | string | yes |
+| `disbursementId` | string (uuid) | yes |
+| `instructionId` | string (uuid) | yes |
+| `instructionRecordId` | string (uuid) | yes |
+| `instructionVersion` | integer | yes |
+| `money` | `Money` | yes |
+| `providerReference` | string | yes |
+| `providerResultDigest` | string | yes |
+| `simulation` | boolean | yes |
+
+No other members are accepted.
 
 ## Completions
 

@@ -9,6 +9,39 @@ reviewed projection either to a BReg Action or to a Coordinator workflow.
 The facade holds no records; the job stores item identity and progress, never
 source payloads. The institution's registry remains the system of record.
 
+The optional [typed payment host](examples/payment-collections/README.md)
+shares the listener and PostgreSQL infrastructure while keeping payment
+attempts outside generic record routes. Coordinator uses dedicated payment
+steps. A collection reads an authoritative BReg fee bill; a disbursement
+reads an authoritative [BReg instruction](../breg/examples/g2p-disbursement/README.md).
+Operator configuration binds restricted registry Actions and an exact provider
+pack. The host fixes credentials, origins and mutation methods while the pack
+maps the provider's wire shape. The simulator remains synthetic. The Mifos
+Payment Hub EE disbursement host signs exact retained Bulk requests through a
+pinned Transit RSA key and verifies the released body-only Bulk response
+signature with a separate pinned public key. Status reads use a distinct
+operator-owned bearer credential against the configured HTTPS Operations
+origin. Released Operations v1.17.1 does not enable route authorization by
+default, so the deployment must enable and verify bearer authorization or
+enforce it at a trusted gateway. Its unsigned status body remains a provider
+report: the host independently compares its correlation, amount, currency,
+funding party and recipient with the authoritative BReg instruction before
+reporting confirmation. A missing Bulk response leaves the original send held
+for operator or provider reconciliation because no accepted batch reference
+exists for an Operations lookup; the host never submits it again. Mifos
+Operations completion does not authorize a paid fee-bill receipt.
+
+The Transit Unix socket must be an absolute local path protected by deployment
+ACLs and a trusted proxy policy. Adapter pins the mount, key name, version and
+SPKI SHA-256 digest for separate signing and response-verification keys. The
+repository's fake Transit regression checks the wire contract, but does not
+establish live OpenBao `/none` plus `prehashed` interoperability.
+
+For a provider pack upgrade, repeat `--payment-provider-pack` with the current
+pack and every retained pack still needed by an unfinished attempt. The host
+selects each attempt's exact saved pin for sends and status reads; a missing
+retained pack holds that attempt before provider I/O.
+
 Source-system knowledge and deployment mappings live in reviewed configuration. A reviewed, versioned pack
 declares a source's endpoints and route templates, with field mapping in
 Rhai scripts beside it; a project binds a pack to a profile's operations; a

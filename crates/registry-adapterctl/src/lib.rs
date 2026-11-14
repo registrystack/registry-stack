@@ -22,6 +22,8 @@ mod fixtures;
 mod job;
 mod job_runtime;
 mod mapping;
+mod payment_fixtures;
+mod payments;
 mod project;
 mod report;
 mod schemas;
@@ -66,6 +68,8 @@ enum Command {
     Mapping(mapping::MappingArgs),
     /// Operate one authored adapter project.
     Project(project::ProjectArgs),
+    /// Check typed payment connections or export their fixed operation contract.
+    Payments(payments::PaymentsArgs),
     /// Write the generated JSON Schemas of every Adapter format, or
     /// check the committed ones for drift.
     Schemas(schemas::SchemasArgs),
@@ -151,6 +155,7 @@ where
             project::ProjectCommand::Lock(_) => "project lock",
         },
         Command::Schemas(_) => "schemas",
+        Command::Payments(args) => payments::command_name(&args.command),
         Command::Compile(_) => "compile",
         Command::Fixtures(fixtures) => match fixtures.command {
             fixtures::FixturesCommand::Replay(_) => "fixtures replay",
@@ -168,6 +173,7 @@ where
         Command::Mapping(args) => mapping_command(args, format, command_name, stdout, stderr),
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
+        Command::Payments(args) => payments_command(args, format, command_name, stdout, stderr),
         Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
         Command::Fixtures(args) => fixtures_command(args, format, command_name, stdout, stderr),
         Command::Verify(args) => verify_command(args, format, command_name, stdout, stderr),
@@ -191,6 +197,39 @@ fn usage_failure(message: String) -> Value {
             "suggestedAction": USAGE_ACTION,
         })],
     )
+}
+
+fn payments_command(
+    args: payments::PaymentsArgs,
+    format: OutputFormat,
+    command_name: &'static str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<ExitCode, ()> {
+    let run = payments::run(&args.command);
+    let exit = if run.unavailable {
+        OPERATIONAL_FAILURE_EXIT
+    } else if refused(run.checked.diagnostics(), run.deny_warnings) {
+        DOMAIN_REFUSAL_EXIT
+    } else {
+        0
+    };
+    let mut value = run.value;
+    value["ok"] = json!(exit == 0);
+    value["status"] = json!(if exit == 0 {
+        "complete"
+    } else {
+        failure_status(exit)
+    });
+    value["command"] = json!(command_name);
+    value["diagnostics"] = run.checked.to_json_value();
+    value["filesChecked"] = json!(1);
+    if exit == 0 {
+        write_success(&value, &run.checked, format, stdout)
+    } else {
+        write_configuration_report(&run.checked, command_name, format, value, stdout, stderr)
+            .map(|()| ExitCode::from(exit))
+    }
 }
 
 /// Whether the check verdict refuses: any error always refuses, and with

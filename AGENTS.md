@@ -51,10 +51,14 @@ not products of their own.
 | `products/documents` | Document Store product contracts, starter example, generated schemas and OpenAPI document, and contributor check scripts |
 | `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks |
 | `crates/registry-adapter-engine` | Shared bounded integration execution, compilation, components and replay; no listener, PostgreSQL client or product runtime |
-| `crates/registry-adapter` | Adapter facade: serving, caller admission, write custody and audit journal over the shared engine |
+| `crates/registry-adapter` | Adapter host: record-facade serving and custody over the shared engine, plus the optional typed payment module and its separate PostgreSQL attempts |
+| `crates/registry-payment-protocol` | Runtime-free exact-money payment intents, observations, receipts and problem vocabulary |
+| `crates/registry-payment-client` | Bounded typed HTTP client for the Adapter payment contract |
+| `crates/registry-payment-simulator-connector` | Standalone synthetic P2G provider connector; no Adapter, Coordinator or product runtime dependency |
+| `crates/registry-payment-mifos-connector` | Bounded Mifos Payment Hub EE wire and legacy signature profile; key custody belongs to the payment host |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
 | `crates/registry-adapter-job` | Adapter ingestion-job host and the `adapter-job` binary: item table, pass, interval and authenticated hook triggers, and destination seam; identity and position only, never payloads |
-| `crates/registry-adapter-connectors` | BReg connector over `registry-breg-client`, reachable only through the job host's explicit off-by-default `direct-breg` feature; never through the engine or facade; the dependency gate enforces this boundary |
+| `crates/registry-adapter-connectors` | Ingestion BReg connector over `registry-breg-client`, reachable only through the job host's explicit off-by-default `direct-breg` feature; never through the engine or facade; distinct from the payment host's direct public BReg client dependency |
 | `products/adapter` | Adapter product contract (`CONCEPT.md`), delivery plan, schemas, profiles, packs, examples, fixtures, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
@@ -289,8 +293,11 @@ and its bindings) owns its reviewed workflow packages, durable run state,
 prepared commands, waits, and audit journal, and never product authority,
 data, eligibility, or capacity. A wait never renews an approval or creates
 downstream authority. The runtime may depend on product clients, product
-cores, `registry-record`, and `registry-platform-*`, never on a product
-runtime, adopter tooling, a supporting service, or a binding; it reaches
+cores, `registry-record`, and `registry-platform-*`. It may depend directly on
+the runtime-free `registry-review-protocol` handoff contract and may reach
+`registry-payment-protocol` only through `registry-payment-client`; these do
+not admit other protocol crates. It never depends on a product runtime,
+adopter tooling, a supporting service, or a binding; it reaches
 Casework through `registry-casework-client` alone; its client reaches
 `registry-platform-*` only. No product crate depends on a Coordinator crate
 (only `registry-cli-docs` may), and the Casework, Scheduling, and Messaging
@@ -330,6 +337,15 @@ never reaches a product runtime, CLI, database crate, or any Coordinator
 crate, and
 `products/adapter/scripts/check_dependency_direction.py` enforces that
 split. The adapter inherits no authorization
+from any product. The optional payment module is a separate approved host
+exception: `registry-adapter` may use `registry-payment-protocol`, the
+standalone simulator and Mifos provider connectors, and the public
+`registry-breg-client` for authoritative bill and instruction reads and
+restricted binding and reporting Actions. The source-neutral core, engine and
+generic job host gain no payment dependencies.
+The payment host retains original attempt bindings and grants no authority
+to Coordinator or callers to assert financial facts. The record facade
+inherits no authorization
 from any product and grants none to any source: upstream calls run under
 the deployment's own credential, or without an application credential for
 numeric loopback, HTTPS with mTLS, or a fixed HTTPS source carrying the
