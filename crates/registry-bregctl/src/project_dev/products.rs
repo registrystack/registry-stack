@@ -1689,9 +1689,7 @@ fn check_casework_binding(
             "dev-check-casework",
             CHECK_BIND,
         );
-        if plan.issuer == "run" {
-            config["authentication"]["oidc"]["issuer"] = json!(super::bindings::CHECK_ORIGIN);
-        }
+        config["authentication"]["oidc"]["issuer"] = json!(super::bindings::issuer_for_check(plan));
         super::bindings::render_for_check(plan, Product::Casework, &mut config);
         let path = root.join("casework-runtime.yaml");
         write_private(&path, &serde_json::to_vec(&config)?)?;
@@ -2597,6 +2595,81 @@ mod tests {
             casework_binding_check(Some(0), &explain, "registry"),
             BindingCheck::Unchecked
         );
+    }
+
+    #[test]
+    fn run_issuer_runtime_configs_keep_authentication_and_both_bindings_on_the_allocated_url() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/reviewed-evidence-journey")
+            .canonicalize()
+            .unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let terminate = AtomicBool::new(false);
+        let mut input = breg_input(false);
+        input.plan = plan::load(&fixture).unwrap().plan;
+        let fixed_issuer = input.plan.issuer.clone();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let allocated_issuer = format!("http://{}", listener.local_addr().unwrap());
+        for expected in [fixed_issuer, allocated_issuer] {
+            let root = scratch.path().join(if expected.starts_with("https:") {
+                "fixed"
+            } else {
+                "allocated"
+            });
+            super::super::private_directory(&root).unwrap();
+            let mut captured: RunInput =
+                serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
+            captured.plan.issuer = expected.clone();
+            if expected.starts_with("http:") {
+                captured.plan.application = Some(serde_json::from_value(json!({
+                    "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
+                    "entry": "dist/main.js", "prepare": "dist/prepare.js", "checker": "dist/check.js",
+                    "deployment": "deployment.json", "configSchema": "example/host-run/v1",
+                    "configEnvironment": "HOST_CONFIG", "prepareVersion": "example-prepare 1.0"
+                })).unwrap());
+            }
+            let captured = Arc::new(captured);
+            let issuer = Arc::new(Issuer::create(&root).unwrap());
+            let origins = BTreeMap::from([
+                (Product::Breg, "http://127.0.0.1:31001".to_owned()),
+                (Product::Casework, "http://127.0.0.1:31002".to_owned()),
+            ]);
+            let mut runner = ProductRunner::new(captured.clone(), &root, &terminate).unwrap();
+            runner.bindings =
+                Some(RuntimeBindings::prepare(&root, captured, issuer, &origins).unwrap());
+            let (breg, _) = breg_config(&runner, &root, "breg");
+            let path = runner
+                .config(
+                    Product::Casework,
+                    "casework",
+                    "127.0.0.1:0",
+                    &root.join("casework-package"),
+                    DatabaseUrls {
+                        runtime: "postgresql://runtime:password@127.0.0.1:5432/run".to_owned(),
+                        migration: "postgresql://migration:password@127.0.0.1:5432/run".to_owned(),
+                    },
+                )
+                .unwrap();
+            let casework: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(breg["authentication"]["oidc"]["issuer"], expected);
+            assert_eq!(casework["authentication"]["oidc"]["issuer"], expected);
+            assert_eq!(
+                breg["reviewAuthorities"]["casework"]["privateKeyJwt"]["assertionAudience"],
+                expected
+            );
+            assert_eq!(
+                casework["contextProviders"]["registry"]["clientAssertionAudience"],
+                expected
+            );
+            assert_eq!(
+                breg["reviewAuthorities"]["casework"]["privateKeyJwt"]["resource"],
+                "urn:journey:casework"
+            );
+            assert_eq!(
+                casework["contextProviders"]["registry"]["resource"],
+                "urn:journey:breg"
+            );
+        }
     }
 
     #[test]

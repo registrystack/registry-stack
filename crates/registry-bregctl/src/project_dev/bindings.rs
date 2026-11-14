@@ -286,15 +286,23 @@ impl RuntimeBindings {
             .as_ref()
             .expect("prepared token server")
             .endpoint;
-        render(&input.plan, product, &self.origins, endpoint, config);
+        render(
+            &input.plan,
+            &input.plan.issuer,
+            product,
+            &self.origins,
+            endpoint,
+            config,
+        );
     }
 }
 
 /// Writes the binding the plan configures for `product` into its runtime
-/// configuration. Only the token endpoint and the product origins belong to
-/// the run; every other value comes from the plan.
+/// configuration. The issuer is resolved for the current phase: a static
+/// preflight URL during check, or the captured issuer during the run.
 fn render(
     plan: &Plan,
+    issuer: &str,
     product: Product,
     origins: &BTreeMap<Product, String>,
     token_endpoint: &str,
@@ -314,7 +322,7 @@ fn render(
                     "tokenEndpoint": token_endpoint,
                     "clientIdRef": client_id_ref,
                     "clientAssertionKeyRef": client_assertion_key_ref,
-                    "assertionAudience": plan.issuer,
+                    "assertionAudience": issuer,
                     "resource": plan.product(Product::Casework).audience,
                     "scopes": grant.scopes,
                 },
@@ -332,7 +340,7 @@ fn render(
                 "baseUrl": origins[&Product::Breg],
                 "statusProfile": grant.profile,
                 "tokenEndpoint": token_endpoint,
-                "clientAssertionAudience": plan.issuer,
+                "clientAssertionAudience": issuer,
                 "resource": plan.product(Product::Breg).audience,
                 "scopes": grant.scopes,
                 "clientIdRef": client_id_ref,
@@ -355,6 +363,17 @@ fn client_refs(filename: &str) -> (String, String) {
 pub(super) const CHECK_ORIGIN: &str = "http://127.0.0.1:1";
 const CHECK_TOKEN_ENDPOINT: &str = "http://127.0.0.1:1/oauth2/token";
 
+/// Resolve only the authored run placeholder for static inspection. This
+/// never allocates a listener or creates an issuer or machine identity.
+/// Runtime rendering uses the worker's captured, allocated issuer directly.
+pub(super) fn issuer_for_check(plan: &Plan) -> &str {
+    if plan.issuer == "run" {
+        CHECK_ORIGIN
+    } else {
+        &plan.issuer
+    }
+}
+
 /// Writes the binding the plan configures for `product` into `config` as
 /// `start` writes it, at the origin and token endpoint `check` renders with.
 pub(super) fn render_for_check(plan: &Plan, product: Product, config: &mut Value) {
@@ -362,7 +381,14 @@ pub(super) fn render_for_check(plan: &Plan, product: Product, config: &mut Value
         (Product::Breg, CHECK_ORIGIN.to_owned()),
         (Product::Casework, CHECK_ORIGIN.to_owned()),
     ]);
-    render(plan, product, &origins, CHECK_TOKEN_ENDPOINT, config);
+    render(
+        plan,
+        issuer_for_check(plan),
+        product,
+        &origins,
+        CHECK_TOKEN_ENDPOINT,
+        config,
+    );
 }
 
 /// Renders the review authority binding exactly as `start` writes it and lets
@@ -959,6 +985,28 @@ mod tests {
     }
 
     #[test]
+    fn run_issuer_preflight_resolves_both_binding_audiences_without_changing_the_plan() {
+        let mut value = plan();
+        value.issuer = "run".to_owned();
+        check_with_breg_reader(&value).unwrap();
+        for (product, pointer) in [
+            (
+                Product::Breg,
+                "/reviewAuthorities/casework/privateKeyJwt/assertionAudience",
+            ),
+            (
+                Product::Casework,
+                "/contextProviders/registry/clientAssertionAudience",
+            ),
+        ] {
+            let mut config = json!({});
+            render_for_check(&value, product, &mut config);
+            assert_eq!(config.pointer(pointer).unwrap(), CHECK_ORIGIN);
+        }
+        assert_eq!(value.issuer, "run");
+    }
+
+    #[test]
     fn check_accepts_a_plan_the_breg_reader_accepts() {
         check_with_breg_reader(&plan()).unwrap();
     }
@@ -1135,8 +1183,20 @@ mod tests {
 
     #[test]
     fn endpoint_accepts_one_assertion_and_refuses_replay_tampering_and_wrong_resource() {
+        exercise_endpoint(plan());
+    }
+
+    #[test]
+    fn allocated_run_issuer_endpoint_keeps_exact_assertion_audience_and_resource_checks() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut value = plan();
+        value.issuer = format!("http://{}", listener.local_addr().unwrap());
+        exercise_endpoint(value);
+    }
+
+    fn exercise_endpoint(plan: Plan) {
         let root = tempfile::tempdir().unwrap();
-        let input = Arc::new(input(plan()));
+        let input = Arc::new(input(plan));
         let issuer = Arc::new(Issuer::create(root.path()).unwrap());
         let origins = BTreeMap::from([
             (Product::Breg, "http://127.0.0.1:31001".to_owned()),
@@ -1167,6 +1227,22 @@ mod tests {
         request_runtime
             .block_on(provider.bearer_token())
             .expect("the maintained private-key JWT client obtains a token");
+        for wrong_audience in [CHECK_ORIGIN, "https://other.example.test"] {
+            let wrong_provider = PrivateKeyJwt::new(
+                PrivateKeyJwtConfig::new(
+                    endpoint.parse().unwrap(),
+                    "context-reader-client",
+                    key.clone(),
+                )
+                .with_audience(wrong_audience)
+                .with_resource("urn:dev:breg")
+                .with_scopes(vec!["registry:proposal:review-status".to_owned()]),
+            )
+            .unwrap();
+            assert!(request_runtime
+                .block_on(wrong_provider.bearer_token())
+                .is_err());
+        }
 
         let assertion = request_runtime.block_on(sign_assertion(
             &key,
