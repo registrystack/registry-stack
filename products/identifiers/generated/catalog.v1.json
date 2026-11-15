@@ -5140,7 +5140,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
-        "sha256": "2481544f84d61d0bd21ba44e31e7bdefcbf9e10b12d3b103fc100ebead1e346e",
+        "sha256": "a703762656c1127f10d20cf8d34b9fcb5c0be20ed3c394c4a1f8ef1fe3b1d36e",
         "mediaType": "application/schema+json"
       }
     },

@@ -19,6 +19,10 @@
         "delegatedDisplayExchange": {
           "$ref": "#/$defs/DelegatedDisplayExchangeBinding"
         },
+        "humanSourceAuthentication": {
+          "$ref": "#/$defs/HumanSourceAuthentication",
+          "description": "Opt in to independently verified, same-human source credentials."
+        },
         "resource": {
           "type": "string"
         },
@@ -161,6 +165,18 @@
       "minLength": 1,
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
+    },
+    "HumanSourceAuthentication": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "audience"
+      ],
+      "type": "object"
     },
     "Integrations": {
       "additionalProperties": false,
