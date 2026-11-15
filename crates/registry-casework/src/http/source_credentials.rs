@@ -113,6 +113,20 @@ pub(super) async fn boundary(
     }
 }
 
+/// Target-dependent admission must preserve the ordinary concealed-row shape.
+/// A bad source credential cannot reveal a stored policy or target's existence.
+fn conceal_target_error(target: Target, error: HttpError) -> HttpError {
+    match (target, error) {
+        (
+            Target::Task(_) | Target::Request(_),
+            HttpError::AuthenticationRefused
+            | HttpError::NotFound
+            | HttpError::SourceProfileNotApplicable,
+        ) => HttpError::NotFound,
+        (_, error) => error,
+    }
+}
+
 async fn admit(
     state: &HttpState,
     method: &Method,
@@ -149,18 +163,19 @@ async fn admit(
                 _ => None,
             },
         )
-        .await?;
+        .await
+        .map_err(|error| conceal_target_error(target, error.into()))?;
     // This fatal verification precedes any inbox observation, even empty pages.
     state
         .authenticator
         .verify_human_source_pair(primary, source, &provider)
         .await
-        .map_err(|_| HttpError::AuthenticationRefused)?;
+        .map_err(|_| conceal_target_error(target, HttpError::AuthenticationRefused))?;
     let original = state
         .service
         .providers
         .get(&provider)
-        .ok_or(HttpError::AuthenticationRefused)?;
+        .ok_or_else(|| conceal_target_error(target, HttpError::AuthenticationRefused))?;
     let scoped = VerifiedSourceProvider {
         inner: Arc::clone(original),
         token: Zeroizing::new(source.to_owned()),

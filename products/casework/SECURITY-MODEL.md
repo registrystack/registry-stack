@@ -282,7 +282,11 @@ BReg's, without cloning or unioning Casework client lists.
 The selected stored policy pins the provider. Collection authentication resolves
 one immutable provider before filtering or output, including empty pages;
 missing or ambiguous providers and invalid pairs fail the invocation. Single
-submitted targets and source-free routes reject the source header. A verified
+submitted targets and source-free routes reject the source header. Target-derived
+source authentication or policy refusal on a single task/request uses the same
+not-found response as an absent or concealed row. This prevents a supplied bad
+source bearer from becoming an existence or stored-context-policy oracle; normal
+header/primary admission and collection-wide failures retain their own classes. A verified
 request-local provider handle forwards only the source bearer, never the
 Casework or unattended status credential. Credentials are redacted, zeroized
 and dropped with the request, with no cross-call cache or durable recovery
