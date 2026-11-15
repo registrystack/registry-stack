@@ -204,28 +204,46 @@ pub fn router(state: HttpState) -> Router {
             post(preview_caseload_move),
         )
         .route("/v1/directory/caseload/apply", post(apply_caseload_move));
-    http_edge(app)
-        .merge(contract_edge(review, HttpContract::Review))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            source_credentials::boundary,
+    http_edge(app, Some(state.clone()))
+        .merge(contract_edge(
+            review,
+            HttpContract::Review,
+            Some(state.clone()),
         ))
         .with_state(state)
 }
 
-fn http_edge<S>(router: Router<S>) -> Router<S>
+fn http_edge<S>(router: Router<S>, source_state: Option<HttpState>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    contract_edge(router.fallback(route_not_found), HttpContract::Casework)
+    contract_edge(
+        router.fallback(route_not_found),
+        HttpContract::Casework,
+        source_state,
+    )
 }
 
-fn contract_edge<S>(router: Router<S>, contract: HttpContract) -> Router<S>
+fn contract_edge<S>(
+    router: Router<S>,
+    contract: HttpContract,
+    source_state: Option<HttpState>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
+    let router = router.method_not_allowed_fallback(method_not_allowed);
+    // Admission can refuse before a handler runs. Keep those refusals inside
+    // the same contract, trace, cache and security boundary as handler errors.
+    let router = if let Some(state) = source_state {
+        router.layer(middleware::from_fn_with_state(
+            state,
+            source_credentials::boundary,
+        ))
+    } else {
+        router
+    };
     router
-        .method_not_allowed_fallback(method_not_allowed)
         .layer(request_body_limit_default())
         .layer(middleware::from_fn(move |request, next| {
             http_boundary(contract, request, next)
@@ -1917,7 +1935,7 @@ mod tests {
     }
 
     fn edge_fixture() -> Router {
-        http_edge(Router::new().route("/json/{id}", post(json_route)))
+        http_edge(Router::new().route("/json/{id}", post(json_route)), None)
     }
 
     #[tokio::test]
@@ -1927,11 +1945,13 @@ mod tests {
                 profile_header(&headers, HttpContract::current().profile_header())?.to_owned(),
             ))
         }
-        let app =
-            http_edge(Router::new().route("/staff", post(selected_profile))).merge(contract_edge(
+        let app = http_edge(Router::new().route("/staff", post(selected_profile)), None).merge(
+            contract_edge(
                 Router::new().route("/review", post(selected_profile)),
                 HttpContract::Review,
-            ));
+                None,
+            ),
+        );
         for (path, selected, other, base) in [
             (
                 "/review",
@@ -2032,6 +2052,7 @@ mod tests {
                 }),
             ),
             HttpContract::Review,
+            None,
         );
         for (method, path, media, body, expected) in [
             (
@@ -2397,6 +2418,7 @@ mod tests {
                         Err::<StatusCode, _>(HttpError::ServiceUnavailable)
                     }),
                 ),
+            None,
         );
         let authentication = app
             .clone()
@@ -2453,6 +2475,7 @@ mod tests {
                 Router::new()
                     .route("/headers", post(bounded_header_route))
                     .with_state(Arc::clone(&calls)),
+                None,
             );
             let mut request = Request::builder()
                 .method("POST")
@@ -2491,7 +2514,7 @@ mod tests {
     }
 
     async fn refused_shape(body: &str) -> (Response, serde_json::Value) {
-        let response = http_edge(Router::new().route("/decision", post(decision_route)))
+        let response = http_edge(Router::new().route("/decision", post(decision_route)), None)
             .oneshot(
                 Request::builder()
                     .method("POST")
