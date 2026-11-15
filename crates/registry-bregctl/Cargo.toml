@@ -59,6 +59,7 @@ registry-platform-config.workspace = true
 registry-platform-yaml.workspace = true
 registry-platform-hooks.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-httpsec = { workspace = true, default-features = false }
 registry-thunderid-tooling = { workspace = true, features = ["session"] }
 registry-platform-buildinfo.workspace = true
 registry-cli-api.workspace = true

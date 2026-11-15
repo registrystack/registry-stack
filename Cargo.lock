@@ -6374,6 +6374,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-hooks",
  "registry-platform-httputil",
+ "registry-platform-httpsec",
  "registry-platform-testing",
  "registry-platform-yaml",
  "registry-thunderid-tooling",
