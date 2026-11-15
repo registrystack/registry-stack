@@ -576,17 +576,17 @@ impl<'a> ProductRunner<'a> {
             ],
         )?;
         let build = self.root.join("breg-build");
-        self.tool(
-            Product::Breg,
-            "package",
-            &[
-                project.as_os_str(),
-                "--test-receipt".as_ref(),
-                receipt.as_os_str(),
-                "--output".as_ref(),
-                build.as_os_str(),
-            ],
-        )?;
+        self.package_breg(&crate::PackageArgs {
+            candidate: crate::PackageCandidateArgs {
+                project: project.to_owned(),
+                baseline_package: None,
+                reviewed_migrations: None,
+            },
+            schema_fingerprint: None,
+            test_receipt: receipt,
+            output: build.clone(),
+            revision: None,
+        })?;
         let package = build.join("package");
         let urls = database
             .provision("breg", true, requires_postgis)
@@ -609,6 +609,41 @@ impl<'a> ProductRunner<'a> {
             &["--runtime-config".as_ref(), config.as_os_str()],
         )?;
         Ok((config, package))
+    }
+
+    /// Use the same private local packaging path as `bregctl dev`. The
+    /// selected worker still owns compilation, exact receipt validation and
+    /// publication; no public package command acquires this mode.
+    fn package_breg(&self, args: &crate::PackageArgs) -> Result<()> {
+        self.ensure_active()?;
+        require_selected_bregctl(&self.input.binaries[&Product::Breg].tool)?;
+        let result = crate::package(args, false);
+        self.ensure_active()?;
+        match result {
+            Ok(_) => Ok(()),
+            Err(refusal) => {
+                let mut report = Vec::new();
+                let mut diagnostics = Vec::new();
+                let _exit = crate::write_refusal(
+                    &refusal,
+                    crate::OutputFormat::Json,
+                    &mut report,
+                    &mut diagnostics,
+                );
+                // Preserve the same bounded structured diagnostic codes as
+                // the external tool path, never arbitrary report messages.
+                let codes = report_codes(report.as_slice())?;
+                drop(open_log(self.root, "breg-package")?);
+                write_private(
+                    &self.root.join("logs/breg-package-report.json"),
+                    &serde_json::to_vec(&json!({"phase":"breg-package","diagnosticCodes":codes}))?,
+                )?;
+                bail!(
+                    "breg package failed{codes}{}",
+                    failure_detail(&log_path(self.root, "breg-package"))
+                );
+            }
+        }
     }
 
     /// Draw the run's own data key when the project encrypts fields. BReg's
@@ -1313,6 +1348,22 @@ fn random_secret() -> Result<zeroize::Zeroizing<String>> {
     let mut encoded = zeroize::Zeroizing::new(String::new());
     URL_SAFE_NO_PAD.encode_string(bytes.as_slice(), &mut encoded);
     Ok(encoded)
+}
+
+/// In-process compilation must not silently replace the tool this run
+/// selected. Canonical paths admit the ordinary path and symlink aliases.
+fn require_selected_bregctl(selected: &Path) -> Result<()> {
+    let selected = selected
+        .canonicalize()
+        .context("cannot resolve the selected BReg tool")
+        .map_err(operational)?;
+    let worker = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .context("cannot resolve the running BReg development worker")
+        .map_err(operational)?;
+    ensure!(selected == worker,
+        "the selected BReg tool differs from the running development worker; launch through the selected rstack BReg tool");
+    Ok(())
 }
 
 fn copy_project(source: &Path, target: &Path) -> Result<()> {
@@ -2680,6 +2731,194 @@ mod tests {
             .token(&input, &normalized, Product::Breg, clock().unwrap() + 300)
             .unwrap();
         assert!(runtime.block_on(authenticator.authenticate(&token)).is_ok());
+    }
+
+    #[test]
+    fn local_package_accepts_the_worker_and_its_symlink() {
+        let worker = std::env::current_exe().unwrap();
+        assert!(require_selected_bregctl(&worker).is_ok());
+        let root = tempfile::tempdir().unwrap();
+        let alias = root.path().join("selected-bregctl");
+        std::os::unix::fs::symlink(&worker, &alias).unwrap();
+        assert!(require_selected_bregctl(&alias).is_ok());
+    }
+
+    #[test]
+    fn local_package_refuses_a_different_selected_tool() {
+        let root = tempfile::tempdir().unwrap();
+        let other = root.path().join("different-bregctl");
+        fs::write(&other, b"not the running worker").unwrap();
+        let error = require_selected_bregctl(&other).unwrap_err();
+        assert!(error.to_string().contains("selected BReg tool differs"));
+        assert!(!error
+            .to_string()
+            .contains(&root.path().display().to_string()));
+        let (report, exit) = crate::project_dev::error_report(&error);
+        assert!(exit == 1 && report["error"]["class"] == "domain");
+    }
+
+    fn local_package_args(root: &Path) -> crate::PackageArgs {
+        let project = root.join("project");
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
+        copy_project(&source, &project).unwrap();
+        let registry = project.join("registry.yaml");
+        let text = fs::read_to_string(&registry).unwrap();
+        assert!(text.matches("https://directory.example.gov").count() == 1);
+        fs::write(
+            &registry,
+            text.replace(
+                "https://directory.example.gov",
+                "https://directory.example.invalid",
+            ),
+        )
+        .unwrap();
+        crate::PackageArgs {
+            candidate: crate::PackageCandidateArgs {
+                project,
+                baseline_package: None,
+                reviewed_migrations: None,
+            },
+            schema_fingerprint: Some(format!("sha256:{}", "0".repeat(64))),
+            test_receipt: root.join("receipt.json"),
+            output: root.join("build"),
+            revision: None,
+        }
+    }
+
+    fn local_package_input(tool: PathBuf) -> Arc<RunInput> {
+        let mut input = breg_input(false);
+        input.binaries.insert(
+            Product::Breg,
+            super::super::Binaries {
+                tool,
+                runtime: std::env::current_exe().unwrap(),
+            },
+        );
+        Arc::new(input)
+    }
+
+    #[test]
+    fn local_package_keeps_cancellation_and_deadline_ahead_of_tool_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let args = local_package_args(root.path());
+        let input = local_package_input(root.path().join("unavailable-tool"));
+        let cancel = AtomicBool::new(true);
+        let mut runner = ProductRunner::new(Arc::clone(&input), root.path(), &cancel).unwrap();
+        let stopped = runner.package_breg(&args).unwrap_err();
+        assert!(stopped.to_string() == "development run was stopped");
+        cancel.store(false, Ordering::Relaxed);
+        runner.deadline = Instant::now() - Duration::from_secs(1);
+        let deadline = runner.package_breg(&args).unwrap_err();
+        let (report, exit) = crate::project_dev::error_report(&deadline);
+        assert!(exit == 3 && report["error"]["class"] == "operational");
+        assert!(!args.output.exists() && !root.path().join("logs").exists());
+    }
+
+    #[test]
+    fn local_package_requires_a_receipt_and_keeps_public_deployment_refusal() {
+        let root = tempfile::tempdir().unwrap();
+        let args = local_package_args(root.path());
+        let input = local_package_input(std::env::current_exe().unwrap());
+        let cancel = AtomicBool::new(false);
+        let runner = ProductRunner::new(input, root.path(), &cancel).unwrap();
+        let error = runner.package_breg(&args).unwrap_err();
+        assert!(error.to_string().contains("package.test-receipt.missing"));
+        assert!(!error.to_string().contains("canonical-base-iri-reserved"));
+        assert!(!args.output.exists());
+        let path = root.path().join("logs/breg-package-report.json");
+        let diagnostic: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(diagnostic["phase"] == "breg-package");
+        assert!(diagnostic["diagnosticCodes"]
+            .as_str()
+            .unwrap()
+            .contains("package.test-receipt.missing"));
+        assert!(fs::metadata(path).unwrap().permissions().mode() & 0o777 == 0o600);
+        let deployment = crate::package(&args, true).err().unwrap();
+        let mut report = Vec::new();
+        let mut errors = Vec::new();
+        crate::write_refusal(
+            &deployment,
+            crate::OutputFormat::Json,
+            &mut report,
+            &mut errors,
+        );
+        assert!(report_codes(report.as_slice())
+            .unwrap()
+            .contains("breg.registry.canonical-base-iri-reserved"));
+    }
+
+    /// Uses only a genuine retained public rehearsal receipt supplied explicitly
+    /// by the operator. This does not start a native lifecycle or a database.
+    #[test]
+    #[ignore = "requires RSTACK_LOCAL_PACKAGE_PUBLIC_RECEIPT from a genuine minimal public .invalid rehearsal"]
+    fn local_package_accepts_genuine_public_receipt_without_deployment_authority() {
+        use registry_breg::package::{
+            load_package, load_predecessor_package, PackageError, PackageLoadContext,
+        };
+        let retained = PathBuf::from(
+            std::env::var_os("RSTACK_LOCAL_PACKAGE_PUBLIC_RECEIPT")
+                .expect("supply the genuine public receipt"),
+        );
+        let root = tempfile::tempdir().unwrap();
+        let mut args = local_package_args(root.path());
+        fs::copy(retained, &args.test_receipt).unwrap();
+        let receipt: Value =
+            serde_json::from_slice(&fs::read(&args.test_receipt).unwrap()).unwrap();
+        assert!(receipt["successfulJourneyIds"] == json!(["directory-contact"]));
+        let input = local_package_input(std::env::current_exe().unwrap());
+        let cancel = AtomicBool::new(false);
+        let runner = ProductRunner::new(input, root.path(), &cancel).unwrap();
+        // Read the actual fingerprint through the same shared packaging path.
+        args.schema_fingerprint = None;
+        let deployment = crate::package(&args, true).err().unwrap();
+        let mut report = Vec::new();
+        let mut diagnostics = Vec::new();
+        crate::write_refusal(
+            &deployment,
+            crate::OutputFormat::Json,
+            &mut report,
+            &mut diagnostics,
+        );
+        assert!(report_codes(report.as_slice())
+            .unwrap()
+            .contains("breg.registry.canonical-base-iri-reserved"));
+        runner.package_breg(&args).unwrap();
+        let package = args.output.join("package");
+        let local = load_package(
+            &package,
+            &PackageLoadContext {
+                database_initialization_environment: "local",
+            },
+        )
+        .unwrap();
+        assert!(local.manifest().schema_fingerprint == receipt["targetManagedSchemaFingerprint"]);
+        assert!(matches!(
+            load_package(
+                &package,
+                &PackageLoadContext {
+                    database_initialization_environment: "production"
+                }
+            ),
+            Err(PackageError::DeploymentIdentity)
+        ));
+        load_predecessor_package(
+            &package,
+            &PackageLoadContext {
+                database_initialization_environment: "production",
+            },
+        )
+        .unwrap();
+        args.output = root.path().join("wrong-fingerprint");
+        let expected = receipt["targetManagedSchemaFingerprint"].as_str().unwrap();
+        let zero = format!("sha256:{}", "0".repeat(64));
+        let one = format!("sha256:{}", "1".repeat(64));
+        args.schema_fingerprint = Some(if expected == zero { one } else { zero });
+        let error = runner.package_breg(&args).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("package.test-receipt.fingerprint-mismatch"));
+        assert!(!args.output.exists());
     }
 
     #[test]

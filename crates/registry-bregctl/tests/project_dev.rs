@@ -2514,3 +2514,52 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     );
     fs::write(parent.join("result.json"), serde_json::to_vec_pretty(&serde_json::json!({"checkPassed":true,"startReady":true,"authoredNativeJourneyReceiptPassed":true,"journeyPassed":true,"localPackageAdmitted":true,"productionPackageRefused":true,"productionTargetLoadRefused":true,"predecessorRecoveryReadable":true,"statusReady":true,"stopStopped":true,"postStopStatusStopped":true,"stateEmpty":true,"sourceBytesUnchanged":true})).unwrap()).unwrap();
 }
+
+#[test]
+fn local_package_public_command_keeps_reserved_identity_refusal() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let initialized = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("init")
+        .arg(&project)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        initialized.status.success(),
+        "normal public initialization must succeed"
+    );
+    let path = project.join("registry.yaml");
+    let original = fs::read_to_string(&path).unwrap();
+    assert!(original.matches("https://directory.example.gov").count() == 1);
+    let source = original.replace(
+        "https://directory.example.gov",
+        "https://directory.example.invalid",
+    );
+    fs::write(&path, &source).unwrap();
+    let output = root.path().join("deployment-build");
+    let refused = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("package")
+        .arg(&project)
+        .arg("--schema-fingerprint")
+        .arg(format!("sha256:{}", "0".repeat(64)))
+        .arg("--test-receipt")
+        .arg(root.path().join("missing-receipt.json"))
+        .arg("--output")
+        .arg(&output)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        !refused.status.success(),
+        "ordinary package must refuse reserved identity"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert!(report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["code"] == "breg.registry.canonical-base-iri-reserved"));
+    assert!(!output.exists());
+    assert!(fs::read_to_string(&path).unwrap() == source);
+}
