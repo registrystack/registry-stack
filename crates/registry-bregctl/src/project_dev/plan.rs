@@ -486,7 +486,7 @@ pub(super) struct Expected {
     /// Accepted HTTP status: one status, or a list of 1 to 16 distinct statuses, each from 200 to 599.
     pub status: ExpectedStatus,
     /// Exact values the response body must hold, keyed by JSON pointer (empty for the whole body, otherwise starting with `/`). String values may contain `{{name}}` references to earlier captures.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "expected_json_values")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "expected_json_schema"))]
     pub json: BTreeMap<String, Value>,
     /// Further assertions about the response body, at most 32. Each one tests a single JSON pointer.
@@ -494,6 +494,22 @@ pub(super) struct Expected {
     pub checks: Vec<Check>,
     /// Problem code the error response must carry, 1 to 256 characters without whitespace or control characters. It may contain `{{name}}` references to earlier captures.
     pub code: Option<String>,
+}
+
+// Only each asserted JSON value is foreign data; the pointer map and the
+// surrounding scenario remain ordinary, strictly decoded configuration.
+fn expected_json_values<'de, D>(deserializer: D) -> Result<BTreeMap<String, Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    BTreeMap::<String, registry_platform_yaml::ForeignValue>::deserialize(deserializer).map(
+        |values| {
+            values
+                .into_iter()
+                .map(|(pointer, value)| (pointer, value.into_value()))
+                .collect()
+        },
+    )
 }
 
 /// One accepted HTTP status or a list of them.
@@ -1632,6 +1648,181 @@ mod tests {
         }))
         .unwrap();
         (root, plan)
+    }
+
+    // Exercise the production file readers, not serde_json's independent decoder.
+    fn read_expected_json(inline: bool, expected: &str) -> Result<Expected> {
+        let root = tempfile::tempdir()?;
+        fs::write(root.path().join("registry.yaml"), "fixture")?;
+        let base = format!(
+            "apiVersion: {API_VERSION}\nkind: {KIND}\nissuer: https://issuer.example.invalid\nproducts:\n  - {{product: breg, project: ., audience: registry}}\npeople:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: []}}\n"
+        );
+        let journey = format!(
+            r#"{{"id":"smoke","steps":[{{"id":"read","product":"breg","as":"operator","method":"GET","path":"/v1/records/widgets/00000000-0000-4000-8000-000000000001","expect":{expected}}}]}}"#
+        );
+        let tail = if inline {
+            format!("journey: {journey}\n")
+        } else {
+            fs::create_dir(root.path().join("tests"))?;
+            fs::write(
+                root.path().join("tests/scenarios.yaml"),
+                format!(
+                    "apiVersion: {SCENARIOS_API_VERSION}\nkind: {SCENARIOS_KIND}\nscenarios:\n  - {journey}\n"
+                ),
+            )?;
+            "scenarioFile: tests/scenarios.yaml\n".to_owned()
+        };
+        fs::write(root.path().join("dev.yaml"), format!("{base}{tail}"))?;
+        let mut decoded = read_plan(root.path())?;
+        validate_plan(root.path(), &decoded)?;
+        let mut journeys = if inline {
+            vec![decoded.value.journey.take().unwrap()]
+        } else {
+            read_scenarios(root.path(), &decoded.value)?.0
+        };
+        Ok(journeys.remove(0).steps.remove(0).expect)
+    }
+
+    #[test]
+    fn expected_json_reader_accepts_direct_null_values() {
+        for inline in [false, true] {
+            let expected =
+                read_expected_json(inline, r#"{"status":200,"json":{"/data/domainData":null}}"#)
+                    .unwrap();
+            assert_eq!(expected.json["/data/domainData"], Value::Null);
+        }
+    }
+
+    #[test]
+    fn expected_json_reader_accepts_inline_null_values() {
+        let expected = read_expected_json(
+            true,
+            r#"{"status":200,"json":{"/data/domainData":{"optionalText":null}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            expected.json["/data/domainData"],
+            json!({"optionalText": null})
+        );
+    }
+
+    #[test]
+    fn expected_json_reader_accepts_nested_null_and_preserves_exact_typed_values() {
+        let value = json!({"optionalText": null, "nested": [null, {"text": "null", "flag": false, "integer": 7, "fraction": 1.5}], "empty": {}});
+        for inline in [false, true] {
+            let source = format!(r#"{{"status":200,"json":{{"/data/domainData":{value}}}}}"#);
+            let expected = read_expected_json(inline, &source).unwrap();
+            assert_eq!(expected.json["/data/domainData"], value);
+            assert_eq!(
+                serde_json::to_value(&expected).unwrap()["json"]["/data/domainData"],
+                value
+            );
+            let expanded =
+                expand_json(&expected.json["/data/domainData"], |_| unreachable!()).unwrap();
+            assert_eq!(expanded, value);
+            assert_ne!(expanded, json!({"optionalText": null}));
+            assert_ne!(
+                expanded,
+                json!({"optionalText": "null", "nested": value["nested"], "empty": {}})
+            );
+        }
+    }
+
+    #[test]
+    fn expected_json_reader_keeps_null_scoped_to_each_expected_value() {
+        for inline in [false, true] {
+            for expected in [
+                r#"{"status":200,"json":null}"#,
+                r#"{"json":{"/data":null},"status":null}"#,
+                r#"{"status":200,"json":{"/data":null},"code":null}"#,
+            ] {
+                let error = read_expected_json(inline, expected).err().unwrap();
+                assert!(error.to_string().contains("config.null-value"), "{error}");
+            }
+            assert!(read_expected_json(inline, r#"{"status":200,"json":[]}"#).is_err());
+            for expected in [r#"{"status":200}"#, r#"{"status":200,"json":{}}"#] {
+                assert!(read_expected_json(inline, expected)
+                    .unwrap()
+                    .json
+                    .is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn expected_json_reader_retains_unknown_key_and_yaml_syntax_guards() {
+        for inline in [false, true] {
+            for (expected, code) in [
+                (
+                    r#"{"status":200,"json":{"/data":null},"unexpected":true}"#,
+                    "config.unknown-key",
+                ),
+                (
+                    r#"{"status":200,"json":{"/data":null,"/data":{}}}"#,
+                    "yaml.duplicate-key",
+                ),
+                (
+                    r#"{"status":200,"json":{"/data":{"optionalText":null,"optionalText":"text"}}}"#,
+                    "yaml.duplicate-key",
+                ),
+                (
+                    r#"{"status":200,"json":{"/data":{optionalText: &item null}}}"#,
+                    "yaml.anchor",
+                ),
+                (
+                    r#"{"status":200,"json":{"/data":{optionalText: *item}}}"#,
+                    "yaml.alias",
+                ),
+                (
+                    r#"{"status":200,"json":{"/data":{optionalText: !!str null}}}"#,
+                    "yaml.tag",
+                ),
+            ] {
+                let error = read_expected_json(inline, expected).err().unwrap();
+                assert!(error.to_string().contains(code), "{code}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn expected_json_reader_retains_document_size_and_depth_bounds() {
+        let deep = format!("{}null{}", "[".repeat(129), "]".repeat(129));
+        let large = format!(
+            "\"{}\"",
+            "x".repeat(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES)
+        );
+        for inline in [false, true] {
+            let expected = format!(r#"{{"status":200,"json":{{"/data":{deep}}}}}"#);
+            let error = read_expected_json(inline, &expected).err().unwrap();
+            assert!(error.to_string().contains("yaml.too-deep"), "{error}");
+            let expected = format!(r#"{{"status":200,"json":{{"/data":{large}}}}}"#);
+            let error = read_expected_json(inline, &expected).err().unwrap();
+            let detail = format!("{error:#}");
+            assert!(
+                detail.contains("size limit") || detail.contains("yaml.too-large"),
+                "{detail}"
+            );
+        }
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn expected_json_reader_matches_the_existing_exact_json_schema() {
+        let document = serde_json::to_value(schemars::schema_for!(Expected)).unwrap();
+        let schema = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&document)
+            .unwrap();
+        for value in [
+            Value::Null,
+            json!({"optionalText": null}),
+            json!([null, true, 1, "null"]),
+        ] {
+            let expected = json!({"status": 200, "json": {"/data/domainData": value}});
+            assert!(schema.is_valid(&expected), "{expected}");
+        }
+        assert!(!schema.is_valid(&json!({"status": 200, "json": null})));
+        assert!(!schema.is_valid(&json!({"status": null, "json": {}})));
     }
 
     fn canonical(root: &tempfile::TempDir) -> PathBuf {
