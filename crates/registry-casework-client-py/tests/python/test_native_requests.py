@@ -36,6 +36,7 @@ class _Handler(BaseHTTPRequestHandler):
             "profile": self.headers.get("registry-casework-profile", ""),
             "review_profile": self.headers.get("registry-review-profile", ""),
             "source_profile": self.headers.get("registry-source-profile", ""),
+            "source_authorization": self.headers.get("registry-source-authorization", ""),
         })
         if f"cursor={EXPIRED_CURSOR}" in self.path:
             self.respond_problem(
@@ -204,6 +205,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "nextCursor": "target-next",
                 "status": "complete",
             })
+        elif urlsplit(self.path).path == "/tenant/v1/review-tasks":
+            self.respond({"items": [], "nextCursor": None, "status": "complete"})
         elif self.path.startswith("/tenant/v1/directory/absences?"):
             self.respond({
                 "directoryRevision": 12,
@@ -372,6 +375,27 @@ class NativeRequestTests(unittest.TestCase):
         self.server.shutdown()
         self.thread.join()
         self.server.server_close()
+
+    def test_separate_human_source_credential_is_explicit_and_not_retained(self) -> None:
+        self.assertEqual(self.client.human_source_credential_contract(),
+                         "registry.casework.human-source-credential.v1")
+        credential = {"source_profile": "source-reader", "token": "source-call-canary"}
+        self.client.review_tasks("casework-call-canary", "staff", source_credential=credential)
+        self.client.review_tasks("casework-call-canary", "staff")
+        first, second = _Handler.observations
+        self.assertEqual(first["authorization"], "Bearer casework-call-canary")
+        self.assertEqual(first["source_authorization"], "Bearer source-call-canary")
+        self.assertEqual(first["source_profile"], "source-reader")
+        self.assertEqual(second["source_authorization"], "")
+        self.assertEqual(second["source_profile"], "")
+        for value, profile in [(credential, "conflicting-profile"),
+                               ({**credential, "unknown": "refuse"}, None),
+                               ({"source_profile": "source-reader"}, None)]:
+            with self.subTest(value=value.keys(), profile=profile):
+                with self.assertRaises(CaseworkClientError):
+                    self.client.review_tasks("casework-call-canary", "staff",
+                                             source_profile=profile, source_credential=value)
+        self.assertEqual(len(_Handler.observations), 2)
 
     def test_description_ignores_additive_response_members(self) -> None:
         description = self.client.description("staff-token", "staff")
