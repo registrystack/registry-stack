@@ -4996,7 +4996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/project-dev.v1alpha1.schema.json",
-        "sha256": "c5c08ed560b3b278b9a8128bd92e15eb64ddfe1637a3292650effe6d9430a3a8",
+        "sha256": "0aca49708d20ae26e35eee44060f44b3c2dd9e09445328fa7a20414fc37232d3",
         "mediaType": "application/schema+json"
       }
     },
@@ -5136,7 +5136,7 @@
       "description": "Registry Casework development clients JSON Schema.",
       "source": {
         "path": "crates/registry-caseworkctl/src/schema.rs",
-        "sha256": "4f5378799ebb3a0f65b82eff6f654d8323679bf147214eb68c821bbd6c94733a"
+        "sha256": "0ddb3d8fb94d92e69a5a4fcca0393b42573a264351930fb296448f9a7dc4b10b"
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
@@ -5212,7 +5212,25 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "9d701cf095137be5e1ce0203943626bcf7005597f3e5748527b510fabe180cb4",
+        "sha256": "4122be508a569c6a73a033021d9e04b424ec9b5b2fcc22107683f930ab9d02a7",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/run-source/run-source.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Casework synthetic run source binding",
+      "description": "Registry Casework explicit synthetic run-source binding JSON Schema.",
+      "source": {
+        "path": "crates/registry-caseworkctl/src/schema.rs",
+        "sha256": "0ddb3d8fb94d92e69a5a4fcca0393b42573a264351930fb296448f9a7dc4b10b"
+      },
+      "artifact": {
+        "path": "products/casework/generated/run-source/run-source.schema.json",
+        "sha256": "75c9ab24f6f6dfa109a807fae80c0fdbbe2f462b5e848ae6d67e8c7880a8c4e0",
         "mediaType": "application/schema+json"
       }
     },
@@ -5230,7 +5248,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "ef82e91c0f0c3366bd62967be8453e90920341c246a6d05f56e4b4b4b8eb85b0",
+        "sha256": "51741b823bab73c729114d6c32787fecc873d621c85fed1024e46a6e32afbb43",
         "mediaType": "application/schema+json"
       }
     },
