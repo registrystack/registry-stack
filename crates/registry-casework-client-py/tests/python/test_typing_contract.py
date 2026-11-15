@@ -68,7 +68,9 @@ class TypingContractTests(unittest.TestCase):
             with self.subTest(method=name):
                 arguments = methods[name].args
                 self.assertEqual([arg.arg for arg in arguments.args], ["self", "token", "profile", "task_id"])
-                self.assertEqual([arg.arg for arg in arguments.kwonlyargs], ["source_profile"])
+                self.assertEqual([arg.arg for arg in arguments.kwonlyargs], ["source_profile", "source_credential"])
+                self.assertEqual(ast.unparse(arguments.kwonlyargs[1].annotation), "HumanSourceCredential | None")
+                self.assertEqual(ast.unparse(arguments.kw_defaults[1]), "None")
                 self.assertEqual(ast.unparse(arguments.kwonlyargs[0].annotation), "str | None")
                 self.assertEqual(ast.unparse(arguments.kw_defaults[0]), "None")
 
