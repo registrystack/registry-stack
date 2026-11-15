@@ -2558,6 +2558,16 @@ mod tests {
         .is_err());
     }
 
+    fn read_public_fixture(path: &Path, format: &registry_platform_yaml::FormatSpec<'_>) -> Value {
+        registry_platform_yaml::Reader::new(path.display().to_string())
+            .read(
+                &fs::read(path).unwrap(),
+                &registry_platform_yaml::Expect::one(format),
+            )
+            .unwrap()
+            .to_json_value()
+    }
+
     #[test]
     fn minimal_schema_tokens_preserve_exact_client_and_fixture_claims() {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -2565,11 +2575,14 @@ mod tests {
             .join("../../products/breg/examples/minimal")
             .canonicalize()
             .unwrap();
-        let clients: Value =
-            serde_norway::from_slice(&fs::read(source.join("dev-clients.yaml")).unwrap()).unwrap();
-        let fixtures: Value =
-            serde_norway::from_slice(&fs::read(source.join("tests/journeys.yaml")).unwrap())
-                .unwrap();
+        let clients = read_public_fixture(
+            &source.join("dev-clients.yaml"),
+            &crate::dev::DEV_CLIENTS_FORMAT,
+        );
+        let fixtures = read_public_fixture(
+            &source.join("tests/journeys.yaml"),
+            &registry_breg::fixtures::JOURNEYS_FORMAT,
+        );
         let root = tempfile::tempdir().unwrap();
         let issuer = Issuer::create(root.path()).unwrap();
         let mut input = breg_input(false);
@@ -2674,8 +2687,10 @@ mod tests {
         use registry_breg::auth::{AuthenticationError, RegistryAuthenticator};
         let source =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
-        let clients: Value =
-            serde_norway::from_slice(&fs::read(source.join("dev-clients.yaml")).unwrap()).unwrap();
+        let clients = read_public_fixture(
+            &source.join("dev-clients.yaml"),
+            &crate::dev::DEV_CLIENTS_FORMAT,
+        );
         let client = &clients["clients"][0];
         let mut claims = client["claims"].as_object().unwrap().clone();
         let subject = claims.remove("registry_principal").unwrap();
