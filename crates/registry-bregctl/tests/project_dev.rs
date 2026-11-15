@@ -702,6 +702,38 @@ fn check_reads_authored_scenarios_without_allocating_run_state() {
 }
 
 #[test]
+fn check_accepts_scoped_null_assertions_but_refuses_null_native_input() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let scenario = |body: &str, expected: &str| {
+        format!(
+            "  - id: nullable\n    steps:\n      - id: compare\n        product: breg\n        as: operator\n        method: POST\n        path: /v1/actions/fixture\n{body}        expect: {expected}\n"
+        )
+    };
+    let expected = "{status: 200, json: {/data: {optional: null, nested: [null, 'null', false]}}}";
+    authored_scenarios(scratch.path(), &scenario("", expected));
+    let accepted = check(scratch.path(), &state, true);
+    assert!(accepted.status.success(), "{accepted:?}");
+    assert!(!state.exists());
+
+    for (body, expected) in [
+        ("        body: {optional: null}\n", expected),
+        ("        body: null\n", expected),
+        ("", "{status: 200, json: null}"),
+    ] {
+        let scratch = tempfile::tempdir().unwrap();
+        let state = scratch.path().join("state");
+        authored_scenarios(scratch.path(), &scenario(body, expected));
+        let refused = check(scratch.path(), &state, true);
+        assert!(!refused.status.success(), "{refused:?}");
+        let report: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+        assert_eq!(report["status"], "domain-refusal");
+        assert_eq!(report["diagnostics"][0]["code"], "config.null-value");
+        assert!(!state.exists());
+    }
+}
+
+#[test]
 fn check_refuses_duplicate_authored_scenarios() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
