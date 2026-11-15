@@ -1123,6 +1123,36 @@ fn retain_tool_receipt(
     )
 }
 
+/// Closed diagnostic metadata from the owning schema-test report. Never keep
+/// its arbitrary message, source snippets, credential fields or token values.
+fn schema_test_failure_projection(bytes: &[u8]) -> Value {
+    use sha2::{Digest, Sha256};
+    let bounded = bytes.len() <= 256 * 1024;
+    let value = bounded
+        .then(|| serde_json::from_slice::<Value>(bytes).ok())
+        .flatten();
+    let diagnostics: Vec<_> = value.as_ref().and_then(|v| v["diagnostics"].as_array())
+        .into_iter().flatten().take(6).map(|item| {
+            let code = item["code"].as_str().filter(|code| matches!(*code,
+                "test.step.failed" | "test.database.unavailable" | "test.credentials.refused" | "test.execution.refused"));
+            let indices = item["path"].as_str().and_then(|path| {
+                let path = path.strip_prefix("journeys[")?;
+                let (journey,step)=path.split_once("].steps[")?;
+                let step=step.strip_suffix(']')?;
+                if journey.is_empty() || step.is_empty() || !journey.bytes().all(|b|b.is_ascii_digit()) || !step.bytes().all(|b|b.is_ascii_digit()) { return None; }
+                Some((journey.parse::<u32>().ok()?,step.parse::<u32>().ok()?))
+            });
+            let reason = match item["message"].as_str() {
+                Some("the fixture credential is missing the configured actor-kind claim") => Some("credential-actor-kind-missing"),
+                Some("the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client") => Some("credential-verification-refused"),
+                _ => None,
+            };
+            json!({"code":code,"journeyIndex":indices.map(|v|v.0),"stepIndex":indices.map(|v|v.1),"reasonClass":reason})
+        }).collect();
+    json!({"phase":"breg-test","reportParsed":value.is_some(),"reportBounded":bounded,
+        "reportSha256":bounded.then(||format!("sha256:{}",Sha256::digest(bytes).iter().map(|byte|format!("{byte:02x}")).collect::<String>())),"diagnostics":diagnostics})
+}
+
 fn logged_tool_result(
     status: ExitStatus,
     output: &mut fs::File,
@@ -1131,6 +1161,18 @@ fn logged_tool_result(
 ) -> Result<()> {
     if status.success() {
         return Ok(());
+    }
+    if product == "breg" && stage == "test" {
+        output.rewind()?;
+        let mut bytes = Vec::new();
+        (&mut *output)
+            .take(256 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        let projection = schema_test_failure_projection(&bytes);
+        write_private(
+            &root.join("logs/breg-test-failure.json"),
+            &serde_json::to_vec(&projection)?,
+        )?;
     }
     output.rewind()?;
     let codes = report_codes(output)?;
@@ -2393,6 +2435,252 @@ mod tests {
         os::unix::fs::PermissionsExt,
         sync::mpsc,
     };
+
+    #[test]
+    fn schema_failure_projection_keeps_only_closed_step_metadata() {
+        let report = json!({"diagnostics":[{"code":"test.step.failed","path":"journeys[0].steps[3]",
+            "message":"the fixture credential is missing the configured actor-kind claim",
+            "token":"eyJ-private-canary","source":{"value":"private-source-canary"}},
+            {"code":"private-code-canary","path":"/private/path-canary","message":"postgresql://private-url-canary"}]});
+        let projected = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
+        assert!(projected["diagnostics"][0]["journeyIndex"] == 0);
+        assert!(projected["diagnostics"][0]["stepIndex"] == 3);
+        assert!(projected["diagnostics"][0]["reasonClass"] == "credential-actor-kind-missing");
+        assert!(projected["diagnostics"][1]["code"].is_null());
+        assert!(projected["diagnostics"][1]["stepIndex"].is_null());
+        assert!(!projected.to_string().contains("canary"));
+        assert!(schema_test_failure_projection(b"not json")["reportParsed"] == false);
+        assert!(
+            schema_test_failure_projection(&vec![b'x'; 256 * 1024 + 1])["reportSha256"].is_null()
+        );
+        let malformed = json!({"diagnostics":[{"code":"test.step.failed","path":"journeys[0].steps[3]/private-canary","message":"private-canary"}]});
+        assert!(
+            schema_test_failure_projection(&serde_json::to_vec(&malformed).unwrap())["diagnostics"]
+                [0]["stepIndex"]
+                .is_null()
+        );
+    }
+
+    #[test]
+    fn schema_failure_projection_survives_normal_failed_log_cleanup() {
+        use std::io::Write as _;
+        use std::os::unix::process::ExitStatusExt as _;
+        let scratch = tempfile::tempdir().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let root = scratch.path().join(id);
+        private_directory(&root).unwrap();
+        drop(open_log(&root, "breg-test").unwrap());
+        let mut output = tempfile::tempfile_in(&root).unwrap();
+        let report = json!({"diagnostics":[{"code":"test.step.failed","path":"journeys[0].steps[0]",
+            "message":"the fixture credential is missing the configured actor-kind claim",
+            "token":"eyJ-private-canary","connection":"postgresql://private-url-canary"}]});
+        output
+            .write_all(&serde_json::to_vec(&report).unwrap())
+            .unwrap();
+        let error = logged_tool_result(
+            ExitStatus::from_raw(256),
+            &mut output,
+            &root,
+            ("breg", "test"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("test.step.failed"));
+        let path = root.join("logs/breg-test-failure.json");
+        assert!(fs::metadata(&path).unwrap().permissions().mode() & 0o777 == 0o600);
+        let kept = crate::project_dev::keep_logs(&root, id).unwrap().unwrap();
+        fs::remove_dir(&root).unwrap();
+        let bytes = fs::read(kept.join("breg-test-failure.json")).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("canary"));
+        let evidence: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(evidence["diagnostics"][0]["reasonClass"] == "credential-actor-kind-missing");
+        assert!(evidence["diagnostics"][0]["stepIndex"] == 0);
+        let root = scratch.path().join("blocked");
+        private_directory(&root).unwrap();
+        drop(open_log(&root, "breg-test").unwrap());
+        fs::create_dir(root.join("logs/breg-test-failure.json")).unwrap();
+        assert!(logged_tool_result(
+            ExitStatus::from_raw(256),
+            &mut output,
+            &root,
+            ("breg", "test")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn minimal_schema_tokens_preserve_exact_client_and_fixture_claims() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/examples/minimal")
+            .canonicalize()
+            .unwrap();
+        let clients: Value =
+            serde_norway::from_slice(&fs::read(source.join("dev-clients.yaml")).unwrap()).unwrap();
+        let fixtures: Value =
+            serde_norway::from_slice(&fs::read(source.join("tests/journeys.yaml")).unwrap())
+                .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let issuer = Issuer::create(root.path()).unwrap();
+        let mut input = breg_input(false);
+        input.breg_authority.as_mut().unwrap().principal = "registry_principal".into();
+        input.breg_authority.as_mut().unwrap().purpose = true;
+        for client in clients["clients"].as_array().unwrap() {
+            let raw = client["claims"].as_object().unwrap();
+            assert!(!raw.contains_key("registry_actor_kind"));
+            let mut claims = raw.clone();
+            let subject = claims.remove("registry_principal").unwrap();
+            let mut person:plan::TestPerson=serde_json::from_value(json!({"subject":subject,"client":client["id"],
+                "grants":{"breg":{"profile":client["accessProfiles"][0],"scopes":client["scopes"],"claims":claims}}})).unwrap();
+            let payload = |person: &plan::TestPerson| -> Value {
+                let token = issuer
+                    .token(&input, person, Product::Breg, clock().unwrap() + 300)
+                    .unwrap();
+                serde_json::from_slice(
+                    &URL_SAFE_NO_PAD
+                        .decode(token.split('.').nth(1).unwrap())
+                        .unwrap(),
+                )
+                .unwrap()
+            };
+            // Reproduce the old test adapter's omission without a product run.
+            assert!(payload(&person).get("registry_actor_kind").is_none());
+            // Existing dev/config::client_token_claims makes this ordinary
+            // machine default explicit; no issuer or verifier default changes.
+            person
+                .grants
+                .get_mut(&Product::Breg)
+                .unwrap()
+                .claims
+                .insert("registry_actor_kind".into(), json!("service"));
+            let minted = payload(&person);
+            assert!(minted["registry_actor_kind"] == "service");
+            let mut expected_names: BTreeSet<_> = raw.keys().map(String::as_str).collect();
+            expected_names.extend([
+                "registry_actor_kind",
+                "iss",
+                "aud",
+                "sub",
+                "client_id",
+                "scope",
+                "iat",
+                "exp",
+                "jti",
+            ]);
+            assert!(
+                minted
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>()
+                    == expected_names
+            );
+            assert!(raw
+                .iter()
+                .all(|(name, value)| minted.get(name) == Some(value)));
+            assert!(minted["sub"] == subject && minted["client_id"] == client["id"]);
+            assert!(
+                minted["iss"] == input.plan.issuer
+                    && minted["aud"] == input.plan.product(Product::Breg).audience
+            );
+            let scopes: BTreeSet<_> = minted["scope"].as_str().unwrap().split(' ').collect();
+            let registered: BTreeSet<_> = client["scopes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap())
+                .collect();
+            assert!(scopes == registered);
+            for step in fixtures["journeys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|j| j["steps"].as_array().unwrap())
+                .filter(|step| step["claims"]["principal"] == subject)
+            {
+                assert!(person.grants[&Product::Breg].profile == step["accessProfile"]);
+                assert!(minted["registry_purpose"] == step["claims"]["purpose"]);
+                assert!(step["claims"]["directClaims"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .all(|(name, value)| minted.get(name) == Some(value)));
+                let expected: BTreeSet<_> = step["claims"]["scopes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s.as_str().unwrap())
+                    .collect();
+                assert!(scopes == expected);
+            }
+        }
+    }
+
+    /// Real signer and verifier, with a static local JWKS. No database,
+    /// discovery request, listener or product process is involved.
+    #[test]
+    fn minimal_schema_authentication_requires_the_existing_machine_default() {
+        use registry_breg::auth::{AuthenticationError, RegistryAuthenticator};
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
+        let clients: Value =
+            serde_norway::from_slice(&fs::read(source.join("dev-clients.yaml")).unwrap()).unwrap();
+        let client = &clients["clients"][0];
+        let mut claims = client["claims"].as_object().unwrap().clone();
+        let subject = claims.remove("registry_principal").unwrap();
+        let person:plan::TestPerson=serde_json::from_value(json!({"subject":subject,"client":client["id"],
+            "grants":{"breg":{"profile":client["accessProfiles"][0],"scopes":client["scopes"],"claims":claims}}})).unwrap();
+        let mut input = breg_input(false);
+        input.breg_authority.as_mut().unwrap().principal = "registry_principal".into();
+        input.breg_authority.as_mut().unwrap().purpose = true;
+        input.plan.people.clear();
+        input.plan.people.insert("editor".into(), person);
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let issuer = Issuer::create(&root).unwrap();
+        let input = Arc::new(input);
+        let terminate = Arc::new(AtomicBool::new(false));
+        let runner = ProductRunner::new(Arc::clone(&input), &root, &terminate).unwrap();
+        // Only configuration decoding is exercised; no package is loaded or activated.
+        private_directory(&root.join("package")).unwrap();
+        let _ = breg_config(&runner, &root, "breg");
+        let config =
+            registry_breg::runtime_config::load_runtime_config(&root.join("breg-runtime.yaml"))
+                .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let keys = runtime.block_on(config.oidc_key_source()).unwrap();
+        let compiled = minimal_registry(str::to_owned);
+        let authenticator = RegistryAuthenticator::new(
+            &compiled,
+            config.authentication().oidc().token_verifier_config(),
+            keys,
+            config.authentication().authority_claim_config(),
+        )
+        .unwrap();
+        let person = &input.plan.people["editor"];
+        let token = issuer
+            .token(&input, person, Product::Breg, clock().unwrap() + 300)
+            .unwrap();
+        assert!(matches!(
+            runtime.block_on(authenticator.authenticate(&token)),
+            Err(AuthenticationError::MissingActorKind)
+        ));
+        let mut normalized: plan::TestPerson =
+            serde_json::from_value(serde_json::to_value(person).unwrap()).unwrap();
+        normalized
+            .grants
+            .get_mut(&Product::Breg)
+            .unwrap()
+            .claims
+            .insert("registry_actor_kind".into(), json!("service"));
+        let token = issuer
+            .token(&input, &normalized, Product::Breg, clock().unwrap() + 300)
+            .unwrap();
+        assert!(runtime.block_on(authenticator.authenticate(&token)).is_ok());
+    }
 
     #[test]
     fn postgis_requirement_comes_from_the_compiled_breg_inventory() {

@@ -2051,3 +2051,391 @@ fn normal_check_uses_owning_casework_tool_for_exact_run_producer_chain() {
         fs::read(project.join("casework/casework.yaml")).unwrap()
     );
 }
+
+/// Match the existing BReg dev-client normalizer, not a new issuer default.
+fn public_parity_client_claims(
+    client: &serde_json::Value,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut claims = client["claims"].as_object().unwrap().clone();
+    claims
+        .entry("registry_actor_kind".to_owned())
+        .or_insert_with(|| serde_json::json!("service"));
+    assert!(
+        client["allowHumanFixture"].as_bool().unwrap_or(false)
+            == (claims["registry_actor_kind"] == "human"),
+        "human fixtures require the existing authored opt-in"
+    );
+    claims
+}
+
+#[test]
+fn public_parity_clients_preserve_existing_machine_contract() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/minimal/dev-clients.yaml");
+    let clients = registry_platform_yaml::Reader::new(path.display().to_string())
+        .scan(&fs::read(&path).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    for client in clients["clients"].as_array().unwrap() {
+        let raw = client["claims"].as_object().unwrap();
+        assert!(!raw.contains_key("registry_actor_kind"));
+        let normalized = public_parity_client_claims(client);
+        assert!(normalized.len() == raw.len() + 1);
+        assert!(raw
+            .iter()
+            .all(|(key, value)| normalized.get(key) == Some(value)));
+        assert!(normalized["registry_actor_kind"] == "service");
+        for kind in ["agent", "service", "human"] {
+            let mut explicit = client.clone();
+            explicit["claims"]["registry_actor_kind"] = serde_json::json!(kind);
+            explicit["allowHumanFixture"] = serde_json::json!(kind == "human");
+            assert!(public_parity_client_claims(&explicit)["registry_actor_kind"] == kind);
+        }
+    }
+}
+
+/// Public native lifecycle regression. The caller supplies a fresh owner-only
+/// directory and a disposable TLS PostgreSQL, never a retained developer DB.
+#[test]
+#[ignore = "requires RSTACK_PARITY_ROOT, RSTACK_PARITY_DATABASE_URL_FILE, RSTACK_PARITY_DATABASE_CA, RSTACK_PARITY_RSTACK_BIN and RSTACK_PARITY_BREG_BIN"]
+fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
+    use registry_breg::package::{
+        load_package, load_predecessor_package, PackageError, PackageLoadContext,
+    };
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    fn required(name: &str) -> PathBuf {
+        std::env::var_os(name)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| panic!("set {name}"))
+    }
+    fn copy(source: &Path, target: &Path) {
+        fs::create_dir(target).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let destination = target.join(entry.file_name());
+            assert!(!entry.file_type().unwrap().is_symlink());
+            if entry.file_type().unwrap().is_dir() {
+                copy(&entry.path(), &destination);
+            } else {
+                fs::copy(entry.path(), destination).unwrap();
+            }
+        }
+    }
+    fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    visit(root, &entry.path(), files);
+                } else {
+                    files.insert(
+                        entry.path().strip_prefix(root).unwrap().to_owned(),
+                        fs::read(entry.path()).unwrap(),
+                    );
+                }
+            }
+        }
+        let mut files = BTreeMap::new();
+        visit(root, root, &mut files);
+        files
+    }
+    struct OwnedRun {
+        rstack: PathBuf,
+        install: PathBuf,
+        state: PathBuf,
+        run: Option<String>,
+    }
+    impl OwnedRun {
+        fn command(&self, operation: &str, subject: &Path) -> Command {
+            let mut command = Command::new(&self.rstack);
+            command
+                .args(["--install-root"])
+                .arg(&self.install)
+                .args(["dev", operation])
+                .arg(subject)
+                .arg("--json")
+                .env("RSTACK_DEV_STATE_DIR", &self.state)
+                .env("RSTACK_BREGCTL_BIN", env!("CARGO_BIN_EXE_bregctl"))
+                .env("RSTACK_BREG_BIN", required("RSTACK_PARITY_BREG_BIN"));
+            command
+        }
+        fn stop(&mut self) {
+            if let Some(id) = self.run.clone() {
+                let stopped = self.command("stop", Path::new(&id)).output().unwrap();
+                assert!(stopped.status.success(), "owned normal stop failed");
+                let report: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
+                assert_eq!(report["status"], "stopped");
+                self.run = None;
+                let later = self.command("status", Path::new(&id)).output().unwrap();
+                assert!(later.status.success());
+                let report: serde_json::Value = serde_json::from_slice(&later.stdout).unwrap();
+                assert_eq!(report["status"], "stopped");
+            }
+        }
+    }
+    impl Drop for OwnedRun {
+        fn drop(&mut self) {
+            if self.run.is_some() {
+                self.stop();
+            }
+        }
+    }
+
+    let parent = required("RSTACK_PARITY_ROOT").canonicalize().unwrap();
+    let scratch = tempfile::Builder::new()
+        .prefix("public-local-package-")
+        .tempdir_in(&parent)
+        .unwrap();
+    let root = scratch.path();
+    let project = root.join("project");
+    copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal"),
+        &project,
+    );
+    let source = fs::read_to_string(project.join("registry.yaml")).unwrap();
+    assert_eq!(source.matches("https://directory.example.gov").count(), 1);
+    fs::write(
+        project.join("registry.yaml"),
+        source.replace(
+            "https://directory.example.gov",
+            "https://directory.example.invalid",
+        ),
+    )
+    .unwrap();
+
+    // Derive identities and exact fixture-step assignments from the public
+    // project's existing authored clients and journeys, without widening them.
+    let yaml = |name: &str| -> serde_json::Value {
+        let path = project.join(name);
+        registry_platform_yaml::Reader::new(path.display().to_string())
+            .scan(&fs::read(&path).unwrap())
+            .unwrap()
+            .unwrap()
+            .to_json_value()
+    };
+    let clients = yaml("dev-clients.yaml");
+    let journeys = yaml("tests/journeys.yaml");
+    let mut people = serde_json::Map::new();
+    for client in clients["clients"].as_array().unwrap() {
+        let alias = client["id"].as_str().unwrap();
+        assert_eq!(client["accessProfiles"].as_array().unwrap().len(), 1);
+        let mut claims = public_parity_client_claims(client);
+        let subject = claims.remove("registry_principal").unwrap();
+        people.insert(alias.to_owned(), serde_json::json!({"subject":subject,"client":alias,
+            "grants":{"breg":{"profile":client["accessProfiles"][0],"scopes":client["scopes"],"claims":claims}}}));
+    }
+    let mut assignments = serde_json::Map::new();
+    for journey in journeys["journeys"].as_array().unwrap() {
+        let mut steps = serde_json::Map::new();
+        for step in journey["steps"].as_array().unwrap() {
+            let selected: Vec<_> = clients["clients"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|client| {
+                    client["claims"]["registry_principal"] == step["claims"]["principal"]
+                        && client["accessProfiles"][0] == step["accessProfile"]
+                        && client["scopes"] == step["claims"]["scopes"]
+                        && client["claims"]["registry_purpose"] == step["claims"]["purpose"]
+                })
+                .collect();
+            assert_eq!(
+                selected.len(),
+                1,
+                "one existing authored client must bind each fixture step"
+            );
+            steps.insert(
+                step["id"].as_str().unwrap().to_owned(),
+                selected[0]["id"].clone(),
+            );
+        }
+        assignments.insert(journey["id"].as_str().unwrap().to_owned(), steps.into());
+    }
+    fs::write(project.join("dev.yaml"), serde_json::to_vec_pretty(&serde_json::json!({
+        "apiVersion":"id.registrystack.org/formats/breg/project-dev/v1alpha1","kind":"BRegProjectDev",
+        "issuer":"https://issuer.example.invalid",
+        "products":[{"product":"breg","project":".","audience":"registry"}],
+        "people":people,"schemaTestPeople":assignments,
+        "journey":{"id":"public-directory","steps":[{"id":"read-registry","product":"breg","as":"editor","method":"GET","path":"/v1/registry","expect":{"status":200}}]}
+    })).unwrap()).unwrap();
+    let original = snapshot(&project);
+    let mut owned = OwnedRun {
+        rstack: required("RSTACK_PARITY_RSTACK_BIN"),
+        install: root.join("install"),
+        state: root.join("state"),
+        run: None,
+    };
+    let checked = owned.command("check", &project).output().unwrap();
+    assert!(
+        checked.status.success(),
+        "public authored project-dev check failed"
+    );
+    let database = fs::read_to_string(required("RSTACK_PARITY_DATABASE_URL_FILE")).unwrap();
+    let output = owned
+        .command("start", &project)
+        .args(["--ttl", "5m"])
+        .env("RSTACK_DEV_DATABASE_URL", database.trim())
+        .env(
+            "RSTACK_DEV_DATABASE_CA",
+            required("RSTACK_PARITY_DATABASE_CA"),
+        )
+        .output()
+        .unwrap();
+    let started: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    if let Some(id) = started["run_id"].as_str() {
+        owned.run = Some(id.to_owned());
+    }
+    fn retain_failure(root: &Path, parent: &Path) {
+        if !root.is_dir() {
+            return;
+        }
+        for entry in fs::read_dir(root).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                retain_failure(&entry.path(), parent);
+            } else if entry.file_name() == "breg-test-failure.json" {
+                let bytes = fs::read(entry.path()).unwrap();
+                assert!(bytes.len() <= 16 * 1024);
+                let _: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                use std::io::Write as _;
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(parent.join("first-failure.json"))
+                    .unwrap()
+                    .write_all(&bytes)
+                    .unwrap();
+            }
+        }
+    }
+    retain_failure(&owned.state, &parent);
+    let message = started["error"]["message"].as_str().unwrap_or("");
+    let mut redacted = message.replace(database.trim(), "[database]");
+    if let Ok(parsed) = url::Url::parse(database.trim()) {
+        if let Some(password) = parsed.password() {
+            redacted = redacted.replace(password, "[secret]");
+        }
+    }
+    let summary = redacted
+        .split_whitespace()
+        .map(|word| {
+            if word.contains("://") || word.contains('/') {
+                "[path-or-url]"
+            } else if word.len() > 80 || word.contains("eyJ") || word.contains("-----") {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(512)
+        .collect::<String>();
+    let diagnostic_codes: Vec<_> = message
+        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        .filter(|word| {
+            word.len() <= 128
+                && [
+                    "breg.", "test.", "package.", "startup.", "config.", "auth.", "source.",
+                ]
+                .iter()
+                .any(|prefix| word.starts_with(prefix))
+        })
+        .collect();
+    let failing_tool = [
+        "breg check",
+        "breg test",
+        "breg package",
+        "breg apply",
+        "breg verify",
+    ]
+    .into_iter()
+    .find(|stage| message.contains(stage));
+    let safe = serde_json::json!({"startExit":output.status.code(),"schema":started["schema_version"],"status":started["status"],"class":started["error"]["class"],"diagnosticCodes":diagnostic_codes,"failingTool":failing_tool,"boundedRedactedSummary":summary,
+        "missingManagedBinary":message.contains("managed") && message.contains("binary"),
+        "privatePathRefusal":message.contains("not writable by group") || message.contains("runtime configuration path"),
+        "postgresConnectionRefusal":message.contains("PostgreSQL") && message.contains("connect"),
+        "reservedIdentityDiagnostic":started["error"]["message"].as_str().is_some_and(|message|message.contains("breg.registry.canonical-base-iri-reserved")),
+        "sourceBytesUnchanged":snapshot(&project)==original});
+    fs::write(
+        parent.join("result.json"),
+        serde_json::to_vec_pretty(&safe).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "public placeholder start refused; see bounded result.json"
+    );
+    assert_eq!(started["status"], "ready");
+    assert_eq!(started["journey"]["result"], "passed");
+    let id = owned.run.as_deref().unwrap();
+    let run_root = owned.state.join(id);
+    let receipt = run_root.join("schema-test-receipt.json");
+    let receipt_value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+    assert_eq!(
+        receipt_value["successfulJourneyIds"],
+        serde_json::json!(["directory-contact"])
+    );
+    fs::copy(&receipt, parent.join("schema-test-receipt.json")).unwrap();
+    let package = run_root.join("breg-build/package");
+    load_package(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        load_package(
+            &package,
+            &PackageLoadContext {
+                database_initialization_environment: "production"
+            }
+        ),
+        Err(PackageError::DeploymentIdentity)
+    ));
+    load_predecessor_package(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "production",
+        },
+    )
+    .unwrap();
+    let deployment = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("package")
+        .arg(&project)
+        .arg("--test-receipt")
+        .arg(&receipt)
+        .arg("--output")
+        .arg(root.join("deployment-build"))
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(!deployment.status.success());
+    let refused: serde_json::Value = serde_json::from_slice(&deployment.stdout).unwrap();
+    assert!(refused["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["code"] == "breg.registry.canonical-base-iri-reserved"));
+    assert!(!root.join("deployment-build").exists());
+    let status = owned.command("status", Path::new(id)).output().unwrap();
+    assert!(status.status.success());
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["status"], "ready");
+    assert_eq!(status["journey"], started["journey"]);
+    owned.stop();
+    assert!(live_runs(&owned.state).is_empty());
+    assert_eq!(
+        snapshot(&project),
+        original,
+        "authored source must remain byte-identical"
+    );
+    fs::write(parent.join("result.json"), serde_json::to_vec_pretty(&serde_json::json!({"checkPassed":true,"startReady":true,"authoredNativeJourneyReceiptPassed":true,"journeyPassed":true,"localPackageAdmitted":true,"productionPackageRefused":true,"productionTargetLoadRefused":true,"predecessorRecoveryReadable":true,"statusReady":true,"stopStopped":true,"postStopStatusStopped":true,"stateEmpty":true,"sourceBytesUnchanged":true})).unwrap()).unwrap();
+}
