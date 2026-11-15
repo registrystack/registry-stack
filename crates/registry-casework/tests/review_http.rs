@@ -5753,6 +5753,20 @@ impl ReviewContextProvider for SeparateHumanSource {
 #[tokio::test]
 async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mutations() {
     use registry_casework_client::HumanSourceCredential;
+    const TRACE: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+    fn protected(response: &axum::response::Response) {
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("cache-control").and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+        assert_eq!(headers["referrer-policy"], "no-referrer");
+        assert_eq!(headers["x-frame-options"], "DENY");
+        assert!(headers.contains_key("content-security-policy"));
+        assert!(headers.contains_key("permissions-policy"));
+        assert!(headers.contains_key("traceparent"));
+    }
     const SOURCE_AUDIENCE: &str = "urn:test:breg-human-source";
     let idp = MockIdp::start().await;
     let (legacy, service, _, _, _, _, database) = app_with_database(&idp).await;
@@ -5798,6 +5812,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         .oneshot(
             Request::builder()
                 .uri("/v1/review-tasks")
+                .header("traceparent", TRACE)
                 .header("authorization", primary.authorization_header_value())
                 .header(CASEWORK_PROFILE_HEADER, "staff")
                 .header(
@@ -5810,10 +5825,12 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         .await
         .unwrap();
     assert_eq!(missing_profile.status(), StatusCode::BAD_REQUEST);
+    protected(&missing_profile);
     let problem: Value =
         serde_json::from_slice(&to_bytes(missing_profile.into_body(), 32768).await.unwrap())
             .unwrap();
     assert_eq!(problem["code"], "source-profile.required");
+    assert_eq!(problem["traceId"], "0123456789abcdef0123456789abcdef");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     for selector in [
         SOURCE_PROFILE_HEADER,
@@ -5839,6 +5856,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         );
         let refused = app.clone().oneshot(request).await.unwrap();
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        protected(&refused);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -5866,6 +5884,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     for patch in [
         json!({"sub":"different-human"}),
+        json!({"iat":0,"exp":1}),
         json!({"aud":AUDIENCE}),
         json!({"registry_actor_kind":"service"}),
         json!({"aud":[SOURCE_AUDIENCE]}),
@@ -5876,6 +5895,30 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
             .unwrap()
             .extend(patch.as_object().unwrap().clone());
         let bad = BearerToken::new(idp.mint_token(claims)).unwrap();
+        let refused = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/review-tasks")
+                    .header("traceparent", TRACE)
+                    .header("authorization", primary.authorization_header_value())
+                    .header(CASEWORK_PROFILE_HEADER, "staff")
+                    .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                    .header(
+                        SOURCE_AUTHORIZATION_HEADER,
+                        bad.authorization_header_value(),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+        protected(&refused);
+        let problem: Value =
+            serde_json::from_slice(&to_bytes(refused.into_body(), 32768).await.unwrap()).unwrap();
+        assert_eq!(problem["code"], "authentication.refused");
+        assert_eq!(problem["traceId"], "0123456789abcdef0123456789abcdef");
         assert!(client
             .review_tasks(
                 CaseworkAuth::new(&primary, "staff")
@@ -5999,7 +6042,11 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
             "A"
         },
     );
+    let mut expired = source_claims.clone();
+    expired["iat"] = json!(0);
+    expired["exp"] = json!(1);
     for bad_source in [
+        idp.mint_token(expired),
         idp.mint_token(mismatched),
         wrong_signature,
         idp.mint_token(source_claims.clone()),
@@ -6042,6 +6089,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
                     )
                     .await
                     .unwrap();
+                protected(&response);
                 let status = response.status();
                 let body: Value =
                     serde_json::from_slice(&to_bytes(response.into_body(), 32768).await.unwrap())
@@ -6149,6 +6197,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     for (method, path) in [
+        ("POST", "/v1/review-requests".into()),
         ("POST", format!("/v1/review-tasks/{task}/release")),
         ("GET", "/health".into()),
         ("GET", format!("/v1/review-accountability/{task}")),
@@ -6173,6 +6222,14 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        protected(&response);
+        let problem: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 32768).await.unwrap()).unwrap();
+        assert_eq!(problem["code"], "request.invalid");
+        assert!(problem["type"]
+            .as_str()
+            .unwrap()
+            .starts_with(CASEWORK_PROBLEM_TYPE_BASE));
     }
     server.abort();
     idp.stop().await;
