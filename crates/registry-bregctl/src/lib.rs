@@ -6137,8 +6137,9 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
 
 /// Build a package from a schema-tested candidate. A `deployment` package
 /// also applies the refusals for identity a deployable package must not
-/// carry; only `bregctl dev`, packaging for its own loopback session, passes
-/// `false`, and no command-line spelling reaches it.
+/// carry; native local owners (`bregctl dev` and `rstack dev`), packaging for
+/// their own loopback sessions, pass `false`. No public package command-line
+/// spelling reaches that mode.
 fn package(args: &PackageArgs, deployment: bool) -> Result<PackageSuccessReport, Refusal> {
     // The receipt names the fingerprint its rehearsal reached, so an operator who
     // does not restate it still packages against that exact managed catalogue.
