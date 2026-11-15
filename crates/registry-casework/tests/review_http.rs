@@ -5969,13 +5969,94 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let (_, task) = create_task(
+    let (created, task) = create_task(
         &legacy,
         &database,
         &idp,
         &review_request("dual-source-review", &idp.issuer()),
     )
     .await;
+    let (submitted_created, submitted_task) =
+        create_answer_task(&legacy, &database, &idp, "dual-source-submitted").await;
+    database
+        .execute(
+            "DELETE FROM casework_memberships WHERE subject='reviewer'",
+            &[],
+        )
+        .await
+        .unwrap();
+    // A supplied invalid source bearer must not reveal whether a task or
+    // request exists before its normal row/source disclosure checks.
+    let mut mismatched = source_claims.clone();
+    mismatched["sub"] = json!("different-human");
+    let mut wrong_signature = idp.mint_token(source_claims.clone());
+    let signature_start = wrong_signature.rfind('.').unwrap() + 1;
+    wrong_signature.replace_range(
+        signature_start..signature_start + 1,
+        if &wrong_signature[signature_start..signature_start + 1] == "A" {
+            "B"
+        } else {
+            "A"
+        },
+    );
+    for bad_source in [
+        idp.mint_token(mismatched),
+        wrong_signature,
+        idp.mint_token(source_claims.clone()),
+    ] {
+        for (existing, missing) in [
+            (
+                format!("/v1/review-tasks/{task}/context"),
+                format!("/v1/review-tasks/{}/context", Uuid::new_v4()),
+            ),
+            (
+                format!("/v1/review-requests/{}/history", created.request_id),
+                format!("/v1/review-requests/{}/history", Uuid::new_v4()),
+            ),
+            (
+                format!("/v1/review-tasks/{submitted_task}/context"),
+                format!("/v1/review-tasks/{}/context", Uuid::new_v4()),
+            ),
+            (
+                format!(
+                    "/v1/review-requests/{}/history",
+                    submitted_created.request_id
+                ),
+                format!("/v1/review-requests/{}/history", Uuid::new_v4()),
+            ),
+        ] {
+            let mut observations = Vec::new();
+            let before = calls.load(Ordering::SeqCst);
+            for path in [existing, missing] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(path)
+                            .header("authorization", primary.authorization_header_value())
+                            .header(CASEWORK_PROFILE_HEADER, "staff")
+                            .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                            .header(SOURCE_AUTHORIZATION_HEADER, format!("Bearer {bad_source}"))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let body: Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 32768).await.unwrap())
+                        .unwrap();
+                observations.push((status, body["code"].clone()));
+            }
+            assert_eq!(
+                observations[0], observations[1],
+                "source admission disclosed target existence"
+            );
+            assert_eq!(observations[0].0, StatusCode::NOT_FOUND);
+            assert_eq!(calls.load(Ordering::SeqCst), before);
+        }
+    }
+    database.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('review-team',$1,'reviewer','staff')", &[&idp.issuer()]).await.unwrap();
     assert_eq!(
         client
             .review_tasks(auth(), &Default::default())
@@ -5984,7 +6065,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
             .value
             .items
             .len(),
-        1
+        2
     );
     client
         .next_review_task(auth(), &Default::default())
