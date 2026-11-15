@@ -6,6 +6,9 @@ use crate::{HoldingSummary, IssuerPrincipal, Page, TeamRecord};
 
 pub const CASEWORK_PROFILE_HEADER: &str = "registry-casework-profile";
 pub const SOURCE_PROFILE_HEADER: &str = "registry-source-profile";
+/// A separate, invocation-local human credential for the pinned source provider.
+pub const SOURCE_AUTHORIZATION_HEADER: &str = "registry-source-authorization";
+pub const HUMAN_SOURCE_CREDENTIAL_CONTRACT: &str = "registry.casework.human-source-credential.v1";
 /// Prefix for every public Registry Casework problem type URI.
 pub const CASEWORK_PROBLEM_TYPE_BASE: &str =
     "https://id.registrystack.org/problems/registry-casework/";

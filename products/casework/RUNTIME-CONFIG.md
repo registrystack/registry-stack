@@ -264,6 +264,45 @@ transport credentials by updating their secret references without changing
 the policy. A changed BReg context contract needs a new export, schema pin and
 Casework package.
 
+Separate resource grants can opt in per provider with
+`humanSourceAuthentication: {audience: urn:example:breg}` in the existing
+`contextProviders` binding. The audience must differ from Casework's audience.
+Casework uses its existing issuer, signing-key trust, algorithms, access-token
+type, revocation and token lifetime policy to independently verify this source
+credential. It does not apply or combine Casework's `allowedClients` or
+`assertionIssuers` for source-client admission: BReg independently enforces its
+source client, profile, scope, purpose and disclosure before any field release.
+This creates no new issuer or client trust.
+
+An ordinary human request can then supply exactly one
+`Registry-Source-Authorization: Bearer <source-access-token>` alongside its
+Casework Authorization and explicit `Registry-Source-Profile`. Both verified
+tokens must name one scalar audience each and the same nonempty issuer and
+`sub`, carry the configured human marker and direct `registry_actor_kind:
+human`, and carry no delegation or task-grant claims. A custom Casework
+principal does not replace the verified subject comparison. Audience arrays,
+wrong key, issuer, time, subject or machine identity refuse; Casework authority
+never supplies source authority. Duplicate or conflicting headers refuse.
+
+The pinned task/request policy selects the provider. A collection invocation
+requires one unique current-source provider across the active project; zero or
+multiple providers refuse rather than filtering a bad credential into a partial
+page. Verification precedes source I/O and any output, including empty and
+submitted-only pages. Submitted-context single targets and source-free
+operations such as release, task-grant revocation, accountability, producer,
+directory and delegated-reader routes reject the new header. An absent header
+preserves ordinary single-bearer and CLI forwarding behavior. Once supplied,
+no fallback to the Casework token or machine status token is permitted.
+
+Credentials live only in the current request's redacted, zeroizing provider
+handle and its bounded source calls. They never enter tasks, decisions, drafts,
+audit, cursors, receipts or recovery objects. Clients borrow an explicit
+`HumanSourceCredential` per call. Language clients expose
+`humanSourceCredentialContract()` (Python: `human_source_credential_contract`)
+from the actually loaded native addon; its supported value is
+`registry.casework.human-source-credential.v1`. A facade version or a silently
+ignored extra argument is not capability evidence.
+
 `reviewCompletionDestinations` is keyed by the logical destination ids a
 producer's `completion` block names, kept as written: 1 to 512 characters
 without control characters. Each destination has one `url` and exactly

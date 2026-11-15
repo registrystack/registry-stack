@@ -31,6 +31,55 @@ const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-
 type HistoryObservations = Arc<Mutex<Vec<(String, HeaderMap)>>>;
 
 #[tokio::test]
+async fn separate_human_source_credential_is_explicit_per_call_and_never_retained() {
+    let observations = Arc::new(Mutex::new(Vec::<(String, HeaderMap)>::new()));
+    let app = Router::new()
+        .route("/v1/review-tasks", get(capture_review_task_discovery))
+        .with_state(observations.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let casework = BearerToken::new("casework-only-canary").expect("Casework token");
+    let source = BearerToken::new("source-only-canary").expect("source token");
+    let auth = CaseworkAuth::new(&casework, "staff").with_source_credential(
+        registry_casework_client::HumanSourceCredential::new(&source, "source-reviewer"),
+    );
+    let debug = format!("{auth:?}");
+    assert!(!debug.contains("casework-only-canary"));
+    assert!(!debug.contains("source-only-canary"));
+    client
+        .review_tasks(auth, &Default::default())
+        .await
+        .expect("explicit separate source call");
+    client
+        .review_tasks(CaseworkAuth::new(&casework, "staff"), &Default::default())
+        .await
+        .expect("legacy next call");
+    let observed = observations.lock().expect("observations");
+    assert_eq!(observed.len(), 2);
+    assert_eq!(
+        observed[0].1["authorization"],
+        "Bearer casework-only-canary"
+    );
+    assert_eq!(
+        observed[0].1["registry-source-authorization"],
+        "Bearer source-only-canary"
+    );
+    assert_eq!(observed[0].1["registry-source-profile"], "source-reviewer");
+    assert!(!observed[1].1.contains_key("registry-source-authorization"));
+    assert!(!observed[1].1.contains_key("registry-source-profile"));
+    server.abort();
+}
+
+#[tokio::test]
 async fn ordinary_nested_response_members_are_ignored() {
     let description = json!({
         "projectId": "client-fixture",

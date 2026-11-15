@@ -69,6 +69,9 @@ impl BregContextExport {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BregBinding {
+    /// Opt in to independently verified, same-human source credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_source_authentication: Option<HumanSourceAuthentication>,
     #[serde(deserialize_with = "registry_casework_core::typed::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub base_url: String,
@@ -98,6 +101,13 @@ pub struct BregBinding {
     pub scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_display_exchange: Option<DelegatedDisplayExchangeBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HumanSourceAuthentication {
+    pub audience: String,
 }
 /// The member of a context-provider binding that provider construction would
 /// refuse, and the rule it breaks. The reason names the rule and never the
@@ -135,6 +145,16 @@ impl BregBinding {
     /// the identifier themselves are checked when the provider is built.
     pub fn check_offline(&self) -> Result<(), BindingRefusal> {
         use registry_platform_httputil::{valid_resource_uri, validate_requested_scopes};
+        if self
+            .human_source_authentication
+            .as_ref()
+            .is_some_and(|auth| !valid_resource_uri(&auth.audience))
+        {
+            return Err(BindingRefusal::new(
+                "/humanSourceAuthentication/audience",
+                RESOURCE_URI_RULE,
+            ));
+        }
         if !registry_casework_core::valid_profile_identifier(&self.status_profile) {
             return Err(BindingRefusal::new(
                 "/statusProfile",

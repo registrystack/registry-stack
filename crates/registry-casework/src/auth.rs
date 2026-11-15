@@ -15,6 +15,9 @@ pub(crate) mod delegated;
 
 pub struct CaseworkAuthenticator {
     verifier: TokenVerifier,
+    source_verifier_config: TokenVerifierConfig,
+    source_keys: Arc<JwksFetcher>,
+    source_verifiers: BTreeMap<String, TokenVerifier>,
     audience: String,
     profiles: BTreeMap<String, AccessProfile>,
     /// Requester profiles through which a person reads their own review
@@ -44,6 +47,9 @@ impl CaseworkAuthenticator {
     ) -> Self {
         let audience = verifier.audiences.first().cloned().unwrap_or_default();
         Self {
+            source_verifier_config: verifier.clone(),
+            source_keys: Arc::clone(&keys),
+            source_verifiers: BTreeMap::new(),
             verifier: TokenVerifier::new(verifier, keys),
             audience,
             profiles: project
@@ -60,6 +66,89 @@ impl CaseworkAuthenticator {
             human_identity,
             delegated_staff_readers: BTreeMap::new(),
         }
+    }
+
+    /// Source authentication shares existing issuer/key trust, never Casework
+    /// client admission. BReg independently enforces source client authority.
+    #[must_use]
+    pub fn with_human_source_audiences(mut self, audiences: BTreeMap<String, String>) -> Self {
+        for (provider, audience) in audiences {
+            if audience == self.audience {
+                continue;
+            }
+            // Reuse only cryptographic trust and lifetime policy. In particular,
+            // Casework clients, assertion authorities and scope mappings are not
+            // source admission policy; BReg owns those independent decisions.
+            let existing = &self.source_verifier_config;
+            let mut config = TokenVerifierConfig::access_token_profile(
+                existing.issuer.clone(),
+                vec![audience],
+                existing.allowed_algorithms.clone(),
+                existing.allowed_typ.clone(),
+            );
+            config.denied_kids = existing.denied_kids.clone();
+            config.max_token_lifetime = existing.max_token_lifetime;
+            config.leeway = existing.leeway;
+            self.source_verifiers.insert(
+                provider,
+                TokenVerifier::new(config, Arc::clone(&self.source_keys)),
+            );
+        }
+        self
+    }
+
+    pub(crate) async fn verify_human_source_pair(
+        &self,
+        casework: &str,
+        source: &str,
+        provider: &str,
+    ) -> Result<(), AuthenticationError> {
+        validate_compact_access_token(source).map_err(|_| AuthenticationError::Refused)?;
+        let source_verifier = self
+            .source_verifiers
+            .get(provider)
+            .ok_or(AuthenticationError::Refused)?;
+        let primary = self
+            .verifier
+            .verify(casework)
+            .await
+            .map_err(|_| AuthenticationError::Refused)?;
+        let secondary = source_verifier
+            .verify(source)
+            .await
+            .map_err(|_| AuthenticationError::Refused)?;
+        for verified in [&primary, &secondary] {
+            if !matches!(
+                verified.claims.aud,
+                Some(registry_platform_oidc::Audience::One(_))
+            ) || verified.claims.sub.as_deref().is_none_or(str::is_empty)
+                || verified
+                    .claims
+                    .extra
+                    .get("registry_actor_kind")
+                    .and_then(Value::as_str)
+                    != Some("human")
+                || verified
+                    .claims
+                    .extra
+                    .get(&self.human_identity.claim)
+                    .and_then(Value::as_str)
+                    != Some(self.human_identity.value.as_str())
+                || verified.claims.extra.contains_key("act")
+                || verified
+                    .claims
+                    .extra
+                    .keys()
+                    .any(|key| key.starts_with("registry_grant_"))
+            {
+                return Err(AuthenticationError::Refused);
+            }
+        }
+        if primary.claims.iss != secondary.claims.iss || primary.claims.sub != secondary.claims.sub
+        {
+            return Err(AuthenticationError::Refused);
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -405,6 +494,200 @@ mod tests {
         header.kid = Some("test".to_owned());
         header.typ = Some("at+jwt".to_owned());
         jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(SECRET)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn separate_human_source_pair_uses_raw_subject_and_independent_source_client() {
+        let mut project = project();
+        project.access_profiles.push(AccessProfile {
+            id: "staff".into(),
+            label: None,
+            description: None,
+            principal_claim: "casework_principal".into(),
+            required_scopes: vec!["casework-review".into()],
+            acts_as: CaseworkActsAs::Staff,
+        });
+        let verifier = TokenVerifierConfig::access_token_profile(
+            ISSUER,
+            vec![AUDIENCE.into()],
+            vec![Algorithm::HS256],
+            vec!["at+jwt".into()],
+        )
+        .with_allowed_clients(vec![CLIENT.into()])
+        .with_max_token_lifetime(Some(std::time::Duration::from_secs(600)));
+        let auth = CaseworkAuthenticator::new(
+            &project,
+            verifier,
+            keys(),
+            HumanIdentityConfig {
+                claim: "human_session".into(),
+                value: "yes".into(),
+            },
+        )
+        .with_human_source_audiences(BTreeMap::from([(
+            "registry".into(),
+            "urn:breg:source".into(),
+        )]));
+        let primary_claims = json!({"sub":"same-human", "casework_principal":"casework-alias", "client_id":CLIENT, "scope":"casework-review", "registry_actor_kind":"human", "human_session":"yes"});
+        let source_claims = json!({"aud":"urn:breg:source", "sub":"same-human", "registry_principal":"source-alias", "client_id":"different-source-client", "scope":"source-only", "registry_actor_kind":"human", "human_session":"yes"});
+        let primary = token(primary_claims.clone());
+        let source = token(source_claims.clone());
+        assert_eq!(
+            auth.authenticate(&primary, "staff")
+                .await
+                .unwrap()
+                .principal
+                .subject,
+            "casework-alias"
+        );
+        auth.verify_human_source_pair(&primary, &source, "registry")
+            .await
+            .expect("separate client and principal aliases do not alter verified raw sub");
+        assert!(auth
+            .verify_human_source_pair(&primary, &source, "unknown")
+            .await
+            .is_err());
+        let now = Utc::now().timestamp();
+        for patch in [
+            json!({"sub":"another-human"}),
+            json!({"sub":null}),
+            json!({"sub":["same-human"]}),
+            json!({"iss":"https://other.example.test"}),
+            json!({"aud":AUDIENCE}),
+            json!({"aud":["urn:breg:source"]}),
+            json!({"aud":["urn:breg:source",AUDIENCE]}),
+            json!({"registry_actor_kind":"service"}),
+            json!({"registry_actor_kind":null}),
+            json!({"human_session":"no"}),
+            json!({"act":{"sub":"agent"}}),
+            json!({"registry_grant_id":"grant"}),
+            json!({"iat":now-7200,"exp":now-3600}),
+            json!({"iat":now,"exp":now+1000}),
+            json!({"nbf":now+3600}),
+        ] {
+            let mut claims = source_claims.clone();
+            claims
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            assert!(
+                auth.verify_human_source_pair(&primary, &token(claims), "registry")
+                    .await
+                    .is_err(),
+                "source mutation must fail"
+            );
+        }
+        let mut array_primary = primary_claims.clone();
+        array_primary["aud"] = json!([AUDIENCE]);
+        assert!(auth
+            .verify_human_source_pair(&token(array_primary), &source, "registry")
+            .await
+            .is_err());
+        let mut other_primary = primary_claims.clone();
+        other_primary["sub"] = json!("different-raw-sub");
+        assert!(auth
+            .verify_human_source_pair(&token(other_primary), &source, "registry")
+            .await
+            .is_err());
+        // Same display principal cannot compensate for a different verified subject.
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("test".into());
+        header.typ = Some("at+jwt".into());
+        let mut signed = source_claims.clone();
+        signed["iss"] = json!(ISSUER);
+        signed["iat"] = json!(now);
+        signed["exp"] = json!(now + 300);
+        let wrong_key = jsonwebtoken::encode(
+            &header,
+            &signed,
+            &EncodingKey::from_secret(b"different-signing-key-not-trusted"),
+        )
+        .unwrap();
+        assert!(auth
+            .verify_human_source_pair(&primary, &wrong_key, "registry")
+            .await
+            .is_err());
+        let mut disallowed = header.clone();
+        disallowed.alg = Algorithm::HS512;
+        let wrong_algorithm =
+            jsonwebtoken::encode(&disallowed, &signed, &EncodingKey::from_secret(SECRET)).unwrap();
+        assert!(auth
+            .verify_human_source_pair(&primary, &wrong_algorithm, "registry")
+            .await
+            .is_err());
+        header.typ = Some("JWT".into());
+        let wrong_type =
+            jsonwebtoken::encode(&header, &signed, &EncodingKey::from_secret(SECRET)).unwrap();
+        assert!(auth
+            .verify_human_source_pair(&primary, &wrong_type, "registry")
+            .await
+            .is_err());
+        let mut auth = auth;
+        auth.source_verifier_config
+            .denied_kids
+            .insert("test".into());
+        let auth = auth.with_human_source_audiences(BTreeMap::from([(
+            "registry".into(),
+            "urn:breg:source".into(),
+        )]));
+        auth.authenticate(&primary, "staff")
+            .await
+            .expect("primary policy unchanged by source key refusal");
+        assert!(auth
+            .verify_human_source_pair(&primary, &source, "registry")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn separate_human_source_refusals_never_log_credentials_or_subjects() {
+        use tracing::instrument::WithSubscriber;
+        #[derive(Clone)]
+        struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, value: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(value);
+                Ok(value.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = output.clone();
+        let dispatch = tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || Capture(captured.clone()))
+                .finish(),
+        );
+        let auth = authenticator(BTreeMap::new()).with_human_source_audiences(BTreeMap::from([(
+            "registry".into(),
+            "urn:breg:source".into(),
+        )]));
+        let primary = token(
+            json!({"sub":"primary-human-canary", "client_id":CLIENT, "registry_actor_kind":"human"}),
+        );
+        let source = token(
+            json!({"aud":"urn:breg:source", "sub":"different-source-human-canary", "client_id":"source-client-canary", "registry_actor_kind":"human"}),
+        );
+        assert!(auth
+            .verify_human_source_pair(&primary, &source, "registry")
+            .with_subscriber(dispatch)
+            .await
+            .is_err());
+        let logs = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        for canary in [
+            primary.as_str(),
+            source.as_str(),
+            "primary-human-canary",
+            "different-source-human-canary",
+            "source-client-canary",
+        ] {
+            assert!(!logs.contains(canary));
+        }
     }
 
     #[tokio::test]

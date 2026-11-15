@@ -109,3 +109,14 @@ const unknownStaffingNotice: StaffingDiagnostic = 'unavailable'
 void unknownStaffingNotice
 // @ts-expect-error AssignmentContext was unused and removed from the maintained contract
 import type { AssignmentContext } from '../client'
+
+const sourceCredential: import('../client').HumanSourceCredential = { sourceProfile: 'source-reader', token: 'separate-call-secret' }
+const nativeSourceContract: string = client.humanSourceCredentialContract()
+void nativeSourceContract
+void client.reviewTasks(token, profile, undefined, undefined, sourceCredential)
+void client.claimReviewTask(token, profile, id, 1, 'claim', undefined, sourceCredential)
+void client.previewReviewTaskTemplates(token, profile, { taskId: id, sourceCredential })
+// @ts-expect-error the explicit source selector is required with a source bearer
+void client.reviewTasks(token, profile, undefined, undefined, { token: 'source' })
+// @ts-expect-error credentials are opaque strings, not decoded claim objects
+void client.reviewTasks(token, profile, undefined, undefined, { sourceProfile: 'source-reader', token: { sub: 'person' } })

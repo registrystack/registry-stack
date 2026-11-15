@@ -134,6 +134,17 @@ class CaseworkClient {
     }
   }
 
+  humanSourceCredentialContract() {
+    try {
+      const capability = typeof this.native.humanSourceCredentialContract === 'function'
+        ? this.native.humanSourceCredentialContract() : undefined;
+      if (capability !== 'registry.casework.human-source-credential.v1') {
+        throw new Error('The loaded native Casework client does not support separate human source credentials');
+      }
+      return capability;
+    } catch (error) { throw normalized(error, 'configuration'); }
+  }
+
   taskAssertionEndpoint(grantId) {
     try {
       return this.native.taskAssertionEndpoint(grantId);
@@ -143,6 +154,17 @@ class CaseworkClient {
   }
 }
 
+function humanSourceCredentialValue(value) {
+  const source = sanitize(value, 'invalid-request');
+  if (!source || Array.isArray(source) || Object.keys(source).sort().join() !== 'sourceProfile,token'
+      || typeof source.sourceProfile !== 'string' || !source.sourceProfile || source.sourceProfile.length > 64
+      || typeof source.token !== 'string' || !source.token || source.token.length > 131072) {
+    throw normalized({}, 'invalid-request');
+  }
+  return source;
+}
+
+const sourceCredentialIndexes = new Map([["nextReviewTask", 4], ["reviewTasks", 4], ["supervisoryReviewTasks", 4], ["ownReviewDecisions", 4], ["reviewTask", 4], ["reviewTaskContext", 4], ["approveReviewTaskGrant", 7], ["claimReviewTask", 6], ["assignReviewTask", 7], ["delegateReviewTask", 7], ["reviewTaskDraft", 4], ["saveReviewTaskDraft", 7], ["deleteReviewTaskDraft", 6], ["decideReviewTask", 7], ["reviewHistory", 5], ["addReviewNote", 6], ["reviewClocks", 4], ["reviewTaskHoldings", 4], ["previewClockRecompute", 3], ["applyClockRecompute", 4], ["previewCaseloadMove", 4], ["applyCaseloadMove", 5]]);
 for (const [method, jsonIndexes] of [
   ['description', []],
   ['createOrRecoverReviewRequest', [3]],
@@ -194,6 +216,19 @@ for (const [method, jsonIndexes] of [
 ]) {
   CaseworkClient.prototype[method] = function (...args) {
     try {
+      const sourceIndex = sourceCredentialIndexes.get(method);
+      if (sourceIndex !== undefined && args[sourceIndex] !== undefined && args[sourceIndex] !== null) {
+        args[sourceIndex] = humanSourceCredentialValue(args[sourceIndex]);
+        this.humanSourceCredentialContract();
+      }
+      if (method === 'previewReviewTaskTemplates' || method === 'listReviewTaskGrants') {
+        const options = sanitize(args[2], 'invalid-request');
+        if (options.sourceCredential !== undefined && options.sourceCredential !== null) {
+          options.sourceCredential = humanSourceCredentialValue(options.sourceCredential);
+          this.humanSourceCredentialContract();
+        }
+        args[2] = options;
+      }
       for (const index of jsonIndexes) {
         if (args[index] !== undefined && args[index] !== null) args[index] = sanitize(args[index], 'invalid-request');
       }

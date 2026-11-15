@@ -265,3 +265,32 @@ Focused executable proofs are `registry-caseworkctl` `run_source::tests` and
 `registry-bregctl` `normal_check_uses_owning_casework_tool_for_exact_run_producer_chain`;
 the latter requires a matching CLI and proves offline inspection, not database
 admission or activation. Full native admission remains a separate database gate.
+
+
+## Separate credentials for the same human
+
+Ordinary human current-source calls may opt into a separately issued source
+bearer through an explicit provider `humanSourceAuthentication` audience and
+`Registry-Source-Authorization`. Casework still authenticates and authorizes its
+own bearer/profile first. It independently verifies both signatures, existing
+issuer/key/type/revocation/time policy, scalar distinct audiences and the same
+verified nonempty issuer/sub. Both must be direct human sessions; neither a
+custom principal alias nor a machine, delegated actor or task grant can stand
+in for that binding. Source client/profile/scope/purpose admission remains
+BReg's, without cloning or unioning Casework client lists.
+
+The selected stored policy pins the provider. Collection authentication resolves
+one immutable provider before filtering or output, including empty pages;
+missing or ambiguous providers and invalid pairs fail the invocation. Single
+submitted targets and source-free routes reject the source header. A verified
+request-local provider handle forwards only the source bearer, never the
+Casework or unattended status credential. Credentials are redacted, zeroized
+and dropped with the request, with no cross-call cache or durable recovery
+capture. Legacy absent-header flows retain their existing authorization and
+concealment. This is two independently authorized credentials for one existing
+human, not delegation, authority transfer or a grant union.
+
+Owning proofs include the native `separate_human_source_pair_uses_raw_subject_and_independent_source_client`,
+HTTP `separate_human_source_credentials_bind_before_empty_inbox_and_guard_mutations`,
+provider-scope concurrency tests, and SDK wire/capability negatives. Their
+presence names the proof obligation; actual execution is recorded separately.

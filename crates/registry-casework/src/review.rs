@@ -270,6 +270,40 @@ impl SourceDisclosure {
 }
 
 impl CaseworkService {
+    pub(crate) async fn human_source_provider(
+        &self,
+        task: Option<Uuid>,
+        request: Option<Uuid>,
+    ) -> Result<String, ReviewRuntimeError> {
+        let record = if let Some(task) = task {
+            Some(self.store.review_request_for_task(task).await?)
+        } else if let Some(request) = request {
+            Some(self.store.review_request_record(request).await?)
+        } else {
+            None
+        };
+        if let Some(record) = record {
+            return match record.policy.context {
+                ReviewContextPolicy::CurrentSource { provider, .. } => Ok(provider),
+                ReviewContextPolicy::Submitted => {
+                    Err(ReviewRuntimeError::SourceProfileNotApplicable)
+                }
+            };
+        }
+        let providers: std::collections::BTreeSet<_> = self
+            .project
+            .review_policies
+            .iter()
+            .filter_map(|policy| match &policy.context {
+                ReviewContextPolicy::CurrentSource { provider, .. } => Some(provider.clone()),
+                ReviewContextPolicy::Submitted => None,
+            })
+            .collect();
+        if providers.len() != 1 {
+            return Err(ReviewRuntimeError::SourceProfileNotApplicable);
+        }
+        Ok(providers.into_iter().next().expect("one provider"))
+    }
     pub async fn erase_expired_reviews(&self) -> Result<u64, ReviewRuntimeError> {
         self.store.erase_expired_reviews_at(Utc::now()).await
     }

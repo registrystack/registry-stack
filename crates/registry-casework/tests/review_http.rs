@@ -5704,3 +5704,395 @@ mod inbox_pagination_http;
 
 #[path = "support/producer_cancellation.rs"]
 mod producer_cancellation;
+
+#[derive(Clone)]
+struct SeparateHumanSource {
+    expected: String,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+#[async_trait]
+impl ReviewContextProvider for SeparateHumanSource {
+    fn provider_id(&self) -> &str {
+        "registry"
+    }
+    fn capabilities(&self) -> &[ReviewContextCapability] {
+        &[
+            ReviewContextCapability::HumanDisplay,
+            ReviewContextCapability::ServiceStatus,
+        ]
+    }
+    async fn human_display(
+        &self,
+        request: HumanDisplayRequest<'_>,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        // Models downstream source-client/profile admission independently of Casework.
+        if request.credential.expose() != self.expected
+            || request.source_profile_id != "reviewer-source"
+        {
+            return Err(ReviewContextError::Concealed);
+        }
+        Ok(HumanDisplayObservation {
+            identity: request.identity.clone(),
+            reviewable: true,
+            display_reference: None,
+            fields: BTreeMap::from([("summary".into(), json!("Authorized source view"))]),
+        })
+    }
+    async fn service_status(
+        &self,
+        identity: &ReviewContextIdentity,
+    ) -> Result<ServiceStatusObservation, ReviewContextError> {
+        Ok(ServiceStatusObservation {
+            identity: identity.clone(),
+            reviewable: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mutations() {
+    use registry_casework_client::HumanSourceCredential;
+    const SOURCE_AUDIENCE: &str = "urn:test:breg-human-source";
+    let idp = MockIdp::start().await;
+    let (legacy, service, _, _, _, _, database) = app_with_database(&idp).await;
+    let project = project(&idp.issuer());
+    let primary = BearerToken::new(idp.mint_token(json!({"aud":AUDIENCE,"sub":"human-one","client_id":"casework-client","registry_principal":"reviewer","scope":"casework:staff","registry_actor_kind":"human"}))).unwrap();
+    let source_claims = json!({"aud":SOURCE_AUDIENCE,"sub":"human-one","client_id":"source-client","registry_principal":"reviewer","scope":"source-read","registry_actor_kind":"human"});
+    let source_text = idp.mint_token(source_claims.clone());
+    let source = BearerToken::new(source_text.clone()).unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let separate_service = CaseworkService::new(
+        service.store().clone(),
+        project.clone(),
+        [Arc::new(SeparateHumanSource {
+            expected: source_text,
+            calls: calls.clone(),
+        }) as Arc<dyn ReviewContextProvider>],
+    )
+    .unwrap();
+    let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        idp.jwks_uri(),
+        JwksFetcherConfig::defaults(),
+        FetchUrlPolicy::dev(),
+    ));
+    let authenticator = CaseworkAuthenticator::new(
+        &project,
+        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.into()])
+            .with_allowed_clients(vec!["casework-client".into()]),
+        keys.clone(),
+        HumanIdentityConfig::default(),
+    )
+    .with_human_source_audiences(BTreeMap::from([(
+        "registry".into(),
+        SOURCE_AUDIENCE.into(),
+    )]));
+    let state = HttpState {
+        service: separate_service,
+        authenticator: Arc::new(authenticator),
+        project: Arc::new(project.clone()),
+    };
+    let app = router(state.clone());
+    let missing_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", primary.authorization_header_value())
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(
+                    SOURCE_AUTHORIZATION_HEADER,
+                    source.authorization_header_value(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_profile.status(), StatusCode::BAD_REQUEST);
+    let problem: Value =
+        serde_json::from_slice(&to_bytes(missing_profile.into_body(), 32768).await.unwrap())
+            .unwrap();
+    assert_eq!(problem["code"], "source-profile.required");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    for selector in [
+        SOURCE_PROFILE_HEADER,
+        CASEWORK_PROFILE_HEADER,
+        SOURCE_AUTHORIZATION_HEADER,
+        "authorization",
+    ] {
+        let mut request = Request::builder()
+            .uri("/v1/review-tasks")
+            .header("authorization", primary.authorization_header_value())
+            .header(CASEWORK_PROFILE_HEADER, "staff")
+            .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+            .header(
+                SOURCE_AUTHORIZATION_HEADER,
+                source.authorization_header_value(),
+            )
+            .body(Body::empty())
+            .unwrap();
+        let second = request.headers().get(selector).unwrap().clone();
+        request.headers_mut().append(
+            axum::http::HeaderName::from_bytes(selector.as_bytes()).unwrap(),
+            second,
+        );
+        let refused = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, served).await.unwrap();
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        format!("http://{address}/").parse().unwrap(),
+    ))
+    .unwrap();
+    let auth = || {
+        CaseworkAuth::new(&primary, "staff")
+            .with_source_credential(HumanSourceCredential::new(&source, "reviewer-source"))
+    };
+    assert!(client
+        .review_tasks(auth(), &Default::default())
+        .await
+        .unwrap()
+        .value
+        .items
+        .is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    for patch in [
+        json!({"sub":"different-human"}),
+        json!({"aud":AUDIENCE}),
+        json!({"registry_actor_kind":"service"}),
+        json!({"aud":[SOURCE_AUDIENCE]}),
+    ] {
+        let mut claims = source_claims.clone();
+        claims
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let bad = BearerToken::new(idp.mint_token(claims)).unwrap();
+        assert!(client
+            .review_tasks(
+                CaseworkAuth::new(&primary, "staff")
+                    .with_source_credential(HumanSourceCredential::new(&bad, "reviewer-source")),
+                &Default::default()
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "local admission cannot become omitted observations on empty pages"
+        );
+    }
+    // No first-provider or successful partial inbox when two immutable providers apply.
+    let mut multiple = project.clone();
+    let mut policy = multiple
+        .review_policies
+        .iter()
+        .find(|p| matches!(p.context, ReviewContextPolicy::CurrentSource { .. }))
+        .unwrap()
+        .clone();
+    policy.id = "second-source-policy".into();
+    if let ReviewContextPolicy::CurrentSource { provider, .. } = &mut policy.context {
+        *provider = "second-provider".into();
+    }
+    let mut provider = multiple.context_providers[0].clone();
+    provider.id = "second-provider".into();
+    provider.deployment_ref = "second-provider".into();
+    multiple.context_providers.push(provider);
+    multiple.review_policies.push(policy);
+    let mut multiple_state = state.clone();
+    multiple_state.service = CaseworkService::new(
+        service.store().clone(),
+        multiple.clone(),
+        [Arc::new(SeparateHumanSource {
+            expected: "not-used".into(),
+            calls: calls.clone(),
+        }) as Arc<dyn ReviewContextProvider>],
+    )
+    .unwrap();
+    multiple_state.project = Arc::new(multiple);
+    let response = router(multiple_state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", primary.authorization_header_value())
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .header(
+                    SOURCE_AUTHORIZATION_HEADER,
+                    source.authorization_header_value(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let mut submitted = project.clone();
+    for p in &mut submitted.review_policies {
+        p.context = ReviewContextPolicy::Submitted;
+    }
+    let mut submitted_state = state.clone();
+    submitted_state.service = CaseworkService::new(
+        service.store().clone(),
+        submitted.clone(),
+        [Arc::new(SeparateHumanSource {
+            expected: "not-used".into(),
+            calls: calls.clone(),
+        }) as Arc<dyn ReviewContextProvider>],
+    )
+    .unwrap();
+    submitted_state.project = Arc::new(submitted);
+    let response = router(submitted_state)
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", primary.authorization_header_value())
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .header(
+                    SOURCE_AUTHORIZATION_HEADER,
+                    source.authorization_header_value(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let (_, task) = create_task(
+        &legacy,
+        &database,
+        &idp,
+        &review_request("dual-source-review", &idp.issuer()),
+    )
+    .await;
+    assert_eq!(
+        client
+            .review_tasks(auth(), &Default::default())
+            .await
+            .unwrap()
+            .value
+            .items
+            .len(),
+        1
+    );
+    client
+        .next_review_task(auth(), &Default::default())
+        .await
+        .unwrap();
+    client.review_task_context(auth(), task).await.unwrap();
+    let mut denied_claims = source_claims.clone();
+    denied_claims["client_id"] = json!("unadmitted-source-client");
+    let denied = BearerToken::new(idp.mint_token(denied_claims)).unwrap();
+    assert!(client
+        .claim_review_task(
+            CaseworkAuth::new(&primary, "staff")
+                .with_source_credential(HumanSourceCredential::new(&denied, "reviewer-source")),
+            task,
+            1,
+            "dual-denied-claim"
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        database
+            .query_one(
+                "SELECT revision FROM casework_review_tasks WHERE task_id=$1",
+                &[&task]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    let held = client
+        .claim_review_task(auth(), task, 1, "dual-claim")
+        .await
+        .unwrap();
+    assert_eq!(held.value.revision, 2);
+    let draft = client
+        .save_review_task_draft(
+            auth(),
+            task,
+            2,
+            "dual-draft",
+            &registry_casework_client::ReviewTaskDraftInput {
+                body: json!({"note":"private draft"}),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(draft.value.body, json!({"note":"private draft"}));
+    client.review_task_draft(auth(), task).await.unwrap();
+    let current_revision = client
+        .review_task(auth(), task)
+        .await
+        .unwrap()
+        .value
+        .revision;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-tasks/{task}/decisions"))
+                .header("authorization", primary.authorization_header_value())
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .header(
+                    SOURCE_AUTHORIZATION_HEADER,
+                    source.authorization_header_value(),
+                )
+                .header("if-match", format!("\"{current_revision}\""))
+                .header("idempotency-key", "dual-decision")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(
+                        &json!({"decision":{"type":"approve","outcome":"approved"}}),
+                    )
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    for (method, path) in [
+        ("POST", format!("/v1/review-tasks/{task}/release")),
+        ("GET", "/health".into()),
+        ("GET", format!("/v1/review-accountability/{task}")),
+        (
+            "POST",
+            format!("/v1/review-tasks/{task}/task-grants/{task}/revoke"),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(
+                        SOURCE_AUTHORIZATION_HEADER,
+                        source.authorization_header_value(),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    server.abort();
+    idp.stop().await;
+}

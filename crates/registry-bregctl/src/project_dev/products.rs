@@ -110,6 +110,9 @@ fn application_run_input(
             "baseUrl": base_url,
             "audience": input.plan.product(Product::Casework).audience,
         });
+        if let Some(roles) = &plan.casework_source_credential_roles {
+            run["casework"]["sourceCredentialRoles"] = json!(roles);
+        }
     }
     run
 }
@@ -3113,6 +3116,7 @@ mod tests {
         plan["products"].as_array_mut().unwrap().push(json!({
             "product": "casework", "project": "casework", "audience": "review"
         }));
+        plan["application"]["caseworkSourceCredentialRoles"] = json!(["reviewer"]);
         input.plan = serde_json::from_value(plan).unwrap();
         let urls = BTreeMap::from([
             (Product::Breg, "http://127.0.0.1:4201".to_owned()),
@@ -3130,6 +3134,10 @@ mod tests {
         assert_eq!(run["casework"]["audience"], "review");
         assert_eq!(run["oidc"]["recoveryKeyFile"], "/private/recovery-key");
         assert_eq!(run["oidc"]["separateResourceGrants"], true);
+        assert_eq!(
+            run["casework"]["sourceCredentialRoles"],
+            json!(["reviewer"])
+        );
     }
 
     #[test]

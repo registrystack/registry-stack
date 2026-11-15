@@ -63,6 +63,9 @@ impl HttpContract {
     }
 }
 
+mod source_credentials;
+use source_credentials::RequestState;
+
 const MAXIMUM_PAGE_SIZE: usize = 100;
 const MAXIMUM_ABSENCE_PAGE_SIZE: usize = 1_000;
 const DELEGATED_READER_HEADER: &str = "registry-casework-delegated-reader";
@@ -203,6 +206,10 @@ pub fn router(state: HttpState) -> Router {
         .route("/v1/directory/caseload/apply", post(apply_caseload_move));
     http_edge(app)
         .merge(contract_edge(review, HttpContract::Review))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            source_credentials::boundary,
+        ))
         .with_state(state)
 }
 
@@ -447,7 +454,7 @@ async fn health() -> StatusCode {
     StatusCode::OK
 }
 
-async fn ready(State(state): State<HttpState>) -> Result<StatusCode, HttpError> {
+async fn ready(RequestState(state): RequestState) -> Result<StatusCode, HttpError> {
     if state.service.ready().await.is_ok() {
         Ok(StatusCode::OK)
     } else {
@@ -456,7 +463,7 @@ async fn ready(State(state): State<HttpState>) -> Result<StatusCode, HttpError> 
 }
 
 async fn description(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
 ) -> Result<Json<Description>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
@@ -503,7 +510,7 @@ async fn description(
 }
 
 async fn create_review_request(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(request): StrictJson<ReviewCreateRequest>,
 ) -> Result<Response, HttpError> {
@@ -528,7 +535,7 @@ async fn create_review_request(
 }
 
 async fn review_policy_descriptions(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
 ) -> Result<Json<Vec<ReviewPolicyClosure>>, HttpError> {
     reject_source_profile(&headers)?;
@@ -537,7 +544,7 @@ async fn review_policy_descriptions(
 }
 
 async fn review_policy_description(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(policy_id): Path<String>,
 ) -> Result<Json<ReviewPolicyClosure>, HttpError> {
@@ -551,7 +558,7 @@ async fn review_policy_description(
 }
 
 async fn review_tasks(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(query): Query<ReviewStaffingQuery>,
 ) -> Result<Json<ReviewTaskPage>, HttpError> {
@@ -574,7 +581,7 @@ struct DelegatedReviewTaskQuery {
 }
 
 async fn delegated_review_tasks(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(query): Query<DelegatedReviewTaskQuery>,
 ) -> Result<Json<ReviewTaskPage>, HttpError> {
@@ -590,7 +597,7 @@ async fn delegated_review_tasks(
 }
 
 async fn delegated_review_task_context(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<ReviewTaskContext>, HttpError> {
@@ -604,7 +611,7 @@ async fn delegated_review_task_context(
     ))
 }
 async fn next_review_task(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(mut query): Query<ReviewStaffingQuery>,
 ) -> Result<Json<Option<ReviewTask>>, HttpError> {
@@ -628,7 +635,7 @@ async fn next_review_task(
     ))
 }
 async fn review_task_holdings(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(mut query): Query<ReviewStaffingQuery>,
 ) -> Result<Json<ReviewTaskPage>, HttpError> {
@@ -653,7 +660,7 @@ struct OwnReviewDecisionQuery {
 }
 
 async fn own_review_decisions(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(query): Query<OwnReviewDecisionQuery>,
 ) -> Result<Json<OwnReviewDecisionPage>, HttpError> {
@@ -684,7 +691,7 @@ struct SupervisoryReviewTaskQuery {
 }
 
 async fn supervisory_review_tasks(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(query): Query<SupervisoryReviewTaskQuery>,
 ) -> Result<Json<SupervisoryReviewTaskPage>, HttpError> {
@@ -707,7 +714,7 @@ async fn supervisory_review_tasks(
 }
 
 async fn get_review_task(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<ReviewTask>, HttpError> {
@@ -722,7 +729,7 @@ async fn get_review_task(
 }
 
 async fn get_review_task_context(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<ReviewTaskContext>, HttpError> {
@@ -737,7 +744,7 @@ async fn get_review_task_context(
 }
 
 async fn get_review_request(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
     Query(query): Query<ReviewRequestQuery>,
@@ -757,7 +764,7 @@ async fn get_review_request(
 }
 
 async fn get_review_result(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
 ) -> Result<Response, HttpError> {
@@ -780,7 +787,7 @@ struct ReviewFeedQuery {
 }
 
 async fn review_result_feed(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(query): Query<ReviewFeedQuery>,
 ) -> Result<Json<ReviewResultFeedPage>, HttpError> {
@@ -796,7 +803,7 @@ async fn review_result_feed(
 }
 
 async fn cancel_review_request(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
     StrictJson(request): StrictJson<ReviewCancelRequest>,
@@ -814,7 +821,7 @@ async fn cancel_review_request(
 }
 
 async fn claim_review_task(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
     body: Bytes,
@@ -842,7 +849,7 @@ async fn claim_review_task(
 }
 
 async fn assign_review_task(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
     StrictJson(request): StrictJson<AssignmentRequest>,
@@ -866,7 +873,7 @@ async fn assign_review_task(
 }
 
 async fn delegate_review_task(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
     StrictJson(request): StrictJson<DelegateRequest>,
@@ -890,7 +897,7 @@ async fn delegate_review_task(
 }
 
 async fn get_review_task_draft(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<Response, HttpError> {
@@ -907,7 +914,7 @@ async fn get_review_task_draft(
 }
 
 async fn save_review_task_draft(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
     StrictJson(input): StrictJson<ReviewTaskDraftInput>,
@@ -931,7 +938,7 @@ async fn save_review_task_draft(
 }
 
 async fn delete_review_task_draft(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<StatusCode, HttpError> {
@@ -959,7 +966,7 @@ struct ReviewHistoryQuery {
 }
 
 async fn review_history(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
     Query(query): Query<ReviewHistoryQuery>,
@@ -982,7 +989,7 @@ async fn review_history(
 }
 
 async fn review_clocks(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
 ) -> Result<Json<Vec<registry_casework_core::ReviewClockOccurrence>>, HttpError> {
@@ -997,7 +1004,7 @@ async fn review_clocks(
 }
 
 async fn add_review_note(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(request_id): Path<Uuid>,
     StrictJson(request): StrictJson<ReviewNoteRequest>,
@@ -1020,7 +1027,7 @@ async fn add_review_note(
 }
 
 async fn review_accountability(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(event_id): Path<Uuid>,
 ) -> Result<Json<ReviewAccountabilityRecord>, HttpError> {
@@ -1035,7 +1042,7 @@ async fn review_accountability(
 }
 
 async fn release_review_task(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
     body: Bytes,
@@ -1061,7 +1068,7 @@ async fn release_review_task(
 }
 
 async fn decide_review_task(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
     StrictJson(request): StrictJson<ReviewTaskDecisionRequest>,
@@ -1085,7 +1092,7 @@ async fn decide_review_task(
 }
 
 async fn directory(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
 ) -> Result<Json<DirectoryResponse>, HttpError> {
     let (actor, _) = authenticate(&state, &headers).await?;
@@ -1094,7 +1101,7 @@ async fn directory(
 }
 
 async fn directory_targets(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(query): Query<DirectoryTargetsQuery>,
 ) -> Result<Json<DirectoryTargetPage>, HttpError> {
@@ -1118,7 +1125,7 @@ async fn directory_targets(
 }
 
 async fn update_directory_team(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(team_id): Path<String>,
     StrictJson(request): StrictJson<DirectoryTeamUpdateRequest>,
@@ -1139,7 +1146,7 @@ async fn update_directory_team(
 }
 
 async fn bootstrap(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(request): StrictJson<BootstrapDirectoryRequest>,
 ) -> Result<Json<DirectoryResponse>, HttpError> {
@@ -1158,7 +1165,7 @@ async fn bootstrap(
 }
 
 async fn create_holiday_revision(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(input): StrictJson<HolidaySetRevisionInput>,
 ) -> Result<(StatusCode, Json<HolidaySetDocument>), HttpError> {
@@ -1171,7 +1178,7 @@ async fn create_holiday_revision(
 }
 
 async fn holiday_revision(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path((id, revision)): Path<(String, u64)>,
 ) -> Result<Json<HolidaySetDocument>, HttpError> {
@@ -1185,7 +1192,7 @@ async fn holiday_revision(
 }
 
 async fn preview_clock_recompute(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(request): StrictJson<ReviewClockRecomputeRequest>,
 ) -> Result<Json<ReviewClockRecomputePreview>, HttpError> {
@@ -1200,7 +1207,7 @@ async fn preview_clock_recompute(
 }
 
 async fn apply_clock_recompute(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(request): StrictJson<ReviewClockRecomputeApplyRequest>,
 ) -> Result<Json<ReviewClockRecomputeResult>, HttpError> {
@@ -1215,7 +1222,7 @@ async fn apply_clock_recompute(
 }
 
 async fn absences(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Query(query): Query<AbsencesQuery>,
 ) -> Result<Json<AbsenceList>, HttpError> {
@@ -1237,7 +1244,7 @@ async fn absences(
 }
 
 async fn create_absence(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(input): StrictJson<AbsenceInput>,
 ) -> Result<(StatusCode, Json<AbsenceRecord>), HttpError> {
@@ -1255,7 +1262,7 @@ async fn create_absence(
 }
 
 async fn update_absence(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(absence_id): Path<Uuid>,
     StrictJson(input): StrictJson<AbsenceInput>,
@@ -1276,7 +1283,7 @@ async fn update_absence(
 }
 
 async fn delete_absence(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(absence_id): Path<Uuid>,
 ) -> Result<StatusCode, HttpError> {
@@ -1294,7 +1301,7 @@ async fn delete_absence(
 }
 
 async fn preview_caseload_move(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(request): StrictJson<ReviewCaseloadMoveRequest>,
 ) -> Result<Json<ReviewCaseloadPreview>, HttpError> {
@@ -1309,7 +1316,7 @@ async fn preview_caseload_move(
 }
 
 async fn apply_caseload_move(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     StrictJson(request): StrictJson<ReviewCaseloadApplyRequest>,
 ) -> Result<Json<ReviewCaseloadResult>, HttpError> {
@@ -1323,12 +1330,14 @@ async fn apply_caseload_move(
     ))
 }
 
-async fn task_jwks(State(state): State<HttpState>) -> Result<Json<serde_json::Value>, HttpError> {
+async fn task_jwks(
+    RequestState(state): RequestState,
+) -> Result<Json<serde_json::Value>, HttpError> {
     Ok(Json(state.service.task_jwks()?))
 }
 
 async fn preview_review_task_templates(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<registry_casework_core::TaskTemplatePreviews>, HttpError> {
@@ -1346,7 +1355,7 @@ async fn preview_review_task_templates(
     ))
 }
 async fn approve_review_task_grant(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
     StrictJson(request): StrictJson<registry_casework_core::TaskApprovalRequest>,
@@ -1368,7 +1377,7 @@ async fn approve_review_task_grant(
     ))
 }
 async fn list_review_task_grants(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<Json<registry_casework_core::TaskGrantList>, HttpError> {
@@ -1381,7 +1390,7 @@ async fn list_review_task_grants(
     ))
 }
 async fn revoke_review_task_grant(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path((task_id, grant_id)): Path<(Uuid, Uuid)>,
     body: Bytes,
@@ -1419,7 +1428,7 @@ async fn task_client(
         .map_err(|_| HttpError::AuthenticationRefused)
 }
 async fn task_assertion(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(grant): Path<Uuid>,
     body: Bytes,
@@ -1437,7 +1446,7 @@ async fn task_assertion(
     Ok(Json(state.service.task_assertion(grant, &client).await?))
 }
 async fn task_status(
-    State(state): State<HttpState>,
+    RequestState(state): RequestState,
     headers: HeaderMap,
     Path(grant): Path<Uuid>,
 ) -> Result<Json<registry_casework_core::TaskGrantStatus>, HttpError> {

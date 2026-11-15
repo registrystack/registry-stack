@@ -8806,6 +8806,18 @@
               "type": "string",
               "x-maximum-utf8-bytes": 128
             }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
           }
         ],
         "requestBody": {
@@ -9189,6 +9201,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           }
         ],
@@ -9574,6 +9598,18 @@
               "type": "string",
               "x-maximum-utf8-bytes": 128
             }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
           }
         ],
         "requestBody": {
@@ -9957,6 +9993,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           }
         ],
@@ -11768,6 +11816,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -13741,6 +13801,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "request_id",
@@ -14032,6 +14104,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -14348,6 +14432,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -15317,6 +15413,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "query",
             "name": "cursor",
@@ -15739,6 +15847,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -16167,6 +16287,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "query",
             "name": "cursor",
@@ -16592,6 +16724,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "query",
             "name": "cursor",
@@ -16907,6 +17051,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -17238,6 +17394,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "task_id",
@@ -17530,6 +17698,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -17950,6 +18130,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "task_id",
@@ -18343,6 +18535,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "task_id",
@@ -18635,6 +18839,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -19069,6 +19285,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "task_id",
@@ -19486,6 +19714,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "task_id",
@@ -19870,6 +20110,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "task_id",
@@ -20153,6 +20405,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -20966,6 +21230,18 @@
             }
           },
           {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
+            }
+          },
+          {
             "description": "",
             "in": "path",
             "name": "task_id",
@@ -21256,6 +21532,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {
@@ -22040,6 +22328,18 @@
               "pattern": "^[A-Za-z0-9._:-]+$",
               "type": "string",
               "x-maximum-utf8-bytes": 128
+            }
+          },
+          {
+            "description": "Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding.",
+            "in": "header",
+            "name": "registry-source-authorization",
+            "required": false,
+            "schema": {
+              "maxLength": 131079,
+              "minLength": 1,
+              "type": "string",
+              "writeOnly": true
             }
           },
           {

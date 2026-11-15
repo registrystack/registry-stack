@@ -1514,7 +1514,25 @@ impl CaseworkClient {
             .header(AUTHORIZATION, auth.token.authorization_header_value())
             .header(HeaderName::from_static(CASEWORK_PROFILE_HEADER), profile)
             .header(ACCEPT, JSON_MEDIA_TYPE);
-        if let Some(source_profile) = auth.source_profile {
+        let source_profile = match auth.source_credential {
+            Some(source) => {
+                if auth
+                    .source_profile
+                    .is_some_and(|profile| profile != source.source_profile)
+                {
+                    return Err(CaseworkClientError::invalid_request(
+                        "the explicit source profiles differ",
+                    ));
+                }
+                request = request.header(
+                    HeaderName::from_static(registry_casework_core::SOURCE_AUTHORIZATION_HEADER),
+                    source.token.authorization_header_value(),
+                );
+                Some(source.source_profile)
+            }
+            None => auth.source_profile,
+        };
+        if let Some(source_profile) = source_profile {
             validate_identifier(source_profile, "the selected source profile is invalid")?;
             request = request.header(
                 HeaderName::from_static(SOURCE_PROFILE_HEADER),
@@ -2258,7 +2276,7 @@ fn validate_identifier(value: &str, reason: &'static str) -> Result<(), Casework
 }
 
 fn reject_source_profile(auth: &CaseworkAuth<'_>) -> Result<(), CaseworkClientError> {
-    if auth.source_profile.is_some() {
+    if auth.source_profile.is_some() || auth.source_credential.is_some() {
         return Err(CaseworkClientError::invalid_request(
             "this operation does not accept a source profile",
         ));

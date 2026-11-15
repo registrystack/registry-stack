@@ -1427,6 +1427,24 @@ impl RuntimeConfig {
     /// refuse, at the member that breaks the rule, without resolving a secret.
     fn check_context_providers(&self, findings: &mut Vec<RuntimeConfigError>) {
         for (deployment, binding) in &self.context_providers {
+            if binding
+                .human_source_authentication
+                .as_ref()
+                .is_some_and(|auth| auth.audience == self.authentication.oidc.provider.audience)
+            {
+                findings.push(RuntimeConfigError::InvalidContextProvider {
+                    path: format!(
+                        "contextProviders.{deployment}.humanSourceAuthentication.audience"
+                    ),
+                    pointer: pointer_to(&[
+                        "contextProviders",
+                        deployment,
+                        "humanSourceAuthentication",
+                        "audience",
+                    ]),
+                    reason: "must differ from the Casework audience".to_owned(),
+                });
+            }
             let Err(refusal) = binding.check_offline() else {
                 continue;
             };
@@ -1770,6 +1788,22 @@ impl RuntimeConfig {
     /// UserInfo JWT, or any other JWT minted for this audience is not an
     /// access token, and admitting one would let a credential issued for
     /// another purpose claim, draft, and act on casework.
+    pub(crate) fn human_source_audiences(
+        &self,
+        project: &CaseworkProject,
+    ) -> BTreeMap<String, String> {
+        project
+            .context_providers
+            .iter()
+            .filter_map(|provider| {
+                self.context_providers
+                    .get(&provider.deployment_ref)
+                    .and_then(|binding| binding.human_source_authentication.as_ref())
+                    .map(|auth| (provider.id.clone(), auth.audience.clone()))
+            })
+            .collect()
+    }
+
     pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
         TokenVerifierConfig::access_token_profile(
             self.authentication.oidc.provider.issuer.to_string(),
@@ -2714,6 +2748,33 @@ mod tests {
             .diagnostics
             .iter()
             .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
+    }
+
+    #[test]
+    fn human_source_verifier_binds_logical_provider_through_exact_deployment_reference() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["contextProviders"] = json!({"source-deployment": {
+            "baseUrl":"https://source.example.test", "statusProfile":"status", "tokenEndpoint":"https://identity.example.test/token",
+            "clientIdRef":"secret:file/client", "clientAssertionKeyRef":"secret:file/key",
+            "humanSourceAuthentication":{"audience":"urn:example:breg"}
+        }});
+        let config = read_operator(&value, directory.path());
+        let mut project = CaseworkProject::from_slice(STANDALONE.as_bytes()).unwrap();
+        project.context_providers = vec![registry_casework_core::ReviewContextProviderPolicy {
+            id: "logical-source".into(),
+            description: None,
+            capabilities: vec![registry_casework_core::ReviewContextCapability::HumanDisplay],
+            source_namespace: "source".into(),
+            deployment_ref: "source-deployment".into(),
+            service_profiles: BTreeMap::new(),
+        }];
+        assert_eq!(
+            config.human_source_audiences(&project),
+            BTreeMap::from([("logical-source".into(), "urn:example:breg".into())])
+        );
+        project.context_providers[0].deployment_ref = "logical-source".into();
+        assert!(config.human_source_audiences(&project).is_empty());
     }
 
     #[test]

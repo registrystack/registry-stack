@@ -10,6 +10,7 @@
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
 export declare class CaseworkClient {
+  humanSourceCredentialContract(): string
   constructor(config: CaseworkClientConfig)
   description(token: string, profile: string): Promise<CaseworkOutcome>
   createOrRecoverReviewRequest(token: string, profile: string, idempotencyKey: string, request: any, expectedSubmissionDigest: string): Promise<CaseworkOutcome>
@@ -19,28 +20,28 @@ export declare class CaseworkClient {
   cancelReviewRequest(token: string, profile: string, accepted: any, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   reviewPolicies(token: string, profile: string): Promise<CaseworkOutcome>
   reviewPolicy(token: string, profile: string, policyId: string): Promise<CaseworkOutcome>
-  reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  nextReviewTask(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  reviewTaskHoldings(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  ownReviewDecisions(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  supervisoryReviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  nextReviewTask(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewTaskHoldings(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  ownReviewDecisions(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  supervisoryReviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   previewReviewTaskTemplates(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome>
   listReviewTaskGrants(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome>
-  approveReviewTaskGrant(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, approval: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  approveReviewTaskGrant(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, approval: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   revokeReviewTaskGrant(token: string, profile: string, taskId: string, grantId: string): Promise<CaseworkOutcome>
-  claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   releaseReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
-  assignReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  delegateReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  reviewTaskDraft(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  saveReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, draft: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  deleteReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  decideReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, decision: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  reviewHistory(token: string, profile: string, requestId: string, query?: any | undefined | null, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  reviewClocks(token: string, profile: string, requestId: string, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  assignReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  delegateReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewTaskDraft(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  saveReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, draft: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  deleteReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  decideReviewTask(token: string, profile: string, taskId: string, expectedRevision: number, idempotencyKey: string, decision: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewHistory(token: string, profile: string, requestId: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewClocks(token: string, profile: string, requestId: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   reviewAccountability(token: string, profile: string, eventId: string): Promise<CaseworkOutcome>
   taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome>
   taskAssertionEndpoint(grantId: string): string
@@ -52,13 +53,13 @@ export declare class CaseworkClient {
   createAbsence(token: string, profile: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: number, idempotencyKey: string): Promise<CaseworkOutcome>
-  previewCaseloadMove(token: string, profile: string, movement: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
-  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null): Promise<CaseworkOutcome>
+  previewCaseloadMove(token: string, profile: string, movement: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: any, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   updateDirectoryTeam(token: string, profile: string, teamId: string, expectedRevision: number, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   holidayRevision(token: string, profile: string, holidaySet: string, revision: number): Promise<CaseworkOutcome>
   createHolidayRevision(token: string, profile: string, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
-  previewClockRecompute(token: string, profile: string, request: any): Promise<CaseworkOutcome>
-  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
+  previewClockRecompute(token: string, profile: string, request: any, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: any, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
 }
 
 export interface CaseworkClientConfig {
@@ -81,8 +82,14 @@ export interface CaseworkOutcome {
   traceId: string
 }
 
+export interface HumanSourceCredential {
+  sourceProfile: string
+  token: string
+}
+
 /** Identify a human task grant read without positional string ambiguity. */
 export interface ReviewTaskGrantReadOptions {
+  sourceCredential?: HumanSourceCredential
   taskId: string
   sourceProfile?: string
 }

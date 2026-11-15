@@ -26,8 +26,9 @@ pub use client::CaseworkClient;
 pub use config::CaseworkClientConfig;
 pub use error::{CaseworkClientError, CaseworkProblemCode, CaseworkProtocolFailure};
 pub use model::{
-    CaseworkAuth, CaseworkComplete, DelegatedStaffReadAuth, OwnReviewDecisionQuery,
-    ReviewPageQuery, ReviewResultObservation, ReviewResultResponse, SupervisoryReviewTaskQuery,
+    CaseworkAuth, CaseworkComplete, DelegatedStaffReadAuth, HumanSourceCredential,
+    OwnReviewDecisionQuery, ReviewPageQuery, ReviewResultObservation, ReviewResultResponse,
+    SupervisoryReviewTaskQuery,
 };
 pub use registry_casework_core::{
     submission_digest, AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest,
@@ -66,3 +67,7 @@ pub use task_assertion_source::CaseworkTaskAssertionSource;
 /// The identifier type every task, request, and event argument carries, so a
 /// caller names it through this crate rather than a second `uuid` dependency.
 pub use uuid::Uuid;
+
+/// Exact native transport capability, independent of package-version guesses.
+pub const HUMAN_SOURCE_CREDENTIAL_CONTRACT: &str =
+    registry_casework_core::HUMAN_SOURCE_CREDENTIAL_CONTRACT;

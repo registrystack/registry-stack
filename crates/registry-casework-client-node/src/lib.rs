@@ -54,8 +54,15 @@ pub struct CaseworkClientConfig {
 /// Identify a human task grant read without positional string ambiguity.
 #[napi(object)]
 pub struct ReviewTaskGrantReadOptions {
+    pub source_credential: Option<HumanSourceCredential>,
     pub task_id: String,
     pub source_profile: Option<String>,
+}
+
+#[napi(object)]
+pub struct HumanSourceCredential {
+    pub source_profile: String,
+    pub token: String,
 }
 
 #[napi(object)]
@@ -72,6 +79,11 @@ pub struct CaseworkClient {
 
 #[napi]
 impl CaseworkClient {
+    #[napi]
+    pub fn human_source_credential_contract(&self) -> String {
+        registry_casework_client::HUMAN_SOURCE_CREDENTIAL_CONTRACT.to_owned()
+    }
+
     #[napi(constructor)]
     pub fn new(config: CaseworkClientConfig) -> Result<Self> {
         let base_url = Url::parse(&config.base_url).map_err(|_| {
@@ -244,13 +256,24 @@ impl CaseworkClient {
         profile: String,
         query: Option<Value>,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let query: ReviewStaffingQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .review_tasks(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &query,
                 )
                 .await,
@@ -264,13 +287,24 @@ impl CaseworkClient {
         profile: String,
         query: Option<Value>,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let query: ReviewStaffingQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .next_review_task(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &query,
                 )
                 .await,
@@ -284,13 +318,24 @@ impl CaseworkClient {
         profile: String,
         query: Option<Value>,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let query: ReviewStaffingQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .review_task_holdings(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &query,
                 )
                 .await,
@@ -304,12 +349,23 @@ impl CaseworkClient {
         profile: String,
         task_id: String,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .review_task(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                 )
                 .await,
@@ -323,13 +379,24 @@ impl CaseworkClient {
         profile: String,
         query: Option<Value>,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let query: OwnReviewDecisionQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .own_review_decisions(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &query,
                 )
                 .await,
@@ -343,13 +410,24 @@ impl CaseworkClient {
         profile: String,
         query: Option<Value>,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let query: SupervisoryReviewTaskQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .supervisory_review_tasks(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &query,
                 )
                 .await,
@@ -363,12 +441,23 @@ impl CaseworkClient {
         profile: String,
         task_id: String,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .review_task_context(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                 )
                 .await,
@@ -384,10 +473,21 @@ impl CaseworkClient {
     ) -> Result<CaseworkOutcome> {
         let task_id = uuid(&options.task_id)?;
         let token = bearer(token)?;
+        let source_token = options
+            .source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .preview_review_task_templates(
-                    optional_source_auth(&token, &profile, options.source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        options.source_profile.as_deref(),
+                        options.source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     task_id,
                 )
                 .await,
@@ -403,10 +503,21 @@ impl CaseworkClient {
     ) -> Result<CaseworkOutcome> {
         let task_id = uuid(&options.task_id)?;
         let token = bearer(token)?;
+        let source_token = options
+            .source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .list_review_task_grants(
-                    optional_source_auth(&token, &profile, options.source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        options.source_profile.as_deref(),
+                        options.source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     task_id,
                 )
                 .await,
@@ -424,15 +535,26 @@ impl CaseworkClient {
         idempotency_key: String,
         approval: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let task_id = uuid(&task_id)?;
         let approval: registry_casework_client::TaskApprovalRequest = input(approval)?;
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .approve_review_task_grant(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     task_id,
                     expected_revision,
                     &idempotency_key,
@@ -456,7 +578,7 @@ impl CaseworkClient {
         outcome(
             self.inner
                 .revoke_review_task_grant(
-                    optional_source_auth(&token, &profile, None),
+                    optional_source_auth(&token, &profile, None, None, None),
                     task_id,
                     grant_id,
                 )
@@ -465,6 +587,8 @@ impl CaseworkClient {
     }
 
     #[napi]
+    // Preserve existing positional arguments with an explicit per-call credential.
+    #[allow(clippy::too_many_arguments)]
     pub async fn claim_review_task(
         &self,
         token: String,
@@ -473,13 +597,24 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: String,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .claim_review_task(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -522,14 +657,25 @@ impl CaseworkClient {
         idempotency_key: String,
         request: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let request: AssignmentRequest = input(request)?;
         outcome(
             self.inner
                 .assign_review_task(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -550,14 +696,25 @@ impl CaseworkClient {
         idempotency_key: String,
         request: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let request: DelegateRequest = input(request)?;
         outcome(
             self.inner
                 .delegate_review_task(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -574,12 +731,23 @@ impl CaseworkClient {
         profile: String,
         task_id: String,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .review_task_draft(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                 )
                 .await,
@@ -597,14 +765,25 @@ impl CaseworkClient {
         idempotency_key: String,
         draft: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let draft: ReviewTaskDraftInput = input(draft)?;
         outcome(
             self.inner
                 .save_review_task_draft(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -615,6 +794,8 @@ impl CaseworkClient {
     }
 
     #[napi]
+    // Preserve existing positional arguments with an explicit per-call credential.
+    #[allow(clippy::too_many_arguments)]
     pub async fn delete_review_task_draft(
         &self,
         token: String,
@@ -623,13 +804,24 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: String,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .delete_review_task_draft(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -649,14 +841,25 @@ impl CaseworkClient {
         idempotency_key: String,
         decision: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let decision: ReviewTaskDecisionRequest = input(decision)?;
         outcome(
             self.inner
                 .decide_review_task(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -674,13 +877,24 @@ impl CaseworkClient {
         request_id: String,
         query: Option<Value>,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let query: ReviewPageQuery = query.map(input).transpose()?.unwrap_or_default();
         outcome(
             self.inner
                 .review_history(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&request_id)?,
                     &query,
                 )
@@ -689,6 +903,8 @@ impl CaseworkClient {
     }
 
     #[napi]
+    // Preserve existing positional arguments with an explicit per-call credential.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_review_note(
         &self,
         token: String,
@@ -697,13 +913,24 @@ impl CaseworkClient {
         idempotency_key: String,
         note: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let note: ReviewNoteRequest = input(note)?;
         outcome(
             self.inner
                 .add_review_note(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&request_id)?,
                     &idempotency_key,
                     &note,
@@ -719,12 +946,23 @@ impl CaseworkClient {
         profile: String,
         request_id: String,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         outcome(
             self.inner
                 .review_clocks(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     uuid(&request_id)?,
                 )
                 .await,
@@ -919,13 +1157,24 @@ impl CaseworkClient {
         profile: String,
         movement: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let movement: ReviewCaseloadMoveRequest = input(movement)?;
         outcome(
             self.inner
                 .preview_caseload_move(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &movement,
                 )
                 .await,
@@ -940,13 +1189,24 @@ impl CaseworkClient {
         idempotency_key: String,
         request: Value,
         source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let request: ReviewCaseloadApplyRequest = input(request)?;
         outcome(
             self.inner
                 .apply_caseload_move(
-                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &idempotency_key,
                     &request,
                 )
@@ -1031,12 +1291,26 @@ impl CaseworkClient {
         token: String,
         profile: String,
         request: Value,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let request: ReviewClockRecomputeRequest = input(request)?;
         outcome(
             self.inner
-                .preview_clock_recompute(CaseworkAuth::new(&token, &profile), &request)
+                .preview_clock_recompute(
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        None,
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
+                    &request,
+                )
                 .await,
         )
     }
@@ -1048,13 +1322,24 @@ impl CaseworkClient {
         profile: String,
         idempotency_key: String,
         request: Value,
+        source_credential: Option<HumanSourceCredential>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
         let request: ReviewClockRecomputeApplyRequest = input(request)?;
         outcome(
             self.inner
                 .apply_clock_recompute(
-                    CaseworkAuth::new(&token, &profile),
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        None,
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
                     &idempotency_key,
                     &request,
                 )
@@ -1067,11 +1352,19 @@ fn optional_source_auth<'a>(
     token: &'a registry_casework_client::BearerToken,
     profile: &'a str,
     source_profile: Option<&'a str>,
+    source: Option<&'a HumanSourceCredential>,
+    source_token: Option<&'a registry_casework_client::BearerToken>,
 ) -> CaseworkAuth<'a> {
     let auth = CaseworkAuth::new(token, profile);
-    match source_profile {
+    let auth = match source_profile {
         Some(source) => auth.with_source_profile(source),
         None => auth,
+    };
+    match (source, source_token) {
+        (Some(source), Some(token)) => auth.with_source_credential(
+            registry_casework_client::HumanSourceCredential::new(token, &source.source_profile),
+        ),
+        _ => auth,
     }
 }
 
