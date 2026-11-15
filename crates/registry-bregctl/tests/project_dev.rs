@@ -2095,6 +2095,114 @@ fn public_parity_clients_preserve_existing_machine_contract() {
     }
 }
 
+/// A closed receipt, not a redacted copy of arbitrary native error text.
+fn public_parity_start_result(
+    started: &serde_json::Value,
+    exit: Option<i32>,
+    source_unchanged: bool,
+) -> serde_json::Value {
+    let (schema, status) = match (
+        started["schema_version"].as_str(),
+        started["status"].as_str(),
+    ) {
+        (Some("registry.rstack.dev.v1"), Some("ready")) => {
+            (Some("registry.rstack.dev.v1"), Some("ready"))
+        }
+        (Some("registry.rstack.error.v1"), Some("refused")) => {
+            (Some("registry.rstack.error.v1"), Some("refused"))
+        }
+        _ => (None, None),
+    };
+    let class = if status == Some("refused") {
+        match started["error"]["class"].as_str() {
+            Some("domain") => Some("domain"),
+            Some("usage") => Some("usage"),
+            Some("operational") => Some("operational"),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let exit = exit.filter(|code| (0..=3).contains(code));
+    let valid = matches!(
+        (status, class, exit),
+        (Some("ready"), None, Some(0 | 1))
+            | (Some("refused"), Some("domain"), Some(1))
+            | (Some("refused"), Some("usage"), Some(2))
+            | (Some("refused"), Some("operational"), Some(3))
+    );
+    // Preserve only membership of this one existing contract diagnostic.
+    // Neither its surrounding text nor any prefix-derived code is copied.
+    let reserved = status == Some("refused")
+        && started["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("breg.registry.canonical-base-iri-reserved"));
+    serde_json::json!({"phase":"native-start","startExit":exit,"schema":schema,"status":status,
+        "class":class,"protocolEnvelopeValid":valid,"reservedIdentityDiagnostic":reserved,
+        "sourceBytesUnchanged":source_unchanged})
+}
+
+#[test]
+fn public_parity_retention_excludes_short_claim_message_and_forged_codes() {
+    for canary in [
+        "unallowlisted-claim-canary auth.unallowlisted-canary",
+        "tiny-token-abc",
+        "config.short-canary source.short-canary test.forged-canary",
+    ] {
+        let report = serde_json::json!({"schema_version":"registry.rstack.error.v1","status":"refused",
+            "error":{"class":"domain","message":canary,"code":canary},
+            "claims":{"short":canary},"boundedRedactedSummary":canary,"diagnosticCodes":[canary]});
+        let result = public_parity_start_result(&report, Some(1), true);
+        let encoded = result.to_string();
+        for word in canary.split_whitespace() {
+            assert!(!encoded.contains(word));
+        }
+        assert!(result.get("boundedRedactedSummary").is_none());
+        assert!(result.get("diagnosticCodes").is_none());
+        assert!(result.as_object().unwrap().len() == 8);
+        assert!(result["protocolEnvelopeValid"] == true);
+        assert!(result["reservedIdentityDiagnostic"] == false);
+    }
+    let report = serde_json::json!({"schema_version":"registry.rstack.error.v1","status":"refused",
+        "error":{"class":"domain","message":"breg.registry.canonical-base-iri-reserved short-claim-canary auth.forged-canary"}});
+    let result = public_parity_start_result(&report, Some(1), false);
+    assert!(result["reservedIdentityDiagnostic"] == true);
+    assert!(result["sourceBytesUnchanged"] == false);
+    assert!(!result.to_string().contains("canary"));
+}
+
+#[test]
+fn public_parity_retention_accepts_only_fixed_protocol_enums() {
+    for (class, exit) in [("domain", 1), ("usage", 2), ("operational", 3)] {
+        let report = serde_json::json!({"schema_version":"registry.rstack.error.v1","status":"refused","error":{"class":class}});
+        let result = public_parity_start_result(&report, Some(exit), true);
+        assert!(result["protocolEnvelopeValid"] == true);
+        assert!(result["class"] == class);
+        for field in ["schema_version", "status", "class"] {
+            let mut forged = report.clone();
+            if field == "class" {
+                forged["error"][field] = serde_json::json!("short-enum-canary");
+            } else {
+                forged[field] = serde_json::json!("short-enum-canary");
+            }
+            let result = public_parity_start_result(&forged, Some(exit), true);
+            assert!(!result.to_string().contains("canary"));
+            assert!(result["class"].is_null());
+            assert!(result["protocolEnvelopeValid"] == false);
+        }
+    }
+    let ready = serde_json::json!({"schema_version":"registry.rstack.dev.v1","status":"ready","error":{"class":"short-enum-canary"}});
+    for exit in [0, 1] {
+        let result = public_parity_start_result(&ready, Some(exit), true);
+        assert!(result["protocolEnvelopeValid"] == true && result["class"].is_null());
+        assert!(!result.to_string().contains("canary"));
+    }
+    for exit in [None, Some(-1), Some(4), Some(101), Some(i32::MAX)] {
+        let result = public_parity_start_result(&ready, exit, true);
+        assert!(result["startExit"].is_null() && result["protocolEnvelopeValid"] == false);
+    }
+}
+
 /// Public native lifecycle regression. The caller supplies a fresh owner-only
 /// directory and a disposable TLS PostgreSQL, never a retained developer DB.
 #[test]
@@ -2167,12 +2275,18 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
                 let stopped = self.command("stop", Path::new(&id)).output().unwrap();
                 assert!(stopped.status.success(), "owned normal stop failed");
                 let report: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
-                assert_eq!(report["status"], "stopped");
+                assert!(
+                    report["status"] == "stopped",
+                    "owned status must be stopped"
+                );
                 self.run = None;
                 let later = self.command("status", Path::new(&id)).output().unwrap();
                 assert!(later.status.success());
                 let report: serde_json::Value = serde_json::from_slice(&later.stdout).unwrap();
-                assert_eq!(report["status"], "stopped");
+                assert!(
+                    report["status"] == "stopped",
+                    "owned status must be stopped"
+                );
             }
         }
     }
@@ -2313,55 +2427,11 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
         }
     }
     retain_failure(&owned.state, &parent);
-    let message = started["error"]["message"].as_str().unwrap_or("");
-    let mut redacted = message.replace(database.trim(), "[database]");
-    if let Ok(parsed) = url::Url::parse(database.trim()) {
-        if let Some(password) = parsed.password() {
-            redacted = redacted.replace(password, "[secret]");
-        }
-    }
-    let summary = redacted
-        .split_whitespace()
-        .map(|word| {
-            if word.contains("://") || word.contains('/') {
-                "[path-or-url]"
-            } else if word.len() > 80 || word.contains("eyJ") || word.contains("-----") {
-                "[redacted]"
-            } else {
-                word
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(512)
-        .collect::<String>();
-    let diagnostic_codes: Vec<_> = message
-        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
-        .filter(|word| {
-            word.len() <= 128
-                && [
-                    "breg.", "test.", "package.", "startup.", "config.", "auth.", "source.",
-                ]
-                .iter()
-                .any(|prefix| word.starts_with(prefix))
-        })
-        .collect();
-    let failing_tool = [
-        "breg check",
-        "breg test",
-        "breg package",
-        "breg apply",
-        "breg verify",
-    ]
-    .into_iter()
-    .find(|stage| message.contains(stage));
-    let safe = serde_json::json!({"startExit":output.status.code(),"schema":started["schema_version"],"status":started["status"],"class":started["error"]["class"],"diagnosticCodes":diagnostic_codes,"failingTool":failing_tool,"boundedRedactedSummary":summary,
-        "missingManagedBinary":message.contains("managed") && message.contains("binary"),
-        "privatePathRefusal":message.contains("not writable by group") || message.contains("runtime configuration path"),
-        "postgresConnectionRefusal":message.contains("PostgreSQL") && message.contains("connect"),
-        "reservedIdentityDiagnostic":started["error"]["message"].as_str().is_some_and(|message|message.contains("breg.registry.canonical-base-iri-reserved")),
-        "sourceBytesUnchanged":snapshot(&project)==original});
+    let safe = public_parity_start_result(
+        &started,
+        output.status.code(),
+        snapshot(&project) == original,
+    );
     fs::write(
         parent.join("result.json"),
         serde_json::to_vec_pretty(&safe).unwrap(),
@@ -2371,16 +2441,19 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
         output.status.success(),
         "public placeholder start refused; see bounded result.json"
     );
-    assert_eq!(started["status"], "ready");
-    assert_eq!(started["journey"]["result"], "passed");
+    assert!(started["status"] == "ready", "native start must be ready");
+    assert!(
+        started["journey"]["result"] == "passed",
+        "native journey must pass"
+    );
     let id = owned.run.as_deref().unwrap();
     let run_root = owned.state.join(id);
     let receipt = run_root.join("schema-test-receipt.json");
     let receipt_value: serde_json::Value =
         serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
-    assert_eq!(
-        receipt_value["successfulJourneyIds"],
-        serde_json::json!(["directory-contact"])
+    assert!(
+        receipt_value["successfulJourneyIds"] == serde_json::json!(["directory-contact"]),
+        "receipt must bind the authored journey"
     );
     fs::copy(&receipt, parent.join("schema-test-receipt.json")).unwrap();
     let package = run_root.join("breg-build/package");
@@ -2428,13 +2501,15 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     let status = owned.command("status", Path::new(id)).output().unwrap();
     assert!(status.status.success());
     let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
-    assert_eq!(status["status"], "ready");
-    assert_eq!(status["journey"], started["journey"]);
+    assert!(status["status"] == "ready", "native status must be ready");
+    assert!(
+        status["journey"] == started["journey"],
+        "native status must match the start journey"
+    );
     owned.stop();
     assert!(live_runs(&owned.state).is_empty());
-    assert_eq!(
-        snapshot(&project),
-        original,
+    assert!(
+        snapshot(&project) == original,
         "authored source must remain byte-identical"
     );
     fs::write(parent.join("result.json"), serde_json::to_vec_pretty(&serde_json::json!({"checkPassed":true,"startReady":true,"authoredNativeJourneyReceiptPassed":true,"journeyPassed":true,"localPackageAdmitted":true,"productionPackageRefused":true,"productionTargetLoadRefused":true,"predecessorRecoveryReadable":true,"statusReady":true,"stopStopped":true,"postStopStatusStopped":true,"stateEmpty":true,"sourceBytesUnchanged":true})).unwrap()).unwrap();
