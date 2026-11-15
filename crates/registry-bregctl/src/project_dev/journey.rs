@@ -1118,6 +1118,38 @@ mod tests {
     }
 
     #[test]
+    fn exact_json_null_expectations_distinguish_missing_keys_and_text() {
+        for expected in [json!({"/optional": null}), json!({"": {"optional": null}})] {
+            let step: Step = serde_json::from_value(json!({
+                "id": "read", "product": "breg", "as": "person", "method": "GET",
+                "path": "/v1/records", "expect": {"status": 200, "json": expected}
+            }))
+            .unwrap();
+            for (body, matches) in [
+                (json!({"optional": null}), true),
+                (json!({}), false),
+                (json!({"optional": "null"}), false),
+                (json!({"optional": {}}), false),
+            ] {
+                let response = ResponseData {
+                    status: 200,
+                    headers: HeaderMap::new(),
+                    failure: None,
+                    body,
+                };
+                assert_eq!(
+                    first_mismatch(&step, &response, no_capture)
+                        .unwrap()
+                        .is_none(),
+                    matches,
+                    "response must retain exact null and object membership: {}",
+                    response.body
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mismatch_names_the_pointer_expected_and_observed_values() {
         let step: Step = serde_json::from_value(json!({
             "id": "read", "product": "breg", "as": "person", "method": "GET",

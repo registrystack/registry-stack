@@ -1707,6 +1707,23 @@ mod tests {
     }
 
     #[test]
+    fn expected_json_reader_preserves_null_as_distinct_from_missing_and_text() {
+        for inline in [false, true] {
+            let expected = read_expected_json(
+                inline,
+                r#"{"status":200,"json":{"/data":{"optionalText":null}}}"#,
+            )
+            .unwrap();
+            let asserted = &expected.json["/data"];
+            assert_eq!(asserted.pointer("/optionalText"), Some(&Value::Null));
+            assert_eq!(asserted.pointer("/absent"), None);
+            assert_ne!(asserted, &json!({}));
+            assert_ne!(asserted, &json!({"optionalText": "null"}));
+            assert_ne!(asserted, &json!({"optionalText": null, "extra": true}));
+        }
+    }
+
+    #[test]
     fn expected_json_reader_accepts_nested_null_and_preserves_exact_typed_values() {
         let value = json!({"optionalText": null, "nested": [null, {"text": "null", "flag": false, "integer": 7, "fraction": 1.5}], "empty": {}});
         for inline in [false, true] {
