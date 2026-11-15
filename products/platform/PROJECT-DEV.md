@@ -486,3 +486,26 @@ JWKS; CLI tokens and the separately served run-local machine token endpoint
 continue to use the same effective issuer. The worker holds the reservation
 until cleanup. `issuer: run` without application and without this exact paired
 binding is refused, including BReg-only plans; fixed HTTP remains refused.
+
+
+### Explicit browser roles using separate human source credentials
+
+A paired BReg/Casework built application may declare
+`application.caseworkSourceCredentialRoles` as 1 through 32 distinct existing
+role identifiers. The runner forwards this exact ordered list to
+`casework.sourceCredentialRoles` in the application's normal run input. It does
+not pick roles, infer a staff profile, or modify the authored deployment. The
+application's maintained configuration command must verify that each role is
+served, has its existing explicit BReg mapping, is an eligible non-holder human
+reviewer, and agrees exactly with its authored declaration. Missing roles,
+mismatches and unsupported native client capability refuse configuration.
+Omission preserves the previous run-input bytes and grant mode.
+
+The paired application's selected Casework provider receives
+`humanSourceAuthentication.audience` from the already declared BReg resource.
+This enables independent verification of the separate source bearer; it does
+not change packages, issuer/key trust, principal, scope or source authorization.
+Browser tokens keep one audience and only that product's narrowed grant. The
+shared-audience CLI `caseworkContext` compatibility path is unchanged. Review
+and save the authored source/declaration through normal tooling before using a
+new generated host configuration; post-generation JSON injection is unsupported.

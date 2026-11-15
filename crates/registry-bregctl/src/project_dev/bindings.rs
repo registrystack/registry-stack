@@ -391,6 +391,15 @@ fn render(
                 "clientIdRef": client_id_ref,
                 "clientAssertionKeyRef": client_assertion_key_ref,
             });
+            if plan
+                .application
+                .as_ref()
+                .is_some_and(|application| application.casework_source_credential_roles.is_some())
+            {
+                config["contextProviders"][binding.id.as_str()]["humanSourceAuthentication"] = json!({
+                    "audience": plan.product(Product::Breg).audience,
+                });
+            }
         }
     }
 }
@@ -1394,6 +1403,37 @@ mod tests {
             .block_on(client.post(&endpoint).form(&wrong).send())
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn human_source_runtime_audience_requires_explicit_browser_role_selection() {
+        let mut value = serde_json::to_value(plan()).unwrap();
+        value["issuer"] = json!("run");
+        value["application"] = json!({
+            "client":"browser-client", "callbackPath":"/callback", "healthPath":"/health",
+            "entry":"entry.js", "prepare":"prepare.js", "checker":"checker.js", "deployment":"deployment.json",
+            "configSchema":"example/host-run/v1", "configEnvironment":"HOST_CONFIG", "prepareVersion":"example1"
+        });
+        let mut output = json!({});
+        render_for_check(
+            &serde_json::from_value(value.clone()).unwrap(),
+            Product::Casework,
+            &mut output,
+        );
+        assert!(output["contextProviders"]["registry"]
+            .get("humanSourceAuthentication")
+            .is_none());
+        value["application"]["caseworkSourceCredentialRoles"] = json!(["reviewer"]);
+        let mut output = json!({});
+        render_for_check(
+            &serde_json::from_value(value).unwrap(),
+            Product::Casework,
+            &mut output,
+        );
+        assert_eq!(
+            output["contextProviders"]["registry"]["humanSourceAuthentication"]["audience"],
+            "urn:dev:breg"
+        );
     }
 
     #[test]

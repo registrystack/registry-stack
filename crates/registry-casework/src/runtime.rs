@@ -568,6 +568,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             keys,
             config.authentication.oidc.human_identity.clone(),
         )
+        .with_human_source_audiences(config.human_source_audiences(project))
         .with_delegated_staff_readers(
             config
                 .authentication

@@ -10,6 +10,16 @@
           "minLength": 1,
           "type": "string"
         },
+        "caseworkSourceCredentialRoles": {
+          "description": "Explicit existing served roles opting into separate same-human source credentials.\nThe application's checked configuration command validates their BReg mapping.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "checker": {
           "description": "Built configuration checker, invoked with the generated config path.",
           "type": "string"

@@ -116,3 +116,34 @@ locally with `submission_digest(producer_id, source_namespace, &request)`;
 Node and Python expose that same implementation as `submissionDigest` and
 `submission_digest`. A changed expected binding is refused without accepting
 work. Keep the binding, request, key, and digest unchanged during recovery.
+
+
+### Separate human source credentials
+
+For an explicitly configured current-source provider, borrow a separate source
+bearer for one call without changing the client's state:
+
+```rust,ignore
+let source = HumanSourceCredential::new(&source_token, declared_source_profile);
+let auth = CaseworkAuth::new(&casework_token, selected_casework_profile)
+    .with_source_credential(source);
+let page = client.review_tasks(auth, &query).await?;
+```
+
+Casework independently verifies both credentials as the same direct human;
+BReg still decides source client, profile, scope, purpose and disclosure. The
+source selector is explicit. A conflicting `with_source_profile` refuses before
+I/O. An absent source credential keeps legacy single-bearer behavior. Never
+put the source token in a task, draft, request body or recovery object.
+
+Node ordinary source methods append optional
+`sourceCredential: {sourceProfile, token}` after existing positional arguments;
+task-template/grant read options contain `sourceCredential` instead. Python
+uses the optional `source_credential` argument with `source_profile` and `token`
+keys. Native capability is `registry.casework.human-source-credential.v1`,
+returned by `humanSourceCredentialContract()` or Python
+`human_source_credential_contract()` on the loaded native client. Missing or
+unknown capability must fail closed; package versions, function arity and
+silently ignored extra arguments do not prove support. Source-free release,
+revocation, accountability, requester history and delegated routes cannot use
+this credential.

@@ -392,11 +392,36 @@ fn auth<'a>(
     token: &'a BearerToken,
     profile: &'a str,
     source_profile: Option<&'a str>,
+    source: Option<&'a (BearerToken, String)>,
 ) -> CaseworkAuth<'a> {
-    match source_profile {
+    let auth = match source_profile {
         Some(source) => CaseworkAuth::new(token, profile).with_source_profile(source),
         None => CaseworkAuth::new(token, profile),
+    };
+    match source {
+        Some((token, profile)) => auth.with_source_credential(
+            casework_client_sdk::HumanSourceCredential::new(token, profile),
+        ),
+        None => auth,
     }
+}
+
+fn parse_human_source_credential(
+    py: Python<'_>,
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<(BearerToken, String)>> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Credential {
+        source_profile: String,
+        token: String,
+    }
+    value
+        .map(|value| {
+            let credential: Credential = input(py, value)?;
+            Ok((bearer(py, &credential.token)?, credential.source_profile))
+        })
+        .transpose()
 }
 
 /// Every validation reason the binding can answer, in the order the mapping
@@ -456,6 +481,10 @@ struct CaseworkClient {
 
 #[pymethods]
 impl CaseworkClient {
+    fn human_source_credential_contract(&self) -> &'static str {
+        casework_client_sdk::HUMAN_SOURCE_CREDENTIAL_CONTRACT
+    }
+
     #[new]
     #[pyo3(signature = (base_url, attempt_timeout_seconds=None, connect_timeout_seconds=None, maximum_response_bytes=None, user_agent=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
     #[allow(clippy::too_many_arguments)]
@@ -518,7 +547,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime
-                    .block_on(self.inner.description(auth(&token, profile, None)))
+                    .block_on(self.inner.description(auth(&token, profile, None, None)))
             }),
         )
     }
@@ -543,7 +572,7 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime
                     .block_on(self.inner.create_or_recover_review_request(
-                        auth(&token, profile, None),
+                        auth(&token, profile, None, None),
                         idempotency_key,
                         &request,
                         &digest,
@@ -566,7 +595,7 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .review_request(auth(&token, profile, None), request_id),
+                        .review_request(auth(&token, profile, None, None), request_id),
                 )
             }),
         )
@@ -586,7 +615,7 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .review_result(auth(&token, profile, None), &accepted),
+                        .review_result(auth(&token, profile, None, None), &accepted),
                 )
             }),
         )
@@ -607,7 +636,7 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .review_results(auth(&token, profile, None), &query),
+                        .review_results(auth(&token, profile, None, None), &query),
                 )
             }),
         )
@@ -630,7 +659,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.cancel_review_request(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, None),
                     &accepted,
                     idempotency_key,
                     &request,
@@ -649,8 +678,10 @@ impl CaseworkClient {
         complete(
             py,
             py.detach(|| {
-                self.runtime
-                    .block_on(self.inner.review_policies(auth(&token, profile, None)))
+                self.runtime.block_on(
+                    self.inner
+                        .review_policies(auth(&token, profile, None, None)),
+                )
             }),
         )
     }
@@ -668,13 +699,13 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .review_policy(auth(&token, profile, None), policy_id),
+                        .review_policy(auth(&token, profile, None, None), policy_id),
                 )
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    #[pyo3(signature = (token, profile, query=None, source_profile=None, source_credential=None))]
     fn own_review_decisions<'py>(
         &self,
         py: Python<'py>,
@@ -682,21 +713,23 @@ impl CaseworkClient {
         profile: &str,
         query: Option<&Bound<'py, PyAny>>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let query: OwnReviewDecisionQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .own_review_decisions(auth(&token, profile, source_profile), &query),
-                )
+                self.runtime.block_on(self.inner.own_review_decisions(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    &query,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    #[pyo3(signature = (token, profile, query=None, source_profile=None, source_credential=None))]
     fn review_tasks<'py>(
         &self,
         py: Python<'py>,
@@ -704,21 +737,23 @@ impl CaseworkClient {
         profile: &str,
         query: Option<&Bound<'_, PyAny>>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let query: ReviewStaffingQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .review_tasks(auth(&token, profile, source_profile), &query),
-                )
+                self.runtime.block_on(self.inner.review_tasks(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    &query,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    #[pyo3(signature = (token, profile, query=None, source_profile=None, source_credential=None))]
     fn next_review_task<'py>(
         &self,
         py: Python<'py>,
@@ -726,21 +761,23 @@ impl CaseworkClient {
         profile: &str,
         query: Option<&Bound<'_, PyAny>>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let query: ReviewStaffingQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .next_review_task(auth(&token, profile, source_profile), &query),
-                )
+                self.runtime.block_on(self.inner.next_review_task(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    &query,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    #[pyo3(signature = (token, profile, query=None, source_profile=None, source_credential=None))]
     fn review_task_holdings<'py>(
         &self,
         py: Python<'py>,
@@ -748,21 +785,23 @@ impl CaseworkClient {
         profile: &str,
         query: Option<&Bound<'_, PyAny>>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let query: ReviewStaffingQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .review_task_holdings(auth(&token, profile, source_profile), &query),
-                )
+                self.runtime.block_on(self.inner.review_task_holdings(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    &query,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, source_profile=None, source_credential=None))]
     fn review_task<'py>(
         &self,
         py: Python<'py>,
@@ -770,21 +809,23 @@ impl CaseworkClient {
         profile: &str,
         task_id: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .review_task(auth(&token, profile, source_profile), task_id),
-                )
+                self.runtime.block_on(self.inner.review_task(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    task_id,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, query=None, source_profile=None))]
+    #[pyo3(signature = (token, profile, query=None, source_profile=None, source_credential=None))]
     fn supervisory_review_tasks<'py>(
         &self,
         py: Python<'py>,
@@ -792,21 +833,23 @@ impl CaseworkClient {
         profile: &str,
         query: Option<&Bound<'_, PyAny>>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let query: SupervisoryReviewTaskQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .supervisory_review_tasks(auth(&token, profile, source_profile), &query),
-                )
+                self.runtime.block_on(self.inner.supervisory_review_tasks(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    &query,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, source_profile=None, source_credential=None))]
     fn review_task_context<'py>(
         &self,
         py: Python<'py>,
@@ -814,21 +857,23 @@ impl CaseworkClient {
         profile: &str,
         task_id: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .review_task_context(auth(&token, profile, source_profile), task_id),
-                )
+                self.runtime.block_on(self.inner.review_task_context(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    task_id,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, task_id, *, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, *, source_profile=None, source_credential=None))]
     fn preview_review_task_templates<'py>(
         &self,
         py: Python<'py>,
@@ -836,23 +881,24 @@ impl CaseworkClient {
         profile: &str,
         task_id: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner.preview_review_task_templates(
-                        auth(&token, profile, source_profile),
+                self.runtime
+                    .block_on(self.inner.preview_review_task_templates(
+                        auth(&token, profile, source_profile, source_credential.as_ref()),
                         task_id,
-                    ),
-                )
+                    ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, task_id, *, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, *, source_profile=None, source_credential=None))]
     fn list_review_task_grants<'py>(
         &self,
         py: Python<'py>,
@@ -860,22 +906,24 @@ impl CaseworkClient {
         profile: &str,
         task_id: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .list_review_task_grants(auth(&token, profile, source_profile), task_id),
-                )
+                self.runtime.block_on(self.inner.list_review_task_grants(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    task_id,
+                ))
             }),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, approval, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, approval, source_profile=None, source_credential=None))]
     fn approve_review_task_grant<'py>(
         &self,
         py: Python<'py>,
@@ -886,15 +934,17 @@ impl CaseworkClient {
         idempotency_key: &str,
         approval: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         let approval: casework_client_sdk::TaskApprovalRequest = input(py, approval)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.approve_review_task_grant(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -919,7 +969,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.revoke_review_task_grant(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, None),
                     task_id,
                     grant_id,
                 ))
@@ -928,7 +978,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, source_profile=None, source_credential=None))]
     fn claim_review_task<'py>(
         &self,
         py: Python<'py>,
@@ -938,14 +988,16 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.claim_review_task(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -970,7 +1022,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.release_review_task(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, None),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -980,7 +1032,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None, source_credential=None))]
     fn assign_review_task<'py>(
         &self,
         py: Python<'py>,
@@ -991,15 +1043,17 @@ impl CaseworkClient {
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         let request: AssignmentRequest = input(py, request)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.assign_review_task(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -1010,7 +1064,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None, source_credential=None))]
     fn delegate_review_task<'py>(
         &self,
         py: Python<'py>,
@@ -1021,15 +1075,17 @@ impl CaseworkClient {
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         let request: DelegateRequest = input(py, request)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.delegate_review_task(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -1039,7 +1095,7 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, source_profile=None, source_credential=None))]
     fn review_task_draft<'py>(
         &self,
         py: Python<'py>,
@@ -1047,22 +1103,24 @@ impl CaseworkClient {
         profile: &str,
         task_id: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .review_task_draft(auth(&token, profile, source_profile), task_id),
-                )
+                self.runtime.block_on(self.inner.review_task_draft(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    task_id,
+                ))
             }),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, draft, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, draft, source_profile=None, source_credential=None))]
     fn save_review_task_draft<'py>(
         &self,
         py: Python<'py>,
@@ -1073,15 +1131,17 @@ impl CaseworkClient {
         idempotency_key: &str,
         draft: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         let draft: ReviewTaskDraftInput = input(py, draft)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.save_review_task_draft(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -1092,7 +1152,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, source_profile=None, source_credential=None))]
     fn delete_review_task_draft<'py>(
         &self,
         py: Python<'py>,
@@ -1102,14 +1162,16 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.delete_review_task_draft(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -1119,7 +1181,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, decision, source_profile=None))]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, decision, source_profile=None, source_credential=None))]
     fn decide_review_task<'py>(
         &self,
         py: Python<'py>,
@@ -1130,15 +1192,17 @@ impl CaseworkClient {
         idempotency_key: &str,
         decision: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let task_id = uuid(py, task_id)?;
         let decision: ReviewTaskDecisionRequest = input(py, decision)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.decide_review_task(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -1148,7 +1212,9 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, request_id, query=None, source_profile=None))]
+    #[pyo3(signature = (token, profile, request_id, query=None, source_profile=None, source_credential=None))]
+    // Preserve existing positional arguments; the separate credential is per call.
+    #[allow(clippy::too_many_arguments)]
     fn review_history<'py>(
         &self,
         py: Python<'py>,
@@ -1157,15 +1223,17 @@ impl CaseworkClient {
         request_id: &str,
         query: Option<&Bound<'_, PyAny>>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let request_id = uuid(py, request_id)?;
         let query: ReviewPageQuery = optional_input(py, query)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.review_history(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     request_id,
                     &query,
                 ))
@@ -1174,7 +1242,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (token, profile, request_id, idempotency_key, note, source_profile=None))]
+    #[pyo3(signature = (token, profile, request_id, idempotency_key, note, source_profile=None, source_credential=None))]
     fn add_review_note<'py>(
         &self,
         py: Python<'py>,
@@ -1184,15 +1252,17 @@ impl CaseworkClient {
         idempotency_key: &str,
         note: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let request_id = uuid(py, request_id)?;
         let note: ReviewNoteRequest = input(py, note)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.add_review_note(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     request_id,
                     idempotency_key,
                     &note,
@@ -1201,7 +1271,7 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, request_id, source_profile=None))]
+    #[pyo3(signature = (token, profile, request_id, source_profile=None, source_credential=None))]
     fn review_clocks<'py>(
         &self,
         py: Python<'py>,
@@ -1209,16 +1279,18 @@ impl CaseworkClient {
         profile: &str,
         request_id: &str,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         let request_id = uuid(py, request_id)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .review_clocks(auth(&token, profile, source_profile), request_id),
-                )
+                self.runtime.block_on(self.inner.review_clocks(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    request_id,
+                ))
             }),
         )
     }
@@ -1237,7 +1309,7 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .review_accountability(auth(&token, profile, None), event_id),
+                        .review_accountability(auth(&token, profile, None, None), event_id),
                 )
             }),
         )
@@ -1293,7 +1365,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime
-                    .block_on(self.inner.directory(auth(&token, profile, None)))
+                    .block_on(self.inner.directory(auth(&token, profile, None, None)))
             }),
         )
     }
@@ -1312,7 +1384,7 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .directory_targets(auth(&token, profile, None), &query),
+                        .directory_targets(auth(&token, profile, None, None), &query),
                 )
             }),
         )
@@ -1334,7 +1406,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.bootstrap_directory(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, None),
                     expected_revision,
                     idempotency_key,
                     &request,
@@ -1360,7 +1432,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.update_directory_team(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, None),
                     team_id,
                     expected_directory_revision,
                     idempotency_key,
@@ -1386,7 +1458,7 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .absences_page(auth(&token, profile, source_profile), &query),
+                        .absences_page(auth(&token, profile, source_profile, None), &query),
                 )
             }),
         )
@@ -1410,7 +1482,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.create_absence(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, None),
                     expected_directory_revision,
                     idempotency_key,
                     &absence,
@@ -1439,7 +1511,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.update_absence(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, None),
                     absence_id,
                     expected_directory_revision,
                     idempotency_key,
@@ -1467,7 +1539,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.delete_absence(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, None),
                     absence_id,
                     expected_directory_revision,
                     idempotency_key,
@@ -1476,7 +1548,7 @@ impl CaseworkClient {
         )
     }
 
-    #[pyo3(signature = (token, profile, movement, source_profile=None))]
+    #[pyo3(signature = (token, profile, movement, source_profile=None, source_credential=None))]
     #[allow(clippy::too_many_arguments)]
     fn preview_caseload_move<'py>(
         &self,
@@ -1485,21 +1557,23 @@ impl CaseworkClient {
         profile: &str,
         movement: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let movement: ReviewCaseloadMoveRequest = input(py, movement)?;
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .preview_caseload_move(auth(&token, profile, source_profile), &movement),
-                )
+                self.runtime.block_on(self.inner.preview_caseload_move(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    &movement,
+                ))
             }),
         )
     }
 
-    #[pyo3(signature = (token, profile, idempotency_key, request, source_profile=None))]
+    #[pyo3(signature = (token, profile, idempotency_key, request, source_profile=None, source_credential=None))]
     #[allow(clippy::too_many_arguments)]
     fn apply_caseload_move<'py>(
         &self,
@@ -1509,14 +1583,16 @@ impl CaseworkClient {
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
         source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request: ReviewCaseloadApplyRequest = input(py, request)?;
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.apply_caseload_move(
-                    auth(&token, profile, source_profile),
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
                     idempotency_key,
                     &request,
                 ))
@@ -1537,7 +1613,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.holiday_revision(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, None),
                     holiday_set,
                     revision,
                 ))
@@ -1559,7 +1635,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.create_holiday_revision(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, None),
                     idempotency_key,
                     &request,
                 ))
@@ -1567,26 +1643,30 @@ impl CaseworkClient {
         )
     }
 
+    #[pyo3(signature = (token, profile, request, source_credential=None))]
     fn preview_clock_recompute<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
         request: &Bound<'_, PyAny>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request: ReviewClockRecomputeRequest = input(py, request)?;
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(
-                    self.inner
-                        .preview_clock_recompute(auth(&token, profile, None), &request),
-                )
+                self.runtime.block_on(self.inner.preview_clock_recompute(
+                    auth(&token, profile, None, source_credential.as_ref()),
+                    &request,
+                ))
             }),
         )
     }
 
+    #[pyo3(signature = (token, profile, idempotency_key, request, source_credential=None))]
     fn apply_clock_recompute<'py>(
         &self,
         py: Python<'py>,
@@ -1594,14 +1674,16 @@ impl CaseworkClient {
         profile: &str,
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
+        source_credential: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request: ReviewClockRecomputeApplyRequest = input(py, request)?;
         let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
         complete(
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.apply_clock_recompute(
-                    auth(&token, profile, None),
+                    auth(&token, profile, None, source_credential.as_ref()),
                     idempotency_key,
                     &request,
                 ))

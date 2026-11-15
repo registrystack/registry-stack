@@ -219,6 +219,8 @@ def document(contract: dict, wire: dict) -> dict:
                 else "Current-source lists, open work, source context, task mutations and new notes require the human caller's source-valid profile and credential. Retained terminal task and history reads use Casework authority. Submitted context requires no provider."
             )
             parameters.append(parameter(SOURCE_PROFILE,"header",bounded_identifier(),False,source_description))
+            if not endpoint.delegated and not endpoint.path.endswith("/release"):
+                parameters.append(parameter("registry-source-authorization","header",{"type":"string","minLength":1,"maxLength":131079,"writeOnly":True},False,"Optional separate human source bearer. Requires explicit source profile and provider-bound configuration; both credentials must independently verify as the same direct human. Never persisted or used as Casework authority; absent preserves legacy single-bearer forwarding."))
         for name in re.findall(r"\{([^}]+)\}",endpoint.path):
             schema={"type":"string","format":"uuid"}
             if name in ("policy_id","team_id","id"):schema=bounded_identifier()

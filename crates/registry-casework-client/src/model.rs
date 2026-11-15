@@ -12,6 +12,30 @@ pub struct CaseworkAuth<'a> {
     pub token: &'a BearerToken,
     pub profile: &'a str,
     pub source_profile: Option<&'a str>,
+    pub source_credential: Option<HumanSourceCredential<'a>>,
+}
+
+/// Explicit source authority borrowed for one call, never retained by the client.
+#[derive(Clone, Copy)]
+pub struct HumanSourceCredential<'a> {
+    pub token: &'a BearerToken,
+    pub source_profile: &'a str,
+}
+
+impl<'a> HumanSourceCredential<'a> {
+    #[must_use]
+    pub fn new(token: &'a BearerToken, source_profile: &'a str) -> Self {
+        Self {
+            token,
+            source_profile,
+        }
+    }
+}
+
+impl fmt::Debug for HumanSourceCredential<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("HumanSourceCredential(<redacted>)")
+    }
 }
 
 impl<'a> CaseworkAuth<'a> {
@@ -21,12 +45,19 @@ impl<'a> CaseworkAuth<'a> {
             token,
             profile,
             source_profile: None,
+            source_credential: None,
         }
     }
 
     #[must_use]
     pub fn with_source_profile(mut self, source_profile: &'a str) -> Self {
         self.source_profile = Some(source_profile);
+        self
+    }
+
+    #[must_use]
+    pub fn with_source_credential(mut self, source: HumanSourceCredential<'a>) -> Self {
+        self.source_credential = Some(source);
         self
     }
 }
@@ -38,6 +69,7 @@ impl fmt::Debug for CaseworkAuth<'_> {
             .field("token", &"<redacted>")
             .field("profile", &"<selected>")
             .field("source_profile", &self.source_profile.map(|_| "<selected>"))
+            .field("source_credential", &self.source_credential)
             .finish()
     }
 }

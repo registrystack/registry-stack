@@ -245,6 +245,14 @@ pub(super) struct Plan {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ApplicationPlan {
+    /// Explicit existing served roles opting into separate same-human source credentials.
+    /// The application's checked configuration command validates their BReg mapping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "application_source_roles_schema")
+    )]
+    pub casework_source_credential_roles: Option<Vec<String>>,
     /// Confidential browser client identifier admitted by the selected product profiles.
     pub client: String,
     /// Exact loopback callback path registered with the run issuer.
@@ -651,6 +659,19 @@ pub(super) struct RawBody {
     pub base64: String,
 }
 
+#[cfg(feature = "schema")]
+fn application_source_roles_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let item = generator.subschema_for::<LocalId>();
+    schemars::json_schema!({"anyOf": [{"type":"null"}, {"type":"array","items":item,"minItems":1,"maxItems":32,"uniqueItems":true}]})
+}
+
+fn valid_application_source_roles(roles: &[String]) -> bool {
+    !roles.is_empty()
+        && roles.len() <= 32
+        && roles.iter().all(|role| identifier(role))
+        && roles.iter().collect::<BTreeSet<_>>().len() == roles.len()
+}
+
 pub(super) fn identifier(value: &str) -> bool {
     LocalId::new(value).is_ok()
 }
@@ -962,6 +983,17 @@ impl Plan {
             "Use issuer `run` with application or the exact paired runIssuerBinding; otherwise remove both and set an HTTPS issuer.",
         )?;
         if let Some(application) = &self.application {
+            if let Some(roles) = &application.casework_source_credential_roles {
+                require(
+                    valid_application_source_roles(roles)
+                        && self.products.iter().any(|product| product.product == Product::Breg)
+                        && self.products.iter().any(|product| product.product == Product::Casework)
+                        && self.bindings.casework_context_provider.is_some(),
+                    "/application/caseworkSourceCredentialRoles",
+                    "Separate source credentials require 1 through 32 distinct existing role identifiers and a paired BReg/Casework context binding.",
+                    "Declare the exact served roles and both product bindings, or omit caseworkSourceCredentialRoles.",
+                )?;
+            }
             require(
                 bounded_atom(&application.client),
                 "/application/client",
@@ -1604,6 +1636,28 @@ mod tests {
 
     fn canonical(root: &tempfile::TempDir) -> PathBuf {
         root.path().canonicalize().unwrap()
+    }
+
+    #[test]
+    fn application_source_role_list_is_explicit_bounded_and_unique() {
+        assert!(valid_application_source_roles(&[
+            "reviewer".into(),
+            "supervisor".into()
+        ]));
+        for roles in [
+            vec![],
+            vec!["reviewer".into(), "reviewer".into()],
+            vec!["invalid role".into()],
+            (0..33).map(|n| format!("role-{n}")).collect(),
+        ] {
+            assert!(!valid_application_source_roles(&roles));
+        }
+        let (root, plan) = application_plan();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["application"]["caseworkSourceCredentialRoles"] = json!(["reviewer"]);
+        let plan: Plan = serde_json::from_value(value).unwrap();
+        let refusal = plan.validate(&canonical(&root)).unwrap_err();
+        assert_eq!(refusal.field, "/application/caseworkSourceCredentialRoles");
     }
 
     fn application_plan() -> (tempfile::TempDir, Plan) {

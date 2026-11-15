@@ -163,7 +163,13 @@ export type KnownCaseworkProblemCode =
 export type CaseworkProblemCode = KnownCaseworkProblemCode | (string & {})
 export type CaseworkProtocolFailure = 'header-bounds' | 'trace-context' | 'media-type' | 'body' | 'problem' | 'status' | 'protocol'
 
+export interface HumanSourceCredential {
+  sourceProfile: string
+  token: string
+}
+
 export interface ReviewTaskGrantReadOptions {
+  sourceCredential?: HumanSourceCredential | null
   taskId: Uuid
   sourceProfile?: string | null
 }
@@ -390,6 +396,7 @@ export interface ReviewPolicyClosure {
 export function submissionDigest(producer: string, sourceNamespace: string, request: ReviewCreateRequest): ContentDigest
 
 export class CaseworkClient {
+  humanSourceCredentialContract(): string
   constructor(config: CaseworkClientConfig)
   description(token: string, profile: string): Promise<CaseworkOutcome<Description>>
   createOrRecoverReviewRequest(token: string, profile: string, idempotencyKey: string, request: ReviewCreateRequest, expectedSubmissionDigest: ContentDigest): Promise<CaseworkOutcome<ReviewRequestAccepted>>
@@ -399,45 +406,45 @@ export class CaseworkClient {
   cancelReviewRequest(token: string, profile: string, accepted: ReviewRequestAccepted, idempotencyKey: string, request: ReviewCancelRequest): Promise<CaseworkOutcome<ReviewCancelResponse>>
   reviewPolicies(token: string, profile: string): Promise<CaseworkOutcome<ReadonlyArray<ReviewPolicyClosure>>>
   reviewPolicy(token: string, profile: string, policyId: string): Promise<CaseworkOutcome<ReviewPolicyClosure>>
-  nextReviewTask(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask | null>>
-  reviewTasks(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
-  supervisoryReviewTasks(token: string, profile: string, query?: SupervisoryReviewTaskQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<SupervisoryReviewTaskPage>>
-  ownReviewDecisions(token: string, profile: string, query?: OwnReviewDecisionQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<OwnReviewDecisionPage>>
-  reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask>>
-  reviewTaskContext(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskContext>>
+  nextReviewTask(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTask | null>>
+  reviewTasks(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskPage>>
+  supervisoryReviewTasks(token: string, profile: string, query?: SupervisoryReviewTaskQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<SupervisoryReviewTaskPage>>
+  ownReviewDecisions(token: string, profile: string, query?: OwnReviewDecisionQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<OwnReviewDecisionPage>>
+  reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTask>>
+  reviewTaskContext(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskContext>>
   previewReviewTaskTemplates(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskTemplatePreviews>>
   listReviewTaskGrants(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskGrantList>>
-  approveReviewTaskGrant(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<TaskGrantView>>
+  approveReviewTaskGrant(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<TaskGrantView>>
   revokeReviewTaskGrant(token: string, profile: string, taskId: Uuid, grantId: string): Promise<CaseworkOutcome<TaskGrantRevocation>>
-  claimReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTask>>
+  claimReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTask>>
   releaseReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<ReviewTask>>
-  assignReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTask>>
-  delegateReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTask>>
-  reviewTaskDraft(token: string, profile: string, taskId: Uuid, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTaskDraft | null>>
-  saveReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, draft: ReviewTaskDraftInput, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTaskDraft>>
-  deleteReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string): Promise<CaseworkOutcome<null>>
-  decideReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, decision: ReviewTaskDecisionRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<null>>
-  reviewHistory(token: string, profile: string, requestId: Uuid, query?: ReviewPageQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewHistoryPage>>
-  addReviewNote(token: string, profile: string, requestId: Uuid, idempotencyKey: string, note: ReviewNoteRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewHistoryEntry>>
-  reviewClocks(token: string, profile: string, requestId: Uuid, sourceProfile?: string | null): Promise<CaseworkOutcome<ReadonlyArray<ReviewClockOccurrence>>>
+  assignReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTask>>
+  delegateReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTask>>
+  reviewTaskDraft(token: string, profile: string, taskId: Uuid, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskDraft | null>>
+  saveReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, draft: ReviewTaskDraftInput, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskDraft>>
+  deleteReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<null>>
+  decideReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, decision: ReviewTaskDecisionRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<null>>
+  reviewHistory(token: string, profile: string, requestId: Uuid, query?: ReviewPageQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewHistoryPage>>
+  addReviewNote(token: string, profile: string, requestId: Uuid, idempotencyKey: string, note: ReviewNoteRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewHistoryEntry>>
+  reviewClocks(token: string, profile: string, requestId: Uuid, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReadonlyArray<ReviewClockOccurrence>>>
   reviewAccountability(token: string, profile: string, eventId: Uuid): Promise<CaseworkOutcome<ReviewAccountabilityRecord>>
   taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome<TaskAssertionResponse>>
   /** Exact empty-POST authority route for the shared remote exchange provider. */
   taskAssertionEndpoint(grantId: string): string
   taskGrantStatus(token: string, grantId: string): Promise<CaseworkOutcome<TaskGrantStatus>>
-  reviewTaskHoldings(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskPage>>
+  reviewTaskHoldings(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskPage>>
   directory(token: string, profile: string): Promise<CaseworkOutcome<DirectoryResponse>>
   directoryTargets(token: string, profile: string, query: DirectoryTargetsQuery): Promise<CaseworkOutcome<DirectoryTargetPage>>
   bootstrapDirectory(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: BootstrapDirectoryRequest): Promise<CaseworkOutcome<DirectoryResponse>>
   updateDirectoryTeam(token: string, profile: string, teamId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DirectoryTeamUpdateRequest): Promise<CaseworkOutcome<DirectoryResponse>>
   holidayRevision(token: string, profile: string, holidaySet: string, revision: SafeInteger): Promise<CaseworkOutcome<HolidaySetDocument>>
   createHolidayRevision(token: string, profile: string, idempotencyKey: string, request: HolidaySetRevisionInput): Promise<CaseworkOutcome<HolidaySetDocument>>
-  previewClockRecompute(token: string, profile: string, request: ReviewClockRecomputeRequest): Promise<CaseworkOutcome<ReviewClockRecomputePreview>>
-  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: ReviewClockRecomputeApplyRequest): Promise<CaseworkOutcome<ReviewClockRecomputeResult>>
+  previewClockRecompute(token: string, profile: string, request: ReviewClockRecomputeRequest, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewClockRecomputePreview>>
+  applyClockRecompute(token: string, profile: string, idempotencyKey: string, request: ReviewClockRecomputeApplyRequest, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewClockRecomputeResult>>
   absences(token: string, profile: string, query?: AbsencesQuery | null): Promise<CaseworkOutcome<AbsenceList>>
   createAbsence(token: string, profile: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
   updateAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AbsenceInput): Promise<CaseworkOutcome<AbsenceRecord>>
   deleteAbsence(token: string, profile: string, absenceId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<null>>
-  previewCaseloadMove(token: string, profile: string, movement: ReviewCaseloadMoveRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewCaseloadPreview>>
-  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: ReviewCaseloadApplyRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewCaseloadResult>>
+  previewCaseloadMove(token: string, profile: string, movement: ReviewCaseloadMoveRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewCaseloadPreview>>
+  applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: ReviewCaseloadApplyRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewCaseloadResult>>
 }
