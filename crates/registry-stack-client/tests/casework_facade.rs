@@ -99,6 +99,18 @@ async fn every_casework_method_names_its_types(
     Ok(())
 }
 
+#[allow(dead_code)]
+fn explicit_human_source_auth<'a>(
+    casework_token: &'a BearerToken,
+    casework_profile: &'a str,
+    source_token: &'a BearerToken,
+    source_profile: &'a str,
+) -> CaseworkAuth<'a> {
+    let source: HumanSourceCredential<'a> =
+        HumanSourceCredential::new(source_token, source_profile);
+    CaseworkAuth::new(casework_token, casework_profile).with_source_credential(source)
+}
+
 /// Every name one `pub use` statement publishes, whether braced or single.
 fn published_names(statement: &str) -> Vec<String> {
     if let Some(open) = statement.find('{') {
