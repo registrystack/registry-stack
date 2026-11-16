@@ -407,10 +407,10 @@ export class CaseworkClient {
   reviewPolicies(token: string, profile: string): Promise<CaseworkOutcome<ReadonlyArray<ReviewPolicyClosure>>>
   reviewPolicy(token: string, profile: string, policyId: string): Promise<CaseworkOutcome<ReviewPolicyClosure>>
   nextReviewTask(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTask | null>>
-  reviewTasks(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskPage>>
+  reviewTasks(token: string, profile: string, query?: ReviewStaffingQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<ObservedCaseworkOutcome<ReviewTaskPage>>
   supervisoryReviewTasks(token: string, profile: string, query?: SupervisoryReviewTaskQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<SupervisoryReviewTaskPage>>
   ownReviewDecisions(token: string, profile: string, query?: OwnReviewDecisionQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<OwnReviewDecisionPage>>
-  reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTask>>
+  reviewTask(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<ObservedCaseworkOutcome<ReviewTask>>
   reviewTaskContext(token: string, profile: string, taskId: Uuid, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskContext>>
   previewReviewTaskTemplates(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskTemplatePreviews>>
   listReviewTaskGrants(token: string, profile: string, options: ReviewTaskGrantReadOptions): Promise<CaseworkOutcome<TaskGrantList>>
@@ -448,3 +448,5 @@ export class CaseworkClient {
   previewCaseloadMove(token: string, profile: string, movement: ReviewCaseloadMoveRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewCaseloadPreview>>
   applyCaseloadMove(token: string, profile: string, idempotencyKey: string, request: ReviewCaseloadApplyRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewCaseloadResult>>
 }
+
+export interface ObservedCaseworkOutcome<T> extends CaseworkOutcome<T> { readonly responseStatus: number }

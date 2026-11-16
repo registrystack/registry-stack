@@ -938,8 +938,8 @@ export declare class BaseRegistryClient {
   recordSchema(recordTypeIdentifier: string, accessProfile?: string | null, request?: ReadRequestOptions): Promise<RawOutcome>
   recordRevisions(recordRoute: string, recordIdentifier: string, accessProfile?: string | null, request?: ReadRequestOptions): Promise<RawOutcome>
   getRecordRevision(recordRoute: string, recordIdentifier: string, revision: SafeInteger, options?: RecordProjectionOptions | null, request?: ReadRequestOptions): Promise<RawOutcome>
-  getRecord(recordRoute: string, recordIdentifier: string, options?: RecordOptions | null, request?: ReadRequestOptions): Promise<CompleteOutcome<RecordEnvelope>>
-  listRecords(recordRoute: string, options?: ListOptions | null, request?: ReadRequestOptions): Promise<PageOutcome>
+  getRecord(recordRoute: string, recordIdentifier: string, options?: RecordOptions | null, request?: ReadRequestOptions): Promise<ObservedCompleteOutcome<RecordEnvelope>>
+  listRecords(recordRoute: string, options?: ListOptions | null, request?: ReadRequestOptions): Promise<ObservedPageOutcome>
   continueList(continuation: ListContinuation, request?: ReadRequestOptions): Promise<PageOutcome>
   getGeoJsonRecord(recordRoute: string, recordIdentifier: string, options?: GeoJsonOptions | null): Promise<CompleteOutcome<GeoJsonFeature>>
   listGeoJsonRecords(recordRoute: string, options?: GeoJsonListOptions | null): Promise<PageOutcome<GeoJsonFeatureCollection, GeoJsonListContinuation>>
@@ -1086,3 +1086,6 @@ export interface BRegProposalReviewAttachment {
 export declare class BRegProposalCollection { private constructor(); private readonly __opaque: void }
 export interface BRegProposalPage { readonly items: ReadonlyArray<BRegProposal>; readonly nextCursor?: string }
 export declare class BRegPreparedProposal { private constructor(); private readonly __opaque: void; static fromBytes(bytes: Buffer): BRegPreparedProposal; toBytes(): Buffer }
+
+export interface ObservedCompleteOutcome<T> extends CompleteOutcome<T> { readonly responseStatus: number }
+export interface ObservedPageOutcome<T = RecordCollection, C = ListContinuation> extends PageOutcome<T,C> { readonly responseStatus: number }

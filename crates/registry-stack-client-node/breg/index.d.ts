@@ -26,8 +26,8 @@ export declare class BaseRegistryClient {
    * caller may not read it.
    */
   eventRecordCreationRevision(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<string | null>
-  getRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
-  listRecords(recordRoute: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<PageOutcome>
+  getRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<ObservedCompleteOutcome>
+  listRecords(recordRoute: string, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<ObservedPageOutcome>
   continueList(value: any, cancellation?: ReadCancellation | undefined | null): Promise<PageOutcome>
   getGeoJsonRecord(recordRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
   listGeoJsonRecords(recordRoute: string, options?: any | undefined | null): Promise<PageOutcome>
@@ -373,6 +373,26 @@ export interface JsonOutcome {
   location?: string
   snapshot?: string
   validAt?: string
+}
+
+export interface ObservedCompleteOutcome {
+  kind: string
+  value: any
+  traceId: string
+  etag?: string
+  location?: string
+  responseStatus: number
+}
+
+export interface ObservedPageOutcome {
+  kind: string
+  value: any
+  continuation?: any
+  traceId: string
+  etag?: string
+  snapshot?: string
+  validAt?: string
+  responseStatus: number
 }
 
 export interface PageOutcome {

@@ -42,8 +42,9 @@ use uuid::Uuid;
 
 use crate::{
     wire::ClientResponse, CaseworkAuth, CaseworkClientConfig, CaseworkClientError,
-    CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, DelegatedStaffReadAuth,
-    ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest, SupervisoryReviewTaskQuery,
+    CaseworkComplete, CaseworkObservedRead, CaseworkProblemCode, CaseworkProtocolFailure,
+    DelegatedStaffReadAuth, ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest,
+    SupervisoryReviewTaskQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -286,6 +287,17 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
         query: &ReviewStaffingQuery,
     ) -> Result<CaseworkComplete<ReviewTaskPage>, CaseworkClientError> {
+        self.review_tasks_with_response_status(auth, query)
+            .await
+            .map(CaseworkObservedRead::into_outcome)
+    }
+
+    /// Retain actual response status after the same canonical read validation.
+    pub async fn review_tasks_with_response_status(
+        &self,
+        auth: CaseworkAuth<'_>,
+        query: &ReviewStaffingQuery,
+    ) -> Result<CaseworkObservedRead<CaseworkComplete<ReviewTaskPage>>, CaseworkClientError> {
         query.check().map_err(|_| {
             CaseworkClientError::invalid_request("the review task query is invalid")
         })?;
@@ -295,8 +307,10 @@ impl CaseworkClient {
                 .query(query),
             &auth,
         )?;
-        let complete: CaseworkComplete<ReviewTaskPage> =
-            self.send_json(request, StatusCode::OK).await?;
+        let observed = self
+            .send_json_with_response_status::<ReviewTaskPage>(request, StatusCode::OK)
+            .await?;
+        let (complete, status) = observed.into_parts();
         if !valid_staffing_page(&complete.value.items, query)
             || invalid_page_cursor(complete.value.status, complete.value.next_cursor)
             || complete.value.items.iter().any(|task| {
@@ -320,7 +334,7 @@ impl CaseworkClient {
                 Some(complete.trace_id),
             ));
         }
-        Ok(complete)
+        Ok(CaseworkObservedRead::new(complete, status))
     }
 
     /// Lists only currently held tasks assigned to the delegated principal.
@@ -481,10 +495,27 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
         task_id: Uuid,
     ) -> Result<CaseworkComplete<ReviewTask>, CaseworkClientError> {
+        self.review_task_with_response_status(auth, task_id)
+            .await
+            .map(CaseworkObservedRead::into_outcome)
+    }
+
+    /// Retain actual response status after the same canonical read validation.
+    pub async fn review_task_with_response_status(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+    ) -> Result<CaseworkObservedRead<CaseworkComplete<ReviewTask>>, CaseworkClientError> {
         let complete = self
-            .get_json(&auth, &["v1", "review-tasks", &task_id.to_string()], &[])
+            .get_json_with_response_status(
+                &auth,
+                &["v1", "review-tasks", &task_id.to_string()],
+                &[],
+            )
             .await?;
+        let (complete, status) = complete.into_parts();
         require_review_task_id(complete, task_id, StatusCode::OK)
+            .map(|outcome| CaseworkObservedRead::new(outcome, status))
     }
 
     pub async fn review_task_context(
@@ -1459,8 +1490,20 @@ impl CaseworkClient {
         segments: &[&str],
         query: &[(&str, &str)],
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
+        self.get_json_with_response_status(auth, segments, query)
+            .await
+            .map(CaseworkObservedRead::into_outcome)
+    }
+
+    async fn get_json_with_response_status<T: ClientResponse>(
+        &self,
+        auth: &CaseworkAuth<'_>,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<CaseworkObservedRead<CaseworkComplete<T>>, CaseworkClientError> {
         let request = self.authorized(self.http.get(self.url(segments)?).query(query), auth)?;
-        self.send_json(request, StatusCode::OK).await
+        self.send_json_with_response_status(request, StatusCode::OK)
+            .await
     }
 
     async fn mutate<T: ClientResponse, B: Serialize + ?Sized>(
@@ -1677,8 +1720,19 @@ impl CaseworkClient {
         request: RequestBuilder,
         expected_status: StatusCode,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
+        self.send_json_with_response_status(request, expected_status)
+            .await
+            .map(CaseworkObservedRead::into_outcome)
+    }
+
+    async fn send_json_with_response_status<T: ClientResponse>(
+        &self,
+        request: RequestBuilder,
+        expected_status: StatusCode,
+    ) -> Result<CaseworkObservedRead<CaseworkComplete<T>>, CaseworkClientError> {
         let response = self.send(request).await?;
-        self.json_answer(response, expected_status).await
+        self.json_answer_with_response_status(response, expected_status)
+            .await
     }
 
     async fn json_answer<T: ClientResponse>(
@@ -1686,6 +1740,16 @@ impl CaseworkClient {
         response: Response,
         expected_status: StatusCode,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
+        self.json_answer_with_response_status(response, expected_status)
+            .await
+            .map(CaseworkObservedRead::into_outcome)
+    }
+
+    async fn json_answer_with_response_status<T: ClientResponse>(
+        &self,
+        response: Response,
+        expected_status: StatusCode,
+    ) -> Result<CaseworkObservedRead<CaseworkComplete<T>>, CaseworkClientError> {
         let status = response.status();
         if status != expected_status {
             return Err(self.problem_or_status(response).await);
@@ -1710,7 +1774,10 @@ impl CaseworkClient {
                 Some(trace_id.clone()),
             )
         })?;
-        Ok(CaseworkComplete { value, trace_id })
+        Ok(CaseworkObservedRead::new(
+            CaseworkComplete { value, trace_id },
+            status.as_u16(),
+        ))
     }
 
     async fn empty_answer(
@@ -2377,6 +2444,34 @@ fn validate_page_with_max(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn observed_decoder_preserves_actual_distinct_response_statuses() {
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            Url::parse("http://127.0.0.1:1").unwrap(),
+        ))
+        .unwrap();
+        // This private helper accepts a caller-selected expected status for other
+        // operations. Neither public ReviewTask read accepts201.
+        for status in [StatusCode::OK, StatusCode::CREATED] {
+            let response: reqwest::Response = axum::http::Response::builder()
+                .status(status)
+                .header("content-type", "application/json")
+                .header(
+                    "traceparent",
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                )
+                .body("{\"items\":[],\"status\":\"complete\"}".to_owned())
+                .unwrap()
+                .into();
+            let actual = response.status().as_u16();
+            let observed = client
+                .json_answer_with_response_status::<ReviewTaskPage>(response, status)
+                .await
+                .unwrap();
+            assert_eq!(observed.response_status(), actual);
+        }
+    }
 
     #[test]
     fn auth_debug_redacts_token_and_profile() {
