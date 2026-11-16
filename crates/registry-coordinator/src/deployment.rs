@@ -235,6 +235,25 @@ fn fail(advice: &str) -> CoordinatorError {
     CoordinatorError::new("deployment.refused", "the deployment contract was refused")
         .suggest(advice)
 }
+// Keep audit-open diagnostics value-free, including custom I/O error messages.
+fn audit_open_refusal(error: registry_platform_audit::AuditError) -> CoordinatorError {
+    use registry_platform_audit::AuditError;
+    use std::io::ErrorKind;
+    let category = match error {
+        AuditError::SinkLocked { .. } => "sink-locked",
+        AuditError::Io(error) => match error.kind() {
+            ErrorKind::PermissionDenied => "io-permission-denied",
+            ErrorKind::NotFound => "io-not-found",
+            ErrorKind::InvalidData => "io-invalid-data",
+            _ => "io-other",
+        },
+        AuditError::Json(_) => "invalid-format",
+        _ => "other",
+    };
+    fail(&format!(
+        "restore writable durable audit custody ({category})"
+    ))
+}
 /// The metrics listener serves operator data, so it binds only a loopback or
 /// private address on its own nonzero port, never a wildcard and never the
 /// socket the public listener already covers. The rule is Messaging's.
@@ -500,7 +519,7 @@ async fn open_named(
     };
     let audit = AuditWriter::open(destination)
         .await
-        .map_err(|_| fail("restore writable durable audit custody"))?;
+        .map_err(audit_open_refusal)?;
     let security = StoreSecurity {
         database_id: d.database_id.clone(),
         keys: StateKeys::new(d.active_state_key, keys, admission)?,
@@ -981,6 +1000,107 @@ mod tests {
     use super::{limits, load_package, valid_metrics_listener, write_package, PackageConfig};
     use crate::definition::Definition;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn audit_open_refusals_are_fixed_and_value_free() {
+        use registry_platform_audit::AuditError;
+        use std::io::{Error, ErrorKind};
+        const CANARY: &str = "private-path-role-key-canary";
+        let mut cases = vec![
+            (
+                AuditError::SinkLocked {
+                    path: CANARY.into(),
+                    role: Some(CANARY.into()),
+                },
+                "sink-locked",
+            ),
+            (
+                AuditError::SinkLocked {
+                    path: CANARY.into(),
+                    role: None,
+                },
+                "sink-locked",
+            ),
+            (
+                AuditError::Json(serde_json::from_str::<serde_json::Value>("{").unwrap_err()),
+                "invalid-format",
+            ),
+            (AuditError::EmptyEnvVarName, "other"),
+            (
+                AuditError::EnvVarUnavailable {
+                    name: CANARY.into(),
+                },
+                "other",
+            ),
+            (
+                AuditError::EnvVarNotUnicode {
+                    name: CANARY.into(),
+                },
+                "other",
+            ),
+            (
+                AuditError::EmptySecret {
+                    name: CANARY.into(),
+                },
+                "other",
+            ),
+            (
+                AuditError::WeakSecret {
+                    name: CANARY.into(),
+                    min_bytes: 32,
+                },
+                "other",
+            ),
+        ];
+        for (kind, category) in [
+            (ErrorKind::PermissionDenied, "io-permission-denied"),
+            (ErrorKind::NotFound, "io-not-found"),
+            (ErrorKind::InvalidData, "io-invalid-data"),
+            (ErrorKind::Other, "io-other"),
+            (ErrorKind::Interrupted, "io-other"),
+        ] {
+            cases.push((AuditError::Io(Error::new(kind, CANARY)), category));
+        }
+        for (error, category) in cases {
+            let refusal = super::audit_open_refusal(error);
+            assert_eq!(refusal.code, "deployment.refused");
+            assert_eq!(refusal.message, "the deployment contract was refused");
+            assert_eq!(refusal.exit_code, 1);
+            assert_eq!(
+                refusal.suggested_action.as_deref(),
+                Some(format!("restore writable durable audit custody ({category})").as_str())
+            );
+            assert!(refusal.file.is_none());
+            assert!(refusal.field.is_none());
+            assert!(refusal.diagnostics.is_empty());
+            assert!(!format!("{refusal:?} {refusal}").contains(CANARY));
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_open_refusal_preserves_exclusive_companion_custody() {
+        use registry_platform_audit::{AuditDestination, AuditWriter, FileDestination};
+        let root = tempfile::tempdir().unwrap();
+        let destination =
+            AuditDestination::File(FileDestination::new(root.path().join("audit.jsonl")).unwrap())
+                .for_process("apply")
+                .unwrap();
+        let first = AuditWriter::open(destination.clone()).await.unwrap();
+        let error = match AuditWriter::open(destination.clone()).await {
+            Ok(_) => panic!("a second writer must not acquire the same companion"),
+            Err(error) => error,
+        };
+        let refusal = super::audit_open_refusal(error);
+        assert_eq!(refusal.code, "deployment.refused");
+        assert_eq!(
+            refusal.suggested_action.as_deref(),
+            Some("restore writable durable audit custody (sink-locked)")
+        );
+        drop(first);
+        let reopened = AuditWriter::open(destination).await.unwrap();
+        drop(reopened);
+        root.close().unwrap();
+    }
 
     /// The review-wait fixture snapshot with its review cancel retargeted at a
     /// literal request, which an earlier version packaged and this one refuses.
