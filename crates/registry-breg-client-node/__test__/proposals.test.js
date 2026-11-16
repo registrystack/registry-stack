@@ -257,3 +257,106 @@ test('review status preserves accepted request correlation without widening cont
     await assert.rejects(client.readProposalReviewContext(current), error => error.kind === 'invalid-request');
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+
+test('Proposal responseEtag observes only its individual HTTP response and never replaces opaque conditions', async () => {
+  let observed = '"breg-observed-one"';
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    for await (const _ of request) { /* consume the exact normal client body */ }
+    requests.push({url: request.url, headers: request.headers});
+    response.setHeader('content-type', 'application/json');
+    response.setHeader('cache-control', 'no-store');
+    response.setHeader('vary', 'authorization, accept');
+    response.setHeader('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01');
+    if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
+    if (observed !== null) response.setHeader('etag', observed);
+    response.end(JSON.stringify(request.url.startsWith('/v1/proposals?') ? {items: [proposal]} :
+      request.url.includes('/submit?') ? {...proposal, revision: 2, state: 'submitted', effectDigest: revision} : proposal));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/`});
+    const contract = await client.registryContract('author');
+    const started = await client.startProposal(contract.selectAction('correct', 'author'), {}, 'observed-start');
+    assert.equal(started.responseEtag, observed);
+    assert.notEqual(started.responseEtag, JSON.parse(started.documentJson).links.submit.ifMatch);
+    assert.throws(() => { started.responseEtag = '"breg-forged"'; }, TypeError);
+    observed = '"breg-observed-two"';
+    const read = await client.readProposal(started);
+    assert.equal(read.responseEtag, observed);
+    assert.equal(started.responseEtag, '"breg-observed-one"', 'later responses do not mutate retained observation');
+    observed = '"breg-observed-three"';
+    const located = await client.getProposal(contract.selectProposalGet('author'), id);
+    assert.equal(located.responseEtag, observed);
+    observed = '"breg-observed-four"';
+    const executed = await client.executeProposal(client.prepareProposal(located, 'submit', {}, 'observed-execute'));
+    assert.equal(executed.responseEtag, observed);
+    assert.equal(requests.at(-1).headers['if-match'], '"draft-condition"', 'actual observation never overrides promoted opaque authority');
+    const page = await client.listProposals(contract.selectProposals('author'), {});
+    assert.equal(page.items[0].responseEtag, null, 'a page response header is not an item observation');
+    observed = null;
+    assert.equal((await client.readProposal(started)).responseEtag, null, 'missing response header never falls back to retained/link/document data');
+    for (const invalid of ['W/"breg-weak"', '"foreign-tag"', 'unquoted']) {
+      observed = invalid;
+      await assert.rejects(client.getProposal(contract.selectProposalGet('author'), id), error => error.kind === 'protocol');
+    }
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+for (const operation of ['recovered-start', 'upload', 'delete']) {
+  test(`Complete-backed Proposal ${operation} preserves its own response ETag without changing authority`, async () => {
+    const fixture = require('../../registry-breg-client/tests/fixtures/attachments.json');
+    const { createHash } = require('node:crypto');
+    const bytes = Buffer.from(fixture.content), slot = 'supporting-file';
+    let observed = `"breg-${operation}-actual"`;
+    const requests = [];
+    const server = http.createServer(async (request, response) => {
+      const chunks = []; for await (const chunk of request) chunks.push(chunk);
+      const body = Buffer.concat(chunks);
+      requests.push({ method: request.method, headers: request.headers, body });
+      const value = structuredClone(request.url.startsWith('/v1/registry') ? fixture.metadata : fixture.proposal);
+      if (request.method === 'PATCH') {
+        value.revision++;
+        Object.assign(value.attachments[slot].value, { sha256: createHash('sha256').update(body).digest('hex'), contentType: request.headers['content-type'], byteSize: body.length });
+      } else if (request.method === 'DELETE') { value.revision++; delete value.attachments[slot].value; }
+      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', vary: 'authorization, accept',
+        traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+        ...(!request.url.startsWith('/v1/registry') && observed !== null ? { etag: observed } : {}) });
+      response.end(JSON.stringify(value));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const client = new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}/`, maximumMutationRetries: 0 });
+      const binding = (await client.registryContract('writer')).selectAction('correct', 'writer');
+      const initial = await client.startProposal(binding, {}, 'initial');
+      const send = async key => {
+        if (operation === 'recovered-start') {
+          const prepared = client.prepareActionJson(binding, '{}', key);
+          const count = requests.length;
+          assert.throws(() => client.recoverActionJson(binding, prepared, '{}', key + '-different'), error => error.kind === 'invalid-request');
+          assert.equal(requests.length, count);
+          return client.executeRecoveredProposalStart(binding, client.recoverActionJson(binding, prepared, '{}', key));
+        }
+        return operation === 'upload'
+          ? client.uploadProposalAttachment(initial, slot, 'application/pdf', bytes, key)
+          : client.deleteProposalAttachment(initial, slot, key);
+      };
+      const result = await send('observed');
+      assert.equal(result.responseEtag, observed);
+      assert.throws(() => { result.responseEtag = '"breg-forged"'; }, TypeError);
+      if (operation !== 'recovered-start') assert.equal(requests.at(-1).headers['if-match'], '"condition"');
+      assert.equal(requests.at(-1).headers['idempotency-key'], 'observed');
+      if (operation === 'upload') assert.deepEqual(requests.at(-1).body, bytes);
+      observed = null;
+      assert.equal((await send('missing')).responseEtag, null);
+      assert.equal(result.responseEtag, `"breg-${operation}-actual"`, 'a later exchange cannot replace the retained observation');
+      for (const invalid of ['W/"breg-weak"', '"foreign-tag"', 'unquoted']) {
+        observed = invalid;
+        const before = requests.length;
+        await assert.rejects(send('invalid-' + before), error => error.kind === 'protocol');
+        assert.equal(requests.length, before + 1, 'invalid response metadata never triggers a new send');
+      }
+    } finally { await new Promise(resolve => server.close(resolve)); }
+  });
+}

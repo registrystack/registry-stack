@@ -290,6 +290,11 @@ export declare class BRegPreparedProposal {
 export type PreparedProposal = BRegPreparedProposal
 
 export declare class BRegProposal {
+  /**
+   * The ETag observed on this individual response, or null when unavailable
+   * or unobserved. This never supplies or replaces a promoted condition.
+   */
+  get responseEtag(): string | null
   get inputJson(): string | null
   get identifier(): string
   get actionIdentifier(): string

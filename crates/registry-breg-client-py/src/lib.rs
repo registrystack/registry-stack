@@ -1327,6 +1327,7 @@ struct PreparedAction {
 #[pyclass(name = "BRegProposal", module = "registry_breg_client", frozen)]
 struct Proposal {
     inner: breg_client_sdk::BRegProposal,
+    response_etag: Option<String>,
 }
 
 #[pyclass(
@@ -1368,7 +1369,10 @@ impl ProposalPage {
             .items
             .iter()
             .cloned()
-            .map(|inner| Proposal { inner })
+            .map(|inner| Proposal {
+                inner,
+                response_etag: None,
+            })
             .collect()
     }
     #[getter]
@@ -1379,6 +1383,12 @@ impl ProposalPage {
 
 #[pymethods]
 impl Proposal {
+    /// The observed individual response ETag, or None when unavailable or
+    /// unobserved. It never supplies or replaces a promoted condition.
+    #[getter]
+    fn response_etag(&self) -> Option<String> {
+        self.response_etag.clone()
+    }
     #[getter]
     fn input<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
         self.inner
@@ -2740,6 +2750,10 @@ impl BaseRegistryClient {
             })
             .map_err(|error| sdk_error(py, error))?;
         Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
             inner: response.value,
         })
     }
@@ -2749,6 +2763,10 @@ impl BaseRegistryClient {
             .detach(|| self.runtime.block_on(self.inner.read_proposal(&current)))
             .map_err(|error| sdk_error(py, error))?;
         Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
             inner: response.value,
         })
     }
@@ -2763,6 +2781,10 @@ impl BaseRegistryClient {
             .detach(|| self.runtime.block_on(self.inner.get_proposal(&binding, id)))
             .map_err(|error| sdk_error(py, error))?;
         Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
             inner: response.value,
         })
     }
@@ -2919,6 +2941,10 @@ impl BaseRegistryClient {
             })
             .map_err(|error| sdk_error(py, error))?;
         Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
             inner: response.value,
         })
     }
@@ -2938,6 +2964,10 @@ impl BaseRegistryClient {
             })
             .map_err(|error| sdk_error(py, error))?;
         Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
             inner: response.value,
         })
     }
@@ -2999,6 +3029,10 @@ impl BaseRegistryClient {
             .detach(|| self.runtime.block_on(self.inner.execute_proposal(&attempt)))
             .map_err(|error| sdk_error(py, error))?;
         Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
             inner: response.value,
         })
     }
@@ -3161,6 +3195,10 @@ impl BaseRegistryClient {
             })
             .map_err(|error| sdk_error(py, error))?;
         Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
             inner: response.value,
         })
     }

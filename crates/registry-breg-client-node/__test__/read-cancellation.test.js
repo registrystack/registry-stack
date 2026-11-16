@@ -194,12 +194,19 @@ test('metadata-bound proposal get/list cancellation preserves opaque bindings an
     proposals: { method: 'GET', path: '/v1/proposals', accessProfiles: ['reader'], actions: [],
       get: { method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['reader'] } } };
   const reads = [];
+  let hold = true, observed = '\"breg-cancel-compatible-response\"';
+  const proposal = { id, actionId: 'correct', actionRevision: revision, submissionVersion: 1, revision: 1, state: 'draft',
+    links: { self: { method: 'GET', path: `/v1/proposals/${id}`, accessProfile: 'reader', operation: 'get' } } };
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'application/json'); response.setHeader('traceparent', traceparent);
     response.setHeader('cache-control', 'no-store'); response.setHeader('vary', 'authorization, accept');
     if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
     const entry = { closed: false, url: request.url }; reads.push(entry);
     response.on('close', () => { entry.closed = true; });
+    if (!hold) {
+      if (observed !== null) response.setHeader('etag', observed);
+      response.end(JSON.stringify(request.url.split('?')[0] === '/v1/proposals' ? { items: [proposal], nextCursor: null } : proposal));
+    }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
@@ -216,4 +223,18 @@ test('metadata-bound proposal get/list cancellation preserves opaque bindings an
     cancelled(await observe(client[method](...args, { signal: controller.signal })));
     assert.equal(reads.length, before + 1);
   }
+  // Integration with the separately retained18bd contract: adding a read
+  // signal preserves actual individual response metadata, never page headers.
+  hold = false;
+  const active = new AbortController();
+  const complete = await client.getProposal(get, id, { signal: active.signal });
+  assert.equal(complete.responseEtag, observed);
+  assert.equal((await client.readProposal(complete, { signal: active.signal })).responseEtag, observed);
+  const page = await client.listProposals(list, {}, { signal: active.signal });
+  assert.equal(page.items[0].responseEtag, null);
+  active.abort('abort-reason-canary');
+  assert.equal(complete.responseEtag, '\"breg-cancel-compatible-response\"');
+  observed = null;
+  assert.equal((await client.getProposal(get, id, { signal: new AbortController().signal })).responseEtag, null);
+  assert.equal(complete.responseEtag, '\"breg-cancel-compatible-response\"');
 });

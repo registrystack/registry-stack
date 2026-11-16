@@ -360,3 +360,173 @@ class ProposalReviewCorrelationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProposalObservedEtagTests(unittest.TestCase):
+    def test_response_etag_is_individual_observation_not_opaque_authority(self):
+        observed = '\"breg-observed-one\"'
+        requests = []
+        proposal = dict(PROPOSAL, links={
+            'self': dict(PROPOSAL['links']['self'], accessProfile='author'),
+            'submit': {'method': 'POST', 'path': '/v1/proposals/' + ID + '/submit',
+                       'accessProfile': 'author', 'operation': 'submit', 'ifMatch': '\"draft-condition\"'},
+        })
+        proposal.pop('input')
+        metadata = dict(METADATA, proposals=dict(METADATA['proposals'], accessProfiles=['author'],
+            get=dict(METADATA['proposals']['get'], accessProfiles=['author']), actions=[{
+                'actionId': 'correct', 'accessProfile': 'author', 'operations': ['get', 'list', 'submit'],
+                'readableInputs': [], 'readableContextFields': []}]), actions=[{
+            'id': 'correct', 'apiName': 'correct', 'revision': REVISION, 'display': {},
+            'execution': {'mode': 'proposal'}, 'route': '/v1/actions/correct/proposals', 'inputMode': 'fixed', 'inputs': [],
+            'referenceInputs': [], 'requiredConditionKeys': [], 'resultEffects': [],
+            'access': {'selectedProfile': 'author'}, 'routes': {'start': {
+                'method': 'POST', 'path': '/v1/actions/correct/proposals',
+                'operationId': 'actions.correct.start', 'requiresIdempotencyKey': True,
+                'inputSchema': 'action-correct-invoke-input', 'responseSchema': 'action-correct-invoke-response'}},
+            'bounds': {'maximumTargets': 16, 'maximumFieldMutations': 128, 'maximumSnapshotBytes': 2097152}}])
+
+        class Handler(BaseHTTPRequestHandler):
+            def answer(self):
+                self.rfile.read(int(self.headers.get('content-length', '0')))
+                requests.append((self.path, dict(self.headers)))
+                value = metadata if self.path.startswith('/v1/registry') else (
+                    {'items': [proposal]} if self.path.startswith('/v1/proposals?') else (
+                        dict(proposal, revision=3, state='submitted', effectDigest=REVISION)
+                        if '/submit?' in self.path else proposal))
+                payload = json.dumps(value).encode()
+                self.send_response(200)
+                for key, val in [('content-type', 'application/json'), ('cache-control', 'no-store'),
+                                 ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'),
+                                 ('vary', 'authorization, accept'), ('content-length', str(len(payload)))]:
+                    self.send_header(key, val)
+                if observed is not None and not self.path.startswith('/v1/registry'):
+                    self.send_header('etag', observed)
+                self.end_headers()
+                self.wfile.write(payload)
+            do_GET = answer
+            do_POST = answer
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/')
+            contract = client.registry_contract('author')
+            started = client.start_proposal(contract.select_action('correct', 'author'), {}, 'observed-start')
+            self.assertEqual(started.response_etag, observed)
+            self.assertNotEqual(started.response_etag, started.document['links']['submit']['ifMatch'])
+            with self.assertRaises(AttributeError):
+                started.response_etag = '\"breg-forged\"'
+            observed = '\"breg-observed-two\"'
+            self.assertEqual(client.read_proposal(started).response_etag, observed)
+            self.assertEqual(started.response_etag, '\"breg-observed-one\"')
+            observed = '"breg-observed-three"'
+            located = client.get_proposal(contract.select_proposal_get('author'), ID)
+            self.assertEqual(located.response_etag, observed)
+            observed = '"breg-observed-four"'
+            executed = client.execute_proposal(client.prepare_proposal(located, 'submit', {}, 'observed-execute'))
+            self.assertEqual(executed.response_etag, observed)
+            self.assertEqual({k.lower(): v for k, v in requests[-1][1].items()}['if-match'], '\"draft-condition\"')
+            page = client.list_proposals(contract.select_proposals('author'), {})
+            self.assertIsNone(page.items[0].response_etag)
+            observed = None
+            self.assertIsNone(client.read_proposal(started).response_etag)
+            for invalid in ['W/"breg-weak"', '"foreign-tag"', 'unquoted']:
+                observed = invalid
+                with self.assertRaises(BaseRegistryClientError) as raised:
+                    client.get_proposal(contract.select_proposal_get('author'), ID)
+                self.assertEqual(raised.exception.kind, 'protocol')
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+
+class CompleteProposalObservedEtagTests(unittest.TestCase):
+    def test_every_complete_backed_constructor_preserves_observed_metadata(self):
+        import copy
+        import hashlib
+        fixture = json.loads((Path(__file__).resolve().parents[3] /
+                              'registry-breg-client/tests/fixtures/attachments.json').read_text())
+        slot = 'supporting-file'
+        content = fixture['content'].encode()
+        for operation in ['recovered-start', 'upload', 'delete']:
+            with self.subTest(operation=operation):
+                observed = f'"breg-{operation}-actual"'
+                requests = []
+
+                class Handler(BaseHTTPRequestHandler):
+                    def respond(self):
+                        body = self.rfile.read(int(self.headers.get('content-length', '0')))
+                        requests.append((self.command, dict(self.headers), body))
+                        value = copy.deepcopy(fixture['metadata'] if self.path.startswith('/v1/registry') else fixture['proposal'])
+                        if self.command == 'PATCH':
+                            value['revision'] += 1
+                            value['attachments'][slot]['value'].update(
+                                sha256=hashlib.sha256(body).hexdigest(), contentType=self.headers['content-type'], byteSize=len(body))
+                        elif self.command == 'DELETE':
+                            value['revision'] += 1
+                            value['attachments'][slot].pop('value', None)
+                        payload = json.dumps(value).encode()
+                        self.send_response(200)
+                        for key, val in [('content-type', 'application/json'), ('cache-control', 'no-store'),
+                                         ('vary', 'authorization, accept'), ('content-length', str(len(payload))),
+                                         ('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01')]:
+                            self.send_header(key, val)
+                        if observed is not None and not self.path.startswith('/v1/registry'):
+                            self.send_header('etag', observed)
+                        self.end_headers()
+                        self.wfile.write(payload)
+                    do_GET = respond
+                    do_POST = respond
+                    do_PATCH = respond
+                    do_DELETE = respond
+                    def log_message(self, *args):
+                        pass
+
+                server = HTTPServer(('127.0.0.1', 0), Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/', maximum_mutation_retries=0)
+                    binding = client.registry_contract('writer').select_action('correct', 'writer')
+                    initial = client.start_proposal(binding, {}, 'initial')
+
+                    def send(key):
+                        if operation == 'recovered-start':
+                            prepared = client.prepare_action(binding, {}, key)
+                            before = len(requests)
+                            with self.assertRaises(BaseRegistryClientError):
+                                client.recover_action(binding, prepared, {}, key + '-different')
+                            self.assertEqual(len(requests), before)
+                            return client.execute_recovered_proposal_start(binding, client.recover_action(binding, prepared, {}, key))
+                        if operation == 'upload':
+                            return client.upload_proposal_attachment(initial, slot, 'application/pdf', content, key)
+                        return client.delete_proposal_attachment(initial, slot, key)
+
+                    result = send('observed')
+                    self.assertEqual(result.response_etag, observed)
+                    with self.assertRaises(AttributeError):
+                        result.response_etag = '"breg-forged"'
+                    headers = {k.lower(): v for k, v in requests[-1][1].items()}
+                    self.assertEqual(headers['idempotency-key'], 'observed')
+                    if operation != 'recovered-start':
+                        self.assertEqual(headers['if-match'], '"condition"')
+                    if operation == 'upload':
+                        self.assertEqual(requests[-1][2], content)
+                    observed = None
+                    self.assertIsNone(send('missing').response_etag)
+                    self.assertEqual(result.response_etag, f'"breg-{operation}-actual"')
+                    for invalid in ['W/"breg-weak"', '"foreign-tag"', 'unquoted']:
+                        observed = invalid
+                        before = len(requests)
+                        with self.assertRaises(BaseRegistryClientError) as raised:
+                            send('invalid-' + str(before))
+                        self.assertEqual(raised.exception.kind, 'protocol')
+                        self.assertEqual(len(requests), before + 1)
+                finally:
+                    server.shutdown()
+                    thread.join()
+                    server.server_close()

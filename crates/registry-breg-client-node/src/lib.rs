@@ -8,7 +8,10 @@ use read_cancellation::ReadCancellation;
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
+use napi::{
+    bindgen_prelude::{Buffer, Either, Null},
+    Error as NapiError, Result,
+};
 use napi_derive::napi;
 use registry_breg_client::{
     event_record_view_from_json, verify_hook_delivery as verify_core_hook_delivery,
@@ -257,6 +260,7 @@ pub struct PreparedAction {
 #[napi(js_name = "BRegProposal")]
 pub struct Proposal {
     inner: registry_breg_client::BRegProposal,
+    response_etag: Option<String>,
 }
 
 #[napi(js_name = "BRegProposalCollection")]
@@ -281,6 +285,14 @@ pub struct ProposalPage {
 
 #[napi]
 impl Proposal {
+    /// The ETag observed on this individual response, or null when unavailable
+    /// or unobserved. This never supplies or replaces a promoted condition.
+    #[napi(getter)]
+    pub fn response_etag(&self) -> Either<String, Null> {
+        self.response_etag
+            .clone()
+            .map_or(Either::B(Null), Either::A)
+    }
     #[napi(getter)]
     pub fn input_json(&self) -> Result<Option<String>> {
         self.inner
@@ -3296,6 +3308,10 @@ impl BaseRegistryClient {
             .start_proposal(&binding.inner, &request, &key)
             .await
             .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
                 inner: response.value,
             })
             .map_err(client_error)
@@ -3312,6 +3328,10 @@ impl BaseRegistryClient {
                 .read_proposal(&proposal.inner)
                 .await
                 .map(|response| Proposal {
+                    response_etag: response
+                        .metadata
+                        .etag()
+                        .map(|etag| etag.as_str().to_owned()),
                     inner: response.value,
                 })
                 .map_err(client_error)
@@ -3347,6 +3367,10 @@ impl BaseRegistryClient {
                 .get_proposal(&binding.inner, &id)
                 .await
                 .map(|response| Proposal {
+                    response_etag: response
+                        .metadata
+                        .etag()
+                        .map(|etag| etag.as_str().to_owned()),
                     inner: response.value,
                 })
                 .map_err(client_error)
@@ -3481,6 +3505,10 @@ impl BaseRegistryClient {
             .upload_proposal_attachment(&proposal.inner, &slot, &content_type, &bytes, &key)
             .await
             .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
                 inner: response.value,
             })
             .map_err(client_error)
@@ -3497,6 +3525,10 @@ impl BaseRegistryClient {
             .delete_proposal_attachment(&proposal.inner, &slot, &key)
             .await
             .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
                 inner: response.value,
             })
             .map_err(client_error)
@@ -3520,7 +3552,10 @@ impl BaseRegistryClient {
                         .value
                         .items
                         .into_iter()
-                        .map(|inner| Proposal { inner })
+                        .map(|inner| Proposal {
+                            inner,
+                            response_etag: None,
+                        })
                         .collect(),
                     next_cursor: response.value.next_cursor,
                 })
@@ -3588,6 +3623,10 @@ impl BaseRegistryClient {
             .execute_proposal(&attempt.inner)
             .await
             .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
                 inner: response.value,
             })
             .map_err(client_error)
@@ -3736,6 +3775,10 @@ impl BaseRegistryClient {
             .start_proposal(&binding.inner, &recovered.request, &recovered.key)
             .await
             .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
                 inner: response.value,
             })
             .map_err(client_error)

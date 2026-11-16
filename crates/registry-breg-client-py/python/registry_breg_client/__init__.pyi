@@ -741,6 +741,10 @@ class PrivateKeyJwt:
 BRegProposalTransition = Literal['edit', 'submit', 'revise', 'rebase', 'retry', 'cancel', 'apply']
 class BRegProposal:
     @property
+    def response_etag(self) -> str | None:
+        """Observed individual response ETag; None means unavailable or unobserved."""
+        ...
+    @property
     def input(self) -> dict[str, JsonValue] | None: ...
     @property
     def identifier(self) -> str: ...
