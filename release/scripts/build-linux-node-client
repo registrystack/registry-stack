@@ -120,7 +120,7 @@ export "CARGO_TARGET_${cargo_target_env}_LINKER=${cc_wrapper}"
 (
   cd "${client_dir}"
   ./node_modules/.bin/napi build \
-    --platform --release --target "${rust_target}"
+    --platform --release --target "${rust_target}" -- --locked
 )
 
 addon="${client_dir}/${client}-client.${napi_platform}.node"
