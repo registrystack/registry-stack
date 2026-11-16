@@ -17,7 +17,7 @@ image='postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d5710
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
-checkout_name=$(basename -- "$repo_root" | tr -c 'A-Za-z0-9_.-\n' '-')
+checkout_name=$(basename -- "$repo_root" | tr -c 'A-Za-z0-9_.\n-' '-')
 checkout_hash=$(printf '%s' "$repo_root" | openssl dgst -sha256 -r | cut -c1-8)
 container="breg-pg-tls-${checkout_name}-${checkout_hash}"
 tls_dir="$repo_root/target/breg-postgres-tls"
