@@ -142,6 +142,8 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
                 "--release",
                 "--target",
                 "aarch64-unknown-linux-gnu",
+                "--",
+                "--locked",
             ],
         )
         self.assertNotIn("--use-napi-cross", napi["args"])
@@ -192,6 +194,22 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
             calls[0][0:5],
             ["-m", "ziglang", "cc", "-target", "x86_64-linux-gnu.2.17"],
         )
+
+    def test_forwards_locked_cargo_option_on_both_supported_targets(self) -> None:
+        for client, target, platform in (
+            ("breg", "x86_64-unknown-linux-gnu", "linux-x64-gnu"),
+            ("discovery", "aarch64-unknown-linux-gnu", "linux-arm64-gnu"),
+        ):
+            with self.subTest(target=target):
+                self.make_client(client, target, platform)
+                result = self.run_build(client=client, target=target, platform=platform)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = json.loads(self.napi_log.read_text())["args"]
+                # NAPI's trailing Cargo options apply to metadata as well as
+                # compilation; its own build flags must precede the separator.
+                self.assertEqual(args[-2:], ["--", "--locked"])
+                self.assertEqual(args.count("--locked"), 1)
+                self.assertEqual(args[args.index("--target") + 1], target)
 
     def test_accepts_internal_breg_binding_for_unified_package(self) -> None:
         self.make_client("breg", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
