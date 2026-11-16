@@ -238,3 +238,29 @@ mod tests {
         assert!(!format!("{etag:?}").contains("sensitive-precondition-canary"));
     }
 }
+
+/// A validated read outcome and the status captured from that same HTTP response.
+/// This is not a caller-constructible receipt or a body field.
+#[derive(Clone, Debug)]
+pub struct BRegObservedRead<T> {
+    outcome: T,
+    response_status: u16,
+}
+impl<T> BRegObservedRead<T> {
+    pub(crate) fn new(outcome: T, response_status: u16) -> Self {
+        Self {
+            outcome,
+            response_status,
+        }
+    }
+    #[must_use]
+    pub fn response_status(&self) -> u16 {
+        self.response_status
+    }
+    pub fn into_outcome(self) -> T {
+        self.outcome
+    }
+    pub fn into_parts(self) -> (T, u16) {
+        (self.outcome, self.response_status)
+    }
+}

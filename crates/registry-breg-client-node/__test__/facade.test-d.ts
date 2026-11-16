@@ -326,3 +326,18 @@ cancellableClient.registryContract(undefined, { signal: readAbort.signal })
 cancellableClient.getRecord('records', 'id', { signal: readAbort.signal })
 // @ts-expect-error cancellation is not an option on mutations
 cancellableClient.cancelIngestionRun('records', 'run', undefined, { signal: readAbort.signal })
+
+async function observedReadTypes(c: BaseRegistryClient) {
+  const result = await c.getRecord('records','id');
+  const status:number = result.responseStatus;
+  // @ts-expect-error response status is readonly
+  result.responseStatus = 201;
+  const page = await c.listRecords('records');
+  const pageStatus:number = page.responseStatus;
+  // @ts-expect-error unrelated reads do not acquire status
+  (await c.health()).responseStatus;
+  // @ts-expect-error writes keep the legacy outcome type
+  (await c.createRecord(create, {}, "synthetic-key")).responseStatus;
+  void status; void pageStatus;
+}
+void observedReadTypes;

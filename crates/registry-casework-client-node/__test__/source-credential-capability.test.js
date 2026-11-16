@@ -32,15 +32,16 @@ test('native capability is exact and separate authority stays per invocation', a
   const observed = [];
   class Native {
     humanSourceCredentialContract() { return contract; }
-    reviewTasks(...args) { observed.push(args); return Promise.resolve({ kind: 'complete', value: {} }); }
+    // Inert native stub metadata only: public HTTP201 is separately refused.
+    reviewTasks(...args) { observed.push(args); return Promise.resolve({ kind: 'complete', value: {}, responseStatus: 201 }); }
     listReviewTaskGrants(...args) { observed.push(args); return Promise.resolve({ kind: 'complete', value: {} }); }
   }
   const { CaseworkClient } = facade(Native);
   const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/' });
   assert.equal(client.humanSourceCredentialContract(), contract);
   const credential = { sourceProfile: 'source-reader', token: 'source-canary' };
-  await client.reviewTasks('casework-canary', 'staff', {}, undefined, credential);
-  await client.reviewTasks('casework-canary', 'staff');
+  assert.equal((await client.reviewTasks('casework-canary', 'staff', {}, undefined, credential)).responseStatus, 201);
+  assert.equal((await client.reviewTasks('casework-canary', 'staff')).responseStatus, 201);
   await client.listReviewTaskGrants('casework-canary', 'staff', { taskId: 'one', sourceCredential: credential });
   assert.equal(observed[0][4].token, credential.token);
   assert.equal(observed[0][4].sourceProfile, credential.sourceProfile);
@@ -58,7 +59,8 @@ test('new credential validation never invokes accessors or intercepts legacy que
   let requests = 0;
   class Native {
     humanSourceCredentialContract() { return contract; }
-    reviewTasks() { requests++; return Promise.resolve({}); }
+    // This fixture proves forwarding/metadata propagation, not HTTP acceptance.
+    reviewTasks() { requests++; return Promise.resolve({ responseStatus: 201 }); }
   }
   const client = new (facade(Native).CaseworkClient)({ baseUrl: 'https://casework.example.test/' });
   const credential = { sourceProfile: 'source-reader', get token() { invoked++; return 'secret'; } };
@@ -67,4 +69,13 @@ test('new credential validation never invokes accessors or intercepts legacy que
   assert.equal(requests, 0);
   await client.reviewTasks('casework', 'staff', { token: 'ordinary-query-data', sourceProfile: 'ordinary-query-data' });
   assert.equal(requests, 1);
+});
+
+test('a modern credential marker cannot fabricate an absent response observation', async () => {
+  class Native {
+    humanSourceCredentialContract() { return contract; }
+    reviewTasks() { return Promise.resolve({kind:'complete',value:{}}); }
+  }
+  const client = new (facade(Native).CaseworkClient)({baseUrl:'https://casework.example.test/'});
+  await assert.rejects(client.reviewTasks('synthetic','staff'), error=>error.kind==='protocol' && !Object.hasOwn(error,'status'));
 });

@@ -12,10 +12,10 @@ export declare class CaseworkClient {
   cancelReviewRequest(token: string, profile: string, accepted: any, idempotencyKey: string, request: any): Promise<CaseworkOutcome>
   reviewPolicies(token: string, profile: string): Promise<CaseworkOutcome>
   reviewPolicy(token: string, profile: string, policyId: string): Promise<CaseworkOutcome>
-  reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<ObservedCaseworkOutcome>
   nextReviewTask(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   reviewTaskHoldings(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
-  reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
+  reviewTask(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<ObservedCaseworkOutcome>
   ownReviewDecisions(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   supervisoryReviewTasks(token: string, profile: string, query?: any | undefined | null, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
   reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | undefined | null, sourceCredential?: HumanSourceCredential | undefined | null): Promise<CaseworkOutcome>
@@ -77,6 +77,13 @@ export interface CaseworkOutcome {
 export interface HumanSourceCredential {
   sourceProfile: string
   token: string
+}
+
+export interface ObservedCaseworkOutcome {
+  kind: string
+  value: any
+  traceId: string
+  responseStatus: number
 }
 
 /** Identify a human task grant read without positional string ambiguity. */

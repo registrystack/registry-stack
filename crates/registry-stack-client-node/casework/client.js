@@ -19,6 +19,18 @@ class CaseworkClientError extends Error {
   }
 }
 
+
+// Only the explicitly observed reads receive this metadata. Never infer it
+// from completion/body, use a default, or retain it on the client.
+function readonlyResponseStatus(result) {
+  if (result === null || typeof result !== 'object' || isProxy(result)) throw new CaseworkClientError({kind:'protocol',message:'Observed read result unavailable'});
+  const descriptor = Object.getOwnPropertyDescriptor(result, 'responseStatus');
+  const status = descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+  if (!Number.isInteger(status) || status < 100 || status > 599) throw new CaseworkClientError({kind:'protocol',message:'Observed response status unavailable'});
+  Object.defineProperty(result, 'responseStatus', { value: status, enumerable: true, writable: false, configurable: false });
+  return result;
+}
+
 function normalized(error, fallbackKind) {
   if (error instanceof CaseworkClientError) return error;
   if (error instanceof Error && typeof error.message === 'string') {
@@ -232,7 +244,9 @@ for (const [method, jsonIndexes] of [
       for (const index of jsonIndexes) {
         if (args[index] !== undefined && args[index] !== null) args[index] = sanitize(args[index], 'invalid-request');
       }
-      return this.native[method](...args).catch((error) => { throw normalized(error); });
+      const result = this.native[method](...args);
+      const observed = method === 'reviewTask' || method === 'reviewTasks' ? result.then(readonlyResponseStatus) : result;
+      return observed.catch((error) => { throw normalized(error); });
     } catch (error) {
       throw normalized(error, 'invalid-request');
     }
