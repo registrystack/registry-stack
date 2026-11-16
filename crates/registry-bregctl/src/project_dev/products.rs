@@ -1158,34 +1158,182 @@ fn retain_tool_receipt(
     )
 }
 
-/// Closed diagnostic metadata from the owning schema-test report. Never keep
-/// its arbitrary message, source snippets, credential fields or token values.
+/// Closed diagnostic metadata from actual tool/shared-reader report envelopes.
+/// No arbitrary diagnostic message, path, source value, SQL or credential is retained.
 fn schema_test_failure_projection(bytes: &[u8]) -> Value {
-    use sha2::{Digest, Sha256};
     let bounded = bytes.len() <= 256 * 1024;
     let value = bounded
         .then(|| serde_json::from_slice::<Value>(bytes).ok())
         .flatten();
-    let diagnostics: Vec<_> = value.as_ref().and_then(|v| v["diagnostics"].as_array())
-        .into_iter().flatten().take(6).map(|item| {
-            let code = item["code"].as_str().filter(|code| matches!(*code,
-                "test.step.failed" | "test.database.unavailable" | "test.credentials.refused" | "test.execution.refused"));
-            let indices = item["path"].as_str().and_then(|path| {
-                let path = path.strip_prefix("journeys[")?;
-                let (journey,step)=path.split_once("].steps[")?;
-                let step=step.strip_suffix(']')?;
-                if journey.is_empty() || step.is_empty() || !journey.bytes().all(|b|b.is_ascii_digit()) || !step.bytes().all(|b|b.is_ascii_digit()) { return None; }
-                Some((journey.parse::<u32>().ok()?,step.parse::<u32>().ok()?))
-            });
-            let reason = match item["message"].as_str() {
-                Some("the fixture credential is missing the configured actor-kind claim") => Some("credential-actor-kind-missing"),
-                Some("the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client") => Some("credential-verification-refused"),
+    let rows = value
+        .as_ref()
+        .filter(|v| {
+            v.is_object()
+                && v["ok"] == false
+                && v["command"] == "test"
+                && (v.get("status").is_none()
+                    || matches!(
+                        v["status"].as_str(),
+                        Some("domain-refusal" | "usage-error" | "operational-failure")
+                    ))
+        })
+        .and_then(|v| v["diagnostics"].as_array())
+        .filter(|rows| {
+            rows.iter().all(|v| {
+                v.is_object()
+                    && v["code"].is_string()
+                    && v["path"].is_string()
+                    && v["message"].is_string()
+                    && v["suggestedAction"].is_string()
+                    && matches!(
+                        v["severity"].as_str(),
+                        Some("error" | "warning" | "finding")
+                    )
+            })
+        });
+    let diagnostics: Vec<_> = rows.into_iter().flatten().take(6).map(|item| {
+        let supplied = item["code"].as_str().unwrap_or_default();
+        let stage = schema_test_failure_stage(supplied);
+        let code = stage.map(|_| supplied);
+        let (indices, category) = schema_test_failure_path(item["path"].as_str().unwrap_or_default());
+        let reason = match (stage.is_some(), item["message"].as_str()) {
+            (true, Some("the fixture credential is missing the configured actor-kind claim")) => Some("credential-actor-kind-missing"),
+            (true, Some("the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client")) => Some("credential-verification-refused"),
+            _ => None,
+        };
+        json!({"code":code,"stage":stage,"classification":if stage.is_some(){"recognized"}else{"unknown-code"},
+            "pathCategory":category,"journeyIndex":indices.map(|v|v.0),"stepIndex":indices.map(|v|v.1),"reasonClass":reason})
+    }).collect();
+    json!({"phase":"breg-test","reportParsed":value.is_some(),"reportBounded":bounded,
+        "reportShapeValid":rows.is_some(),"reportStatus":rows.and_then(|_| value.as_ref()?.get("status")).and_then(Value::as_str),"diagnosticsTruncated":rows.is_some_and(|v|v.len()>6),"diagnostics":diagnostics})
+}
+
+// Exact registered public codes from the tool test lifecycle, runtime-config
+// diagnostics and shared YAML reader. New/unsupported codes stay explicit unknowns.
+fn schema_test_failure_stage(code: &str) -> Option<&'static str> {
+    match code {
+        "breg.field.pattern-syntax-invalid" | "test.candidate.refused" => Some("candidate"),
+        "breg.runtime.attachment-attempt-budget-exceeded"
+        | "breg.runtime.clients-unlisted"
+        | "breg.runtime.environment-identity-conflict"
+        | "breg.runtime.evidence-provider-id-collision"
+        | "breg.runtime.external-refresh-id-collision"
+        | "breg.runtime.hook-destination-id-collision"
+        | "breg.runtime.invalid-attachment-storage"
+        | "breg.runtime.invalid-attachment-verification"
+        | "breg.runtime.invalid-audit"
+        | "breg.runtime.invalid-authority-claims"
+        | "breg.runtime.invalid-binding"
+        | "breg.runtime.invalid-bounds"
+        | "breg.runtime.invalid-cursor"
+        | "breg.runtime.invalid-database"
+        | "breg.runtime.invalid-external-sources"
+        | "breg.runtime.invalid-field-encryption"
+        | "breg.runtime.invalid-hook-destination"
+        | "breg.runtime.invalid-instance-id"
+        | "breg.runtime.invalid-listener"
+        | "breg.runtime.invalid-metrics-listener"
+        | "breg.runtime.invalid-oidc"
+        | "breg.runtime.invalid-oidc-leeway"
+        | "breg.runtime.invalid-package"
+        | "breg.runtime.invalid-secret-provider"
+        | "breg.runtime.invalid-task-grant-status"
+        | "breg.runtime.invalid-wasm-execution"
+        | "breg.runtime.package-root-unavailable"
+        | "breg.runtime.plaintext-database"
+        | "breg.runtime.pool-budget-exceeded"
+        | "breg.runtime.principal-claim-mismatch"
+        | "breg.runtime.review-authority-id-collision"
+        | "breg.runtime.secret"
+        | "breg.runtime.secret-provider-root-unavailable"
+        | "breg.runtime.unsafe-package-root"
+        | "breg.runtime.unsafe-secret-provider-root"
+        | "config.check-acceptance-duplicate"
+        | "config.check-acceptance-invalid"
+        | "config.deprecated-api-version"
+        | "config.duplicate-id"
+        | "config.duplicate-item"
+        | "config.duplicate-key"
+        | "config.expected-boolean"
+        | "config.expected-integer"
+        | "config.expected-number"
+        | "config.expected-string"
+        | "config.invalid-length"
+        | "config.invalid-type"
+        | "config.invalid-value"
+        | "config.missing-envelope"
+        | "config.missing-key"
+        | "config.null-value"
+        | "config.out-of-range"
+        | "config.removed-key"
+        | "config.retired-api-version"
+        | "config.substitution"
+        | "config.substitution-not-allowed"
+        | "config.too-many-problems"
+        | "config.unknown-key"
+        | "config.unknown-variant"
+        | "config.unsupported-api-version"
+        | "config.wrong-kind" => Some("configuration"),
+        "test.credentials.refused" => Some("credentials"),
+        "test.database.setup-refused" | "test.database.unavailable" => Some("database"),
+        "test.execution.refused" | "test.step.failed" => Some("execution"),
+        "test.journeys.refused" => Some("journeys"),
+        "migration.review.fingerprint-mismatch" => Some("migration"),
+        "test.output.failed" | "test.output.refused" => Some("output"),
+        "test.audit.setup-failed"
+        | "test.authentication.setup-failed"
+        | "test.cursor.setup-failed"
+        | "test.evidence-providers.activation-failed"
+        | "test.hook-destinations.activation-failed"
+        | "test.hook-destinations.inventory-mismatch"
+        | "test.review-authorities.activation-failed"
+        | "test.runtime-config.path-invalid"
+        | "test.runtime.unavailable"
+        | "test.wasm-execution.setup-failed" => Some("runtime"),
+        _ => None,
+    }
+}
+
+fn schema_test_failure_path(path: &str) -> (Option<(u32, u32)>, Option<&'static str>) {
+    fn index(text: &str) -> Option<u32> {
+        (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| text.parse().ok())
+            .flatten()
+    }
+    let dot = path
+        .strip_prefix("journeys[")
+        .and_then(|p| p.split_once("].steps["))
+        .and_then(|(j, s)| Some((index(j)?, index(s.strip_suffix(']')?)?)));
+    if let Some(indices) = dot {
+        return (Some(indices), Some("step"));
+    }
+    let parts: Vec<_> = path.split('/').collect();
+    if let ["", "journeys", journey, "steps", step, member] = parts.as_slice() {
+        if let (Some(j), Some(s)) = (index(journey), index(step)) {
+            let category = match *member {
+                "request" => Some("request"),
+                "expect" => Some("expect"),
                 _ => None,
             };
-            json!({"code":code,"journeyIndex":indices.map(|v|v.0),"stepIndex":indices.map(|v|v.1),"reasonClass":reason})
-        }).collect();
-    json!({"phase":"breg-test","reportParsed":value.is_some(),"reportBounded":bounded,
-        "reportSha256":bounded.then(||format!("sha256:{}",Sha256::digest(bytes).iter().map(|byte|format!("{byte:02x}")).collect::<String>())),"diagnostics":diagnostics})
+            if category.is_some() {
+                return (Some((j, s)), category);
+            }
+        }
+    }
+    let category = match path {
+        "credentials" => Some("credentials"),
+        "database" => Some("database"),
+        "runtime" => Some("runtime"),
+        "runtimeConfig" => Some("runtime-config"),
+        "output" => Some("output"),
+        "candidate" => Some("candidate"),
+        "tests/journeys.yaml" | "/journeys" => Some("journeys"),
+        "reviewedMigrations" => Some("migration"),
+        "authentication" | "audit" | "cursor" | "destinations.hooks" | "evidenceProviders"
+        | "reviewAuthorities" | "wasmExecution" => Some("runtime-config"),
+        _ => None,
+    };
+    (None, category)
 }
 
 fn logged_tool_result(
@@ -2488,11 +2636,125 @@ mod tests {
     };
 
     #[test]
+    fn schema_failure_projection_actual_tool_and_reader_producers() {
+        let report =
+            crate::test_lifecycle_failure(crate::test_lifecycle::TestLifecycleError::Runtime);
+        let projected = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
+        assert_eq!(projected["reportShapeValid"], true);
+        assert_eq!(
+            projected["diagnostics"][0]["code"],
+            "test.runtime.unavailable"
+        );
+        assert_eq!(projected["diagnostics"][0]["stage"], "runtime");
+        assert_eq!(projected["diagnostics"][0]["pathCategory"], "runtime");
+        let source = b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: [{id: public, steps: [{id: public, recordType: record, accessProfile: writer, request: {type: create}, expect: {outcome: success, status: 201}}]}]\n";
+        let Err(registry_breg::fixtures::FixtureError::JourneyDocument(report)) =
+            registry_breg::fixtures::journey_step_profiles(source)
+        else {
+            panic!("actual reader must refuse missing data");
+        };
+        let refusal = crate::DocumentRefusal {
+            command: "test",
+            subject: "fixture journeys",
+            report,
+        };
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        crate::write_document_failure(
+            &refusal,
+            crate::OutputFormat::Json,
+            &mut stdout,
+            &mut stderr,
+        );
+        let projected = schema_test_failure_projection(&stdout);
+        assert_eq!(projected["reportShapeValid"], true);
+        assert_eq!(projected["diagnostics"][0]["code"], "config.missing-key");
+        assert_eq!(projected["diagnostics"][0]["journeyIndex"], 0);
+        assert_eq!(projected["diagnostics"][0]["stepIndex"], 0);
+        assert_eq!(projected["diagnostics"][0]["pathCategory"], "request");
+    }
+
+    #[test]
+    fn schema_failure_projection_actual_failure_classes_and_bounded_truncation() {
+        use crate::test_lifecycle::TestLifecycleError as E;
+        for (error, code, stage) in [
+            (
+                E::RuntimeSetup(
+                    registry_breg::fixtures::SchemaTestRuntimeSetupError::Authentication,
+                ),
+                "test.authentication.setup-failed",
+                "runtime",
+            ),
+            (
+                E::RuntimeConfigPath,
+                "test.runtime-config.path-invalid",
+                "runtime",
+            ),
+            (E::OutputCommit, "test.output.failed", "output"),
+            (
+                E::Journeys {
+                    message: "SQL body token private-canary".into(),
+                },
+                "test.journeys.refused",
+                "journeys",
+            ),
+            (
+                E::Candidate {
+                    stage: "private-canary",
+                    error: registry_breg::package::PackageError::UnsafePath,
+                },
+                "test.candidate.refused",
+                "candidate",
+            ),
+        ] {
+            let report = crate::test_lifecycle_failure(error);
+            let p = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
+            assert_eq!(p["diagnostics"][0]["code"], code);
+            assert_eq!(p["diagnostics"][0]["stage"], stage);
+            assert!(!p.to_string().contains("canary"));
+        }
+        let item = json!({"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[1].steps[2]","message":"private-canary"});
+        let p = schema_test_failure_projection(
+            &serde_json::to_vec(&json!({"ok":false,"command":"test","diagnostics":vec![item;7]}))
+                .unwrap(),
+        );
+        assert_eq!(p["diagnosticsTruncated"], true);
+        assert_eq!(p["diagnostics"].as_array().unwrap().len(), 6);
+        assert!(!p.to_string().contains("canary"));
+    }
+
+    #[test]
+    fn schema_failure_projection_refuses_false_envelopes_and_unknown_metadata() {
+        for report in [
+            json!({}),
+            json!({"ok":true,"command":"test","diagnostics":[]}),
+            json!({"ok":false,"command":"other","diagnostics":[]}),
+            json!({"ok":false,"command":"test","diagnostics":{}}),
+            json!({"ok":false,"command":"test","diagnostics":[null]}),
+        ] {
+            let p = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
+            assert_eq!(p["reportShapeValid"], false);
+            assert_eq!(p["diagnostics"], json!([]));
+        }
+        for path in [
+            "journeys[4294967296].steps[0]",
+            "journeys[0].steps[4294967296]",
+            "/journeys/0/steps/1/request/private-canary",
+            "journeys[0].steps[1]/private-canary",
+        ] {
+            let p = schema_test_failure_projection(&serde_json::to_vec(&json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"private-canary","path":path,"message":"SQL token body private-canary"}]})).unwrap());
+            assert_eq!(p["diagnostics"][0]["classification"], "unknown-code");
+            assert!(p["diagnostics"][0]["journeyIndex"].is_null());
+            assert!(p["diagnostics"][0]["pathCategory"].is_null());
+            assert!(!p.to_string().contains("canary"));
+        }
+    }
+
+    #[test]
     fn schema_failure_projection_keeps_only_closed_step_metadata() {
-        let report = json!({"diagnostics":[{"code":"test.step.failed","path":"journeys[0].steps[3]",
+        let report = json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[0].steps[3]",
             "message":"the fixture credential is missing the configured actor-kind claim",
             "token":"eyJ-private-canary","source":{"value":"private-source-canary"}},
-            {"code":"private-code-canary","path":"/private/path-canary","message":"postgresql://private-url-canary"}]});
+            {"severity":"error","suggestedAction":"correct-source","code":"private-code-canary","path":"/private/path-canary","message":"postgresql://private-url-canary"}]});
         let projected = schema_test_failure_projection(&serde_json::to_vec(&report).unwrap());
         assert!(projected["diagnostics"][0]["journeyIndex"] == 0);
         assert!(projected["diagnostics"][0]["stepIndex"] == 3);
@@ -2504,7 +2766,7 @@ mod tests {
         assert!(
             schema_test_failure_projection(&vec![b'x'; 256 * 1024 + 1])["reportSha256"].is_null()
         );
-        let malformed = json!({"diagnostics":[{"code":"test.step.failed","path":"journeys[0].steps[3]/private-canary","message":"private-canary"}]});
+        let malformed = json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[0].steps[3]/private-canary","message":"private-canary"}]});
         assert!(
             schema_test_failure_projection(&serde_json::to_vec(&malformed).unwrap())["diagnostics"]
                 [0]["stepIndex"]
@@ -2522,7 +2784,7 @@ mod tests {
         private_directory(&root).unwrap();
         drop(open_log(&root, "breg-test").unwrap());
         let mut output = tempfile::tempfile_in(&root).unwrap();
-        let report = json!({"diagnostics":[{"code":"test.step.failed","path":"journeys[0].steps[0]",
+        let report = json!({"ok":false,"command":"test","diagnostics":[{"severity":"error","suggestedAction":"correct-source","code":"test.step.failed","path":"journeys[0].steps[0]",
             "message":"the fixture credential is missing the configured actor-kind claim",
             "token":"eyJ-private-canary","connection":"postgresql://private-url-canary"}]});
         output

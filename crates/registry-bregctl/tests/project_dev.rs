@@ -2595,3 +2595,33 @@ fn local_package_public_command_keeps_reserved_identity_refusal() {
     assert!(!output.exists());
     assert!(fs::read_to_string(&path).unwrap() == source);
 }
+
+#[test]
+fn native_schema_test_runtime_path_refusal_has_closed_report_envelope() {
+    let scratch = tempfile::tempdir().unwrap();
+    fixture_project(scratch.path(), "");
+    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .arg("test")
+        .arg(scratch.path())
+        .args([
+            "--runtime-config",
+            "relative-private-canary",
+            "--credentials",
+            "relative-private-canary",
+            "--output",
+        ])
+        .arg(scratch.path().join("receipt.json"))
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "test");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "test.runtime-config.path-invalid"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "runtimeConfig");
+    assert!(!scratch.path().join("receipt.json").exists());
+}
