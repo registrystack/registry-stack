@@ -5368,10 +5368,11 @@
       "additionalProperties": false,
       "properties": {
         "dimensions": {
-          "description": "Unit Record fields used to group counts. Each field must be boolean or\nvocabulary-code, and each may appear once. `period`, `measure`, `value`,\nand `status` are reserved output columns and cannot be dimension field\nnames.",
+          "description": "Unit Record fields used to group counts. Each field must be boolean or\nvocabulary-code, and each may appear once. `period`, `measure`, `value`,\nand `status` are reserved output columns and cannot be dimension field\nnames. At most 12 dimensions.",
           "items": {
             "type": "string"
           },
+          "maxItems": 12,
           "type": "array"
         },
         "disclosure": {

@@ -292,6 +292,8 @@ pub enum StatisticsError {
     UnknownPeriod { dataset: String },
     #[error("the statistical dataset `{dataset}` produced the same grouped cell more than once")]
     DuplicateGroupedCell { dataset: String },
+    #[error("the statistical dataset `{dataset}` produced a total that differs from its cells")]
+    InconsistentTotal { dataset: String },
     #[error("the statistical dataset has an invalid dimension domain for `{dimension}`")]
     InvalidDimensionDomain { dimension: String },
     #[error("statistical count arithmetic overflowed")]
@@ -407,7 +409,8 @@ pub fn build_exact_cells(
         return Err(StatisticsError::TooManyCells);
     }
 
-    let mut base = BTreeMap::<(String, Vec<String>), u64>::new();
+    // The database returns base cells and total cells alike, each a finished value.
+    let mut returned = BTreeMap::<(String, Vec<String>), u64>::new();
     for row in grouped {
         if !period_codes.contains(row.period.as_str()) {
             return Err(StatisticsError::UnknownPeriod {
@@ -420,14 +423,14 @@ pub fn build_exact_cells(
             });
         }
         for (index, code) in row.codes.iter().enumerate() {
-            if !base_codes[index].contains(code) {
+            if !output_codes[index].contains(code) {
                 return Err(StatisticsError::UnknownCode {
                     dataset: dataset.to_owned(),
                     dimension: dimensions[index].field.clone(),
                 });
             }
         }
-        if base
+        if returned
             .insert((row.period.clone(), row.codes.clone()), row.value)
             .is_some()
         {
@@ -439,19 +442,15 @@ pub fn build_exact_cells(
 
     let mut values = BTreeMap::<(String, Vec<String>), u64>::new();
     for period in periods {
-        for_each_combination(&base_codes, |codes| {
-            let value = base
+        for_each_combination(&output_codes, |codes| {
+            let value = returned
                 .get(&(period.code.clone(), codes.clone()))
                 .copied()
                 .unwrap_or(0);
-            // The closure cannot return an error; retain it and surface immediately below.
             values.insert((period.code.clone(), codes), value);
         });
     }
-    let base_values = std::mem::take(&mut values);
-    for ((period, codes), value) in base_values {
-        add_base_and_margins(&mut values, &period, &codes, value)?;
-    }
+    check_totals(dataset, periods, &base_codes, &output_codes, &values)?;
 
     let mut cells = Vec::with_capacity(total_cells);
     for period in periods {
@@ -771,34 +770,53 @@ fn for_each_combination(domains: &[Vec<String>], mut visit: impl FnMut(Vec<Strin
     );
 }
 
-fn add_base_and_margins(
-    values: &mut BTreeMap<(String, Vec<String>), u64>,
-    period: &str,
-    codes: &[String],
-    value: u64,
+/// Every count total must equal the sum of the cells it totals along each total
+/// position. The database computes the totals; this guards against a wrong grouping.
+fn check_totals(
+    dataset: &str,
+    periods: &[Period],
+    base_codes: &[Vec<String>],
+    output_codes: &[Vec<String>],
+    values: &BTreeMap<(String, Vec<String>), u64>,
 ) -> Result<(), StatisticsError> {
-    let shift = u32::try_from(codes.len()).map_err(|_| StatisticsError::TooManyCells)?;
-    let variants = 1_usize
-        .checked_shl(shift)
-        .ok_or(StatisticsError::TooManyCells)?;
-    for mask in 0..variants {
-        let output_codes = codes
-            .iter()
-            .enumerate()
-            .map(|(index, code)| {
-                if mask & (1 << index) == 0 {
-                    code.clone()
-                } else {
-                    TOTAL_CODE.to_owned()
+    let mut failure = None;
+    for period in periods {
+        for_each_combination(output_codes, |codes| {
+            if failure.is_some() {
+                return;
+            }
+            for (index, code) in codes.iter().enumerate() {
+                if code != TOTAL_CODE {
+                    continue;
                 }
-            })
-            .collect::<Vec<_>>();
-        let entry = values.entry((period.to_owned(), output_codes)).or_default();
-        *entry = entry
-            .checked_add(value)
-            .ok_or(StatisticsError::CountOverflow)?;
+                let mut sum = 0_u64;
+                for base in &base_codes[index] {
+                    let mut part = codes.clone();
+                    part[index].clone_from(base);
+                    let value = values
+                        .get(&(period.code.clone(), part))
+                        .copied()
+                        .unwrap_or(0);
+                    let Some(next) = sum.checked_add(value) else {
+                        failure = Some(StatisticsError::CountOverflow);
+                        return;
+                    };
+                    sum = next;
+                }
+                let total = values
+                    .get(&(period.code.clone(), codes.clone()))
+                    .copied()
+                    .unwrap_or(0);
+                if sum != total {
+                    failure = Some(StatisticsError::InconsistentTotal {
+                        dataset: dataset.to_owned(),
+                    });
+                    return;
+                }
+            }
+        });
     }
-    Ok(())
+    failure.map_or(Ok(()), Err)
 }
 
 fn round_halves_up(value: u64, base: u64) -> Result<u64, StatisticsError> {

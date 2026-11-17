@@ -35,7 +35,7 @@ The facility template declares none; add one under the root `statisticalDatasets
 - `measures`, optional, a list of `id` and `type` pairs; `count` is the only type, and omitting the list gives one count measure with the id `count`
 - `disclosure`, with `minimumCount` and `roundingBase`, each at least 2
 
-One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dimension cannot be named `measure`, which is a reserved column name. The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and the refusals `bregctl check` reports.
+One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and the refusals `bregctl check` reports.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, StatisticalDatasetSource,
     StatisticalPeriodSource, StatisticalDisclosureSource;

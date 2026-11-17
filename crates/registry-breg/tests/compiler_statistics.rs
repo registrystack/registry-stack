@@ -967,6 +967,47 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
     );
 }
 
+/// Adds `count` required single-code vocabulary dimensions to the fixture dataset.
+fn with_single_code_dimensions(value: &mut Value, count: usize) {
+    let mut dimensions = Vec::new();
+    for index in 0..count {
+        let id = format!("dimension-{index:02}");
+        value["vocabularies"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":id,"values":["only"]}));
+        value["recordTypes"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":id,"type":"vocabulary-code","vocabulary":id,
+                "required":true,"classification":"internal"
+            }));
+        for profile in [0_usize, 1] {
+            for member in ["readableFields", "filterableFields"] {
+                value["accessProfiles"][profile]["permissions"]["records"][0][member]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(id));
+            }
+        }
+        dimensions.push(id);
+    }
+    value["statisticalDatasets"][0]["dimensions"] = json!(dimensions);
+}
+
+#[test]
+fn a_dataset_declares_at_most_twelve_dimensions() {
+    let mut twelve = source();
+    with_single_code_dimensions(&mut twelve, 12);
+    compile(&twelve).expect("twelve dimensions compile");
+
+    assert_refused(
+        |value| with_single_code_dimensions(value, 13),
+        "breg.statistical-dataset.dimensions-exceeded",
+    );
+}
+
 #[test]
 fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
     let mut value = source();

@@ -14,6 +14,7 @@ use tokio_postgres::types::ToSql;
 
 use crate::api::{AuthorizedRequestContext, ReadServiceError};
 use crate::audit::RegistryAudit;
+use crate::compiler::MAX_STATISTICAL_DIMENSIONS;
 use crate::history_reference::SnapshotReference;
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_binding, HeldResponse, IdempotencyBinding,
@@ -2047,6 +2048,7 @@ fn map_statistics_error(error: StatisticsError) -> StatisticsServiceError {
         StatisticsError::DimensionCount { .. }
         | StatisticsError::UnknownPeriod { .. }
         | StatisticsError::DuplicateGroupedCell { .. }
+        | StatisticsError::InconsistentTotal { .. }
         | StatisticsError::InvalidDimensionDomain { .. }
         | StatisticsError::CountOverflow
         | StatisticsError::InvalidDisclosureParameters
@@ -2067,6 +2069,10 @@ fn grouped_sql(
         return Err(StatisticsServiceError::QueryInvalid {
             field_path: "period",
         });
+    }
+    // A cube over more dimensions than the compiler allows is never generated.
+    if dataset.dimensions.len() > MAX_STATISTICAL_DIMENSIONS {
+        return Err(StatisticsServiceError::Unavailable);
     }
     let period_values = periods
         .iter()
@@ -2096,11 +2102,11 @@ fn grouped_sql(
         .enumerate()
         .map(|(index, expression)| format!("{expression} AS dimension_{index}"))
         .collect::<Vec<_>>();
-    let mut grouped_select = vec!["periods.code AS period_code".to_owned()];
-    grouped_select.extend(dimension_select);
-    grouped_select.push("count(*)::bigint AS cell_count".to_owned());
-    let mut grouped_by = vec!["periods.code".to_owned()];
-    grouped_by.extend(dimension_sql);
+    let mut base_select = vec!["periods.code AS period_code".to_owned()];
+    base_select.extend(dimension_select);
+    base_select.push("count(*)::bigint AS cell_count".to_owned());
+    let mut base_by = vec!["periods.code".to_owned()];
+    base_by.extend(dimension_sql);
     let (period_join, period_predicate) = match &dataset.period {
         CompiledStatisticalPeriod::Flow { field, .. } => {
             let expression = relations
@@ -2156,19 +2162,52 @@ fn grouped_sql(
     let where_sql = period_predicate
         .map(|period| format!("({population_where}) AND ({period})"))
         .unwrap_or_else(|| population_where.to_owned());
-    let grouped = format!(
+    // One pass over the unit rows counts the base cells. PostgreSQL then returns every
+    // cell as a finished value: the totals (a dimension column of `_T`) are a cube over
+    // the base cells, which sums the counts without a second pass over the rows.
+    let dimension_count = dataset.dimensions.len();
+    let base = format!(
         "periods(code, start_date, end_date, reference_date) AS (VALUES {period_values}),
-         grouped AS (
+         {base_name} AS (
              SELECT {select}
                FROM {from_sql}
                {period_join}
               WHERE {where_sql}
            GROUP BY {group_by}
          )",
-        select = grouped_select.join(", "),
+        base_name = if dimension_count == 0 {
+            "grouped"
+        } else {
+            "base"
+        },
+        select = base_select.join(", "),
         from_sql = relations.from_sql,
-        group_by = grouped_by.join(", "),
+        group_by = base_by.join(", "),
     );
+    let grouped = if dimension_count == 0 {
+        base
+    } else {
+        let cube_select = (0..dimension_count)
+            .map(|index| {
+                format!(
+                    "CASE WHEN GROUPING(base.dimension_{index}) = 1 THEN '_T' ELSE base.dimension_{index} END AS dimension_{index}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cube_columns = (0..dimension_count)
+            .map(|index| format!("base.dimension_{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{base},
+         grouped AS (
+             SELECT base.period_code, {cube_select}, sum(base.cell_count)::bigint AS cell_count
+               FROM base
+           GROUP BY base.period_code, CUBE({cube_columns})
+         )"
+        )
+    };
     let grouped_columns = (0..dataset.dimensions.len())
         .map(|index| format!("grouped.dimension_{index}"))
         .collect::<Vec<_>>();

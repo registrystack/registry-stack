@@ -799,7 +799,8 @@ pub struct StatisticalDatasetSource {
     /// Unit Record fields used to group counts. Each field must be boolean or
     /// vocabulary-code, and each may appear once. `period`, `measure`, `value`,
     /// and `status` are reserved output columns and cannot be dimension field
-    /// names.
+    /// names. At most 12 dimensions.
+    #[cfg_attr(feature = "schema", schemars(length(max = 12)))]
     pub dimensions: Vec<String>,
     /// The values the dataset publishes, one cell per period, dimension
     /// combination, and measure. Each id is unique, and at most one measure has
