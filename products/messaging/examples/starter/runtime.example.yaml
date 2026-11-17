@@ -9,7 +9,7 @@
 #
 # Environment expressions are substituted in parsed string values only:
 # a dollar sign and braces around VAR, VAR:-default, or VAR:?message
-# (RUNTIME-CONFIG.md spells them out). Expressions in keys, non-string values,
+# (https://docs.registrystack.org/reference/messaging-configuration/ spells them out). Expressions in keys, non-string values,
 # secret reference fields, and secretProviders are refused.
 # Unknown keys are refused, each reported with its path.
 apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1

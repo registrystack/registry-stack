@@ -27,7 +27,7 @@ examples, and product-local verification scripts. Read the workspace
   in its place.
 - Changes to authentication, authorization, audit, data minimization, or
   retention are security-sensitive: update the matrix in the same change, and
-  `SECURITY-MODEL.md` when a trust boundary, operator obligation, or accepted
+  the security model page (`docs/site/src/content/docs/security/messaging.mdx`) when a trust boundary, operator obligation, or accepted
   residual changes. Put the review narrative in the pull request description.
 - PostgreSQL verification requires a disposable database and the
   `postgres-test` feature. A test binary that skips because its database URL
