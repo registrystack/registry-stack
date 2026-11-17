@@ -1,11 +1,12 @@
 ---
 title: Error and status code reference
-description: Where to find the maintained problem contracts for Registry Stack HTTP products.
+description: The shared HTTP problem envelope, response exceptions, readiness, idempotency, and retry rules across Registry Stack products, with links to each product's problem contract.
 status: current
 owner: registry-docs
 source_repos:
   - registry-evidence
-last_reviewed: "2026-10-03"
+  - registry-stack
+last_reviewed: "2026-11-17"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -13,6 +14,151 @@ standards_referenced: []
 
 Registry Stack HTTP products own their error contracts. Use the product reference that matches the
 service you call instead of assuming codes or response shapes carry across products.
+
+Use the owning route contract to decide whether an operation completed, was refused, or has an
+unknown outcome.
+A shared envelope does not change a product's authorization, concealed existence, or retry semantics.
+
+## Problem envelope
+
+The common RFC 9457 response is `application/problem+json` with six fields:
+
+| Field | Contract |
+| --- | --- |
+| `type` | Absolute opaque problem URI owned by the product. Never dereference it to authorize recovery. |
+| `title` | Fixed safe category text. |
+| `status` | Integer equal to the HTTP status. |
+| `detail` | Fixed safe guidance, with no submitted or source values. |
+| `code` | At most 128 ASCII bytes, `family.reason`. Each segment starts with a lowercase letter and contains lowercase letters, digits, or hyphens. The snake_case codes of Base Registry Engine (BReg) are an exception (see the BReg note under deliberate response exceptions). |
+| `traceId` | Canonical nonzero 32 lowercase hexadecimal characters, equal to the trace in the response `traceparent`. |
+
+The shared HTTP security crate supplies the problem body, the trace context, and the strict client problem document.
+The server replaces malformed or repeated trace input and never reflects `tracestate`.
+A product may create a fresh response trace.
+Problems use `Cache-Control: no-store`.
+
+{/* Evidence: crates/registry-platform-httpsec/src/server.rs ProblemBody, TraceContext;
+    crates/registry-platform-httpsec/src/client.rs ProblemDocument. */}
+
+Extensions must be explicitly defined, structurally bounded, and safe.
+A field path may name declared structure, never a record identifier or submitted value.
+Render's bounded pointer list and Casework's validation metadata remain product contracts.
+Clients reject duplicate members, excessive bytes, and invalid known members.
+A closed client rejects extensions unless its owning contract explicitly accepts them; sharing the core envelope does not widen it.
+
+{/* Evidence: crates/registry-platform-httpsec/src/client.rs ProblemDocument. */}
+
+### Discovery and Render
+
+Discovery preserves its problem type URIs and adds the codes `request.invalid`, `request.not-found`, `request.result-bound-exceeded`, and `service.unavailable`, a fixed `detail`, and `traceId`.
+Its indeterminate 503 carries no guessed retry interval.
+Its client classifies a problem by HTTP status and the original `type`, `title`, and `status` trio; a supplied `code` must agree for known problem types.
+Additive members, `detail`, `traceId`, and the response `traceparent` are opaque to classification.
+The entire problem body is bounded at 4 KiB.
+Unknown future Discovery problem types keep a bounded, status-only fallback.
+
+{/* Evidence: crates/registry-discovery-client/src/client.rs request.result-bound-exceeded;
+    crates/registry-discovery/src/openapi.rs request.result-bound-exceeded. */}
+
+Render uses the same core with its own vocabulary and extensions.
+Its `code` values are `render.<reason>`, and its type base is its own released `https://render.registrystack.org/problems`.
+That vocabulary includes `render.unauthorized` for invalid credentials, in place of `authentication.refused`.
+
+{/* Evidence: crates/registry-render/src/problem.rs render.unauthorized, render.timestamp-failed. */}
+
+## Deliberate response exceptions
+
+Casework `GET /v1/review-requests/{requestId}/result` returns a bodyless 202 for pending, 404 for concealed or unknown, and 410 for expired.
+The shared Review client maps these states without requiring a problem body.
+A result still must match the persisted accepted request, policy, subject, and submission digest.
+
+{/* Evidence: crates/registry-casework/src/http.rs /v1/review-requests/{request_id}/result. */}
+
+Scheduling returns the same public appointment outcome when the appointment is missing or denied.
+Keep that concealment when presenting or classifying a failure.
+Its readiness route follows its own deployment health contract.
+
+Invalid credentials use a generic 401 `authentication.refused`, except Render, whose own vocabulary answers 401 `render.unauthorized`.
+Profile or route authority failures keep the product's documented 403 or concealment; a verifier outage keeps its documented 503.
+Internal stage diagnostics do not become public error details.
+
+{/* Evidence: crates/registry-adapter-core/src/problem.rs AUTHENTICATION_REFUSED_PROBLEM;
+    crates/registry-render/src/problem.rs render.unauthorized. */}
+
+BReg's codes are snake_case in their reason segment (`runtime.not_ready`, `resource.not_found`, `ingestion.chunk_mismatch`), where the code grammar in the table allows hyphens only.
+They are released wire values, so BReg keeps them and its clients match them as written.
+A new BReg code follows its existing spelling until a breaking release respells them all at once.
+
+{/* Evidence: crates/registry-breg/src/problem.rs RuntimeNotReady, IngestionChunkMismatch;
+    crates/registry-breg-client/src/error.rs RuntimeNotReady. */}
+
+## Upstream failures and readiness
+
+An upstream that answered badly (an unusable, malformed, or contract-violating response) is 502.
+An upstream or a local dependency that is unavailable (unreachable, timed out, circuit open, store down) is 503.
+Adapter `adapter.upstream.unmapped` and Render `render.timestamp-failed` are 502; Evidence `source.unavailable` is 503.
+
+{/* Evidence: crates/registry-adapter-core/src/problem.rs adapter.upstream.unmapped;
+    crates/registry-render/src/problem.rs render.timestamp-failed;
+    crates/registry-breg-client/src/error.rs source.unavailable. */}
+
+`/ready` answers 200 when the instance can serve and 503 when it cannot.
+The body is optional.
+When present it is `{"status":"ready"}` or `{"status":"not-ready"}`, and it may add per-dependency members that use the same two status words.
+Readiness carries no source-data probes.
+These products differ:
+
+- BReg answers 503 with a problem body (`runtime.not_ready`).
+- OID4VCI answers 503 with `{"status":"not_ready"}`.
+- Coordinator answers `{"ready":true}`.
+- Scheduling serves `/readyz` under its deployment health contract.
+- Casework, Messaging, and Documents answer without a body.
+
+{/* Evidence: crates/registry-breg/src/problem.rs RuntimeNotReady;
+    crates/registry-evidence-oid4vci/src/service.rs not_ready;
+    crates/registry-coordinator/src/http.rs ready;
+    crates/registry-scheduling/src/http.rs readyz. */}
+{/* TODO[evidence]: the generic `{"status":"ready"}` / `{"status":"not-ready"}` body and the bodyless Casework, Messaging, and Documents readiness answers have no single code anchor. */}
+
+## Idempotency and retries
+
+Use a caller-owned key, and keep the original body, headers, and accepted binding when reconciling an uncertain mutation.
+Reusing a key with another request is 409 `idempotency.key-reused` from BReg, Casework, Coordinator, Messaging, and Scheduling.
+Classify a 409 by the product that returned it.
+
+{/* Evidence: crates/registry-coordinator/src/problem.rs IDEMPOTENCY_KEY_REUSED_PROBLEM;
+    crates/registry-casework/src/problem.rs IDEMPOTENCY_KEY_REUSED_PROBLEM;
+    crates/registry-breg/src/artifacts.rs idempotency.key-reused. */}
+{/* TODO[evidence]: Messaging and Scheduling 409 `idempotency.key-reused` anchors were not located. */}
+
+A key of 128 bytes is portable guidance, not a replacement for route limits.
+BReg and Coordinator keep their existing 256-byte bounds; Casework, Scheduling, and Messaging keep their owning limits.
+`idempotency.key-invalid` means a missing or invalid key under that route's rules.
+Never classify a valid key of 129 to 256 bytes on BReg or Coordinator as invalid for portability.
+
+{/* Evidence: crates/registry-breg/src/idempotency.rs MAX_IDEMPOTENCY_KEY_BYTES;
+    crates/registry-coordinator/src/problem.rs IDEMPOTENCY_KEY_INVALID_PROBLEM. */}
+
+`Retry-After` appears only when the server knows a useful interval.
+Messaging rate and quota refusals supply bounded waits; Casework polling and readiness use their owning response contracts.
+Evidence `503 source.unavailable` omits `Retry-After` when upstream recovery time is unknown, while meaningful rate-limit hints remain.
+Source-data reachability does not decide Evidence `/ready`: an instance with healthy required dependencies can remain ready during a source-data outage.
+No data-endpoint probes are added to readiness.
+
+An indeterminate outage, a deterministic non-retryable failure, or a readiness contract without a known interval need not carry it.
+Clients preserve absent, invalid, and bounded interval states; waiting remains a caller decision.
+A header never authorizes a fresh-key repeat of an uncertain mutation.
+Client retry rules are in the client crates' documentation.
+
+{/* TODO[evidence]: the `Retry-After` and no-source-probe readiness claims are carried from the source; no single test anchors them. */}
+
+BReg pagination uses `$top` and `$skiptoken` (Python `top`); Casework, Scheduling, and Coordinator use `limit` and `cursor`.
+SDKs expose each actual contract and do not automatically follow continuations.
+
+{/* Evidence: crates/registry-breg/src/api/metadata.rs $skiptoken. */}
+{/* TODO[evidence]: Casework, Scheduling, and Coordinator `limit` and `cursor` pagination anchors were not located. */}
+
+## Product problem contracts
 
 ## Registry Evidence
 
@@ -42,3 +188,9 @@ closed set; a refusal for a spent budget or a full presentation store is `503` o
 Registry Relay and its problem-code catalog were retired in Registry Stack 0.39.0. Existing
 integrations can use the immutable 0.38.0 documentation while planning a replacement. See the
 [Relay retirement decision](../../decisions/registry-relay-retirement-2026-10-03/).
+
+## Next
+
+- [Request an access token from your own code](../../configure/request-an-access-token/)
+- [Signed hook deliveries](../delivery-signing/)
+- [Registry Evidence errors and problems reference](../evidence-problems/)

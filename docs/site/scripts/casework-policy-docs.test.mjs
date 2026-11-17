@@ -163,11 +163,11 @@ test('the excerpted keys exist in the generated project schema', () => {
   }
 });
 
-test('the page renders the authoring contracts and leaves the runtime contract to operate', () => {
+test('the page renders the authoring contracts and leaves the runtime contract to the configuration reference', () => {
   const render = page.match(/<ConfigurationReference contracts=\{([^\n]*)\} prefix="casework" \/>/u);
   assert.ok(render, 'the page does not render the Casework configuration reference');
   for (const id of ['project', 'fixture', 'dev-clients', 'holiday-set']) {
     assert.ok(render[1].includes(`'${id}'`), `the rendered reference omits the ${id} contract`);
   }
-  assert.ok(!render[1].includes("'runtime'"), 'the runtime contract belongs to operate/casework');
+  assert.ok(!render[1].includes("'runtime'"), 'the runtime contract belongs to reference/casework-configuration');
 });

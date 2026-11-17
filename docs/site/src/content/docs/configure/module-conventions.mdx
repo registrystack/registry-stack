@@ -18,7 +18,7 @@ review or a delivered notification does not grant it source mutation rights.
 
 ## Authenticate to one resource
 
-Use the [shared token profile](https://github.com/registrystack/registry-stack/blob/main/products/platform/ACCESS-TOKENS.md)
+Use the [shared token profile](../request-an-access-token/#token-profile-each-service-accepts)
 and the [token acquisition guide](../request-an-access-token/).
 Configure a separate token provider for each resource, audience, and scope set. The shared SDK
 authentication facade removes token acquisition plumbing while the selected product still checks
@@ -29,7 +29,7 @@ Keep private keys server-side and request the scopes the deployment admits.
 
 ## Handle problems, tracing, and uncertain effects
 
-The [common HTTP problem contract](https://github.com/registrystack/registry-stack/blob/main/products/platform/HTTP-PROBLEMS.md)
+The [common HTTP problem contract](../../reference/errors/#problem-envelope)
 owns the envelope and trace relationship. Branch on the owning product's code and documented
 recovery action, and keep response trace context for diagnosis. Do not expose raw tokens or
 upstream transport errors to callers.
@@ -44,7 +44,7 @@ Render's correlation key is not a deduplication promise.
 
 ## Receive signed delivery
 
-Use the [delivery signing contract](https://github.com/registrystack/registry-stack/blob/main/products/platform/DELIVERY-SIGNING.md)
+Use the [delivery signing contract](../../reference/delivery-signing/)
 for exact header and byte rules. Verify the original body bytes before parsing them, compare the
 signature in constant time, and bind deduplication to the verified delivery identity and payload.
 A completion wake announces that a result can be read; read that result from its authoritative

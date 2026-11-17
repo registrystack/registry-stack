@@ -1,11 +1,11 @@
 ---
 title: Author a Coordinator workflow
 description: Start a Registry Coordinator project, read and change its steps, check and test it offline, and package it with the digest an operator pins.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -23,12 +23,11 @@ it. Endpoints, credentials, and caller policies never enter the package;
 You need `coordinatorctl` on your `PATH`. Stack release packaging includes it from `v0.44.0`.
 Use the checksum-verifying installer from the published release you deploy; it keeps the macOS
 FIPS libraries beside the executables. The
-[deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#install-and-package)
+[install and package](../../operate/coordinator/#install-and-package) section
 covers that installer and source builds. Coordinator is pre-1.0 and outside the API stability
 promise, and its container image is held out of releases.
 
-{/* Evidence: products/coordinator/DEPLOYMENT.md, Install and package;
-    release/scripts/release_roster.py, COORDINATOR_BINARY_FIRST_RELEASE and COORDINATOR_FIRST_RELEASE. */}
+{/* Evidence: release/scripts/release_roster.py, COORDINATOR_BINARY_FIRST_RELEASE and COORDINATOR_FIRST_RELEASE. */}
 
 ## Start a project
 
@@ -216,6 +215,747 @@ steps, outcomes, and the operation and Function revisions used. Titles, descript
     crates/registry-coordinator/src/project_check.rs;
     crates/registry-coordinator/src/definition.rs, seal_revisions, semantic_revision. */}
 
+## Build mappings and routes
+
+A project separates reusable assets from the one workflow that uses them:
+
+- `project` supplies an ID and a human version label.
+- `contracts` optionally imports generated local product contracts.
+- `types` optionally names reusable JSON Schemas.
+- `functions` optionally names typed pure computations, their source assets, and entrypoints.
+- `operations` names local aliases for exact versioned host operations and logical connections.
+- `workflow` contains the input, the deadline, the start step, the steps, and the declared outcomes.
+
+A project can omit functions when no mapping needs one.
+Imported contracts are local generated artifacts the compiler reads, not runtime discovery.
+Schema positions accept a JSON Schema or one of `typeRef`, `operationInput`, `operationOutput`, `operationRefusal`, or `completionOutput`; a completion output names its operation and completion.
+`check` resolves those references locally, verifies that every incoming route provides the data a step reads, and fits mappings to the input and result contracts before anything runs.
+The runtime validates dynamic values again before preparation or dispatch.
+An invalid command reports `failurePath`, the RFC 6901 path into the input, and never the value.
+Owner-generated numeric width annotations such as `int64` are accepted only on matching numeric types, and validation intersects explicit bounds with the declared width and the canonical safe-integer range.
+The schema execution profile is pinned in every snapshot; unknown formats and remote schema references are refused.
+
+{/* Evidence: crates/registry-coordinator/src/authoring.rs AuthoredStep, Mapping;
+    crates/registry-coordinator/src/mapping_check.rs;
+    crates/registry-coordinator/tests/authored_project.rs. */}
+
+### Build nested objects
+
+A `fields` mapping builds an object member by member.
+Each member is a reference (`input`, `step`, or `literal`) or another `fields` mapping, so a workflow builds a structured operation input without a Function:
+
+```yaml
+start:
+  type: call
+  operation: start-licence
+  input:
+    type: fields
+    fields:
+      holder:
+        type: input
+        path: /holderId
+      premises:
+        type: fields
+        fields:
+          district:
+            type: step
+            step: read-site
+            path: /domainData/district
+          area:
+            type: step
+            step: read-site
+            path: /domainData/areaSquareMetres
+  next: decided
+```
+
+Nesting reaches a depth of 4, counting the outermost mapping as 1, and the whole mapping holds at most 64 members across all levels.
+A nested object counts as one member, and so does each of its own members.
+A nested member holds only references and further `fields` mappings, never a Function: compute such a value in an earlier step and reference it.
+`wait-until`, `choose`, and Function `inputs` still take references only.
+Compilation refuses a fifth level with `mapping.fields-depth` and a 65th member with `mapping.fields-count`, each at the member's path.
+The compiler checks every member against the operation input schema at that member's path, and the built object is validated again before preparation.
+
+{/* Evidence: crates/registry-coordinator/tests/nested_fields.rs mapping.fields-depth, mapping.fields-count;
+    crates/registry-coordinator/src/definition.rs mapping.fields-depth. */}
+
+### Choose a route
+
+A `choose` step routes on one mapped string with a case for every value it can read, or on a `compare`.
+A compare has exactly one of `all` or `any`, each a list of 1 to 16 conditions.
+A condition names a `value` reference and exactly one test: `equals`, `oneOf`, `less`, `greater`, or `present`.
+`less` and `greater` take a number, or a calendar date when the reference's schema declares `format: date`; compilation refuses them on any other type.
+The cases are exactly `matched` and `unmatched`.
+
+```yaml
+size:
+  type: choose
+  choose:
+    type: compare
+    all:
+      - value: {type: step, step: read-site, path: /areaSquareMetres}
+        present: true
+      - value: {type: step, step: read-site, path: /areaSquareMetres}
+        greater: 500
+  cases:
+    matched: large-premises
+    unmatched: small-premises
+```
+
+Conditions run in order and stop at the first decisive one, so `present: true` before a numeric test guards an optional value.
+A missing or wrongly typed value in any other test fails the run with `choice-invalid`; it never routes silently to `unmatched`.
+A compare holds no Function and no clock.
+
+A `choose` step can name its everyday case with optional `expected` metadata, for both compares and mapped strings:
+
+```yaml
+check-revocation:
+  label: Has the permit been revoked?
+  type: choose
+  expected: unmatched
+  choose:
+    type: compare
+    all:
+      - value: {type: input, path: /revoked}
+        equals: true
+  cases:
+    matched: already-revoked
+    unmatched: record-suspension
+```
+
+The label must exist in that step's `cases`.
+`coordinatorctl --format json check --project <directory> --explain` includes `expected` on that step for diagram tools; omit it when no everyday path is declared.
+`expected` is presentation metadata: it changes neither routing, the order of `next`, nor the workflow revision.
+
+{/* Evidence: crates/registry-coordinator/src/compare.rs;
+    crates/registry-coordinator/tests/compare_worker_postgres.rs choice-invalid;
+    crates/registry-coordinator/src/authoring.rs expected. */}
+
+### Route a failed read
+
+`onFailure` is optional on a `call` whose operation effect is `read` or `evaluation`.
+It names a step taken only when the ordinary retry policy is exhausted by one of these definite availability categories: transport unavailable, rate limited, attempt timeout, external unavailable, external rate limited, or decision unavailable.
+Retries also count as exhausted when the next retry would not fit before the run deadline, so the edge is taken then instead of the hard deadline stopping the run.
+Run status records the category while the routed successor is current, and inspection retains it on the completed call step.
+The failure edge receives no output from the call, so a mapping cannot turn an operational diagnostic into a business result.
+
+A mutation cannot declare this edge, and `check` refuses an unknown target and any use on a mutation operation.
+Authentication, authorization, credential configuration, preparation, binding, command or response validation, and protocol refusals still stop the run.
+An uncertain outcome never routes, including a model request whose reply was lost after dispatch.
+In a scenario, one `retryable` reply stands for the step's automatic retries, all failed, so a reply in one of those categories takes `onFailure` at once unless an earlier reply was `uncertain`.
+
+{/* Evidence: crates/registry-coordinator/src/authoring.rs on_failure;
+    crates/registry-coordinator/src/scenarios.rs on_failure. */}
+
+### Route a run that waits too long
+
+Set `workflow.serviceDeadlineSeconds` and `workflow.onDeadline` together to route a run that is still waiting that many seconds after admission.
+Keep the service deadline shorter than `workflow.deadlineSeconds`, the hard run cutoff.
+Give the deadline route its own steps, such as a notice and a finish, disjoint from the ordinary graph; its first step can read the workflow input.
+`coordinatorctl explain` shows both clocks and the route.
+
+- A wait wakes no later than the service deadline.
+  A completion wait uses its existing read floor and budget for one final observation, and a settled result takes its ordinary route.
+- A wait still pending at the service deadline takes `onDeadline` once, including after a restart.
+  The transition consumes the service deadline in the same transaction that enqueues the successor.
+- A wait with a shorter timeout keeps its own timeout route.
+  A `wait-until` takes `onDeadline` only when the service deadline falls at or before its authored instant.
+- The deadline route carries no output from the interrupted wait, and calls already in progress keep their dispatch and recovery rules.
+- An operator cancel wins over the service deadline: taking `onCancel` ends the service deadline, so the cleanup path runs to its own end, bounded only by the run deadline.
+
+{/* Evidence: crates/registry-coordinator/src/authoring.rs service_deadline_seconds, on_deadline. */}
+
+### Function helpers
+
+Each Rhai entrypoint takes one object of its declared named inputs and returns one typed value.
+A Function declares `runtime`, `source`, `entrypoint`, `inputs`, and `output`.
+Explicit limits can only narrow the host's ceilings on operations, calls, expressions, strings, arrays, maps, and source size.
+A Function cannot obtain credentials, read a clock, or reach a filesystem, network, or database, and it cannot construct workflow steps.
+
+The profile's callable names are the interpreter's own calls, the arithmetic, logic, string, array, map, and iterator packages, and these helpers:
+
+- `parse_int`, `parse_float`, `to_int`, `to_float`, `sqrt`, `floor`, `ceiling`, `round`, `int`, `fraction`, `is_nan`, `is_finite`, `is_infinite`, `to_degrees`, `to_radians`, `PI`, and `E`.
+- `abs`, `sign`, `min`, and `max` from the arithmetic package.
+- `add_seconds` and `seconds_between`, which compute over supplied RFC 3339 instants.
+
+The trigonometric, hyperbolic, exponential, and logarithmic functions are not available because their results differ by host.
+`replace` and `pad` are the host's bounded versions: each refuses a result over the string limit before building it, and `pad` refuses an empty padding string.
+`trim`, `replace`, and `pad` change the string they are called on and return nothing, so copy the string first.
+A result that holds NaN or an infinite number is refused with `function.execution`.
+A top-level `const` is not visible inside a function: read it as `global::NAME` or pass it as an input.
+
+`check` reports a call to any other name as `coordinator.function.unknown-call` at its position in the Function source, unless the source defines that name.
+Calls are matched by name only, so a wrong argument count still fails when the Function runs.
+The check is an authoring aid, not a security boundary: the engine refuses any name it lacks when the Function runs.
+It also reads a string literal given to `Fn`, `is_def_fn`, or an array method such as `map` as a function name, and skips a method call whose name the source also uses as a map key or property.
+`coordinatorctl explain functions` prints the names, the interpreter ABI, and the limits.
+The ABI names the helper set, so a definition frozen under an earlier ABI is refused with `definition.abi` and the project is re-authored.
+
+{/* Evidence: crates/registry-coordinator/tests/helper_functions.rs coordinator.function.unknown-call;
+    crates/registry-coordinator/src/functions.rs;
+    crates/registry-coordinator/src/definition.rs definition.abi. */}
+
+### Check and test offline
+
+```sh
+coordinatorctl check --project ./follow-up --explain
+coordinatorctl test --project ./follow-up
+coordinatorctl --runtime-config ./follow-up/runtime.yaml check --deny-warnings
+```
+
+`check`, `explain`, `test`, `package`, and `types` work offline.
+Scenario tests use a virtual clock and fake replies; they prove workflow logic, not downstream acceptance.
+Diagnostics name source positions and repairs without echoing protected values.
+`--environment` explicitly substitutes runtime environment expressions, and an offline check never resolves secrets.
+Commands print text by default, or a `CoordinatorCtlReport` with `--format json`.
+Exit codes are 0 for acceptance, 1 for refusal, 2 for usage, and 3 for unavailable resources.
+
+{/* Evidence: crates/registry-coordinator/src/cli.rs CoordinatorCtlReport, deny_warnings. */}
+
+## Start runs on a calendar
+
+To start one run at a reviewed institutional month boundary, declare a `workflow.calendarTriggers` entry.
+A trigger names one stable key, a five-field `cron` restricted to `MIN HOUR 1|L * *` (one minute, one hour, and either the first or last local day of every month), and a named IANA `timezone`:
+
+```yaml
+workflow:
+  calendarTriggers:
+    month-end:
+      cron: 5 8 L * *
+      timezone: Asia/Bangkok
+  input:
+    type: object
+    additionalProperties: false
+    required: [scheduledAt]
+    properties:
+      scheduledAt:
+        type: string
+        format: date-time
+```
+
+The run input is exactly one member, `scheduledAt`, holding the resolved UTC instant.
+The timezone controls the local month, day, and time.
+A local time inside a daylight-saving gap moves to the first real instant after the gap, and a fold takes its earlier instant, by the calendar rule Registry Stack products share.
+Coordinator owns the reviewed cron subset and the admission policy.
+
+PostgreSQL holds one durable cursor per workflow and trigger.
+
+- A new trigger starts from the first time the serving deployment observes it; it does not replay earlier institutional history.
+- After downtime, Coordinator admits only the latest due occurrence and records how many older occurrences it skipped.
+- The cursor update, the run, its first job, and the start identity commit in one ordinary admission transaction.
+  Each check locks its cursor row and skips one another replica holds, and the admission lock, the active package, key custody, and the restore and admission holds fence restart and competing replicas.
+- The start identity binds the workflow, the trigger, and the exact occurrence instant, so restart, replay, package replacement, and a competing replica never create a second run for one occurrence.
+- A trigger removed from the served workflows loses its cursor, so one added back starts fresh in the same way.
+- A new workflow revision keeps the cursor while the trigger's cron and timezone are unchanged, so an occurrence already due still runs under the new revision.
+  The cron is compared in its canonical form, so the same schedule written differently is not a change.
+- Changing the cron or timezone moves the cursor to the database time of the first check under the new schedule and runs nothing the previous schedule left due.
+  Coordinator logs and audits how many occurrences it skipped.
+- An admission or a reschedule writes its audit record before it changes state; without durable audit it changes nothing.
+- Calendar checks run in their own loop beside the worker, so a slow or refused check does not delay work already admitted.
+
+Calendar admission adds no HTTP API and grants no downstream product authority.
+[Calendar checks](../../operate/coordinator/#calendar-checks) describes what the service does each second.
+
+{/* Evidence: crates/registry-coordinator/src/calendar_trigger.rs;
+    crates/registry-coordinator/tests/calendar_trigger_authoring.rs a_revision_keeps_due_occurrences_unless_its_schedule_changed,
+    calendar_admission_is_latest_only_atomic_and_fenced, an_audit_outage_admits_and_reschedules_nothing. */}
+
+## Start runs from product events
+
+To react to product events, declare `workflow.eventTriggers` and bind each logical source in the runtime file's `eventSources`.
+A trigger accepts a logical source, an exact event type and data-schema identity, a schema for the full event, and an ordinary typed input mapping.
+The event source owns event meaning and disclosure, and product event names and payload meanings stay in the authored project.
+The receiving workflow uses the same finite execution engine and independently authorized downstream connections as an explicit start.
+
+The receiver is `POST /v1/events/{workflow}/{trigger}`.
+It accepts the HookEnvelope Registry Stack products share, with its v1 delivery signature, under the operator's `eventSources` key binding.
+
+- The authenticated source URI, the event ID, and the trigger bind admission independently of the local source alias, and the canonical event bytes bind exact retries.
+- The admission, the run, and its durable job commit together.
+  A repeated exact delivery recovers the same run before evaluating any changed mapping, and changed event bytes conflict.
+- The delivery attempt time must be fresh within 30 seconds.
+  The immutable event time may be older after an outage.
+- Acknowledgement is an empty HTTP 204 and never a source mutation proposal.
+  An admitted event grants no source mutation authority.
+- Delivery to this route is distinct from the Casework completion route, which only brings forward an existing run's result read.
+
+An event workflow that writes back to its own source must select meaningful state transitions and guard its writes to avoid fresh-event loops.
+Ordinary product API calls do not propagate event causation across products, so the envelope's hop bound alone does not prevent those loops.
+The [product events example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/product-events) admits committed BReg events, and a conforming alternate-source fixture, through the same signed event contract.
+
+{/* Evidence: crates/registry-coordinator/src/event_trigger_tests.rs substituted_signature_destination_source_and_contract_are_refused,
+    stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused,
+    exact_event_identity_survives_retry_replay_and_old_commit_time,
+    event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation;
+    crates/registry-coordinator/tests/breg_event_native.rs native_proposal_event_admits_one_run_without_conferring_apply_authority. */}
+
+## Wait for a result
+
+`wait-until` persists an instant and continues immediately when that instant has passed.
+`wait-for` observes a named completion exposed by an earlier accepted call on every route:
+
+```yaml
+await-review:
+  type: wait-for
+  completion:
+    step: submit-review
+    name: result
+  timeoutSeconds: 1209600
+  next: report
+  onTimeout: withdraw
+  onCancel: withdraw
+```
+
+`timeoutSeconds` is required and shorter than the run deadline.
+Casework submission exposes `result`, and the BReg Proposal operations expose `proposal`.
+An external GET operation can declare a named `bounded-poll` completion with a typed pure `interpret` Function and `intervalSeconds`.
+The Function receives the saved command and the latest validated response and returns `pending`, `complete` with a typed result, or a declared `refused` code.
+The host owns transport, credentials, permitted destinations, scheduling, correlation, and the durable read budget, and the workflow graph stays acyclic.
+External polling is independent of Casework and BReg, and neither external operation offers an arbitrary HTTP method or a dynamic destination.
+
+Completion observation is read-only.
+
+- Every read has a persistent minimum spacing of 30 seconds by default.
+  The runtime file's top-level `minimumObservationIntervalSeconds` raises that floor for the whole deployment, up to 86,400 seconds.
+- Casework and BReg pending reads default to 900 seconds, and each connection's `resultCheckSeconds` accepts 60 to 86,400.
+  An external completion's `intervalSeconds` is constrained by the operation and the deployment floor.
+- A Casework `result` or BReg `proposal` wait's read budget is one read per floor interval over its timeout, plus one.
+  Reads brought forward by a completion wake-up or by Check now therefore fit within the budget, and the wait still reaches its timeout route.
+- Retry hints postpone reads within the host ceiling of 86,400 seconds, and an unusable hint holds the wait.
+  Restart, a completion wake-up, a timeout, or recovery cannot bypass the durable floor.
+- Inspection reports the next read, the floor, the count, and the limit, without protected correlation values.
+- An authenticated Casework completion event only brings forward an eligible result read.
+  It carries no decision authority and starts no run.
+
+A settled completion takes `next`.
+An expired wait takes `onTimeout`, or reports `wait-timed-out`; timing out a Coordinator wait does not cancel work in the owning product, and neither the timeout nor the run deadline resets during recovery.
+An optional `onCancel` takes an authored cleanup path: a leased read records the intent and routes when the read settles or the lease expires, and repeated cancellation preserves the cleanup under the original deadline and current downstream authority.
+Without that path, or after the wait advances, ordinary cancellation stops future calls where possible and never reverses an accepted effect or withdraws a downstream request.
+Unavailable reads stay pending within the original budget.
+A refused, mismatched, blocked, or uncertain observation cannot become a business outcome; inspect and recover the held wait under its original deadline and identity.
+
+{/* Evidence: crates/registry-coordinator/src/operations.rs MINIMUM_OBSERVATION_INTERVAL_SECONDS;
+    crates/registry-coordinator/src/runtime.rs minimum_observation_interval_seconds;
+    crates/registry-coordinator/tests/runtime_config.rs minimumObservationIntervalSeconds;
+    crates/registry-coordinator/src/follow_check.rs wait-timed-out. */}
+
+## Call a BReg Action
+
+A `breg.invoke-action/v1` alias names `action.contract` and `action.id`.
+Import the owning Base Registry Engine (BReg) project's generated Action contract instead of reproducing its schema.
+The compiler pins the Action's revision, mode, inputs, output, and declared refusals.
+Metadata checks at preparation, dispatch, and observation keep a changed owner contract from silently reinterpreting work.
+A standing BReg profile and identity authorize each call independently, and BReg decides application under its current policy and commit-time conditions.
+
+The operation invokes immediate Actions and returns their exact application result.
+The compiler refuses a Proposal Action with `coordinator.operation.proposal-action`, and the runtime refuses one at preparation with `action-unavailable`; Proposal Actions use the operations in [Follow a BReg Proposal](#follow-a-breg-proposal).
+A notice after application is a separate `messaging.submit-message/v1` call authorized by Messaging, and a refused notice leaves the registry application intact.
+
+`onDeclaredRefusal` routes only a validated owner-declared no-effect refusal, and its output is `{refusalCode}`.
+Operational failures stay failures, and a later refusal cannot resolve an earlier uncertain effect.
+The success and refusal outputs are available only along their respective routes, so a join reached through both has no single output shape.
+Omit `onDeclaredRefusal` and a declared refusal fails the run with `product-refused`, like any other refusal.
+
+BReg caller-filtered contract metadata uses the native client's separate 8 MiB metadata ceiling.
+The 64 KiB business-response budget still applies to records, target conditions, Action results, and Proposals.
+An oversized read or preparation response is a terminal `invalid-response` refusal.
+An oversized answer after dispatching a mutation remains uncertain, because the effect may already have committed.
+
+{/* Evidence: crates/registry-coordinator/src/breg_action.rs action-unavailable, product-refused;
+    crates/registry-coordinator/tests/breg_action_adapter.rs;
+    crates/registry-coordinator/src/contracts.rs coordinator.operation.proposal-action. */}
+
+## Follow a BReg Proposal
+
+When a person submits a request in the BReg staff app and the run starts with its ID, read it and wait for its outcome:
+
+```yaml
+steps:
+  proposal:
+    type: call
+    operation: read-proposal
+    input:
+      type: fields
+      fields:
+        proposalId:
+          type: input
+          path: /proposalId
+    next: decided
+  decided:
+    type: wait-for
+    completion:
+      step: proposal
+      name: proposal
+    timeoutSeconds: 2592000
+    next: route
+    onTimeout: no-decision
+  route:
+    type: choose
+    choose:
+      type: step
+      step: decided
+      path: /outcome
+    cases:
+      applied: issue
+      rejected: refused
+      cancelled: withdrawn
+```
+
+Here `read-proposal` is an alias of `breg.read-proposal/v1`.
+Five operations work with Proposals and temporal records.
+Each Proposal operation names one Proposal Action through `action.contract` and `action.id`, and compilation pins its revision as for `breg.invoke-action/v1`.
+No operation approves, rejects, decides, or applies a Proposal; BReg and its review authority keep those decisions.
+
+| Operation | Effect | What it does |
+| --- | --- | --- |
+| `breg.read-proposal/v1` | read | Reads the Proposal named by input `proposalId`, and declares the completion `proposal`. Use it when a person submitted the Proposal in BReg and the run started from it. |
+| `breg.start-proposal/v1` | mutation, `same-command` | Starts a draft with inputs the workflow checked, such as facts read from other registries, and declares `proposal`. A person reviews and submits the draft in BReg and so becomes its initiator. |
+| `breg.submit-proposal/v1` | mutation, `same-command` | Starts and submits a Proposal as two frozen BReg commands, each with its own idempotency key derived from the run's start identity and the step, and declares `proposal`. Use it only when no person started the run: an event, a schedule, or a batch. |
+| `breg.cancel-proposal/v1` | mutation, `same-command` | Cancels a Proposal this run started or submitted. |
+| `breg.read-in-force/v1` | read | Reads the one record of a temporal Record type in force for a subject on a date. |
+
+Each mutation sends its frozen command with the same key on every attempt.
+`breg.start-proposal/v1` and `breg.submit-proposal/v1` lift the Proposal refusal for their own Action only; `breg.invoke-action/v1` keeps refusing a Proposal Action.
+Coordinator never asserts who started a run.
+An initiator-excluding review policy refuses a workflow submission in the review authority, and BReg reports it as the Proposal's `handoffRefusal`.
+A follow of `breg.submit-proposal/v1` then holds the run with `proposal-handoff-refused` and shows the allowlisted code to operators.
+A follow of `breg.read-proposal/v1` or `breg.start-proposal/v1` keeps waiting and records the code in `lastObservation`, because the person who submitted cures it by revising and resubmitting in BReg, and the refusal clears for that later submission version.
+
+`breg.cancel-proposal/v1` is limited to work the run owns.
+Compilation requires its `proposalId` input to map from the output of an earlier `breg.start-proposal/v1` or `breg.submit-proposal/v1` step on every route, and refuses any other source with `definition.proposal-not-run-owned`.
+BReg separately checks the connection profile's Cancel grant and caller ownership.
+Cancellation of a Proposal a person started belongs to that person or an officer in BReg, because BReg records the authenticated draft creator as its owner throughout later submissions.
+
+Use `breg.start-proposal/v1` when the workflow must check facts in other registries first and a person then submits the draft.
+Use `breg.submit-proposal/v1` only when no person started the run.
+A draft that `breg.start-proposal/v1` creates is owned by the Coordinator's BReg connection principal.
+Have the applicant create and submit their draft in BReg when they need caller-owned progress access, and follow it with `breg.read-proposal/v1`.
+
+{/* Evidence: crates/registry-coordinator/src/breg_proposal.rs proposal-handoff-refused;
+    crates/registry-coordinator/tests/breg_proposal_follow.rs definition.proposal-not-run-owned;
+    crates/registry-coordinator/tests/breg_proposal_adapter.rs proposal-handoff-refused. */}
+
+### The proposal completion
+
+`proposal` is a host-owned completion kind, beside Casework `result` and the authored `bounded-poll`.
+Compilation inserts it for `breg.read-proposal/v1`, `breg.start-proposal/v1`, and `breg.submit-proposal/v1`, and refuses an authored completion that tries to replace it, so a start step needs no extra read step before a wait.
+The wait is keyed by the Proposal ID and settles only from the current Proposal read, never from a Casework result for the Proposal subject and never from a lifecycle event.
+A later `wait-for` may name the same `proposal` completion after an earlier wait on it timed out, and observes the same Proposal afresh.
+Coordinator never follows a different Proposal ID.
+
+Scheduled reads follow the BReg connection's `resultCheckSeconds` and the deployment read floor, as [Wait for a result](#wait-for-a-result) describes.
+When a read shows the Proposal `submitted` with `turn: nobody` and no handoff refusal, BReg is applying it automatically, so the next read is scheduled at the read floor instead of after `resultCheckSeconds`.
+That read keeps the floor and counts against the budget, and a review-free Proposal settles within about the floor.
+Review-stage changes leave the wait pending until the Proposal reaches a state that settles it.
+
+The settled output has `outcome`, `proposalId`, `submissionVersion`, `actionRevision`, the retained `decision` (`status`, `decidedAt`, and any `publicReason`), and the frozen `input` the connection profile may read.
+Later steps bind to that input so they act on the record the Proposal named.
+`breg.read-proposal/v1` and `breg.start-proposal/v1` declare the outcomes `applied`, `rejected`, and `cancelled`, so their `choose` names three cases.
+`breg.submit-proposal/v1` declares those three and `returned`, so its `choose` names four; case coverage refuses a missing case and a case the operation cannot return.
+Each read maps as follows:
+
+| Proposal read | Run started from a person's Proposal | Run submitted it |
+| --- | --- | --- |
+| `state: applied`, `rejected`, or `cancelled` | the same outcome | the same outcome |
+| `state: draft`, or `submitted` with `turn: party` | keeps waiting: the holder corrects and resubmits in BReg | `returned` |
+| `submitted` with a `submissionVersion` higher than the one the run submitted | keeps waiting, recording the new version | `returned` |
+| `submitted` with `turn: official` or `nobody` | keeps waiting | keeps waiting |
+| `handoffRefusal` present | keeps waiting, recording the code in `lastObservation` | holds with `proposal-handoff-refused` |
+| 404, 401, or 403 from BReg | holds with `proposal-unreadable` | holds with `proposal-unreadable` |
+
+The first column of the second table column covers `read-proposal` and `start-proposal`, and the last column covers `submit-proposal`.
+Route on `applied`, never on an approval: in manual application an approved Proposal is still `submitted` until an officer applies it.
+A blocked application, including `package-changed` with recovery `rebase`, is a turn change, not an outcome.
+For a follow of `breg.submit-proposal/v1`, a Revise or Rebase by someone other than the run ends the wait as `returned`.
+
+Each read stores a `lastObservation` on the wait: the Proposal `state`, `turn`, and `submissionVersion`, any allowlisted `handoffRefusal` code, `observedAt`, and `stateSince`.
+`stateSince` is Coordinator's first observation of the current state and turn, so it is only as precise as the read interval.
+`lastObservation` holds no person's name or other value, keeps only the latest read, and is deleted with the wait.
+BReg's own Proposal history remains the audit trail, and inspection shows it in `waits[].lastObservation`.
+
+`check` warns `coordinator.follow.long` for a wait that follows a Proposal for more than 90 days, because long waits delay drain-based upgrades, and `coordinator.follow.timeout-unrouted` when the wait has no `onTimeout` route, so the run would fail with `wait-timed-out`.
+A `breg` connection also takes `resultCheckSeconds` for the Proposal reads, and `requestLink`, an `https` URL template with exactly one `{proposalId}` placeholder, usually the BReg staff page for `/v1/proposals/{id}`.
+It may use `http` only on a loopback IP address, for a staff app on the operator's own machine.
+Inspection then offers "Open the request" for each Proposal wait.
+The link carries only the opaque ID, which grants nothing without BReg's own grant, and neither setting is part of a live run's binding, so both can change while runs wait.
+
+{/* Evidence: crates/registry-coordinator/src/operations.rs breg-proposal;
+    crates/registry-coordinator/tests/breg_proposal_follow.rs coordinator.follow.long, coordinator.follow.timeout-unrouted;
+    crates/registry-coordinator/tests/breg_proposal_wait_postgres.rs last_observation, request_link;
+    crates/registry-coordinator/src/runtime.rs request_link. */}
+
+### Read the record in force
+
+`breg.read-in-force/v1` takes `entity`, a structured `subject` of equality values on declared fields, and a calendar `date`.
+It never accepts a filter string.
+Coordinator sends one BReg `:as-of` read with `asOf` set to the date, an equality filter built from the subject, and `$top=2`, so BReg reads at most two rows.
+Only entities whose `temporal` uses date intervals are accepted; compilation refuses other imports with `definition.read-in-force-entity`.
+BReg applies the interval's own semantics, an exclusive end or an inclusive last day, as the record schema's `x-registry-temporal` marker states; Coordinator never evaluates the interval itself.
+
+| BReg answer | Step result |
+| --- | --- |
+| One record | Success with that record and its provenance as the output. |
+| A successful read with zero records | The declared refusal `none-in-force`, routed by `onDeclaredRefusal`, which is required. |
+| Two records | Holds the run with `in-force-ambiguous`; inspection names the two record identifiers and the date. |
+| 401, 403, or 404 | A failure of the read through the ordinary error path, never `none-in-force`. |
+
+BReg never answers a missing or empty row-boundary claim with an empty list: a missing claim is a 404 and an empty claim a 401, so a refused read cannot become "none in force".
+The record comes with `asOf`, the date BReg echoed in the response `meta`, and `observedAt`, Coordinator's clock when the read returned, for any Action that must record where a fact came from.
+`check` warns `coordinator.read-in-force.may-be-ambiguous` unless some `temporal-non-overlap` constraint on the entity is scoped only by fields the subject names, because otherwise BReg allows two records for the same subject on the same date.
+The read runs under the connection's service identity and takes no grant, and `check` refuses it on a connection that sets `taskAuthority`.
+
+{/* Evidence: crates/registry-coordinator/src/read_in_force.rs none-in-force, in-force-ambiguous;
+    crates/registry-coordinator/tests/read_in_force_check.rs definition.read-in-force-entity,
+    coordinator.read-in-force.may-be-ambiguous;
+    crates/registry-coordinator/tests/read_in_force_adapter.rs. */}
+
+### Look up a record and read it with provenance
+
+`breg.lookup-record/v1` finds the one record a structured set of identifier fields resolves to, through BReg's compiled `:lookup` selector.
+Its input is `entity` (the record-type route), `selector` (the compiled lookup name), and `values`, a nested `fields` mapping of one to sixteen identifier fields, each text, a whole number, or a flag.
+It never takes a filter string, and `check` refuses an empty or oversized `values` mapping.
+Coordinator sends the `:lookup` request with no ETag.
+A selector that needs a verified claim and no field values cannot be reached by a service identity, so the request is refused as `invalid-command` before BReg is contacted.
+
+| BReg answer | Step result |
+| --- | --- |
+| One record | Success: `recordIdentifier`, a string `revisionIdentifier`, `domainData`, and `provenance`. |
+| `lookup.unresolved` | The declared refusal `unresolved`, which `onDeclaredRefusal` may route. An unrouted refusal stops the run as `product-refused`. |
+| 401, 403, or 404 other than `lookup.unresolved` | A failure of the lookup through the ordinary error path, never `unresolved`. |
+
+BReg answers one value-free `lookup.unresolved` whether no record matched, two matched, the row is hidden from the profile, or a claim was missing, so neither Coordinator nor the workflow can tell those apart.
+For that reason `check` refuses an `onDeclaredRefusal` that routes `unresolved` straight to a step that creates or changes a record, with `definition.unresolved-route`: `breg.invoke-action/v1`, `breg.start-proposal/v1`, `breg.submit-proposal/v1`, and `external.command/v1`, whose effect Coordinator cannot see.
+"Not found, so create" makes a duplicate when two records match or one is hidden.
+Route to a finish, another read, or a Casework review request, and change data from a later step once a person or that read has decided.
+Only the direct route is refused: a step that cannot write a record (a Casework review request, a message, a scheduling call, a proposal cancellation) is allowed, and so is a mutation later on the path.
+
+`breg.read-record/v2` takes the same input as `breg.read-record/v1` and returns the same record envelope plus a `provenance` member; `breg.read-record/v1` is unchanged, so existing bindings keep their exact input and output.
+A BReg answer that already carries a `provenance` member is refused as `invalid-response` rather than overwritten.
+`provenance` holds `recordIdentifier`, `revisionIdentifier`, `etag` where BReg sends one, and `observedAt`, Coordinator's clock when the read returned, as an RFC 3339 instant in UTC.
+It says when the workflow looked, not when the fact became true, and a lookup's provenance omits `etag` because a lookup sends and receives none.
+
+The `breg` profile must grant the BReg operation `lookup` for a lookup and `get` for `breg.read-record/v2`.
+`check` does not read BReg profiles, so a missing grant shows at run time as the failure `product-forbidden`, never as `unresolved`.
+`breg.lookup-record/v1` runs under the connection's service identity and takes no grant, and `check` refuses it on a connection that sets `taskAuthority` (`workflow-binding`).
+`breg.read-record/v2` follows `breg.read-record/v1` and takes a grant on a task-authority connection.
+
+{/* Evidence: crates/registry-coordinator/tests/record_lookup_check.rs definition.unresolved-route;
+    crates/registry-coordinator/src/definition.rs definition.unresolved-route;
+    crates/registry-coordinator/src/breg_action.rs invalid-response. */}
+
+### Codes you can meet
+
+A `check` diagnostic carries its sentence as its `message`.
+For a run hold the engine stores and returns only the code, and an operator interface maps it to a sentence.
+These are the codes this section introduces:
+
+- `coordinator.follow.long` (`check` warning): the wait follows a request for more than 90 days.
+- `coordinator.follow.timeout-unrouted` (`check` warning): the wait has no route for a request that gets no decision in time, so the run fails with `wait-timed-out`; add `onTimeout`.
+- `coordinator.read-in-force.may-be-ambiguous` (`check` warning): the register allows two records in force for this subject on one date, so the read can hold the run.
+- `definition.proposal-not-run-owned` (`check` error): cancel only a request this run started or submitted, by mapping `proposalId` from that step's output.
+- `definition.read-in-force-entity` (`check` error): the record type has no date validity interval, so no record can be in force on a date.
+- `definition.review-request-not-run-owned` (`check` error): cancel only a review request this run submitted, by mapping `request` from that step's output.
+- `definition.unresolved-route` (`check` error): creating a record from an `unresolved` route can make a duplicate.
+- `mapping.fields-depth` (`check` error): a `fields` mapping nests deeper than 4 levels.
+- `mapping.fields-count` (`check` error): a `fields` mapping builds more than 64 members across its levels.
+- `proposal-unreadable` (run hold): BReg refused or concealed the request; check the connection profile's `get` grant and row boundary, then retry.
+- `proposal-handoff-refused` (run hold): the review authority refused to take the request this run submitted, and a person may need to submit it.
+- `in-force-ambiguous` (run hold): two records are in force for the subject on the date; correct the register, then retry.
+- `definition-refused` (run hold): the run's retained definition no longer restores, so only a release that accepts that definition can end the run.
+- `check.not-waiting` (HTTP 409): the named step is not waiting.
+
+Run hold and failure codes stay in the closed kebab-case list.
+Doctor makes no BReg call for these waits: it reports a `state.proposalWaitsByTurn` count of `party`, `official`, `nobody`, and `unobserved` from stored observations.
+
+{/* Evidence: crates/registry-coordinator/src/follow_check.rs coordinator.follow.long;
+    crates/registry-coordinator/src/store.rs in-force-ambiguous;
+    crates/registry-coordinator/src/definition.rs definition.review-request-not-run-owned. */}
+
+## Review with Casework
+
+`casework.submit-review-request/v1` and `casework.cancel-review-request/v1` use one configured Casework review producer under its own service identity, with no task authority.
+Coordinator is not a review provider: a project that declares `workflow.review` is refused, and the runtime serves no `/v1/review-requests` route.
+When a workflow needs human review, it submits its own request to Casework under its independently registered producer identity.
+
+Submission carries the expected `PolicySelection`, the subject, bounded reviewer context, and a requester reference.
+An ID selector, the ordinary default, selects the provider's current policy at first acceptance; an optional version and digest require an exact pin.
+Acceptance stores a concrete policy binding.
+Recovery preserves that binding and the original selector, and results must match the accepted policy, subject, and submission digest.
+Casework owns reviewer authority and outcomes, review completion creates no registry effect, and a later BReg or Messaging call requires its own authority.
+This review path needs no BReg connection and confers no registry mutation authority.
+
+Submission exposes the named `result` completion.
+Cancellation reports `cancelled`, or `already-terminal` with the result that won the race; only `cancelled` establishes withdrawal.
+Both mutations recover with the same saved request and key, without a read-only original-key receipt.
+`casework.cancel-review-request/v1` is limited to a request the run submitted: compilation requires its `request` input to map the whole output of an earlier `casework.submit-review-request/v1` step on every route, with no path, and refuses any other source with `definition.review-request-not-run-owned`.
+Casework still decides the cancel under the producer identity, which every workflow in the deployment shares.
+
+Give a standalone Coordinator review a Casework producer ID and client credential separate from BReg's.
+Casework can supersede an open review when the producer identity, the subject source, type and ID, and the policy ID match.
+If both connections use BReg's producer identity, a Coordinator submission in that scope can supersede BReg's open review before Coordinator detects the mismatched acceptance.
+When a BReg Action uses a strict Casework policy pin, adding or changing stage codes requires updating that pin for future submissions, and an Action revision change requires refreshing the imported contract for the Coordinator workflows that start or submit against it.
+
+{/* Evidence: crates/registry-coordinator/src/review.rs already-terminal;
+    crates/registry-coordinator/tests/casework_adapter.rs;
+    crates/registry-coordinator/src/definition.rs definition.review-request-not-run-owned. */}
+
+## Call an external provider
+
+An `external.get/v1` alias can specialize its validated response and declare a bounded-poll completion, as [Wait for a result](#wait-for-a-result) describes.
+`external.command/v1` sends one POST to a provider the operator configured.
+Workflow data supplies only the JSON body; the runtime connection fixes the origin, the exact relative `commandPath`, and the credential, and redirects are never followed.
+A connection without `commandPath` stays read-only, and `check` refuses a command alias bound to it or to a connection of another type.
+The alias names a required `interpret` Function and can specialize the provider's `{status, body}` response:
+
+```yaml
+types:
+  bill-outcome:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state, result]
+        properties:
+          state: {type: string, const: accepted}
+          result: {typeRef: bill}
+      - type: object
+        additionalProperties: false
+        required: [state, code]
+        properties:
+          state: {type: string, const: refused}
+          code: {type: string, enum: [account-closed]}
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties:
+          state: {type: string, const: uncertain}
+
+functions:
+  bill-outcome:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: bill_outcome
+    inputs:
+      command: {operationInput: create-bill}
+      response: {operationOutput: create-bill}
+    output: {typeRef: bill-outcome}
+
+operations:
+  create-bill:
+    uses: external.command/v1
+    connection: payments
+    responseSchema: {typeRef: bill-response}
+    interpret: bill-outcome
+```
+
+The Function reads the frozen command and the validated response, held to the alias's `responseSchema`, and returns `accepted` with a result, `refused` with a declared code, or `uncertain`.
+The step output is the accepted `result`, typed by the `bill` schema in this example.
+A declared code takes `onDeclaredRefusal` as `{refusalCode}`, and an interpreter that never returns `refused` has no refusal route.
+Return `uncertain` for any answer the Function does not recognise, so the run holds instead of guessing.
+An accepted result is the provider's answer as the project interprets it; Coordinator does not independently verify the provider's effect.
+
+Only a response whose status Coordinator neither holds nor retries reaches the Function: a redirect, a 429, and any 5xx never do.
+Scenarios reply to the step with `type: response` and a `{status, body}` value, which the same Function interprets, and the status must be one the Function sees at run time.
+A `success` or `declared-refusal` reply to the step is refused.
+`coordinatorctl test` refuses a `response` reply with a redirect, 429, or 5xx status at `scenario.reply`, naming the `uncertain` or `retryable` reply that models it.
+
+Coordinator persists the command and a request ID, derived from the run's start identity and the step, before the first send.
+It sends the ID as `Idempotency-Key` on every attempt, and automatic retry, restart, and `retry-same` send the same stored body with the same ID.
+The provider must deduplicate on that header, because same-command recovery is safe only then.
+
+- A 429 is a command the provider did not process, and Coordinator retries it under the ordinary retry-hint and spacing rules.
+- A 503 before the last automatic attempt is retried the same way, but it may follow an effect, so the step stays uncertain until a later attempt settles it: a deadline or retry limit reached first holds the run as uncertain.
+- A 503 whose retry could land at or after the run deadline is not retried; the step is held as unknown at once, so `retry-same` can still send the same command while the deadline is in the future.
+- A `Retry-After` on either answer that is not one whole number of seconds up to 86,400 is ignored, and the retry waits for the ordinary backoff.
+- A connection that could not be opened carried nothing and is retried.
+- Once the request may have reached the provider, a lost or broken exchange, a timeout, a redirect, any other server error, an oversize or malformed response, a response outside the declared schema, an interpreter error, and an `uncertain` interpretation each hold the run as uncertain.
+  None is reported as a provider failure or a negative business decision.
+- After an uncertain attempt, including a retried 503, a later declared refusal or 429 keeps the run held instead of routing or retrying.
+
+The operation has no original-result receipt, so `reconcile` cannot settle it.
+[External reads and commands](../../operate/coordinator/#external-reads-and-commands) covers recovery, and the reference page covers the [connection](../../reference/coordinator-configuration/#connections).
+
+{/* Evidence: crates/registry-coordinator/src/external_http.rs command_path;
+    crates/registry-coordinator/tests/external_command.rs;
+    crates/registry-coordinator/tests/external_command_project.rs scenario.reply;
+    crates/registry-coordinator/tests/external_command_postgres.rs. */}
+
+## Import record and template contracts
+
+Import a BReg record schema when you want scenarios to reject field names the record type does not serve.
+Import Messaging's template export when you want computed message data checked against the template before deployment.
+Generate both from the owning projects, then copy the selected artifacts into your Coordinator project:
+
+```sh
+bregctl generate schemas ./source-registry --output ./record-contracts
+messagingctl generate templates --project ./notices --output ./notice-contracts.json
+```
+
+Reference the copied files in `workflow.yaml`:
+
+```yaml
+contracts:
+  application-record:
+    type: breg
+    source: generated/application.schema.json
+  notices:
+    type: messaging
+    source: generated/notice-contracts.json
+operations:
+  read-application:
+    uses: breg.read-record/v1
+    connection: applications
+    record:
+      contract: application-record
+  send-notice:
+    uses: messaging.submit-message/v1
+    connection: notices
+    template:
+      contract: notices
+      id: application-approved
+      version: '1'
+```
+
+The record import limits `domainData` to the schema's API names.
+It allows omitted fields and leaves value types open, because current BReg access policy may hide fields.
+`record` applies to `breg.read-record/v1`, `breg.read-record/v2`, `breg.lookup-record/v1`, and `breg.read-in-force/v1`.
+The template import fixes the template ID, version, locales, and data schema, and that alias accepts template submissions only.
+`coordinatorctl test` rejects misspelled fake record members with `scenario.reply-output` and invalid computed template data with `scenario.call-input`.
+Aliases without `record` or `template` keep their general contracts, and you regenerate imports when the owning project changes.
+
+These imports grant no access.
+Messaging still checks the connection's caller, sender profile, and template at request time.
+The [earlier appointment alert example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/earlier-appointment-alerts) shows both imports alongside their owning projects.
+
+{/* Evidence: crates/registry-coordinator/tests/product_contract_imports.rs scenario.reply-output;
+    crates/registry-coordinator/tests/scenario_contracts.rs scenario.call-input. */}
+
+## Admit callers safely
+
+A caller policy that grants `start` names a confidential backend client the institution trusts, never a browser or other public client.
+Each policy lists in `subjects` the exact token `sub` values it admits: the client's own service-account subject, or the named people an operator policy serves.
+Admission accepts a verified token only when its client has a policy, its `sub` is one of that policy's `subjects`, and it carries every required scope.
+Otherwise it answers 403 `operation.not-authorized`, the same answer as a missing scope, and creates no run.
+A token carrying an `act` claim is refused the same way whatever its subject, because it was issued for someone other than the client presenting it, typically a person delegated to that client.
+A token exchanged without an actor keeps the client's own subject and carries no `act`, so it is admitted like the client's own token when the client's assertion issuer is declared.
+
+The verified `iss`, `sub`, and client decide run ownership and admission idempotency.
+They never authorize the start input.
+Coordinator does not compare a record, subject, or recipient identifier in the input with the caller's `sub`, and no mapping can reference the caller.
+A backend that starts a run for a person must already have authorized every identifier it passes for that person.
+A run a backend starts is owned by that backend, even when its input names a citizen's record, so an application must also authorize source-record access itself, and use its own record-to-run correlation, before it displays a run's progress to a person.
+Destinations check the connection's service identity, any task grant, and their own policy; they do not know which person a run concerns.
+
+A caller allowed to start a workflow receives no credential.
+Coordinator acquires each connection's credential for each attempt, and each receiver checks its own current policy against that connection's identity.
+Admitting a caller is therefore a decision to trust it with the record, subject, and recipient values in its start input.
+Waits, retries, restarts, and recovery never renew an approval or alter its original principal, resource, scopes, bounds, or deadline.
+[Admit callers](../../operate/coordinator/#admit-callers) describes the operator's side.
+
+{/* Evidence: crates/registry-coordinator/tests/deployment_surface.rs a_policy_admits_only_the_subjects_it_lists,
+    a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not;
+    crates/registry-coordinator/tests/deployment_postgres.rs start_input_is_not_bound_to_the_caller_subject,
+    a_listed_client_token_for_an_unlisted_subject_is_refused_at_start_and_creates_no_run;
+    crates/registry-coordinator/tests/runtime_config.rs caller_policies_list_the_exact_subjects_they_admit. */}
+
 ## Package the workflow
 
 ```sh
@@ -231,9 +971,12 @@ package digest: sha256:<digest>
 `definition.json` and `SHA256SUMS` into a new directory and refuses one that exists. The package
 digest is the SHA-256 of `SHA256SUMS`, so it covers the exact bytes; the operator pins it.
 `project.version` is a label for people; the revision is what tells two definitions apart.
+The canonical definition snapshot is limited to 393,216 bytes across authoring, packages, and restore;
+`check` and `package` refuse a larger snapshot before writing a package.
 
 {/* Evidence: crates/registry-coordinator/src/deployment.rs, package;
-    products/coordinator/DEPLOYMENT.md, Install and package, Package digest and definition digest. */}
+    crates/registry-coordinator/src/deployment.rs, package_digest;
+    crates/registry-coordinator/src/definition.rs, MAX_SNAPSHOT_BYTES. */}
 
 ## Export a typed caller
 
@@ -268,7 +1011,7 @@ deployment serves up to sixteen workflows; each is applied, upgraded, and rolled
 and a run keeps the definition it started with.
 
 {/* Evidence: crates/registry-coordinator/src/deployment.rs, DeploymentConfig;
-    products/coordinator/README.md, Package and deploy. */}
+    crates/registry-coordinator/src/deployment.rs, expected_digest. */}
 
 The
 [example projects](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples)
@@ -277,4 +1020,7 @@ an external read, and an appointment. Each runs under `coordinatorctl test` the 
 
 ## Next
 
-[Deploy Registry Coordinator](../../operate/coordinator/)
+- [deploy registry coordinator](../../operate/coordinator/)
+- [registry coordinator configuration reference](../../reference/coordinator-configuration/)
+- [how registry coordinator works](../../explanation/how-coordinator-works/)
+- [configure proposals](../breg-proposals/)

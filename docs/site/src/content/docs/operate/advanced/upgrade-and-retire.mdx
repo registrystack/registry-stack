@@ -297,8 +297,8 @@ so a binary that cannot run leaves the installed toolset selected.
     lock-step" (BReg first, readiness fails in between);
     docs/site/src/content/docs/configure/evidence-oid4vci.mdx, "Operational limits" (stop the
     adapter, restart Evidence, start the adapter);
-    products/breg/EVIDENCE.md, "Independently evolving providers require a paused, coordinated
-    cutover";
+    docs/site/src/content/docs/configure/breg-evidence.mdx, "Independently evolving providers
+    require a paused, coordinated cutover";
     products/breg/CHANGELOG.md, Unreleased (v0.42.0) entries: fresh database with no state
     migration from 0.41, PostgreSQL 17 minimum and UTF8, top-level retention block,
     statusResource, recordTypes and Actions, Proposal client methods, metadata version 2, limit
@@ -349,7 +349,7 @@ so a binary that cannot run leaves the installed toolset selected.
     receiptRetentionDays, scopeClaim default;
     crates/registry-messaging/src/store.rs, StoreError::Pre1_0Schema;
     crates/registry-messaging/src/receipts.rs, ReceiptOutcome::Unmatched;
-    products/messaging/RUNTIME-CONFIG.md, "Provider callbacks" (a verified callback naming no
+    crates/registry-messaging/src/http.rs, receiveProviderCallback (a verified callback naming no
     message answers 204);
     docs/site/src/content/docs/operate/messaging.mdx, "Record and serve the package";
     crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
@@ -362,6 +362,58 @@ so a binary that cannot run leaves the installed toolset selected.
     staged Linux --version checks;
     release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR (rehearses each product alone, not
     this composition). */}
+
+## Upgrade the Evidence definitions response
+
+Evidence keeps the `registry.evidence-definitions/v1` identity while its closed response evolves
+before v1.0.
+The current shape adds the effective audience, a stable complete-definition handle, effective
+response formats, stable concept handles, required-output status and bounded-list form metadata.
+It also makes `maximumHolderBoundBatchSize` explicit.
+A concept's `form` is a mapping named by `type`: `{type: boolean}`, or a list with its members
+beside the tag:
+
+```yaml
+type: list
+items: string
+minimumItems: 1
+maximumItems: 8
+unique: true
+```
+
+This is a breaking change for strict readers.
+A client or validator built against an older schema rejects the added members, because that schema
+refuses unknown members.
+
+Upgrade Evidence and every Evidence client or protocol adapter that reads its definitions response
+together:
+
+- **The batch ceiling has one spelling.** It was published as `holderBoundBatchMaxSize` before the
+  configuration conventions release and is `maximumHolderBoundBatchSize` from it on, with no alias
+  on either side. The current client refuses a response carrying the old member as it refuses any
+  unknown member, and an older strict client refuses the new one the same way. There is no
+  interoperation window across the rename.
+- **A missing ceiling reads as 1.** The current client reads a response with no ceiling member as
+  `1`, the only safe inference for a deployment that predates batch-ceiling discovery. That default
+  does not make a client able to read a response written for the other spelling.
+- **`bounded-identifier` needs a matching version.** The governed `bounded-identifier` concept form
+  gives exact, source-owned JSON string outputs with an immutable prefix and byte bounds. Discovery
+  and the client contract describe it as `string`, so a relying party that compares a request field
+  must compare the complete value exactly. A deployment using the form needs an Evidence and
+  authoring-tool version that recognizes its bundle declaration. Existing controlled categories
+  remain finite reviewed codelists.
+- **Access attribution is a pack protocol.** Forwarding the requester and purpose belongs to the
+  reviewed protected-read host protocol that a pack endpoint selects, and it needs a provider that
+  explicitly trusts the authenticated Evidence service to supply the reserved headers. The retired
+  inline `forwardAccessAttribution` Source member is not a configuration alias for that protocol.
+
+{/* Evidence: crates/registry-evidence-client/src/definitions.rs EVIDENCE_DEFINITIONS_SCHEMA_V1,
+    default_maximum_holder_bound_batch_size, deserialize_maximum_holder_bound_batch_size;
+    products/evidence/contracts/definitions.schema.yaml registry.evidence-definitions/v1;
+    products/evidence/contracts/bundle.schema.yaml bounded-identifier;
+    crates/registry-breg/src/evidence_source.rs forwardAccessAttribution. */}
+{/* TODO[evidence]: no test shows the current client refusing the retired holderBoundBatchMaxSize
+    member by name; the refusal is stated from the closed-response rule. */}
 
 ## Roll back
 
@@ -589,7 +641,8 @@ in this sequence.
     erase_expired(); crates/registry-messaging/src/receipts.rs, ReceiptOutcome;
     crates/registry-messaging/src/audit.rs, principal_pseudonym() and recipient_reference();
     crates/registry-platform-audit/src/writer.rs, for_process();
-    products/messaging/RUNTIME-CONFIG.md, Providers and Provider callbacks;
+    crates/registry-messaging/src/config.rs; crates/registry-messaging/src/http.rs,
+    receiveProviderCallback;
     crates/registry-messaging/src/runtime.rs, Listeners::serve_until();
     crates/registry-casework/src/review/maintenance.rs; products/casework/README.md;
     crates/registry-schedulingctl/src/lib.rs, no export command; crates/registry-scheduling/src/runtime.rs,

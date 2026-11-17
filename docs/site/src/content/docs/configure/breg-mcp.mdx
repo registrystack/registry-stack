@@ -26,6 +26,13 @@ issued for one signed-in citizen. The gateway reads that citizen's Record and st
 Proposal draft, which its tools call an application. `breg-review` is a server-rendered page where
 the citizen signs in, compares the draft with their Record, and submits it.
 
+The gateway advertises MCP revision `2026-07-28` and serves Streamable HTTP with `tools/list`, `tools/call`, and protected-resource metadata.
+It advertises tools only: no resources, prompts, sampling, or model-host administration.
+Its tested surface is not a compatibility certification for every chat host or every protocol revision the SDK recognizes.
+
+{/* Evidence: crates/registry-mcp-edge/src/compatibility_tests/server.rs initialization_pins_the_locked_sdk_protocol_version;
+    crates/registry-mcp-edge/src/handler.rs enable_tools */}
+
 Neither service adds registry semantics: BReg decides what the citizen may see or change, under the
 access profile each service names. The two run with separate credentials, so no process can both
 prepare a change and submit it.
@@ -602,6 +609,20 @@ Whatever the chat host does:
 - The chat host's token is never forwarded, and no delegated token outlives the citizen's own.
 - BReg checks the grant's status before every Proposal read and change.
 - The review page re-reads the target under the citizen's own token before it submits.
+- BReg keeps the Proposal state and the application evidence. Neither the gateway nor the review
+  page keeps a parallel workflow, and where the Action requires review, external policy decides it.
+  BReg then applies the exact frozen Plan, automatically by default under its restricted system
+  grant or manually when you configure that. See [Actions and Proposals](../breg-proposals/).
+- Neither service retries a mutation on its own. After an uncertain submit the citizen retries from
+  the retained view under the same key, and a later read does not settle an uncertain command or
+  follow a successor submission.
+- Boundaries, linked reads, target scope, and Proposal permissions belong in the registry project,
+  not in the gateway or review page configuration.
+
+The configurable, source-built `registry-mcp` service can bind this same citizen provider, or a
+separate Casework delegated staff reader. Keep `breg-mcp` for existing citizen deployments. Config
+checks validate documents offline; a passing check does not prove an issuer exchange or a registry
+grant.
 
 {/* Evidence: crates/registry-breg-mcp/clippy.toml;
     products/breg/scripts/check-mcp-gateway-boundary.sh;
@@ -613,7 +634,47 @@ Whatever the chat host does:
     crates/registry-platform-httputil/src/client/exchange_authorization.rs,
     an_upstream_token_is_not_held_past_the_subject_token_expiry;
     crates/registry-breg/src/mutation.rs, check_task_authority;
-    crates/registry-breg-review/src/pages.rs, review, submit. */}
+    crates/registry-breg-review/src/pages.rs, review, submit;
+    crates/registry-breg-mcp/src/client.rs, with_maximum_mutation_retries;
+    crates/registry-breg-review/src/lib.rs, with_maximum_mutation_retries. */}
+{/* TODO[evidence]: the automatic-or-manual application default and the claim that a later read
+    does not reconcile an uncertain command or follow a successor submission have no cited test. */}
+
+Before you operate `registry-mcp`, plan for what it does not provide:
+
+- It is built from source only. No numbered release asset, installer, `rstack` component, or
+  container image ships it, so build it from the exact source revision you operate. `breg-mcp`
+  remains the maintained citizen deployment.
+- Citizen and staff access need separate configurations, each with its own resource, admitted
+  clients, scopes, and credentials. The config check refuses one configuration that binds both the
+  BReg citizen provider and the Casework staff reader, and the service never forwards the caller's
+  inbound token as a provider credential.
+- The Adapter binding is experimental. It needs a compatible Adapter that exports an executable
+  effective contract (`adapter effective-contract`), and it runs only the configured operations
+  that contract serves as GET or as explicitly read-only POST. The config check refuses a
+  configured write.
+- `dataClass: non-personal` is your own unchecked attestation. It is not a data classifier, a grant
+  to read personal data, or a substitute for source authorization. Person-level access and external
+  effects are outside what the binding supports.
+- The Adapter binding reads one machine token from the secret reference you supply, once at
+  startup. Nothing renews it: before it expires, replace the referenced token and restart the
+  service. Do not lengthen the token's lifetime as a workaround.
+
+{/* Evidence: release/manifests/registry-stack-beta-58.yaml, artifacts;
+    release/scripts/check-release-source-model.sh;
+    crates/registry-mcp/src/config.rs, findings, mixed-personas, adapter-operation-not-read,
+    AdapterDataClass, NonPersonal;
+    crates/registry-mcp/tests/configuration.rs,
+    citizen_and_staff_bindings_cannot_share_one_inbound_resource;
+    crates/registry-mcp-edge/src/authorization.rs, FixedAuthorizationFactory, Delegation;
+    crates/registry-mcp/src/adapter.rs, parse_bound_classified, UnsupportedSelection;
+    crates/registry-mcp/tests/adapter_contract.rs,
+    adapter_contract_is_pinned_and_only_effective_reads_can_be_bound,
+    checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch;
+    crates/registry-mcp/src/runtime.rs, build, machine_token_ref, StaticToken. */}
+{/* TODO[evidence]: no test holds `registry-mcp` out of the release artifacts, asserts that the
+    outbound provider credential is never the inbound bearer, refuses a `dataClass` value other than
+    `non-personal`, or proves the machine token is read only at startup and never renewed. */}
 
 ## Next
 

@@ -275,6 +275,51 @@ The key tables above are generated from the runtime schema by
     crates/registry-render/src/openapi.rs, OPENAPI_JSON;
     crates/registry-render/src/audit.rs, RenderAuditEvent::for_seal. */}
 
+## Exit codes
+
+Every CLI failure is one closed vocabulary, `ProblemKind`, and each kind has one stable exit code, so
+scripts can branch exactly. With `--format json`, the same failure prints one RFC 9457 problem
+document on standard output. Exit code 0 is success. The failure codes are 2 to 30; clap's own usage
+errors also exit 2, and a panic exits 101.
+
+- 2, `invalid-argument`: a malformed CLI or request argument.
+- 3, `manifest-invalid`: the bundle manifest is missing or structurally invalid.
+- 4, `bundle-tampered`: package files do not match the shared `SHA256SUMS` envelope.
+- 5, `package-checksums-missing`: the runtime package lacks `SHA256SUMS`.
+- 6, `unknown-document`: the requested document type or locale is not in the bundle.
+- 7, `labels-invalid`: a label table is missing or invalid, or the key sets diverge across locales.
+- 8, `font-invalid`: a bundle font cannot be loaded, or a label script is uncovered.
+- 9, `data-invalid`: the request data violates the document schema, with JSON pointers attached.
+- 10, `asset-invalid`: an asset is missing, oversized, or not JPEG or PNG.
+- 11, `issued-at-missing`: `issuedAt` is absent, or `--issued-at` or `--now` is missing.
+- 12, `compile-failed`: the Typst compile or PDF export failed, with file and line where they resolve.
+- 13, `strict-warnings`: `--strict` refused reported warnings.
+- 14, `output-too-large`: the rendered PDF exceeded the output cap.
+- 15, `render-timeout`: the render exceeded its wall-clock budget and was killed.
+- 16, `render-panicked`: the render worker panicked, and the worker is recycled.
+- 17, `unauthorized`: a missing or invalid bearer credential (serve, HTTP 401).
+- 18, `rate-limited`: as many seals as render slots are already in flight (serve, HTTP 429).
+- 19, `audit-failed`: the audit destination refused or failed, and Render fails closed.
+- 20, `runtime-invalid`: the serve runtime configuration is invalid, including a seal that cannot load
+  at startup.
+- 21, `internal`: an internal invariant broke; it never carries data.
+- 22, `body-too-large`: the request body is over the configured ceiling (serve, HTTP 413).
+- 23, `forbidden`: the verified credential lacks `render:render` (`render:seal` on the seal route),
+  or the legacy API key calls the seal route (serve, HTTP 403).
+- 24, `authentication-unavailable`: the verifier cannot reach a verdict (serve, HTTP 503).
+- 25, `not-found`: the route is not exposed by the adapter (HTTP 404).
+- 26, `signing-unavailable`: the seal's key provider cannot sign now (serve, HTTP 503).
+- 27, `seal-certificate-invalid`: the seal certificate is outside its validity, or cannot sign, when
+  a seal is requested (serve, HTTP 503).
+- 28, `timestamp-failed`: the timestamp authority gave no usable token, and Render never falls back
+  to B-B (serve, HTTP 502).
+- 29, `document-not-sealable`: the document type names no seal (serve, HTTP 400).
+- 30, `seal-client-not-allowed`: the verified client is not in the seal's `allowedClients` (serve,
+  HTTP 403).
+
+{/* Evidence: crates/registry-render/src/problem.rs, ProblemKind, exit_code and http_status,
+    seal_kinds_name_their_status_type_and_exit_code. */}
+
 ## Check commands
 
 <ConfigurationFormatChecks product="render" />

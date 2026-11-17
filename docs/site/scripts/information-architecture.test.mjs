@@ -73,6 +73,14 @@ const documentsRedirects = new Function(
   'productRoutes',
   `${documentsRoutesSource}; ${documentsRedirectsSource.replace(/^export /, '')}; return documentsRedirects;`,
 )(productRoutes);
+const adapterRedirectsSource = configSource.match(/export function adapterRedirects[\s\S]*?^}\n/m)?.[0];
+const adapterRoutesSource = configSource.match(/const adapterRoutes = productRoutes\('registry-adapter'\);/)?.[0];
+assert.ok(adapterRedirectsSource && adapterRoutesSource,
+  'could not isolate Adapter docset routing');
+const adapterRedirects = new Function(
+  'productRoutes',
+  `${adapterRoutesSource}; ${adapterRedirectsSource.replace(/^export /, '')}; return adapterRedirects;`,
+)(productRoutes);
 const bregRewriteRedirectsSource = configSource.match(/export function bregRewriteRedirects[\s\S]*?^}\n/m)?.[0];
 const bregRewriteMovesSource = configSource.match(/const bregRewriteMoves = \[[\s\S]*?\n\];/)?.[0];
 assert.ok(bregRewriteRedirectsSource && bregRewriteMovesSource,
@@ -200,6 +208,7 @@ const sidebarFactory = new Function(
   'hasBregServices',
   'hasCoordinator',
   'hasDocuments',
+  'hasAdapter',
   'hasDiscovery',
   'selectedDocset',
   'hasBregOpenApi',
@@ -237,10 +246,11 @@ const everyProductDocset = {
     'registry-breg-services': {},
     'registry-coordinator': {},
     'registry-documents': {},
+    'registry-adapter': {},
     'registry-discovery': {},
   },
 };
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, true, true, everyProductDocset,
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, true, true, true, everyProductDocset,
   true, bregOpenApiSidebarGroup, true, true, ...productOpenApiSidebarGroups);
 
 const messagingPageRoutes = [
@@ -251,6 +261,7 @@ const messagingPageRoutes = [
   '/operate/messaging/',
   '/reference/messaging-configuration/',
   '/reference/apis/registry-messaging/',
+  '/security/messaging/',
 ];
 const coordinatorPageRoutes = [
   '/start/coordinator/',
@@ -259,6 +270,7 @@ const coordinatorPageRoutes = [
   '/operate/coordinator/',
   '/reference/coordinator-configuration/',
   '/reference/apis/registry-coordinator/',
+  '/security/coordinator/',
 ];
 const documentsPageRoutes = [
   '/start/documents/',
@@ -266,6 +278,17 @@ const documentsPageRoutes = [
   '/operate/documents/',
   '/reference/documents-configuration/',
   '/reference/apis/registry-documents/',
+  '/security/documents/',
+];
+const adapterPageRoutes = [
+  '/configure/adapter/',
+  '/configure/adapter-routes/',
+  '/configure/adapter-consultation/',
+  '/configure/adapter-jobs/',
+  '/configure/adapter-ingestion-jobs/',
+  '/configure/adapter-packs/',
+  '/operate/adapter/',
+  '/reference/adapter-effective-contract/',
 ];
 
 function section(label) {
@@ -382,6 +405,7 @@ test('uses the product navigation in its published order', () => {
     'Registry Messaging',
     'Registry Coordinator',
     'Registry Document Store',
+    'Registry Adapter',
     'Registry Discovery',
     'Operations',
     'Design',
@@ -394,7 +418,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     current: 'latest',
     released: 'v0.29.0',
     docsets: [
-      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' }, 'registry-discovery': { ref: 'HEAD' } } },
+      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' }, 'registry-adapter': { ref: 'HEAD' }, 'registry-discovery': { ref: 'HEAD' } } },
       // The last archive that predates the OID4VCI supporting service's document.
       { id: 'v0.19.0', status: 'archived', availability: 'released', path: '/v/0.19.0/', products: {} },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
@@ -413,16 +437,16 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       { id: 'v0.44.0', status: 'archived', availability: 'candidate', path: '/v/0.44.0/', products: { 'registry-casework': { ref: 'v0.44.0' }, 'registry-documents': { ref: 'v0.44.0' } } },
     ],
   };
-  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices, hasCoordinator, hasDocuments] of [
-    ['latest', {}, true, true, true, false, false, false, false],
-    ['v0.19.0', {}, false, false, false, false, false, false, false],
-    ['v0.29.0', {}, false, false, false, false, false, false, false],
-    ['v0.30.0', {}, true, false, false, false, false, false, false],
-    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false, false, false],
-    ['v0.31.0', {}, true, false, false, true, true, false, false],
-    ['v0.41.0', {}, true, false, false, true, false, true, false],
-    ['v0.42.0', {}, false, false, false, false, false, false, false],
-    ['v0.44.0', {}, true, false, false, false, false, false, true],
+  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices, hasCoordinator, hasDocuments, hasAdapter] of [
+    ['latest', {}, true, true, true, false, false, false, false, true],
+    ['v0.19.0', {}, false, false, false, false, false, false, false, false],
+    ['v0.29.0', {}, false, false, false, false, false, false, false, false],
+    ['v0.30.0', {}, true, false, false, false, false, false, false, false],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false, false, false, false],
+    ['v0.31.0', {}, true, false, false, true, true, false, false, false],
+    ['v0.41.0', {}, true, false, false, true, false, true, false, false],
+    ['v0.42.0', {}, false, false, false, false, false, false, false, false],
+    ['v0.44.0', {}, true, false, false, false, false, false, true, false],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     const hasBregOpenApi = docsetPublishesBregOpenApi(context.selectedDocset, docsets.current);
@@ -436,6 +460,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(context.hasBregServices, hasBregServices, id);
     assert.equal(context.hasCoordinator, hasCoordinator, id);
     assert.equal(context.hasDocuments, hasDocuments, id);
+    assert.equal(context.hasAdapter, hasAdapter, id);
     const docsetSidebar = sidebarFactory(
       ...sidebarArguments,
       context.hasCasework,
@@ -445,6 +470,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasBregServices,
       context.hasCoordinator,
       context.hasDocuments,
+      context.hasAdapter,
       hasDiscovery,
       context.selectedDocset,
       hasBregOpenApi,
@@ -459,6 +485,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Messaging'), hasMessaging, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Coordinator'), hasCoordinator, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Document Store'), hasDocuments, id);
+    assert.equal(docsetSidebar.some((item) => item.label === 'Registry Adapter'), hasAdapter, id);
     // The citizen services are seated inside the Base Registry Engine section,
     // which every docset publishes.
     const docsetBreg = docsetSidebar.find((item) => item.label === 'Base Registry Engine');
@@ -534,6 +561,15 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     const renderRedirectsResult = renderRedirects(context.hasRender, context.currentDocsetRedirect);
     assert.equal(renderRedirectsResult['/reference/render-configuration/'] !== undefined, !context.hasRender, id);
     assert.equal(renderRedirectsResult['/tutorials/first-render-document.md'] !== undefined, !context.hasRender, id);
+    // The current docset publishes the Adapter, so a docset without it sends
+    // each Adapter route, and its Markdown twin, to the same current route.
+    const adapterRedirectsResult = adapterRedirects(context.hasAdapter, context.currentDocsetRedirect);
+    for (const route of adapterPageRoutes) {
+      const twin = `${route.slice(0, -1)}.md`;
+      const target = hasAdapter ? undefined : context.currentDocsetRedirect(route);
+      assert.equal(adapterRedirectsResult[route], target, `${id} ${route}`);
+      assert.equal(adapterRedirectsResult[twin], target, `${id} ${twin}`);
+    }
     const messagingRedirectsResult = messagingRedirects(
       context.hasMessaging,
       context.currentHasMessaging,
@@ -676,6 +712,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   assert.match(configSource, /\.\.\.messagingRedirects\(hasMessaging, currentHasMessaging, currentDocsetRedirect\)/);
   assert.match(configSource, /\.\.\.coordinatorRedirects\(hasCoordinator, currentHasCoordinator, currentDocsetRedirect\)/);
   assert.match(configSource, /\.\.\.documentsRedirects\(hasDocuments, currentHasDocuments, currentDocsetRedirect\)/);
+  assert.match(configSource, /\.\.\.adapterRedirects\(hasAdapter, currentDocsetRedirect\)/);
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {
@@ -750,6 +787,7 @@ test('uses the formal product names for top-level sections', () => {
     'Registry Messaging',
     'Registry Coordinator',
     'Registry Document Store',
+    'Registry Adapter',
     'Registry Discovery',
   ]) {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
@@ -840,27 +878,43 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'tutorials/query-breg-client',
     'configure/breg',
     'explanation/registry-modeling-patterns',
+    'configure/breg-native-patterns',
+    'configure/breg-event-records',
     'configure/breg-access',
+    'configure/breg-consent',
     'configure/breg-actions',
+    'configure/breg-wasm-action-handlers',
+    'configure/breg-record-timers',
+    'configure/breg-proposals',
+    'configure/breg-history',
+    'configure/breg-spatial-queries',
     'configure/breg-field-encryption',
     'configure/breg-statistics',
+    'configure/breg-evidence',
+    'configure/breg-external-projections',
     'configure/breg-journeys',
     'operate/breg',
     'operate/breg-changes',
     'operate/breg-monitor',
+    'operate/breg-access-log',
     'operate/breg-retention',
     'operate/breg-data',
     'operate/breg-webhooks',
     'reference/breg-client-capabilities',
     'reference/client-api',
     'reference/breg-api',
+    'reference/breg-task-grants',
+    'reference/breg-odrl-export',
     'reference/bregctl-publicschema-wizard',
+    'reference/bregctl-explain',
+    'reference/bregctl-dev',
     'explanation/esignet-authentication-over-breg',
     'tutorials/send-registry-events-to-a-webhook',
     'tutorials/evidence-from-breg',
     'tutorials/review-breg-changes-in-casework',
     'configure/breg-mcp',
     'reference/breg-configuration',
+    'security/breg',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the BReg journey`);
@@ -1117,12 +1171,16 @@ test('keeps the Casework journey in one product lane', () => {
     'explanation/how-casework-works',
     'configure/casework',
     'configure/casework-directory',
+    'configure/casework-completion-receivers',
     'operate/casework',
     'operate/change-a-casework-package',
     'operate/casework-retention',
     'tutorials/review-breg-changes-in-casework',
+    'reference/casework-configuration',
+    'reference/casework-task-grants',
     'reference/apis/registry-casework',
     'reference/client-api',
+    'security/casework',
   ]);
   assertOrdered(
     casework,
@@ -1155,6 +1213,7 @@ test('keeps the Coordinator journey in one product lane', () => {
     'operate/coordinator',
     'reference/coordinator-configuration',
     'reference/apis/registry-coordinator',
+    'security/coordinator',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Coordinator journey`);
@@ -1178,6 +1237,7 @@ test('keeps the Document Store journey in one product lane', () => {
     'operate/documents',
     'reference/documents-configuration',
     'reference/apis/registry-documents',
+    'security/documents',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Document Store journey`);

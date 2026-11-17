@@ -1,0 +1,281 @@
+---
+title: Give subjects a log of reads of their Record
+description: Opt a Record type in to a subject-facing access log, forward the original requester through a trusted intermediary, delay documented entries, and operate the log's retention.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+A Record type can opt in to a subject-facing log of reads of its Records.
+The log answers who accessed one subject's Record, when, and for which declared purpose.
+Base Registry Engine (BReg) stores it apart from its operational audit, which keeps its existing
+redaction and retention rules.
+Exemptions add the bounded policy events described later on this page.
+
+The log is registry-local and keyed to the Record that was read.
+BReg does not create a global subject pseudonym, share a subject key with another registry, or make
+the log searchable across registries.
+There is no backfill for reads that happened before a package enabling the log became active.
+
+The log's storage is installed by every apply, whether or not the package declares `accessLog`, and
+it is part of the catalog BReg verifies before it serves.
+BReg refuses to start against a database without the storage.
+
+{/* Evidence: crates/registry-breg/src/postgres/catalog.rs SUBJECT_ACCESS_LOG_TABLE, SUBJECT_ACCESS_LOG_EXPIRY;
+    crates/registry-breg/tests/postgres_access_log.rs
+    subject_access_log_requires_current_record_ownership_and_records_each_read_hit. */}
+
+## Declare the policy
+
+Add `accessLog` to each Record type whose reads must be visible to its subjects:
+
+```yaml
+recordTypes:
+  - id: person
+    primaryDataset: people
+    route: people
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - id: citizen-id
+        type: string
+        minimumLength: 1
+        maximumLength: 128
+        required: true
+        classification: restricted
+      - id: display-name
+        type: string
+        maximumLength: 200
+        required: true
+        classification: restricted
+    accessLog:
+      subjectField: citizen-id
+      retentionDays: 90
+      trustedIntermediaries:
+        - evidence-service
+      exemptions:
+        investigator:
+          reason: active-investigation
+          delayDays: 30
+```
+
+`subjectField` names the field BReg compares with the subject's verified principal when the subject
+retrieves the log.
+It must be a required, plaintext, stored `string` or `text` field with a `maximumLength` of at most
+512.
+
+{/* Evidence: crates/registry-breg/src/contract.rs AccessLogSource, MAX_ACCESS_LOG_SUBJECT_CHARACTERS;
+    crates/registry-breg/tests/access_log.rs access_log_compiles_governed_defaults_and_policy,
+    subject_field_must_be_required_bounded_plaintext_text. */}
+
+### How a subject reads the log
+
+A subject uses an authenticated access profile that currently grants `get` for the Record.
+BReg returns the log only when the verified principal selected by that profile's `principalClaim`
+exactly equals the stored `subjectField` value.
+The access-log route is not a separate grant and does not bypass current Record visibility.
+
+The HTTP route serves only the Record subject, under that current `get` grant and ownership check.
+BReg exposes no separate officer or operator HTTP listing of subject logs.
+Database administrators can inspect the underlying rows, which hold the actual requester and
+purpose, so scope that database access as sensitive operational access.
+Govern backup retention separately from the live subject-log retention.
+
+The subject reads:
+
+```http
+GET /v1/records/people/00000000-0000-4000-8000-000000000001/access-log?accessProfile=subject&limit=50
+```
+
+The response is a bounded page:
+
+```json
+{
+  "events": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "accessedAt": "2026-09-29T10:00:00Z",
+      "requester": "benefits-agency",
+      "serviceClient": "evidence-service",
+      "purpose": "eligibility-check",
+      "operationId": "lookup",
+      "visibleAfter": "2026-09-29T10:00:00Z",
+      "exemptionReason": null
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+`limit` accepts 1 through 100 and defaults to 50.
+`cursor` is the opaque event identifier returned as `nextCursor`; it is always scoped to this Record
+and the currently verified subject, and it conveys no authority.
+Once retention has removed the referenced history, the cursor yields an empty page and the caller
+restarts without it.
+
+Every access profile names a verified caller, so every log entry has one.
+
+{/* Evidence: crates/registry-breg/src/api/access_log.rs parse_options;
+    crates/registry-breg/tests/access_log.rs generated_openapi_publishes_the_subject_owned_bounded_route;
+    crates/registry-breg/tests/postgres_access_log.rs
+    subject_access_log_requires_current_record_ownership_and_records_each_read_hit. */}
+
+### What an entry contains
+
+An entry holds the accessing client attribution, access time, operation, and verified purpose,
+plus delayed-disclosure metadata when an exemption applies.
+`purpose` is null when the verified token carries no purpose; BReg does not invent one.
+On a direct read, `requester` identifies the verified OAuth client when one is available and
+otherwise the verified principal, and `serviceClient` is null.
+On a trusted forwarded read, `requester` is the original verified requester and `serviceClient`
+identifies the verified intermediary.
+The log does not copy Record fields, query values, tokens, or a global subject identifier.
+Access-log persistence and the read response are governed product state; they are not reconstructed
+from the operational audit.
+
+{/* Evidence: crates/registry-breg/src/subject_access_log.rs forwarded_attribution;
+    crates/registry-breg/tests/postgres_access_log.rs
+    direct_client_is_distinguished_in_allowed_and_refused_request_audit,
+    forwarded_access_attribution_requires_a_verified_trusted_client_and_never_grants_subject_access. */}
+
+## Set the retention
+
+`retentionDays` defaults to 90 and accepts 1 through 3650.
+Each row records its own expiry when the read occurs.
+A later package can change the policy for new rows, but it does not extend already-recorded expiry,
+remove retained history, or turn disabling `accessLog` into erasure.
+
+Every minute, the background retention worker erases expired rows in batches of 1000, each committed
+on its own, until a batch comes back short, including after a later package disables logging.
+One tick stops after 100 batches (100,000 rows) and logs a warning with the remaining expired
+backlog; the next tick continues from there.
+Expired rows are hidden immediately even when their physical deletion awaits a later tick.
+Operator backup retention is separate from the live subject-log retention.
+[Monitor and recover](../breg-monitor/) lists the `subject-access-log-retention` worker and its
+metrics.
+
+{/* Evidence: crates/registry-breg/src/subject_access_log.rs EXPIRY_BATCH_ROWS,
+    MAX_EXPIRY_BATCHES_PER_TICK, run_retention;
+    crates/registry-breg/src/contract.rs MAX_ACCESS_LOG_RETENTION_DAYS, default_access_log_retention_days;
+    crates/registry-breg/tests/postgres_access_log.rs
+    one_retention_tick_erases_every_expired_batch_and_reports_a_bounded_backlog. */}
+
+## Preserve requester attribution through an intermediary
+
+By default, an entry identifies the verified client that called BReg.
+A service such as Registry Evidence may need the entry to identify the original requester and
+purpose rather than the intermediary alone.
+`trustedIntermediaries` is the closed set of verified OAuth client IDs allowed to supply that
+forwarded attribution.
+Each value is a nonempty, non-whitespace client identifier of at most 512 UTF-8 bytes, and a Record
+type can list at most 64.
+
+BReg accepts forwarded attribution only after authentication, when the selected profile and verified
+token identify a client in that set.
+The forwarded values travel together in `Registry-Access-Requester` and `Registry-Access-Purpose`.
+Each header is the canonical base64url encoding without padding of a nonblank UTF-8 value of at
+most 512 bytes, with no control characters.
+BReg refuses duplicate or incomplete pairs.
+This is the same
+[source attribution contract](../../reference/evidence-request-adapter-api/) Evidence uses, and it
+grants no Record authority.
+An unlisted caller cannot make another client appear in the subject log.
+BReg never derives this trust from a request header, issuer name, or Registry Manifest projection.
+
+The BReg Evidence exporter enables forwarding for a Record type with `accessLog`.
+Configure the exported Evidence source connection to authenticate as a client listed in that Record
+type's `trustedIntermediaries`; BReg refuses the forwarded request when the verified connection
+client is absent.
+[Export a lookup for Evidence](../../configure/breg-evidence/) covers the connection.
+
+Evidence forwards attribution only for a verified requester and a declared purpose.
+Other read paths record the direct verified client and the request's verified purpose.
+Operational audit continues to record only its existing bounded metadata and does not gain raw
+purpose or subject values from this feature.
+
+{/* Evidence: crates/registry-breg/src/subject_access_log.rs forwarded_attribution, decode_header,
+    valid_value;
+    crates/registry-breg/src/contract.rs MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES;
+    crates/registry-breg/tests/access_log.rs trusted_intermediaries_are_explicit_and_bounded;
+    crates/registry-breg/tests/postgres_access_log.rs
+    forwarded_access_attribution_requires_a_verified_trusted_client_and_never_grants_subject_access;
+    crates/registry-breg/src/evidence_source/tests.rs. */}
+
+## Delay a documented entry
+
+Some authorized reads cannot be disclosed immediately.
+`exemptions` maps an existing read-capable access profile to a governed policy reason and delay.
+A Record type can declare at most 64 exemptions.
+`reason` must be trimmed printable text of at most 256 UTF-8 bytes.
+`delayDays` must be at least 1 and less than `retentionDays`.
+
+An exemption without `sourceRecordType` applies to direct reads authorized by the named profile on
+the logged Record type.
+A relationship read uses the profile and Record type at the start of its read path, so a delayed
+relationship entry names that authority Record type explicitly:
+
+```yaml
+exemptions:
+  relationship-investigator:
+    sourceRecordType: case
+    reason: active-investigation
+    delayDays: 30
+```
+
+The compiler accepts this form only when the named profile belongs to `sourceRecordType` and grants
+a declared read path from that Record type to the logged Record type.
+BReg matches both the source Record type and the profile when applying the delay, so an unrelated
+profile with the same ID cannot inherit the exemption.
+
+An exempt read is still written.
+Its row retains the policy reason and an exact `visibleAfter` time.
+The operational audit records that the governed exemption was applied without copying the subject,
+purpose, or other access-log values.
+That audit entry uses the `breg-access-log/v2` schema and includes only a policy-keyed reference,
+delay, profile, Record type, and activation binding (`activationId`).
+It does not copy the policy reason.
+The subject route withholds the row until `visibleAfter`; an exemption never silently omits a read.
+A package upgrade does not retroactively hide a visible entry, reveal a delayed entry early, or
+rewrite its reason.
+
+{/* Evidence: crates/registry-breg/src/contract.rs AccessLogExemptionSource,
+    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES;
+    crates/registry-breg/src/subject_access_log.rs "breg-access-log/v2";
+    crates/registry-breg/tests/access_log.rs retention_and_exemption_delays_are_bounded,
+    exemptions_name_read_profiles_and_bounded_policy_text;
+    crates/registry-breg/tests/postgres_access_log.rs
+    access_log_exemptions_are_delayed_audited_and_expire_without_runtime_delete_authority. */}
+
+## Reads covered
+
+BReg logs each authorized Record materialized from storage through direct get, list (including GIS
+collection items), lookup, relationship traversal, snapshot, revision, and attachment download
+routes.
+Paging lookahead rows are removed first, so they do not become events.
+A refusal before Record access and a query that matches no Record create no subject-log entry.
+An unresolved ambiguous lookup can materialize candidate Records before it refuses the response;
+those accesses are recorded.
+Each materialized Record gets its own entry, so a list or historical query cannot be represented as
+one ambiguous subject event.
+
+The access-log insert occurs before response release, and its failure refuses the read.
+Once the entry commits, a later serialization, terminal-audit, or network failure does not erase it.
+An entry therefore records that BReg accessed and prepared the Record under the caller's authority,
+even when the caller did not receive the response bytes.
+
+{/* Evidence: crates/registry-breg/tests/postgres_access_log.rs
+    subject_access_log_requires_current_record_ownership_and_records_each_read_hit,
+    snapshot_and_revision_reads_write_subject_access_log_entries,
+    a_failed_subject_access_log_insert_prevents_record_release. */}
+
+## Next
+
+- [Control access and reads](../../configure/breg-access/)
+- [Monitor and recover](../breg-monitor/)
+- [Export a lookup for Evidence](../../configure/breg-evidence/)
+- [Retention and persistent state](../retention-and-persistent-state/)

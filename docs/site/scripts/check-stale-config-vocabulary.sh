@@ -50,8 +50,10 @@ EVIDENCE_CASEWORK_RETIRED='[Aa]uthoring [Ww]orkspaces?|[Bb]ounded [Qq]uestions?|
 # - DHIS2 tracked entities;
 # - Registry Manifest renderings and retired Relay tool names;
 # - the Rust source types and functions cited by evidence anchors;
-# - the configure/breg-change-control page slug in links.
-ALLOWED='[Ee]ntity[ -]tags?|(audience-scoped-)?entity-reference(-list)?|[a-z_]*entity_reference[a-z_]*|[Tt]racked[ _-]?[Ee]ntit(y|ies)(_id)?|entity JSON Schemas?|SHACL entity shapes|get_metadata_entity_[a-z_]+|Entity(Extension)?Source|[a-z_]*entit(y|ies)[a-z_]*\(\)|breg-change-control'
+# - the configure/breg-change-control page slug in links;
+# - SSL_CERT_FILE set to the local CA file bregctl dev writes, which its
+#   operator commands read; other BReg trust uses trustedRootCertificateRef.
+ALLOWED='[Ee]ntity[ -]tags?|(audience-scoped-)?entity-reference(-list)?|[a-z_]*entity_reference[a-z_]*|[Tt]racked[ _-]?[Ee]ntit(y|ies)(_id)?|entity JSON Schemas?|SHACL entity shapes|get_metadata_entity_[a-z_]+|Entity(Extension)?Source|[a-z_]*entit(y|ies)[a-z_]*\(\)|breg-change-control|`--entity`|SSL_CERT_FILE="?[^" ]*\.breg/dev/tls/ca\.pem'
 # Pages that still carry retired vocabulary until a later rewrite removes it.
 # Their lines are counted and reported, not refused.
 BASELINE="$ROOT/scripts/check-stale-config-vocabulary.baseline"

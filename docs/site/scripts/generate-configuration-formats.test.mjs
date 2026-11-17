@@ -160,6 +160,21 @@ test('names a check page for every product, and the page exists', () => {
   }
 });
 
+test('never names a draft CLI reference page as a check page', () => {
+  // A binary still in unreviewed_binaries renders as a draft page, which the
+  // built site omits, so a check link to it would point at nothing.
+  const metadata = parse(readFileSync(new URL('../src/data/cli-reference.yaml', import.meta.url), 'utf8'));
+  const unreviewed = new Set(metadata.unreviewed_binaries ?? []);
+  for (const product of PRODUCTS) {
+    if (!product.checkPage?.startsWith('reference/cli/')) continue;
+    const binary = product.checkPage.slice('reference/cli/'.length).split('/')[0];
+    assert.ok(
+      !unreviewed.has(binary),
+      `${product.id} names check page ${product.checkPage}, whose binary ${binary} is unreviewed`,
+    );
+  }
+});
+
 test('lists the check command of every authored and operator format on its check page', async () => {
   const document = await buildConfigurationFormats();
   for (const product of document.products) {

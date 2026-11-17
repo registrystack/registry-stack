@@ -350,8 +350,7 @@ relevant product pages on this site rather than duplicating release notes.
   or a guard the caller cannot read remains `412 precondition.failed`. Migration: clients that
   match `precondition.failed`, for example to offer reload and retry, must accept the new code.
 
-{/* Evidence: products/breg/CHANGELOG.md, `action.guard_failed`;
-    products/breg/immediate-actions.md, "Check one target's advisory availability". */}
+{/* Evidence: products/breg/CHANGELOG.md, `action.guard_failed`. */}
 
 - BREAKING: a decided Casework ReviewResult and every `ReviewDecisionReceipt` name the selected
   `outcome`, and BReg reads it. An approve without an outcome is refused with `400
@@ -701,7 +700,7 @@ relevant product pages on this site rather than duplicating release notes.
   An omitted member is refused at startup with `scheduling.runtime.missing-task-grant-status`.
 
 {/* Evidence: products/scheduling/CHANGELOG.md, the `taskGrantStatus` behavior and missing-member
-    refusal; products/scheduling/RUNTIME-CONFIG.md, `taskGrantStatus` offline path. */}
+    refusal; crates/registry-scheduling/src/runtime.rs, TaskGrantStatus. */}
 
 - BREAKING: Registry Scheduling removes three refusals for pre-v0.40.0 inputs. `scheduling migrate`
   is an unknown command; activate with `schedulingctl plan` and `schedulingctl apply`.
@@ -1062,8 +1061,7 @@ relevant product pages on this site rather than duplicating release notes.
   [publish statistics](../configure/breg-statistics/) states the
   inference risks the disclosure method accepts.
 
-{/* Evidence: products/breg/STATISTICS.md;
-    crates/registry-breg/src/compiler/statistics.rs;
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs;
     crates/registry-breg/src/api/statistics.rs;
     crates/registry-bregctl/src/statistics_lifecycle.rs. */}
 
@@ -1081,8 +1079,7 @@ relevant product pages on this site rather than duplicating release notes.
   in `$filter`) match without regard to case on string, text, and vocabulary-code fields. `%`,
   `_`, and backslash match literally, and `equals` and `in` keep exact, case-sensitive matching.
 
-{/* Evidence: crates/registry-breg/src/postgres/read.rs, ILIKE;
-    products/breg/metadata.md. */}
+{/* Evidence: crates/registry-breg/src/postgres/read.rs, ILIKE. */}
 
 - BREAKING: a BReg background worker or the metrics listener that panics or returns before
   shutdown ends `breg` with exit status 1, where the process kept serving without the task. Run
@@ -1197,7 +1194,7 @@ relevant product pages on this site rather than duplicating release notes.
   audit, and a failed log insert refuses the read.
 
 {/* Evidence: crates/registry-breg/src/api/access_log.rs, routes;
-    products/breg/ACCESS-LOG.md. */}
+    crates/registry-breg/src/subject_access_log.rs. */}
 
 - BReg automatic review executors can renew credentials with `privateKeyJwt`, and
   `bregctl review-recovery retry-application` requeues an executor-denied job. Webhook dead letters
@@ -1279,8 +1276,7 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg-mcp/src/tools.rs;
     crates/registry-mcp-edge/src/inbound.rs;
     crates/registry-mcp-edge/src/authorization.rs;
-    crates/registry-breg-mcp/clippy.toml;
-    products/breg/MCP-GATEWAY.md. */}
+    crates/registry-breg-mcp/clippy.toml. */}
 
 - `breg-review` ships for the first time, a server-rendered review page beside the gateway. The
   citizen signs in with an authorization code and PKCE, reads the draft BReg
@@ -1296,8 +1292,7 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig;
     crates/registry-breg-review/src/signin.rs;
     crates/registry-breg-review/src/journal.rs;
-    crates/registry-breg-review/tests/binary.rs;
-    products/breg/MCP-GATEWAY.md. */}
+    crates/registry-breg-review/tests/binary.rs. */}
 
 </DocsetProduct>
 
@@ -1321,8 +1316,7 @@ relevant product pages on this site rather than duplicating release notes.
   operations to a profile the person uses directly.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, validate_profiles and is_direct_target_mutation;
-    crates/registry-breg/tests/standing_agent_ceiling.rs;
-    products/breg/TASK_GRANTS.md. */}
+    crates/registry-breg/tests/standing_agent_ceiling.rs. */}
 
 - BREAKING: BReg refuses to compile a standing agent profile that holds an
   immediate-action permission, with
@@ -1333,8 +1327,7 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, expand_project_access;
     crates/registry-breg/tests/standing_agent_ceiling.rs;
-    crates/registry-breg/src/api/tests/immediate_action_tests.rs;
-    products/breg/TASK_GRANTS.md. */}
+    crates/registry-breg/src/api/tests/immediate_action_tests.rs. */}
 
 - BREAKING: BReg refuses to compile a module that contributes an access
   profile declaring a `taskGrant`, whether on an entity it adds or on one it
@@ -1343,8 +1336,7 @@ relevant product pages on this site rather than duplicating release notes.
   `accessProfiles`; declare the task-grant profile there.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, validate_module_access_profile_task_grants;
-    crates/registry-breg/tests/standing_agent_ceiling.rs, module_contributed_profiles_cannot_declare_a_task_grant;
-    products/breg/TASK_GRANTS.md. */}
+    crates/registry-breg/tests/standing_agent_ceiling.rs, module_contributed_profiles_cannot_declare_a_task_grant. */}
 
 - BREAKING: BReg accepts an `act` claim of exactly `{sub, iss}` when `iss`
   equals the verified token issuer, as a token exchange writes it, beside
@@ -1353,8 +1345,7 @@ relevant product pages on this site rather than duplicating release notes.
   so it no longer satisfies a profile that declares `actorKind: human`.
 
 {/* Evidence: crates/registry-breg/src/auth.rs, optional_actor_subject and authenticate;
-    crates/registry-breg/tests/http_auth.rs;
-    products/breg/TASK_GRANTS.md. */}
+    crates/registry-breg/tests/http_auth.rs. */}
 
 - BREAKING: BReg admits a token carrying a trusted `act` only on an access
   profile that declares `actorKind: agent`. A profile that declares no `actorKind` refuses such a
@@ -2084,7 +2075,7 @@ relevant product pages on this site rather than duplicating release notes.
   `package.expectedDigest` pins the policy the runtime starts on.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs, SCHEDULING_REMOVED_KEYS and
-    a_removed_jwks_uri_names_its_replacement; products/scheduling/RUNTIME-CONFIG.md. */}
+    a_removed_jwks_uri_names_its_replacement. */}
 
 - Base Registry Engine (BReg) adds the `import` operation and import authorities, so a governed
   entity can take a bulk load without granting `batch`, `create`, or `patch`
@@ -2303,8 +2294,7 @@ relevant product pages on this site rather than duplicating release notes.
   `apply_request` there.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, expand_project_access;
-    crates/registry-breg/tests/http_auth.rs, task-grant apply-request compile refusal;
-    products/breg/TASK_GRANTS.md. */}
+    crates/registry-breg/tests/http_auth.rs, task-grant apply-request compile refusal. */}
 
 - BReg no longer contacts the review authority for an apply made under a
   revoked or expired task grant, whether the caller's or the one frozen on
@@ -2788,7 +2778,7 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs;
     crates/registry-breg/src/{action_handler,membership,generated_ddl}.rs;
-    products/breg/{immediate-actions,native-patterns,membership-access}.md. */}
+    crates/registry-breg/src/immediate_actions.rs; crates/registry-breg/tests/native_patterns.rs. */}
 
 - `submitterTargets` can require current same-profile GET authority over the
   native-reference targets of a manually applied change request, including on

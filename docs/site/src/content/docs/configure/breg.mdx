@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -153,23 +153,222 @@ delivery.
 {/* Evidence: crates/registry-breg/src/contract.rs (RegistryProject, PermissionsSource);
     products/breg/generated/authoring/registry-project.schema.json. */}
 
+## Generate business identifiers
+
+The UUID in each Record envelope remains the stable Record identity.
+Use a generated `string` field for an institution-facing number or code.
+It reads like an ordinary field, but callers and Actions cannot set or patch it.
+Do not grant it in `writableFields` or a Function write ceiling.
+
+Add `generate` to a stored `string` field:
+
+```yaml
+- id: number
+  type: string
+  required: true
+  minimumLength: 6
+  maximumLength: 32
+  classification: internal
+  generate:
+    type: sequence
+    prefix: "APP-"
+    minimumDigits: 4
+    scope:
+      - jurisdiction
+- id: code
+  type: string
+  required: true
+  minimumLength: 12
+  maximumLength: 12
+  classification: internal
+  generate:
+    type: random
+    prefix: "REF-"
+    length: 8
+```
+
+`sequence` allocates `APP-0001`, `APP-0002`, and onward within each distinct `jurisdiction`.
+`minimumDigits` pads the number but does not cap the sequence, so the field's `maximumLength` must fit its full range.
+`random` generates `length` characters after the prefix from the fixed alphabet `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, which leaves out characters people commonly misread.
+Choose enough length for the expected number of Records.
+BReg retries a collision within a bounded attempt count and refuses the create if the code space cannot supply a free value.
+
+`scope` is accepted on `sequence` only.
+It lists required stored scalar fields classified `public` or `internal`, and never a `reference`.
+BReg keeps every issued value with its scope values after the Record is erased, so a scope must not hold restricted data or point at a person; use a jurisdiction or category code.
+BReg includes the scope values in both the allocation namespace and a database uniqueness constraint.
+Omit `scope` for one namespace across that Record type; a `random` code always has one namespace across its Record type.
+Include the scope fields when you look up a scoped identifier, because the same code can exist in another scope.
+The compiler limits the combined maximum size of the identifier field and its scope fields to a 1 KiB index budget.
+For string and text fields it counts four bytes per character to cover UTF-8 values, including retained identifiers seeded during migration.
+Use short keys for scope fields rather than descriptions.
+A scope field cannot change after the Record is created, because moving a number to another namespace would invalidate its issued meaning.
+Issued values are never recycled, including after a Record is tombstoned or erased.
+
+Direct create, batch and import create, and Action create allocate in the write transaction.
+A Proposal allocates on Submit and freezes the exact values in its reviewed effects.
+A replay of Submit, Apply, or Retry reuses those values.
+
+Sequences are monotonic, not gapless.
+A create that rolls back releases its number, so a failed write leaves no gap.
+Gaps come from three places:
+
+- A Proposal that is rejected or cancelled after Submit keeps the values Submit allocated.
+- Revise followed by a fresh Submit can allocate new values and leaves the earlier ones reserved.
+- A sequence adopted on an existing field starts after the highest retained number and skips values already reserved.
+
+A register that must issue gapless numbers therefore cannot use `sequence` with a Proposal Action.
+A `sequence` value is guessable and shows how many values its scope has issued.
+Use `random` for a code that people outside the registry see, such as one printed on a certificate and checked on a public verification page.
+
+For a new registry, the compiler installs allocation state and the unique constraint with the initial schema.
+Enabling generation on a field in an existing registry requires a reviewed migration.
+Backfill any missing values first; the compiler then seeds reservations and sequence high-water marks from retained rows and checks uniqueness before activation.
+Existing identifiers are preserved.
+Changing or removing an active generation rule is unsupported, so plan the strategy, prefix, length, and scope as part of the issuing scheme.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldGenerationSource;
+    crates/registry-breg/src/compiler.rs, validate_generated_identifier() and generated_identifier_scope_max_bytes();
+    crates/registry-breg/tests/generated_identifier_compiler.rs, generated_identifiers_compile_storage_authority_and_scoped_uniqueness, generated_identifiers_cannot_be_caller_writable and sequence_scope_fields_cannot_hold_restricted_values_or_references;
+    crates/registry-breg/tests/generated_identifier_migration_plan.rs, generated_identifier_activation_requires_review_and_selects_seed_and_unique_ddl and changing_an_active_generated_identifier_is_unsupported;
+    products/breg/acceptance/generated-identifiers/registry.yaml. */}
+
+{/* TODO[evidence]: the gap rules for rejected or cancelled Proposals, Revise and Submit, and adopted sequences, and the random-code collision retry bound, have no located test. */}
+
+## Register and transfer a facility
+
+The facility-registry fixture combines immediate Actions with a related-Record acceptance condition, current ownership, and committed events.
+Checking the source alone does not activate a registry; use the same package and apply boundary as any other project.
+
+An administrator first creates an operator through `POST /v1/records/operators?accessProfile=operator-administrator`.
+Registration then accepts this body through `POST /v1/actions/register-facility`:
+
+```json
+{
+  "input": {
+    "facilityCode": "FAC-001",
+    "label": "Synthetic facility",
+    "owner": "owner-a",
+    "operatorId": "00000000-0000-4000-8000-000000000001"
+  }
+}
+```
+
+Use an existing authorized operator identifier in place of the synthetic UUID.
+Send the registrar token and a stable `Idempotency-Key` for the submission.
+Registration returns identifiers for `facility` and `initial-assignment`.
+Recover a lost response by repeating the identical Action with the same key.
+A corrected submission gets a new key.
+
+Transfer first obtains an opaque edit condition from `POST /v1/actions/transfer-facility/target-conditions?accessProfile=facility-transfer` with `{"input":{"facilityId":"<returned facility identifier>"}}`.
+Submit the returned `preconditions` unchanged with the facility identifier and destination `owner` to the transfer Action.
+A stale condition requires a fresh user decision; do not silently refresh the edit baseline before submission.
+The fixture journeys cover registration, replay, inactive-operator refusal, a refused destination, successful transfer, and former-owner refusal.
+Its `directClaims` use the scalar `registry_principal` and a string array for the broker's `allowed_owners` boundary.
+Fixture metadata repeats the principal value to bind the expected row boundary; the bearer token carries that claim only once.
+
+The operator guard is an acceptance-time check on a linked input, not a permanent condition on later Records.
+Inactivating an operator later does not undo an earlier registration, and the initial assignment is neither a membership grant nor a promise that the operator stays active.
+The `facility-registrar` profile permits only the registration Action and limits the facility owner to the verified principal; it grants no direct facility or assignment create, patch, or delete.
+After a transfer, the same former-owner token loses current GET and LIST access and the new owner gains it.
+The fixture compares the claim with the stored owner directly, so access is not inferred from the initial assignment or from membership Records.
+History access is granted separately, and the fixture grants none.
+
+The fixture does not implement a general cross-Record invariant, arbitrary SQL or Rhai reads during a mutation, or a process engine.
+Live relational membership authorization is a separate policy capability that needs its own declared model and tests.
+Use a Proposal when accepting a change requires review.
+
+{/* Evidence: products/breg/fixtures/facility-registry-actions/registry.yaml;
+    products/breg/fixtures/facility-registry-actions/tests/journeys.yaml;
+    crates/registry-breg/tests/postgres_registry_extensibility.rs facility_registration_transfer_and_events_use_governed_actions. */}
+
+## Publish metadata with manifestProjection
+
+Domain-semantic entries in `manifestProjection` are optional overlays on the configured data model.
+One project declares one catalogue with its publisher, one or more identified `authorities`, one public service, one or more datasets, one or more data services, and optional distributions.
+The public service names the authority legally competent for it with `competentAuthority`, an id from `authorities`.
+The generated Manifest carries the authorities in `authorities[]` and the reference in the service's `competent_authority`, which CPSV-AP renders as `hasCompetentAuthority`.
+Every Record type names exactly one `primaryDataset`, while each data service explicitly lists its nonempty `servesDatasets`.
+Project-level `accessProfile` and `classificationCeiling` values are defaults that a dataset may narrow or replace.
+The compiler resolves every membership and reference before generation, and refuses duplicates, missing memberships, and dangling authority, dataset, service, or distribution references.
+
+Generated Manifest and DCAT bytes are one classified publication slice.
+A dataset appears only when its effective access profile matches the governed project publication profile and its effective classification ceiling does not exceed the governed project ceiling.
+Services, distributions, public-service references, Record types, fields, and relationship edges are pruned with that slice, so a public artifact cannot disclose a protected dataset by reference.
+
+The projection can also declare localized catalogue and resource text, Record type concept URIs, identifiers, field concepts, relationship roles, and codelist schemes.
+Registry Manifest remains the only portable metadata compiler and DCAT renderer.
+BReg does not infer or hardcode a domain model.
+Operational references may cross datasets, but Registry Manifest v1 accepts portable relationship targets only within the same dataset.
+BReg therefore keeps the operational reference valid while omitting that edge from the portable projection until Registry Manifest defines cross-dataset relationship semantics.
+
+When the source dataset, source Record type, reference field, target dataset, and target Record type are all visible in the publication slice, authoring commands report `breg.manifest-projection.cross-dataset-reference-omitted` at the reference field.
+The warning does not invalidate the runtime reference.
+Keep the dataset split and account for the missing metadata relationship in consumers, or place the Record types in the same projected dataset if that fits the intended model.
+The warning is omitted when any of those members is concealed, so it does not reveal hidden relationships.
+`bregctl check --deny-warnings` treats it as a failed check.
+
+The business-establishments example project defines two datasets, one data service that serves both, one distribution attached to the registered-businesses dataset, and Record types with explicit primary-dataset membership.
+Its local example concept URIs demonstrate semantic metadata without claiming conformance to an external domain model.
+Generate the canonical Registry Manifest source and a DCAT JSON-LD catalogue from the project directory:
+
+```sh test-skip="needs the reader's project directory"
+bregctl generate manifest ./business-establishments --output ./business-metadata
+```
+
+Registry Manifest owns the standards rendering, so BReg carries no second DCAT implementation.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, ManifestProjectionSource, ManifestProjectionAuthoritySource, competent_authority and serves_datasets;
+    crates/registry-breg/src/manifest_adapter.rs;
+    crates/registry-bregctl/tests/manifest_omission.rs;
+    crates/registry-breg/tests/compiler_contract.rs;
+    products/breg/acceptance/business-establishments/registry.yaml. */}
+
+## Live derived fields
+
+A derived relation is a reviewed SQL asset, compiled into a read-only `security_invoker` view over the caller's `registry_source` rows.
+Its SQL must be one `SELECT` with the declared key and field aliases.
+The compiler accepts an explicit set of raw PostgreSQL grammar nodes, the aggregate functions `count`, `bool_and`, and `every`, and `registry_context.evaluation_date()`.
+`JSON_VALUE` and `JSON_EXISTS` may read scalars inside a structured field.
+An explicit `RETURNING` type must be a supported built-in scalar type.
+Ordinary casts are limited separately to reviewed built-in scalar targets; arrays, catalog reference types, XML, money, and timestamp-with-time-zone casts are refused.
+Column references resolve against the columns exposed by each range in its own SELECT scope, so a range name cannot capture its whole row and attribute notation cannot invoke an unlisted function.
+`JSON_QUERY`, table functions, SQL/JSON aggregates and constructors, and XML constructs are refused.
+Additions to this grammar require a concrete use case and review; a parser upgrade does not automatically admit new syntax.
+Joins use explicit `ON` conditions; source and join aliases cannot rename columns through alias lists.
+
+Every emitted derived row must have a non-null canonical `id`, and one derived relation may emit at most one row for that `id`.
+BReg refuses the query atomically when reviewed SQL violates either rule.
+
+The generated view checks derived values before casting them to their declared types.
+String length bounds, text maximum length, exact decimal scale and precision, integer integrality and range, and vocabulary membership are enforced without truncation or rounding.
+Null values retain their existing nullable behavior.
+A violating value raises a stable database error identifying the field without including its value; an API read fails through the ordinary value-free source-unavailable response.
+Only derived relations reached by a read are evaluated.
+
+View definitions belong to the managed catalog fingerprint.
+When a compiler release changes these wrappers, the [changelog](../../changelog/) carries the package upgrade instructions: rebuild from the authored project with the deployed package as the baseline and apply the successor before switching the runtime.
+Starting the runtime never rewrites the active catalog.
+
+{/* Evidence: crates/registry-breg/src/derived_sql.rs, JSON_VALUE, JSON_QUERY and the accepted-grammar tests in that module;
+    crates/registry-breg/src/generated_ddl.rs, security_invoker. */}
+
+{/* TODO[evidence]: the derived-row id rules (non-null canonical id, at most one row per id) and the value-check view behaviour have no located test. */}
+
 ## Schedule a Record-controlled Action
 
 A Record timer schedules one bounded immediate Action from control fields on the Record. The
 Record type declares the timer, while the root project grants the exact Record type and timer
-pair. Read the canonical [Record timers
-guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
-for the authoring contract, inspection commands, and milestone boundaries.
+pair. [Schedule Actions with Record timers](../breg-record-timers/) covers the authoring contract and the inspection commands.
 
-{/* Evidence: products/breg/record-timers.md;
-    crates/registry-breg/src/contract.rs, RegistryProject and EntitySource. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, TimerSource, TimerGrantSource; crates/registry-breg/tests/timer_authoring.rs, timer_compiles_complete_typed_mapping_and_exact_system_grant. */}
 
 ## Next
 
 - [Modeling patterns](../../explanation/registry-modeling-patterns/)
 - [Control access and reads](../breg-access/)
 - [Actions and Proposals](../breg-actions/)
-- [Record timers](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
+- [Schedule Actions with Record timers](../breg-record-timers/)
 - [Encrypt a field](../breg-field-encryption/)
 - [Publish statistics](../breg-statistics/)
 - [Test with journeys](../breg-journeys/)

@@ -1,11 +1,11 @@
 ---
 title: Deploy Registry Render
 description: Install Registry Render, write and check its runtime configuration, start serve mode behind your TLS proxy, answer callers, and keep its audit file.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-17"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced: [pades, rfc-3161]
@@ -22,9 +22,7 @@ Registry Render is pre-1.0 and an
 [experimental surface](../../reference/api-stability/#experimental-surfaces), outside the
 compatibility promise.
 
-{/* Evidence: products/render/CONCEPT.md;
-    products/render/EVIDENCE.md;
-    release/scripts/release_roster.py, RENDER_FIRST_RELEASE and render_in_release. */}
+{/* Evidence: release/scripts/release_roster.py, RENDER_FIRST_RELEASE and render_in_release. */}
 
 ## What you provide
 
@@ -257,11 +255,54 @@ and `audit-failed` (503).
     crates/registry-render/src/problem.rs, ProblemKind, exit_code and status;
     crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
 
+### Authenticate callers with OIDC tokens
+
+Choose exactly one non-null authentication mode: `authentication.oidc` or the legacy
+`authentication.apiKeyRef`, which keeps its secret-provider and entropy checks. Do not configure both,
+and do not use null as an absent member. For OIDC, the block is:
+
+```yaml
+authentication:
+  oidc:
+    issuer: https://issuer.example.invalid
+    audience: urn:example:render
+    allowedClients: [portal]
+```
+
+The shared verifier checks signature, expiry, issuer, resource audience membership, and the
+configured client binding. A token needs `render:render`, and `render:seal` for the seal route. An
+audience array may carry the configured resource alongside other audiences. Unrelated signed
+task-grant claims confer no Render authority. OIDC discovery and key set fetches belong to the
+serving process; you may instead configure a URI or static key set through the shared issuer block.
+You may omit unused secret providers, and any provider the runtime declares is validated.
+
+An invalid credential returns `401` with a Bearer challenge. A verified token without the scope
+returns `403`. An issuer-key outage with no usable cached keys returns `503`. `/ready` checks the
+same key source, including the shared bounded cache and outage tolerance, plus audit readiness. Every
+HTTP problem carries the shared six members, optional bounded pointers, fixed guidance, response
+trace context, and `Cache-Control: no-store`. Detailed package, request, and compiler diagnostics
+stay with the local operator commands.
+
+The audit `caller` is the canonical fingerprint of the exact verified credential, not a durable
+person identifier. The same token correlates across calls, and a newly issued token for the same
+principal has a different fingerprint. Raw tokens and the issuer, subject, and client claims are
+absent from audit events.
+
+A lost response does not establish that a render failed. The Render clients expose transport
+uncertainty and never retry on their own; a caller that repeats the identical inputs gets identical
+bytes.
+
+{/* Evidence: crates/registry-render/src/auth.rs, authenticate() and the test that no canary
+    principal reaches the fingerprint; crates/registry-render/src/server.rs, require_bearer() and
+    the CACHE_CONTROL no-store header;
+    crates/registry-render/tests/serve.rs, maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals
+    and unauthorized_requests_are_refused_and_audited. */}
+
 ## Seal documents
 
 Sealing is optional. Without a `signing` block, Render loads no key, makes no timestamp call, and
 serves no seal route. With one, `POST /v1/seal/<document-type>` renders the document and returns
-it with a PAdES signature made with your institution's key. Render seals only what it just
+it with a PAdES signature made with your institution's key. Render seals only what it has
 rendered from the verified package, never bytes a caller sends. A production seal's private key
 stays in Transit, which signs for Render; a test seal's key file is loaded in the serving process.
 Neither is ever sent to a render worker. The seal is PAdES baseline B-B or B-T. Render makes no
@@ -409,7 +450,7 @@ provider, such as `secret:file/seal.jwk`; an environment reference is refused
 <file> --common-name <seal name>` writes a new key owner-only with its certificate request; add
 `--from-pem <file>` to convert a key you hold as unencrypted PKCS #8 instead. The
 template then receives `signing.testOnly: true` in its payload on the seal route, and can print a
-visible test marking (the payload contract is `products/render/PAYLOAD.md` in the repository); the
+visible test marking (the [payload contract](../../reference/render-payload/#the-signing-member)); the
 `registry-render init` scaffold prints it. Render also says so where a template cannot hide it:
 `testOnly: true` in the JSON answer's `seal`, in `/ready` and in the audit, an
 `X-Registry-Seal-Test-Only: true` header on the PDF answer, and one `test-only seal` warning per
@@ -536,6 +577,20 @@ two seals of the same request differ in their signed bytes, because each carries
 time, but their first revision is the same. The audit never holds a certificate subject, a signer
 name, a key, or a token.
 
+### Sign with a tool of your own
+
+You may sign elsewhere instead, with a tool of your own, as long as the tool saves incrementally, so
+the signed file starts with the exact bytes Render produced. With `render.pdf` the Render output and
+`signed.pdf` the result, this check passes when it does:
+
+```sh
+head -c "$(wc -c < render.pdf)" signed.pdf | cmp - render.pdf && echo "signed file starts with the Render bytes"
+```
+
+{/* Evidence: crates/registry-render/src/pdf_signature.rs, module comment (a seal is one incremental
+    update) and the assertion `prepared.bytes().starts_with(&original)`;
+    crates/registry-render/tests/serve_seal.rs, the assertion `pdf.starts_with(&expected.pdf)`. */}
+
 ### What a citizen's PDF viewer shows
 
 A PDF viewer decides trust from its own trust list. When your seal's issuing root is not in a
@@ -574,8 +629,7 @@ verdict on the issuer, not a failure of the file's integrity.
     a_timestamp_authority_under_a_private_root_is_trusted_through_its_ca_bundle,
     an_unusable_timestamp_ca_bundle_refuses_startup_by_position
     and an_unreadable_or_invalid_chain_refuses_startup_by_position;
-    crates/registry-render/tests/check_seals.rs, check_with_the_environment_reads_each_seal_certificate_chain;
-    products/render/SECURITY-MATRIX.md. */}
+    crates/registry-render/tests/check_seals.rs, check_with_the_environment_reads_each_seal_certificate_chain. */}
 
 ## Keep the audit file
 
@@ -621,7 +675,22 @@ switch to a new binary, render a stored request with it and compare `pdfDigest` 
 value. A changed hash means documents rendered after the switch differ from earlier ones.
 
 {/* Evidence: .github/workflows/render-golden.yml;
-    products/render/EVIDENCE.md. */}
+    crates/registry-render/tests/golden.rs, golden_hashes_match. */}
+
+## Call Render from a web application
+
+When a web application asks Render for a document, you carry these obligations; Render does not
+enforce them for you.
+
+- Keep the Render destination and credential in the application's server-side configuration, never
+  in browser code.
+- Keep the host's session, CSRF, and Origin checks on the route that calls Render.
+- The application supplies the QR URL. Render prints it and does no work when the code is scanned.
+- A scanned URL or a Render hash grants no registry access.
+- Serve only the packaged output that `package.root` points at, never the authored bundle.
+
+{/* Evidence: crates/registry-render/tests/golden.rs, golden_hashes_match;
+    crates/registry-render/src/bundle.rs, SHA256SUMS. */}
 
 ## Check commands
 

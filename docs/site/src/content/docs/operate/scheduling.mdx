@@ -1,11 +1,11 @@
 ---
 title: Deploy and operate Registry Scheduling
 description: Install the Scheduling runtime, write its runtime file, activate a package and its records, serve, and change, retain, and upgrade a deployment in command order.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-17"
 doc_type: how-to
 persona:
   - operator
@@ -203,10 +203,8 @@ Callers send the published `policyRevision` with each booking. Applying the acti
 refused with `schedulingctl.activation.package-already-active`.
 
 For commitment authorization, use the existing
-[task-grant contract](../../reference/apis/registry-scheduling/#task-grants). The
-[Scheduling deployment guide](https://github.com/registrystack/registry-stack/blob/main/products/scheduling/RUNTIME-CONFIG.md)
-explains `duplicateKey` identity configuration and remediation. Resolve those diagnostics in the
-owning offering and identity configuration before retrying a commitment.
+[task-grant contract](../../reference/scheduling-task-grants/). Resolve any `duplicateKey`
+diagnostic in the owning offering and identity configuration before retrying a commitment.
 
 ## Apply the environment records
 
@@ -227,6 +225,44 @@ applied: {"exceptions":1,"locations":2,"members":3,"pools":2,"windows":0}
 pool, member, window, or closure the document leaves out is gone. It refuses only to move, remove,
 or shrink a window below its live holds and appointments, and names the window and the deficit.
 :::
+
+### Publish resource availability and absences
+
+Individual pool members may add `availability` with dated `openings` and `closures`, each a
+bounded list of `{start, end}` instants.
+Omitted openings add no opening constraint, and `openings: []` publishes no supply.
+The union of the openings intersects the member's static `available` flag and the offering's
+location calendar.
+Overlapping or adjacent openings form continuous supply, closures win, and every interval is
+half-open.
+Supply must cover the complete occupied interval, including setup and cleanup.
+Resolve local calendars and ambiguous or nonexistent local times at the source before sending
+RFC 3339 instants.
+Each list contains at most 256 intervals, each positive and at most 3,650 days.
+
+Recording an absence blocks new admissions, rescheduling into that absence, and confirmation of an
+affected hold.
+Existing bookings and holds are not cancelled or reassigned.
+`records apply --format json` includes `resourceImpacts`: the first 256 affected live resource
+allocations, their claim identifiers and occupied intervals, and the exact total from a current
+database snapshot after the apply.
+A reservation can appear once for each affected resource, and a window appears through its own
+resource reservation without counting each booking in it again.
+Removed resources and stock reductions below simultaneous commitments are included alongside
+absences.
+The report contains no owner identity or absence reason.
+It is a current impact read, not a promise that supply stayed unchanged after publication.
+Use scoped appointment reads to inspect further bookings and arrange an authorized reschedule or
+cancellation; affected holds can be released or expire normally.
+Resource catalogue and ordinary availability responses do not disclose these dated facts or
+personnel information.
+
+Availability cursors last at most 15 minutes.
+Callers deduplicate entries by their start when a policy, records, or runtime change overlaps an
+in-flight listing.
+
+{/* Evidence: crates/registry-schedulingctl/src/records.rs resource_impacts;
+    crates/registry-scheduling-core/src/resource_availability.rs ResourceAvailability. */}
 
 ## Serve
 
@@ -336,5 +372,5 @@ to a new, empty database; the old ledger is not carried over.
     crates/registry-scheduling/src/runtime.rs, startup ready() and check_active_package(), workers
     and retention; crates/registry-scheduling/src/http.rs, readyz();
     crates/registry-schedulingctl/src/project.rs, package(); crates/registry-platform-config/src/loader.rs,
-    validate_absolute_lexical_path(); products/scheduling/README.md and RUNTIME-CONFIG.md. Success lines observed with scheduling 0.42.0-dev against
+    validate_absolute_lexical_path(); crates/registry-scheduling/src/config.rs. Success lines observed with scheduling 0.42.0-dev against
     PostgreSQL 17, the standalone-exact-time project, and single-role credentials. */}

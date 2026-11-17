@@ -553,9 +553,10 @@
   notes: >-
     Registry Render seals a document it has just rendered as a PAdES baseline
     B-B or B-T signature, with CMS and timestamp pieces from
-    `registry-platform-crypto`. The validator runs are recorded in
-    `products/render/EVIDENCE.md`: pyHanko validated sealed files `serve`
-    answered, EU DSS reported the PAdES-BASELINE-B and PAdES-BASELINE-T
+    `registry-platform-crypto`. The test `write_served_seal_samples` in
+    `crates/registry-render/tests/serve_seal.rs` writes sealed files `serve`
+    answered, and `products/render/scripts/validate-seal.py` validates them
+    with pyHanko. In the validator runs, pyHanko validated those files, EU DSS reported the PAdES-BASELINE-B and PAdES-BASELINE-T
     formats with an indeterminate indication because the test chain has no
     revocation data or trusted list, and veraPDF passed sealed files at every
     accepted PDF/A level and at PDF/UA-1. Render embeds no revocation data
@@ -580,8 +581,12 @@
   last_checked: 2026-11-06
   notes: >-
     Registry Render writes a document type's PDF at the PDF/A level its
-    manifest names, through Typst. `products/render/EVIDENCE.md` records
-    veraPDF 1.30.3 passing every accepted level (A-1a, A-1b, A-2a, A-2b,
+    manifest names, through Typst. The test
+    `check_accepts_a_seal_under_every_pdf_standard` in
+    `crates/registry-render/tests/check_seals.rs` covers every accepted
+    level, and `write_served_seal_samples` in
+    `crates/registry-render/tests/serve_seal.rs` writes the files veraPDF
+    1.30.3 was run on, passing every accepted level (A-1a, A-1b, A-2a, A-2b,
     A-2u, A-3a, A-3b, A-3u, A-4, A-4e and A-4f) for one fixture template, on
     both the rendered file and the sealed file. veraPDF checks the
     machine-checkable rules only; conformance of a deployer's own template is
@@ -606,8 +611,9 @@
   last_checked: 2026-11-06
   notes: >-
     Registry Render writes tagged PDF/UA-1 through Typst when a document type
-    names `ua-1`. `products/render/EVIDENCE.md` records veraPDF 1.30.3
-    passing its `ua1` profile for one fixture template, rendered and sealed.
+    names `ua-1`. The files `write_served_seal_samples` in
+    `crates/registry-render/tests/serve_seal.rs` writes were run through
+    veraPDF 1.30.3, which passed its `ua1` profile for one fixture template, rendered and sealed.
     The checks a person must make (meaningful alternative text, reading
     order, language) depend on the deployer's template and are not claimed.
 - id: rfc-3161
@@ -632,6 +638,6 @@
     For a B-T seal, Registry Render sends an RFC 3161 timestamp query to the
     configured authority and checks the granted token before embedding it as
     the signature timestamp; a refused or failed timestamp fails the seal.
-    Render is a client only and runs no timestamp authority. The tests and
-    the validator runs in `products/render/EVIDENCE.md` use a loopback test
-    authority; no public authority is exercised in this repository.
+    Render is a client only and runs no timestamp authority. The tests in
+    `crates/registry-render/tests/serve_seal.rs` and the validator runs on
+    the files they write use a loopback test authority; no public authority is exercised in this repository.

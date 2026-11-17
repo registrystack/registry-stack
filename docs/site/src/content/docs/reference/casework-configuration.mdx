@@ -1,0 +1,459 @@
+---
+title: Registry Casework runtime configuration reference
+description: How Registry Casework reads runtime.yaml, plus the generated keys, accepted values, defaults and constraints for listener, database, authentication, audit, context providers and completion destinations.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced: []
+wide: true
+---
+
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/casework-configuration.json';
+
+Registry Casework reads one versioned operator document, `runtime.yaml`.
+Select it with `casework --runtime-config ABSOLUTE_FILE serve`.
+`caseworkctl plan`, `apply`, `status` and `doctor` read the same file with `--runtime-config`.
+[Deploy Registry Casework](../../operate/casework/) shows the steps; this page is the contract.
+
+## How the file is read
+
+The selected file path and every operated resource path are absolute, and the selected file may not pass through a symbolic link.
+Local development tooling may resolve paths before it writes the file.
+
+The shared Registry Stack runtime configuration loader reads the file.
+It must be a YAML mapping of at most 1 MiB, and unknown keys are refused with the path of the offending field.
+Every problem is reported at its line and column.
+A member written as `null`, `~` or an empty value is refused; omit the key to take its default.
+A secret reference, URL or digest that is not written in its form is refused at its position with `config.invalid-value`.
+A number outside its bounds is refused with `config.out-of-range`.
+Neither refusal repeats the value.
+
+{/* Evidence: crates/registry-casework/src/config.rs RuntimeConfig, RuntimeConfigError;
+    crates/registry-platform-config/src/offline.rs config.out-of-range */}
+
+### Check the file offline
+
+`caseworkctl check PROJECT --runtime-config FILE` reads the file the same way, offline and against the authored project.
+It opens no package, database, issuer, context provider or secret.
+It reports every problem in the file at its position, as the runtime does when it refuses the file at startup.
+A `${VAR}` expression, and every rule that reads its value, stays unchecked unless `--environment` fills the expressions from the current environment.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs check_runtime_config;
+    crates/registry-caseworkctl/src/lib.rs CheckArgs */}
+
+### Environment substitution
+
+String values in `runtime.yaml` can take a deployment value from the environment when the runtime starts:
+
+- `${VAR}` requires `VAR`.
+- `${VAR:-default}` falls back to `default`.
+- `${VAR:?message}` refuses to start with `message` when `VAR` is unset.
+
+Substitution never applies to a field whose name ends in `Ref` or `Refs`, or to any value beneath one.
+A secret reference must be written literally and resolved by a declared provider.
+Substitution never applies to the authored `casework.yaml` either.
+An environment expression there is refused, by the runtime and by `caseworkctl check`, with the path of the field that holds it.
+
+{/* Evidence: crates/registry-casework/src/config.rs RuntimeConfig;
+    crates/registry-platform-config/src/blocks_tests.rs allow_insecure_http */}
+{/* TODO[evidence]: no Casework test names the Ref and Refs substitution exclusion or the casework.yaml refusal directly */}
+
+## Envelope and identity
+
+The closed envelope is:
+
+```yaml
+apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
+kind: CaseworkRuntimeConfig
+```
+
+`identity.databaseId` is required.
+It is the logical name of the database this deployment activates packages in, such as `casework-production`.
+You choose it.
+It is 1 to 256 bytes with no surrounding whitespace or control character, and it is never derived from a URL or a PostgreSQL database name.
+The first `caseworkctl apply` records it in the activation ledger.
+Every later apply, and every start of the runtime, refuses a database that recorded a different identity, without naming either value.
+A file that omits the block is refused with the key to add.
+
+{/* Evidence: crates/registry-casework/src/config.rs IdentityConfig, valid_database_id;
+    crates/registry-casework/tests/review_migration_postgres.rs DatabaseIdCheck */}
+
+## Package
+
+`package.root` selects one directory.
+The runtime always loads `package.root/casework.yaml`; no second project selector can override it.
+In every listener mode, with or without `package.expectedDigest`, the directory must be a package that `caseworkctl package` wrote.
+Its `SHA256SUMS` file lists exactly `casework.yaml`, its referenced display schemas and the context provider exports it names, each matching its digest.
+A directory without `SHA256SUMS`, such as an authored project, is refused and the refusal names `caseworkctl package`.
+`caseworkctl dev` packages the authored project on every start and serves that package.
+
+`package.expectedDigest` is optional.
+When set, it is `sha256:` followed by 64 lowercase hexadecimal digits.
+The runtime then starts only on the verified package whose package digest, the SHA-256 digest of its `SHA256SUMS`, is that value.
+Any other package, or a directory without `SHA256SUMS`, is refused before the runtime starts, and the refusal names the expected digest and the one found.
+The retired `package.expectedPolicyDigest` is refused with `package.expectedDigest` named as its replacement.
+Set it to the digest that `caseworkctl package` printed for the package you reviewed, so that replacing the files under `package.root` cannot change the policy a restart loads.
+
+{/* Evidence: crates/registry-casework/src/config.rs RuntimePackageConfig, expected_digest, verify_casework_package;
+    crates/registry-casework/tests/support/creation_audit_regressions.rs expected_digest */}
+
+### Pinned work
+
+Before activation, `caseworkctl plan` compares the candidate package with the in-flight reviews retained in the database.
+`caseworkctl apply` refuses a package that removes a policy, profile, team, producer, provider or contract those reviews still need, or that changes pinned policy content under the same version.
+Let the affected reviews finish under the active package before you apply the candidate.
+`caseworkctl doctor` repeats the check for the active package.
+There is no override for orphaned work.
+
+{/* Evidence: crates/registry-casework/src/pinned_work.rs compare_pinned_work, stranded_work_refusal;
+    crates/registry-casework/tests/review_postgres.rs casework.activation.stranded-work */}
+
+## Listener
+
+`listener` is required.
+`listener.bind` is required and is one numeric socket address, including bracketed IPv6 forms.
+`listener.tlsTermination` is required:
+
+- `operator-controlled-upstream` sits behind an operator-managed TLS edge.
+- `development-loopback` is for direct local development.
+
+`listener.networkExposure` defaults to `private-address`.
+`container-private` permits an unspecified bind only for a listener kept on a private container network.
+
+{/* Evidence: crates/registry-platform-config/src/blocks.rs network_exposure;
+    crates/registry-casework/src/config.rs operator-controlled-upstream */}
+
+### Metrics listener
+
+`metricsListener` is optional and absent by default.
+`metricsListener.bind` is one numeric socket address with a nonzero port.
+It is loopback or private (IPv4 private range or IPv6 unique local), never a wildcard, and never the address and port the API listener occupies.
+An IPv6 wildcard API listener counts as occupying that port on both families.
+When set, the runtime serves `/metrics` and `/version` there and nowhere else.
+
+{/* Evidence: crates/registry-casework/src/config.rs MetricsListenerConfig */}
+
+## Secret providers
+
+`secretProviders` explicitly enables each accepted reference form:
+
+- Declare `file: {root: ABSOLUTE_DIRECTORY}` before you use `secret:file/name`.
+- Declare `environment: {}` before you use `secret:env/NAME`.
+
+The runtime does not fall back from one provider to another.
+The maintained example uses mounted files.
+
+{/* Evidence: crates/registry-platform-config/src/secrets.rs validate_file_metadata;
+    crates/registry-casework/src/config.rs RuntimeConfig */}
+
+## Database
+
+`database.runtimeUrlRef` supplies the least-privilege service connection.
+`database.migrationUrlRef` supplies the operator-run migration connection.
+The runtime, `caseworkctl plan`, `status` and `doctor` connect only with the runtime credential.
+Only `caseworkctl apply` resolves the migration credential.
+
+When the two name different PostgreSQL roles, apply grants the runtime role the privileges it serves with and records the deployment as `split`.
+Those privileges are schema usage, read and write on the Casework tables, and read-only on the activation ledger and the schema migration table.
+When they name one role, or the runtime role can still write the ledger, apply records `single`, and `status` and `doctor` say that the runtime credential can activate packages.
+
+`database.trustedRootCertificateRef` is optional.
+Plaintext PostgreSQL is available only to builds with the `postgres-test` feature and an explicit `testOnlyPlaintext: true` setting.
+
+Unless a database URL sets them, every Casework connection uses these values, all in seconds as Casework reads the URL:
+
+- `connect_timeout=5`
+- `keepalives_idle=15`
+- `keepalives_interval=5`
+- `keepalives_retries=3`
+- `tcp_user_timeout=30`
+
+Libpq reads `tcp_user_timeout` in milliseconds; Casework reads it in seconds.
+A connection to a server that stopped answering therefore fails within seconds.
+The TCP user timeout applies on Linux only.
+
+{/* Evidence: crates/registry-casework/src/activation.rs grant_runtime_role, observe_role;
+    crates/registry-casework/src/store.rs tcp_user_timeout, test_only_plaintext;
+    crates/registry-casework/src/config.rs test_only_plaintext */}
+
+## Authentication
+
+`authentication.oidc` requires `issuer` and `audience`.
+The issuer is an exact `https` URL without credentials, query or fragment.
+The audience is at most 512 characters.
+For the shared access-token profile (algorithms, token type, audience, scope and actor separation, issuer-network policy, lifetime and safe diagnostics), see [Request an access token from your own code](../../configure/request-an-access-token/).
+
+{/* Evidence: crates/registry-casework/src/config.rs OidcConfig */}
+
+### Issuer network rules
+
+The issuer's declared origin may resolve to a private address.
+A discovery document may name a same-origin private `jwks_uri`.
+A cross-origin private `jwks_uri` named by discovery is refused, and cloud metadata and link-local addresses are always refused.
+
+Plain `http` is accepted on IPv4 and IPv6 loopback when `listener.tlsTermination` is `development-loopback`.
+Set `allowInsecureHttp: true` beside `issuer` to permit it elsewhere; startup logs a warning while that setting is active.
+The setting covers the issuer's origin and a `type: uri` key set.
+It never covers a cross-origin `jwks_uri` named by discovery, which must use `https`.
+
+{/* Evidence: crates/registry-platform-config/src/blocks.rs allow_insecure_http;
+    crates/registry-platform-config/src/blocks_tests.rs allow_insecure_http */}
+
+### Key set source
+
+`jwksSource` defaults to `type: discovery`.
+
+- `type: uri` with `uri` fetches the key set from a fixed address instead of the one discovery names.
+  As an endpoint you declare, it inherits the declared issuer's allowance and can resolve to a private or loopback address on any origin.
+- `type: static` with `documentRef` reads a pinned key set, which does no rotation of its own.
+
+The removed `jwksUri` key is refused with a diagnostic naming `jwksSource` `type: uri` as its replacement.
+
+{/* Evidence: crates/registry-casework/src/config.rs jwks_source, REMOVED_OIDC_JWKS_URI */}
+
+### Admitted clients and claims
+
+`allowedClients` lists the client identifiers whose tokens the runtime admits.
+Each is matched against the token's `azp` claim or, when it has none, its `client_id` claim.
+Every file writes the member: a list of at least one distinct client, or `unrestricted`, which admits every client the issuer verifies.
+An omitted member, an empty list and a repeated client are refused when the file is read.
+Under `operator-controlled-upstream` the member must list its clients.
+Development loopback accepts `unrestricted` as a local convenience.
+A configured `taskAuthority` requires a list in either mode, and its `issuer` is an absolute `http` or `https` URL with a host and no user information.
+
+`scopeClaim` defaults to `registry_scopes` for compatibility with existing deployments.
+Stock ThunderID emits `scope`, so the maintained example and `caseworkctl init` set that explicit override.
+`humanIdentity` defaults to claim `registry_actor_kind` with value `human` and applies only to human roles.
+Principal selection belongs exclusively to each authored `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`.
+The removed runtime field `authentication.oidc.principalClaim` is refused with that replacement.
+
+{/* Evidence: crates/registry-casework/src/config.rs OidcConfig, TaskAuthorityConfig, default_scope_claim, default_human_identity_claim;
+    crates/registry-casework/src/task_grants/native_exchange_tests.rs unrestricted */}
+
+### Revoked keys and token lifetime
+
+`revokedKeyIds` is an optional list of at most 128 distinct nonempty key identifiers.
+Casework refuses a token whose protected `kid` appears in the list even while the key remains in the issuer's key set.
+The list refuses those keys in Casework only; it does not revoke them at the issuer.
+
+`maximumTokenLifetimeSeconds` optionally limits the interval from `iat` to `exp` to 1 through 7200 seconds.
+Omitting either setting preserves the existing acceptance rule.
+
+During key rotation, publish the replacement key first and confirm that Casework accepts a test token signed by it.
+Add the retiring key identifier to `revokedKeyIds` when it must stop authorizing immediately, apply the runtime configuration, and confirm that a token signed by the retired key is refused.
+Remove the old public key from the issuer after all services have applied the change.
+A static `jwksSource` also requires atomically replacing its referenced document and restarting Casework.
+
+{/* Evidence: crates/registry-casework/src/config.rs RevokedKeyIds, revoked_key_ids;
+    crates/registry-casework/src/auth.rs maximum_token_lifetime_seconds */}
+
+## Delegated staff readers
+
+`delegatedStaffReaders` is absent by default.
+When present, it is a non-empty map keyed by an operator-owned reader policy identifier, such as `assistant-reader`.
+Each entry names:
+
+- one existing `Staff` access profile;
+- one explicitly allowed OAuth client;
+- the exact trusted `act.sub`;
+- the exact subject-token issuer recorded by the exchange;
+- one scope used only for delegated staff reads;
+- a token lifetime ceiling of 1 through 300 seconds.
+
+The delegated token must carry every Staff profile scope plus that one read scope; unrelated extra scopes grant no authority on these dedicated routes.
+It also carries one Casework audience, the configured human assertion, no grant claims and no nested actor.
+An `act.iss` is optional, and when present it must equal the verified token issuer.
+The ordinary authentication path continues to refuse a configured delegated-reader client's token when it has `act` or the delegated-read scope.
+
+Configure `humanIdentity` against an issuer-verified claim about the represented person, and preserve it through both exchanges.
+The gateway's current actor category can be `service` while the subject is human, so that category alone cannot establish subject identity.
+Direct human credentials must carry the configured claim too.
+The issuer, rather than tool arguments, supplies the subject, purpose and jurisdiction claims used downstream.
+
+{/* Evidence: crates/registry-casework/src/config.rs DelegatedStaffReaderConfig;
+    crates/registry-casework/src/auth/delegated.rs maximum_token_lifetime_seconds */}
+
+### Routes
+
+The dedicated routes are `GET /v1/delegated-staff/review-tasks` and `GET /v1/delegated-staff/review-tasks/{taskId}/context`.
+A client selects the map entry with `registry-casework-delegated-reader`; it does not send `registry-casework-profile`.
+The list is always due-ordered work assigned to the represented Staff principal.
+The context route checks the current holder and revision before source I/O and again before release.
+Neither route offers a mutation, unclaimed-work, supervisor, administrator or general human operation.
+An optional `sourceProfiles` list is the complete set accepted from `registry-source-profile`; source authorization remains separate.
+
+{/* Evidence: crates/registry-casework/src/http.rs registry-casework-delegated-reader, delegated-staff/review-tasks;
+    crates/registry-casework/tests/review_http.rs registry-casework-delegated-reader;
+    crates/registry-casework/src/config.rs source_profiles */}
+
+### Delegated display exchange
+
+For a current-source Base Registry Engine (BReg) provider, `delegatedDisplayExchange` is an optional provider binding dedicated to these reads.
+It names the token endpoint, separate client and assertion-key secret references, an optional assertion audience, the exact downstream resource, non-empty scopes and a credential generation.
+Casework passes only verified subject-token metadata and the invocation credential to this provider boundary.
+The provider performs a fresh per-call exchange and sends only the exchanged bearer to BReg.
+It never forwards the Casework bearer and never falls back to the human-display credential.
+
+The delegated OAuth client must differ from the provider's unattended status client, so the authorization server can grant subject-delegation authority without granting it to the status identity.
+This separates OAuth policy; key material is separate only when the deployment configures separate keys.
+
+{/* Evidence: crates/registry-casework/src/config.rs delegated_display_exchange */}
+
+## Audit
+
+`audit` selects where Casework writes its audit entries and the key that pseudonymizes the principals and identifiers they name.
+
+- `audit.hashKeyRef` is that key's secret reference and must be an exact `secret:env/NAME` or `secret:file/name` reference.
+- `audit.destination` is `file` (the default) or `stdout`.
+- A `file` destination requires the absolute `audit.path` of the active file.
+- A `file` destination accepts `audit.rotateBytes` (default 104857600, at least 1048576, at most 4294967295) and `audit.retentionDays` (default 90, at least 1, at most 36500).
+- `stdout` refuses `path`, `rotateBytes` and `retentionDays`.
+
+A `caseworkctl` command that writes audit, such as an applied erasure or settlement, writes to a sibling file named for its process role beside `audit.path`: `audit.caseworkctl.ndjson` for `audit.ndjson`.
+With a `stdout` destination it writes to standard error, so the command's own report keeps standard output.
+
+{/* Evidence: crates/registry-casework/src/config.rs AuditConfig, MAXIMUM_AUDIT_ROTATE_BYTES, retention_days;
+    crates/registry-platform-audit/src/writer.rs for_process */}
+{/* TODO[evidence]: no test names the caseworkctl.ndjson sibling file directly; the naming rule is audit with the role before the extension in the shared writer */}
+
+### Entry shape and failure behaviour
+
+Every entry carries the schema `registry-casework-audit/v1`, a phase, and a correlation shared by an operation's request entry and its response entries.
+
+- A requested operation writes one request entry before it opens the operation's transaction.
+- It writes one response entry for each domain event it records, after that transaction commits.
+- A destination that refuses either entry fails the request with `service.unavailable`, and a refused response leaves the committed change in place.
+- A requested operation that records no domain event, such as an idempotent replay, writes one response entry whose `outcome` is `replayed` or `unchanged`, and returns its result only after that entry is accepted.
+- Background work no caller requested, such as a review clock or retention pass, writes no request entry.
+  It opens its transaction only while the writer reports ready, and its response entries share a correlation that identifies the run.
+
+The database holds no audit state.
+
+{/* Evidence: crates/registry-casework/src/audit.rs registry-casework-audit/v1;
+    crates/registry-casework/tests/review_postgres.rs registry-casework-audit/v1 */}
+
+## Context providers
+
+`contextProviders` binds declared `deploymentRef` values under `casework.yaml:contextProviders`.
+Unknown keys are refused.
+An omitted provider leaves only its current-source operations unavailable, while submitted-context reviews continue to work.
+
+Each binding provides the BReg base URL, `tokenEndpoint`, `clientIdRef`, `clientAssertionKeyRef` and `statusProfile`.
+The status profile must equal the authored `serviceProfiles.service-status` for that provider.
+Optional `taskGrantProfile` must equal the provider's separately authored `serviceProfiles.task-grant-context` profile.
+Its absence disables current-source task-grant context; the runtime never falls back to `statusProfile` or to the human display profile.
+This selection does not require the source access profile to be a singleton permission.
+The configured service client must be authorized for each selected profile at BReg.
+
+Optional `clientAssertionAudience`, `resource` and `scopes` configure the OAuth client-assertion and token request for the service reader.
+Use the exact values registered by the issuer and BReg deployment.
+The status credential reads only the operations and fields its source profiles grant.
+It does not supply fields shown to a human reviewer.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs build_context_providers;
+    crates/registry-casework-breg/src/config.rs */}
+
+### Current-source reads
+
+For a current-source review, the human request selects a BReg source profile with the `Registry-Source-Profile` header.
+Casework forwards that human's bearer to BReg for the current display read.
+BReg authorizes the profile, subject and disclosure.
+
+The compiled Casework policy pins the producer's context contract and vendored schema; the verified package also includes the provider's exported description.
+`caseworkctl check --against-breg-package` compares that export with a checked native BReg package offline.
+Rotate transport credentials by updating their secret references without changing the policy.
+A changed BReg context contract needs a new export, schema pin and Casework package.
+
+{/* Evidence: crates/registry-caseworkctl/src/lib.rs against_breg_package;
+    crates/registry-casework-core/src/http.rs registry-source-profile */}
+
+### Separate source credential
+
+Separate resource grants can opt in per provider with `humanSourceAuthentication: {audience: urn:example:breg}` in the existing `contextProviders` binding.
+The audience must differ from Casework's audience.
+Casework uses its existing issuer, signing-key trust, algorithms, access-token type, revocation and token lifetime policy to verify this source credential independently.
+It does not apply or combine Casework's `allowedClients` or `assertionIssuers` for source-client admission.
+BReg independently enforces its source client, profile, scope, purpose and disclosure before any field release.
+This creates no new issuer or client trust.
+
+An ordinary human request can then supply exactly one `Registry-Source-Authorization: Bearer <source-access-token>` alongside its Casework Authorization and an explicit `Registry-Source-Profile`.
+Both verified tokens must meet all of these conditions:
+
+- Each names one scalar audience.
+- They carry the same nonempty issuer and `sub`.
+- They carry the configured human marker and direct `registry_actor_kind: human`.
+- They carry no delegation or task-grant claims.
+
+A custom Casework principal does not replace the verified subject comparison.
+Audience arrays, a wrong key, issuer, time or subject, and a machine identity are refused.
+Casework authority never supplies source authority.
+Duplicate or conflicting headers are refused.
+
+{/* Evidence: crates/registry-casework/src/config.rs human_source_authentication;
+    crates/registry-casework/src/http/source_credentials.rs;
+    crates/registry-casework-core/src/http.rs registry-source-authorization */}
+
+### Which routes accept the source credential
+
+The pinned task and request policy selects the provider.
+A collection invocation requires one unique current-source provider across the active project; zero or multiple providers are refused rather than filtering a bad credential into a partial page.
+Verification precedes source I/O and any output, including empty and submitted-only pages.
+
+Submitted-context single targets and source-free operations reject the header.
+Those operations are release, task-grant revocation, accountability, producer, directory and delegated-reader routes.
+An absent header preserves ordinary single-bearer and CLI forwarding behavior.
+Once the header is supplied, no fallback to the Casework token or machine status token is permitted.
+
+Credentials live only in the current request's redacted, zeroizing provider handle and its bounded source calls.
+They never enter tasks, decisions, drafts, audit, cursors, receipts or recovery objects.
+Clients borrow an explicit `HumanSourceCredential` per call.
+Language clients expose `humanSourceCredentialContract()` (Python: `human_source_credential_contract`) from the actually loaded native addon; its supported value is `registry.casework.human-source-credential.v1`.
+A facade version or a silently ignored extra argument is not capability evidence.
+
+{/* Evidence: crates/registry-casework/src/http/source_credentials.rs;
+    crates/registry-casework-client-node/src/lib.rs human_source_credential_contract;
+    crates/registry-casework-client-py/src/lib.rs human_source_credential_contract;
+    crates/registry-casework-client-node/__test__/source-credential-capability.test.js humanSourceCredentialContract */}
+
+## Review completion destinations
+
+`reviewCompletionDestinations` is keyed by the logical destination ids a producer's `completion` block names, kept as written: 1 to 512 characters without control characters.
+Each destination has one `url` and exactly one secret:
+
+- `bearerTokenRef` presents the secret as `Authorization: Bearer <secret>`.
+- `auth: {secretRef}` does the same.
+- `auth: {header, secretRef}` presents the raw secret as the value of that header instead, with no `Authorization` header.
+  Use it for a receiver that authenticates with a header such as `x-api-key`.
+
+The header name is HTTP token characters, at most 64 bytes, and compared case-insensitively against a reserved set the runtime refuses at load.
+The reserved set covers authentication, host, cookie, framing, hop-by-hop, forwarding, proxy and tracing headers, plus the completion contract's own `idempotency-key` and every `registry-` header.
+The secret is visible ASCII, is never logged, and redirects are not followed.
+`caseworkctl doctor` reports the same refusal before the runtime starts.
+
+[Receive Casework completion wakes](../../configure/casework-completion-receivers/) defines the POST payload, headers, bounded retries, acknowledgement and durable receiver deduplication.
+Delivery is at-least-once.
+
+{/* Evidence: crates/registry-casework/src/config.rs ReviewCompletionRuntimeConfig, ReviewCompletionAuthConfig, MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES;
+    crates/registry-casework/src/runtime.rs completion_acknowledged */}
+
+## Generated key reference
+
+The table lists every key the runtime schema accepts, with its type, accepted values, defaults and constraints.
+The maintained `runtime.example.yaml` in the canonical-review example project shows a complete file.
+
+{/* Generated from products/casework/generated/runtime/runtime.schema.json through src/data/generated/casework-configuration.json,
+    by docs/site/scripts/generate-casework-configuration.mjs. Run npm run generate from docs/site. */}
+
+<ConfigurationReference contracts={reference.contracts.filter((contract) => contract.id === 'runtime')} prefix="casework" />
+
+## Next
+
+- [deploy registry casework](../../operate/casework/)
+- [receive casework completion wakes](../../configure/casework-completion-receivers/)
+- [author a casework policy](../../configure/casework/)
+- [environment variable reference](../environment-variables/)

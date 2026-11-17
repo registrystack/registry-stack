@@ -11,9 +11,6 @@ locale: en
 standards_referenced: []
 ---
 
-import ConfigurationReference from '../../../components/ConfigurationReference.astro';
-import reference from '../../../data/generated/casework-configuration.json';
-
 If you operate Registry Casework, deploy a reviewed policy package against PostgreSQL, verify its
 activation, then establish the teams that can see and decide its review tasks. Casework returns a
 review result; the producer keeps all authority to change its subject.
@@ -105,6 +102,11 @@ ALTER SCHEMA public OWNER TO casework_migration;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 ```
 
+Each runtime holds up to 32 connections and waits up to 5 seconds for one; neither is configurable,
+so allow 32 connections per replica.
+
+{/* Evidence: crates/registry-casework/src/store.rs, max_size(32) and wait_timeout. */}
+
 Only `caseworkctl apply` uses the migration credential, so keep it off the serving host. Apply
 grants the runtime role what it serves with and keeps the activation ledger read-only to it.
 
@@ -114,7 +116,7 @@ it. When both credentials name one role, the deployment records single-role mode
 says the runtime credential can activate packages.
 
 {/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(), and stray_authority();
-    products/casework/RUNTIME-CONFIG.md, database. */}
+    crates/registry-casework/src/store.rs, tcp_user_timeout. */}
 
 ## Write the runtime file
 
@@ -165,8 +167,7 @@ Each `...Ref` key names a secret, never its value: `secret:file/<name>` resolves
 rotation.
 
 {/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig;
-    crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
-    products/casework/RUNTIME-CONFIG.md. */}
+    crates/registry-platform-config/src/secrets.rs, validate_file_metadata(). */}
 
 ### Add a current-source provider
 
@@ -205,7 +206,8 @@ caseworkctl check ./decisions --runtime-config /etc/registry-casework/runtime.ya
 The check opens no package, database, issuer, provider, or secret. Add `--environment` to fill
 `${VAR}` expressions from the current environment. A clean check does not prove live readiness.
 
-<ConfigurationReference contracts={reference.contracts.filter((contract) => contract.id === 'runtime')} prefix="casework" />
+Every key the file accepts, with its accepted values and defaults, is in the
+[runtime configuration reference](../../reference/casework-configuration/#generated-key-reference).
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, check_runtime_config();
     crates/registry-caseworkctl/src/lib.rs, CheckArgs. */}
@@ -221,7 +223,7 @@ file against `SHA256SUMS`, and an authored directory without one is refused.
 Keep earlier package directories for recovery, and plan every activation, rollbacks included.
 
 {/* Evidence: crates/registry-casework/src/config.rs, verify_casework_package() and expected_digest;
-    products/casework/RUNTIME-CONFIG.md, package. */}
+    crates/registry-casework/src/config.rs, RuntimePackageConfig. */}
 
 ## Refuse a package that strands pinned work
 
@@ -305,7 +307,7 @@ rollout can confirm what each process runs.
 
 {/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router();
     crates/registry-casework/src/config.rs, MetricsListenerConfig;
-    products/casework/RUNTIME-CONFIG.md, metricsListener. */}
+    crates/registry-casework/src/config.rs, metrics_listener. */}
 
 ## Establish directory authority
 
@@ -363,7 +365,7 @@ members and rerun it to confirm the warning clears. It opens no listener and pro
 provider access; use `/ready` and an authenticated task read for those.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor();
-    products/casework/RUNTIME-CONFIG.md, doctor repeats the pinned-work check. */}
+    crates/registry-casework/src/pinned_work.rs, compare_pinned_work. */}
 
 ## Change the active package
 

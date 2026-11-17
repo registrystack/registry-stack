@@ -1,0 +1,698 @@
+---
+title: Operate the Adapter
+description: Install the Registry Adapter binaries, grant the facade's runtime database role, run and recover an ingestion job, operate SFTP and RabbitMQ job sources, and resolve held job items.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+If you run the Registry Adapter for an institution, this page covers what you do after the
+configuration is reviewed: install the binaries, give the facade's database role its grants, and
+run an ingestion job through initialization, preview, bounded passes, upgrade, and held items.
+The Adapter has two runtime shapes.
+The facade (`adapter serve`) serves a declared API over an existing source.
+The ingestion job host (`adapter-job`) reads bounded source pages and delivers each reviewed
+projection to a Base Registry Engine (BReg) Action or to a Coordinator workflow.
+The job commands use the maintained KoboToolbox job example as the worked case.
+
+## Install
+
+The `adapter` runtime and the `adapterctl` author tool are published with each Registry Stack
+release for Linux amd64, Linux arm64, and macOS arm64.
+Download them from the [latest release](https://github.com/registrystack/registry-stack/releases/latest)
+and check them against the release `SHA256SUMS`.
+Linux assets are executables named `<binary>-<tag>-linux-<arch>`.
+macOS assets are `.tar.gz` bundles that carry the executable, its AWS-LC-FIPS libraries, and
+notices.
+There is no Adapter container image; build one from the repository if you need it.
+
+Authenticate the checksum bundle as `release/VERIFY.md` at the tag you install describes, then
+install the binaries with the release-pinned installer or as an `rstack` component:
+
+```sh
+bash adapter-<tag>-install.sh
+adapterctl --version
+
+rstack install adapter
+rstack adapter check --help
+```
+
+The installer puts the two binaries in `~/.local/bin`; set `ADAPTER_INSTALL_DIR` to change that.
+`rstack install adapter` installs the same two binaries into an `rstack` generation, and
+`rstack adapter` runs `adapterctl`.
+Neither path needs a Rust toolchain.
+
+{/* Evidence: release/scripts/test_additional_installers.py
+    test_adapter_installer_joins_the_numbered_release_from_v0_46_0;
+    crates/registry-adapter/install.sh ADAPTER_INSTALL_DIR;
+    crates/registry-rstack/src/cli.rs. */}
+
+`adapter-job`, the governed-ingestion job host, has no numbered-release asset or installer path.
+You build it from a reviewed source checkout (see [Build the job host](#build-the-job-host)).
+
+{/* Evidence: docs/site/src/data/cli-reference.yaml source_build_only_binaries. */}
+
+## Grant the runtime database role
+
+The facade journals every request and, when it serves a write, keeps idempotency state in
+PostgreSQL.
+Serving needs TLS to PostgreSQL, even on loopback: `database.testOnlyPlaintext` is refused outside
+test builds.
+Without a configured root, the system roots verify the server.
+When the certificate comes from a private CA, name that CA with
+`database.trustedRootCertificateRef`.
+
+{/* Evidence: crates/registry-adapter-engine/src/job_sources.rs test_only_plaintext;
+    crates/registry-adapter/src/serve.rs ServeError. */}
+
+`adapter serve` migrates through `database.migrationUrlRef` and serves through
+`database.runtimeUrlRef`.
+The migration role owns the tables.
+Give the runtime role only the grants its deployment uses.
+The Adapter refuses a runtime role at startup, naming each missing grant and table, before it
+listens.
+In the statements that follow, `adapter` stands for the schema on the runtime role's search path and
+`runtime` for that role:
+
+```sql
+-- Every deployment: append journal events, run audit.retentionDays, report readiness.
+GRANT USAGE ON SCHEMA adapter TO runtime;
+GRANT INSERT, SELECT, DELETE ON adapter_journal_events TO runtime;
+GRANT SELECT ON adapter_schema_migrations TO runtime;
+
+-- A deployment that serves any write: idempotent claims, response custody and the expiry sweep.
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON adapter_idempotency_entries, adapter_idempotency_resumes TO runtime;
+
+-- A deployment that declares asyncCompletion or a resumable write: the artifact fence.
+GRANT SELECT, INSERT, UPDATE ON adapter_idempotency_async_artifacts TO runtime;
+
+-- A deployment that declares a resumable write: its checkpointed identifiers.
+GRANT SELECT, INSERT ON adapter_idempotency_resume_bindings TO runtime;
+```
+
+The runtime role needs no grant on `adapter_idempotency_schema_migrations`; only the migration role
+reads it.
+
+{/* Evidence: crates/registry-adapter/src/serve.rs required, missing_table_privileges;
+    crates/registry-adapter/src/journal.rs RUNTIME_PRIVILEGES;
+    crates/registry-adapter/src/idempotent.rs WRITE_RUNTIME_GRANTS, RECOVERY_RUNTIME_GRANTS,
+    RESUME_RUNTIME_GRANTS;
+    crates/registry-adapter/tests/postgres_journal_retention_served.rs
+    a_write_runtime_role_without_idempotency_grants_is_refused_by_name,
+    a_resumable_write_runtime_role_needs_the_recovery_grants_and_serves_on_first_run. */}
+
+## Operate an ingestion job
+
+An ingestion job reads one bounded source page per pass and sends each reviewed projection to one
+chosen destination.
+The job store keeps item identity and progress, never source payloads.
+This section runs the maintained KoboToolbox job example as a controlled pilot.
+
+The maintained KoboToolbox pack has synthetic fixture coverage only, and no run record is published.
+Treat the pack, the Coordinator job, and the hook job as unverified until your own pilot repeats them.
+[Adapter job packs](../../configure/adapter-packs/) states the remaining limits.
+
+### Build the job host
+
+Build an independently runnable `adapter-job` binary from the reviewed Registry Stack source
+checkout.
+Build with exactly one destination feature for the chosen job, plus `job-hook` for the hook job:
+
+- `direct-breg` for `job.yaml` and `job-runtime.example.yaml`.
+- `signed-coordinator-event` for `job.coordinator.yaml` and `job-runtime.coordinator.example.yaml`.
+- `job-hook,direct-breg` for `job.hook.yaml` and `job-runtime.hook.example.yaml`; the hook job
+  needs `job-hook` beside its destination feature.
+
+A source needs its own feature as well: `job-file`, `job-postgres`, `job-sftp`, or
+`job-rabbitmq`.
+A default build delivers nowhere and reads from no local source.
+From the reviewed checkout root, build the selected features into a dedicated target directory:
+
+```sh
+CARGO_TARGET_DIR="<absolute-build-dir>" PATH="$HOME/.cargo/bin:$PATH" \
+  cargo build --locked --release \
+  -p registry-adapter-job \
+  --features "<direct-breg-or-signed-coordinator-event>"
+```
+
+Keep the workspace FIPS crypto configuration enabled.
+Install the binary with the exact runtime libraries that build produced.
+On macOS, follow the source checkout's `CONTRIBUTING.md` procedure for the exact AWS-LC FIPS dynamic
+library rather than copying a library selected by a path pattern.
+A successful Cargo build alone does not establish that the installed binary can find its runtime
+libraries.
+
+{/* Evidence: crates/registry-adapter-job/Cargo.toml direct-breg, signed-coordinator-event,
+    job-hook, job-file, job-postgres, job-sftp, job-rabbitmq;
+    crates/registry-adapter-job/tests/cli.rs check_compiles_the_maintained_job_examples_with_explicit_artifacts;
+    crates/registry-adapter/tests/adapter_job.rs the_default_build_refuses_a_file_job,
+    the_default_build_refuses_a_postgres_job. */}
+
+### Prepare the store, the source, and the destination
+
+Provision a dedicated PostgreSQL database, schema, and role outside `adapter-job`.
+The command does not create or drop a database, schema namespace, role, or grant.
+The role named by `store.runtimeUrlRef` must connect over verified TLS, create and alter the job
+tables, and perform the runtime reads and writes.
+The same reference serves the job and applies compatible migrations, so the role retains data
+definition authority.
+The job runtime does not implement separate migration and serving roles.
+
+Prepare the source and one destination:
+
+1. Confirm the KoboToolbox deployment matches the remaining limits that
+   [Adapter job packs](../../configure/adapter-packs/) states, including stable `_id`, changing `_uuid`,
+   sorted keyset reads, edit discovery, and form size.
+2. Bind `kobo-api` to the selected form's `/api/v2/assets/<asset-uid>/data` URL and give the job a
+   source account restricted to that form.
+   Bind that account's API token through the credential's `tokenRef` (`secret:env/KOBO_TOKEN` in the
+   examples), not its password, because a Kobo password also signs in to the web UI.
+3. For the direct job, configure the reviewed BReg Action, mapping, ingestion access profile, and
+   narrowly scoped BReg credential.
+   The `kobotoolbox-breg` example is the BReg project that matches the job's mapping and access
+   profile.
+4. For the Coordinator job, configure the reviewed event trigger and workflow, provision its signing
+   key, and keep the host clock within 30 seconds of Coordinator's.
+
+Choose one destination before the first pass.
+Do not run both jobs against one form, and do not fall back from a refusal to the other destination.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
+    init_store_bootstraps_only_the_store_from_the_runtime_reference;
+    crates/registry-adapter-job/tests/signed_coordinator_event_postgres.rs
+    coordinator_item_and_deployment_failures_never_fall_back;
+    products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml. */}
+
+{/* TODO[evidence]: the 30 second clock tolerance against Coordinator has no named test or constant
+    in the Adapter crates; the Coordinator signature window owns it. */}
+
+### Prepare the runtime files
+
+Copy the [`kobotoolbox-job` example](https://github.com/registrystack/registry-stack/tree/main/products/adapter/examples/kobotoolbox-job)
+into the deployment's configuration workspace.
+Select one pair and use the same pair in every command:
+
+- Direct BReg Proposal: `job.yaml` and `job-runtime.example.yaml`.
+- Coordinator workflow: `job.coordinator.yaml` and `job-runtime.coordinator.example.yaml`.
+
+Replace the synthetic origins, identifiers, scopes, and mappings with reviewed deployment values.
+The reusable pack stays outside the example directory, in the `kobotoolbox` pack of the reviewed
+checkout.
+Pass the example's `profile.yaml` and `project.yaml` explicitly because the binary otherwise looks
+beside the pack.
+
+Keep credentials and database URLs outside every YAML file.
+The runtime accepts environment secret references such as `secret:env/ADAPTER_JOB_DB`; inject the
+referenced values through the service manager or the deployment's secret facility.
+Do not paste secret values into commands, shell history, checked files, logs, or review records.
+
+The commands that follow use these placeholders:
+
+- `<job-file>` is the selected absolute job path.
+- `<runtime-file>` is its matching absolute runtime path.
+- `<example-dir>` is the absolute deployment copy of the example.
+- `<source-checkout>` is the reviewed Registry Stack checkout used for the build.
+
+{/* Evidence: crates/registry-adapter-job/tests/cli.rs pass_and_rescan_accept_explicit_workspace_artifacts. */}
+
+### Initialize the store
+
+Initialize the existing PostgreSQL database before a preview or an observational command:
+
+```sh
+adapter-job init-store --runtime "<runtime-file>"
+```
+
+`init-store` requires only `--runtime`; it needs no job, pack, profile, or project.
+CLI-wide flags remain accepted, but initialization output stays value-free.
+The command parses the complete runtime document, resolves only the store connection and the
+optional store trust reference, and applies the embedded schema versions `100` through the highest
+this release supports, under the migration lock.
+Run `status` before `init-store` to see which version applies.
+The command is idempotent and creates no job-state or item row.
+It does not resolve source or destination credentials and causes no source or destination effect.
+
+If the store is missing or behind, `status`, `inspect`, and `pass --dry-run` refuse and name
+`init-store`; they never migrate the store themselves.
+If `init-store` cannot connect or migrate, correct the PostgreSQL authority, the TLS trust, or the
+referenced secret, then rerun the same command.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
+    init_store_bootstraps_only_the_store_from_the_runtime_reference,
+    init_store_repeats_unchanged_and_advances_a_supported_schema,
+    init_store_refuses_a_future_schema_without_mutation,
+    status_and_inspect_name_init_store_without_bootstrapping,
+    a_dry_run_refuses_an_unmigrated_store_without_migrating_it;
+    crates/registry-adapter-job/src/cli.rs init_store_refuses_job_and_delivery_arguments. */}
+
+### Check the job
+
+Compile the exact deployment artifacts and preflight the source credential:
+
+```sh
+adapter-job check "<job-file>" \
+  --pack "<source-checkout>/products/adapter/packs/kobotoolbox/pack.yaml" \
+  --runtime "<runtime-file>" \
+  --profile "<example-dir>/profile.yaml" \
+  --project "<example-dir>/project.yaml"
+```
+
+`check` does not contact KoboToolbox or activate the destination credential.
+A successful check establishes that the files compile together, not that the source or the
+destination is reachable.
+
+Read the fresh store before any pass:
+
+```sh
+adapter-job status "<job-file>" --runtime "<runtime-file>"
+```
+
+A fresh initialized store reports zero item counts and is not overdue.
+The read creates no job row.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
+    initialized_fresh_store_supports_status_inspect_and_dry_run_without_writes,
+    status_reads_without_writing_the_state_row. */}
+
+### Preview one source page
+
+Run one preview against the actual KoboToolbox source:
+
+```sh
+adapter-job pass "<job-file>" \
+  --pack "<source-checkout>/products/adapter/packs/kobotoolbox/pack.yaml" \
+  --runtime "<runtime-file>" \
+  --profile "<example-dir>/profile.yaml" \
+  --project "<example-dir>/project.yaml" \
+  --dry-run
+```
+
+The preview reads one bounded source page, delivers nothing, and writes no lease, item, position, or
+schedule state.
+Output omits projected values by default.
+Do not add `--show-values` to an operational run unless the projected personal data has an approved
+destination and handling procedure.
+
+The preview is not a source snapshot.
+Run the first real pass promptly after you review the preview, and account for source edits between
+the two reads.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
+    the_dry_run_writes_nothing_and_reports_the_hand_offs, assert_value_free_output. */}
+
+### Run a bounded pass
+
+Run one bounded operational pass by removing `--dry-run`:
+
+```sh
+adapter-job pass "<job-file>" \
+  --pack "<source-checkout>/products/adapter/packs/kobotoolbox/pack.yaml" \
+  --runtime "<runtime-file>" \
+  --profile "<example-dir>/profile.yaml" \
+  --project "<example-dir>/project.yaml"
+```
+
+One bounded pass is the default; there is no `--once` flag.
+The pass reads at most one page, records item outcomes, and moves the source position only after the
+page settles under the job's acceptance and refusal policy.
+A stopped pass exits unsuccessfully and leaves the position unchanged.
+
+After each pilot pass, inspect the aggregate state:
+
+```sh
+adapter-job status "<job-file>" --runtime "<runtime-file>"
+```
+
+Inspect a specific item when status reports a refusal or a hold:
+
+```sh
+adapter-job inspect "<job-file>" --runtime "<runtime-file>" --key "<item-key>"
+```
+
+`status` and `inspect` are observational.
+They do not retry, release, accept, acknowledge, or migrate anything.
+Resolve a BReg outcome in BReg, or a Coordinator Run and its linked review in their owning
+products.
+The Adapter row remains held, and an unchanged held item remains skipped.
+
+The reports contain no source payload by default, but item identifiers and destination references
+remain operational data.
+Protect the reports, and do not put item keys into shared logs or tickets.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
+    a_pass_hands_off_new_items_and_the_next_pass_skips_them,
+    a_refusal_run_stops_the_pass_with_the_position_unchanged,
+    a_held_item_settles_and_stays_held_until_the_source_changes,
+    inspect_explains_direct_and_coordinator_holds_without_item_values;
+    crates/registry-adapter-job/tests/cli.rs dry_run_loop_is_rejected_before_opening_the_store. */}
+
+### Rescan or run on the interval
+
+KoboToolbox edits can remain behind the saved keyset position, so the maintained route declares a
+periodic rescan.
+To request one rescan from the first page, run:
+
+```sh
+adapter-job rescan "<job-file>" \
+  --pack "<source-checkout>/products/adapter/packs/kobotoolbox/pack.yaml" \
+  --runtime "<runtime-file>" \
+  --profile "<example-dir>/profile.yaml" \
+  --project "<example-dir>/project.yaml"
+```
+
+An ordinary rescan writes the due marker and runs one pass.
+Unchanged items skip by digest, refused items retry, and held items remain held while unchanged.
+
+For a long-running process driven by the job's interval trigger, run:
+
+```sh
+adapter-job pass "<job-file>" \
+  --pack "<source-checkout>/products/adapter/packs/kobotoolbox/pack.yaml" \
+  --runtime "<runtime-file>" \
+  --profile "<example-dir>/profile.yaml" \
+  --project "<example-dir>/project.yaml" \
+  --loop
+```
+
+Use either one scheduler that invokes bounded passes or one `--loop` process for a job, not both.
+`SIGTERM` (what `systemctl stop`, `docker stop`, and Kubernetes send) and `Ctrl+C` stop the loop
+the same way.
+A loop that is waiting exits at once with status 0.
+A pass already in progress finishes first (it ends at its page deadline at the latest), releases its
+lease, and then the process exits with status 0.
+Give the supervisor a stop timeout longer than the job's `pageDeadlineMilliseconds`: a process
+killed earlier leaves its lease to expire before a restart can pass.
+
+A loop whose job store stops answering (a PostgreSQL restart or failover) does not exit.
+It prints `adapter.job.store-unreachable cause=<token>` on stderr, where the token is a SQLSTATE
+such as `sqlstate-57P01` or a condition such as `connection-closed`, and reads the store again after
+one delay.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
+    a_rescan_retries_the_refused_item_and_skips_the_unchanged_ones,
+    actual_cli_interval_loop_stops_cleanly_on_sigterm_while_waiting,
+    actual_cli_interval_loop_finishes_the_running_pass_on_sigterm,
+    actual_cli_interval_loop_survives_a_store_that_stops_answering;
+    crates/registry-adapter-job/src/main.rs store_unreachable_line. */}
+
+### Upgrade and recover
+
+Stop the scheduled or looping job before you change its binary or configuration.
+
+Before upgrading a store older than schema 103, drain first.
+Run passes with the current binary until `adapter-job status` lists no pending items, and take a
+database backup.
+A signed delivery left pending from before schema 103 has no recorded receiver or body identity, so
+the new binary stops it as `adapter.job.coordinator-identity-unrecorded` before any recipient call.
+The recovery is to restore that backup, settle the item with the previous binary, and upgrade again.
+Run the new binary's `init-store` once before you restart passes.
+Compatible embedded transitions serialize under the migration lock and can be repeated safely.
+An older binary refuses a store whose schema is newer than that binary supports.
+
+Pre-1.0 formats can change without a compatible transition.
+If a source build cannot migrate an older store, retain the existing database and its backups,
+provision a separate fresh database, and make an explicit migration or fresh-install decision.
+Do not drop, truncate, or reset the retained store as a recovery step.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs
+    migration_keeps_a_legacy_pending_receiver_identity_unknown,
+    init_store_refuses_a_future_schema_without_mutation;
+    crates/registry-adapter-job/src/pass.rs. */}
+
+Settle pending items before you change `job.version` or the projection.
+A pending signed event keeps the body it was first attempted with, so a pass that would now build a
+different body stops as `adapter.job.coordinator-body-changed` before any recipient call, because a
+new body could start a second Run.
+`adapter-job status` lists the pending keys.
+Restore the previous job definition, let passes settle those items, then ship the change.
+A changed receiver stops as `adapter.job.coordinator-receiver-changed` instead; restoring the
+original receiver recovers it.
+
+A direct BReg job fences the same way, and the recoveries are the same:
+
+- `adapter.job.breg-body-changed`: the mapped operation differs.
+- `adapter.job.breg-receiver-changed`: another BReg binding, base URL, token endpoint, caller, TLS
+  trust profile, access profile, Action, or mode.
+- `adapter.job.breg-identity-unrecorded`: the item was staged before schema 103.
+
+{/* Evidence: crates/registry-adapter-job/tests/signed_coordinator_event_postgres.rs
+    pending_job_version_drift_stops_before_wire_and_restore_recovers;
+    crates/registry-adapter-job/tests/postgres_job.rs
+    a_pending_delivery_stops_on_receiver_drift_and_recovers_on_equality,
+    a_pending_breg_delivery_stops_on_receiver_drift_under_a_breg_code,
+    receiver_identity_and_event_metadata_freeze_per_sequence. */}
+
+A pass that stops as `adapter.job.identity-migration-required` found stored items that predate the
+job's item-identity binding (store schema 103).
+Confirm the job definition is the one you intend to run, stop any running pass or loop, then run
+`adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>` once.
+The command binds the current identity and keeps the stored items.
+It prints a JSON receipt on stdout and an `adapter.job.identity-rebound` audit line on stderr.
+The next pass reads the current identity's items as new, so source rows can be delivered again.
+To keep the old identity instead, restore the previous job definition.
+`pass --dry-run` shows the same stop before it reads a page.
+
+The job store keeps no audit row for the rebind.
+The audit line and the receipt are the only record, so send both to your log pipeline and retain
+them as you would any other operator change record.
+
+{/* Evidence: crates/registry-adapter-job/tests/job_file_host.rs
+    legacy_file_and_raw_state_stop_before_source_or_destination_io,
+    rebind_identity_clears_the_fence_the_dry_run_reports;
+    crates/registry-adapter-job/src/main.rs rebind_identity;
+    crates/registry-adapter-job/src/cli.rs
+    rebind_identity_takes_the_job_pack_and_runtime_and_no_delivery_options. */}
+
+A new process reloads secret material behind the same environment reference.
+Restoring trusted material behind the same reference is corrected-material recovery: a later pass
+retains the pending item's identity.
+This mechanism does not establish valid-to-valid issuer key rotation, overlap, old-key revocation, or
+provider token lifetime behavior.
+Plan those rotations with the source or destination provider, and verify them in the controlled
+pilot before you retire the predecessor credential.
+
+{/* Evidence: crates/registry-adapter-job/tests/direct_breg_native.rs
+    configured_cli_child_crash_reloads_credential_reference_and_recovers_the_same_proposal. */}
+
+## Rotate a source credential
+
+Each source reads its credential through a secret reference, and the sources pick up a rotated secret
+differently:
+
+| Source | When the reference resolves | After a rotation |
+| --- | --- | --- |
+| File | No credential | Nothing to rotate |
+| SFTP | On every read | The next read uses the new secret |
+| PostgreSQL | Once, when the job host activates the source, into the source's pool | Restart the job host; the pool keeps signing in with the old password until then |
+| RabbitMQ | Once, when the job host activates the source | Restart the job host; reconnects reuse the activation-time secret |
+
+Rotate by publishing the new secret, then restart the job host for a PostgreSQL or RabbitMQ source.
+A rerun after a restart is safe, because the cursor and the item store carry the progress.
+
+{/* Evidence: crates/registry-adapter-job/src/sftp_source.rs authenticate;
+    crates/registry-adapter-job/src/rabbitmq_source.rs build_source;
+    crates/registry-adapter-job/src/postgres_source.rs. */}
+
+{/* TODO[evidence]: no test pins the PostgreSQL source's resolve-once-into-pool behavior or the
+    RabbitMQ reconnect reuse; the rows rest on the source construction code. */}
+
+## Operate an SFTP job source
+
+The `job-sftp` feature of the job host is read-only.
+Give it a dedicated source account whose server-side authorization confines that account to the
+configured `baseDirectory`, using a chroot or an equivalent SFTP-server policy.
+SFTP v3 has no portable atomic `open-beneath` or no-follow operation: client symlink and
+canonical-path checks are defense in depth, not the confinement boundary.
+
+Choose exactly one completed-file protocol:
+
+- `completed-name` means the producer writes under another name, closes it, then atomically renames
+  the complete bytes into the final candidate name.
+- `done-file` means the producer removes any stale marker before it replaces a same-name file,
+  writes under another name, closes it, atomically renames the complete bytes into place, then
+  publishes the marker last.
+  This read-only consumer never removes markers.
+  Leaving an old marker while overwriting in place is an unsupported producer protocol, and size,
+  timestamp, or marker rechecks cannot make it safe.
+
+Pin one complete OpenSSH Ed25519 or P-256 public key, and use only secret references for the
+password or private key.
+The [`sftp-source` example](https://github.com/registrystack/registry-stack/tree/main/products/adapter/examples/sftp-source)
+shows the runtime shape and the producer lifecycle.
+[Ingestion job sources](../../configure/adapter-ingestion-jobs/#sftp-job-source) lists the connection
+settings and the refusal codes.
+
+Each page downloads the whole file, up to `maximumFileBytes`, within the `pollEnrich` step's
+`timeoutMilliseconds`.
+Size that timeout to at least the file size divided by the link bandwidth, and keep the number of
+pages per file low (a larger `maximumRowsPerPage` means fewer pages).
+Otherwise the pass stops with `adapter.job.read-timeout`, and the next pass starts the same page
+again.
+
+{/* Evidence: crates/registry-adapter-job/tests/sftp_cli_host.rs
+    actual_cli_pass_recovers_cursor_and_same_name_replacement;
+    crates/registry-adapter-job/src/sftp_source.rs ACCEPTED_KEX;
+    crates/registry-adapter-engine/src/job_sources.rs producer_atomic_handover,
+    pinned_host_key. */}
+
+## Operate a RabbitMQ job source
+
+The `job-rabbitmq` feature of the job host reads one message at a time with the explicit
+`rabbitmq-json` profile and manual source-owned settlement.
+Production builds require AMQPS with system roots or an operator-captured private CA.
+Plain AMQP exists only behind the named loopback fixture feature and is not a production runtime
+option.
+
+Publish immutable events with a unique, stable AMQP `message-id`.
+The job key combines the configured namespace with that identity.
+Its stored digest domain-separates the raw-message revision from the declared projection digest, so
+neither a changed body nor a reviewed normalization change can silently skip.
+Reuse of one identity for changed event bytes or projection is retained as
+`adapter.job.rabbitmq-event-changed` and held for an operator; the job neither delivers nor
+acknowledges it automatically.
+
+Publishers must also set `delivery_mode=2` and wait for publisher confirms.
+The host rejects a delivery without mode 2 to the configured dead-letter queue (DLQ) under
+`adapter.job.rabbitmq-delivery-mode`; it cannot tell whether the producer received a publisher
+confirm.
+The dedicated source principal needs only the resource-scoped configure, write, and read patterns in
+the maintained example, not a broker administrative tag.
+
+An acknowledged destination outcome is written to PostgreSQL before the broker delivery is
+acknowledged.
+An item-scoped refusal is written before the delivery is rejected without requeue, so the configured
+durable dead-letter exchange (DLX) and DLQ receive it.
+Pending, stopped, crashed, and held deliveries remain unsettled and requeue when their channel
+closes.
+A held message can therefore remain at the head of a queue and delay later messages; use operational
+queue partitioning where head blocking is unacceptable.
+The job stores identity, digest, state, and destination references only, never message payloads or
+broker credentials.
+Settlement uses the poll operation's finite deadline.
+A timeout is uncertain, keeps the source position safe, and reconnects on a later bounded read.
+The host does not leave the AMQP client's detached automatic-recovery loop running.
+
+This source uses AMQP `basic.get`, which broker prefetch does not govern.
+`maximumOutstandingDeliveries` is a local semaphore bound over unsettled deliveries.
+The AMQP client has already assembled a body before the job can apply its retained-message ceiling,
+so every authenticated institutional broker must set RabbitMQ's hard `max_message_size` no higher
+than the deployment ceiling.
+The client does not attest that broker setting.
+A queue `--dry-run` refuses before broker acquisition, because AMQP 0-9-1 has no side-effect-free
+peek and even requeueing can consume a delivery attempt.
+
+The [`rabbitmq-source` example](https://github.com/registrystack/registry-stack/tree/main/products/adapter/examples/rabbitmq-source)
+shows the authored endpoint, the strict decoder, the runtime TLS and dead-letter bindings, and the
+broker-side requirement.
+
+{/* Evidence: crates/registry-adapter-job/tests/rabbitmq_pass.rs
+    durable_acknowledgement_settles_and_redelivery_skips_the_destination,
+    refusal_is_durable_before_source_rejection_and_held_never_settles,
+    uncertain_acknowledgement_keeps_position_safe_and_recovers_without_duplicate_effect,
+    changed_raw_body_under_one_message_identity_is_held_without_another_effect,
+    reviewed_normalization_change_under_one_raw_revision_is_not_skipped,
+    queue_dry_run_refuses_before_broker_acquisition;
+    crates/registry-adapter-job/tests/rabbitmq_source.rs
+    least_privileged_principal_can_verify_topology_read_and_dead_letter,
+    private_ca_amqps_succeeds_and_wrong_trust_refuses_before_credentials;
+    crates/registry-adapter-engine/src/job.rs. */}
+
+## Resolve held job items
+
+`adapter-job status` reports aggregate `holdGuidance` by code.
+Use `adapter-job inspect` for the item-level `hold`, including the stored `destinationReference`
+when one exists, the `actionOwner`, and the static `nextAction`.
+These reports are observational: the Adapter has no generic unhold, retry, accept, or acknowledge
+mutation.
+A held row remains held, and ordinary passes and rescans skip an unchanged held item.
+Resolve a BReg outcome in BReg, or a Coordinator Run and its linked review in their owning products.
+
+A refusal the destination answered is stored as `adapter.job.breg.<word>` or
+`adapter.job.coordinator.<word>`, where `<word>` is the destination's own refusal word.
+The prefix says which product to ask; the word is the one that product's documentation uses.
+
+{/* Evidence: crates/registry-adapter-job/src/main.rs hold_guidance;
+    crates/registry-adapter-job/tests/postgres_job.rs
+    status_explains_aggregate_holds_without_promising_release,
+    inspect_explains_direct_and_coordinator_holds_without_item_values. */}
+
+For `adapter.job.rabbitmq-event-changed`, first establish any possible destination outcome.
+The broker operator then resolves the old unsettled delivery under approved broker policy.
+Only after that does the source operator correct immutable-identity and version handling for
+legitimate later messages.
+Publishing a new message ID does not clear the old held row or acknowledge its delivery, and that
+delivery can continue to block the queue head.
+
+{/* Evidence: crates/registry-adapter-job/src/main.rs hold_guidance;
+    crates/registry-adapter-job/tests/rabbitmq_pass.rs
+    changed_raw_body_under_one_message_identity_is_held_without_another_effect. */}
+
+### A flat member named like a dotted field
+
+A pass that stops as `adapter.job.projection-flat-dotted-name` read a row whose flat member is named
+like a dotted `projection.fields` entry, such as a CSV column headed `household.size`.
+A dotted field reads a nested object, so the projection would hand the destination a `null`.
+The pass stops before it stages the page instead, and nothing on that page is delivered.
+Group the columns into a nested object in the route (a `setBody` that builds
+`{"household": {"size": ...}}`), or read a source that delivers the nested object, then run the job
+again.
+
+{/* Evidence: crates/registry-adapter-job/tests/job_file_host.rs
+    a_flat_dotted_column_stops_the_pass_before_delivery. */}
+
+### Stored items that predate the identity binding
+
+A pass that stops as `adapter.job.identity-migration-required` found stored file or SFTP items that
+predate the job's item-identity binding (store schema 103), including a legacy raw decoder whose
+authored semantics did not change.
+This is a stop, not a held item, and HTTP and PostgreSQL jobs do not receive it.
+Confirm the job definition is the one you intend to run, stop any running pass or loop, then run
+`adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>` once.
+It records the job's current identity and keeps the stored items and the cursor, so the next pass
+reads source rows as new and can deliver them again.
+The host never infers identity from stored keys, rewrites rows, or resets the cursor automatically.
+To keep the old identity instead, restore the previous job definition.
+[Upgrade and recover](#upgrade-and-recover) describes the receipt and the audit line.
+
+{/* Evidence: crates/registry-adapter-job/tests/job_file_host.rs
+    legacy_file_and_raw_state_stop_before_source_or_destination_io,
+    rebind_identity_clears_the_fence_the_dry_run_reports;
+    crates/registry-adapter-job/tests/postgres_job.rs
+    file_item_identity_adopts_only_empty_state_and_fences_every_transition. */}
+
+### A page larger than its byte bound
+
+A pass that stops with `adapter.job.page-bytes-bound` built a page larger than
+`profile.maximumPageBytes`.
+The cursor does not move, so every later pass stops at the same place until you change the profile.
+Lower `profile.read.maximumRowsPerPage` (or the file source's `maxMessagesPerPoll`) so a page fits,
+or raise `profile.maximumPageBytes`, which cannot exceed `profile.maximumResponseBytes`.
+Then run the job again.
+
+The job checks `profile.maximumPageBytes` after it builds a page, not while it builds one.
+A file or PostgreSQL source reads up to `maximumRowsPerPage` rows before the check runs, so a page
+can be larger than the bound in memory before the pass stops.
+The real memory ceiling is therefore `maximumRowsPerPage * maximumRowBytes`: size those two members,
+not only `maximumPageBytes`, to the memory you can spare.
+The stop report prints the same fix as its `next` step.
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs;
+    crates/registry-adapter-job/src/main.rs. */}
+
+{/* TODO[evidence]: no test names adapter.job.page-bytes-bound or the maximumRowsPerPage times
+    maximumRowBytes memory ceiling; only the code that raises the stop is cited. */}
+
+## Next
+
+- [ingestion job sources](../../configure/adapter-ingestion-jobs/)
+- [adapter job packs](../../configure/adapter-packs/)
+- [govstack consultation and write](../../configure/adapter-consultation/)
+- [adapter effective operation contract](../../reference/adapter-effective-contract/)

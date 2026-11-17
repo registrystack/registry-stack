@@ -118,8 +118,7 @@ Minimum-count suppression and deterministic rounding can reveal suppressed value
 [Publish statistics](../../configure/breg-statistics/#review-what-a-release-discloses) describes these residual risks and the separation between live, publisher, and released-reader profiles.
 
 {/* Evidence: crates/registry-breg/tests/statistics.rs;
-    crates/registry-breg/src/compiler/statistics.rs;
-    products/breg/STATISTICS.md. */}
+    crates/registry-breg/src/compiler/statistics.rs. */}
 
 ## Registry Evidence limits
 
@@ -146,8 +145,7 @@ a signed assertion proves what the configured service asserted rather than the s
   derivation compares the disclosed claims with the one expected record, so another person's
   credential yields a mismatch, not a match.
   {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, subject_link,
-       AttributeMatchWithoutClaims; products/evidence/CONCEPT.md, 15.10 Linking a credential to
-       the subject. */}
+       AttributeMatchWithoutClaims. */}
 - The relying party that calls Registry Evidence states the session reference and the presenting
   principal. Evidence refuses a principal that did not create the session, but it cannot tell which
   relying party a session was meant for. Run one relying party per Evidence deployment that serves

@@ -134,8 +134,11 @@ export const PRODUCTS = [
     id: 'adapter',
     title: 'Registry Adapter',
     docsetProduct: 'registry-adapter',
-    checkPage: 'reference/cli/adapterctl',
-    references: [],
+    checkPage: 'configure/adapter',
+    references: [
+      { label: 'Configure an Adapter project', page: 'configure/adapter' },
+      { label: 'Operate the Adapter', page: 'operate/adapter' },
+    ],
   },
   {
     id: 'platform',

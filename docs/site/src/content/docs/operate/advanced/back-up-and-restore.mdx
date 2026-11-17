@@ -34,8 +34,8 @@ up these alongside every database backup, on the same schedule:
   pg_dump --format=custom --file=/srv/backup/registry-before-build-2.dump registry
   ```
 
-  When the package declares an indexed external projection, exclude the data of its four
-  projection tables. The backup then holds no source values, bindings, or refresh receipts. Keep
+  When the package declares an indexed external projection, exclude the data of its seven
+  projection and managed-refresh tables. The backup then holds no source values, bindings, or refresh receipts. Keep
   the tables themselves: use `--exclude-table-data`, never `--exclude-table`.
 
   ```sh
@@ -44,13 +44,16 @@ up these alongside every database backup, on the same schedule:
     --exclude-table-data=registry_internal.registry_external_projection_refreshes \
     --exclude-table-data=registry_internal.registry_external_projection_snapshots \
     --exclude-table-data=registry_internal.registry_external_projection_values \
+    --exclude-table-data=registry_internal.registry_external_refresh_plans \
+    --exclude-table-data=registry_internal.registry_external_refresh_work \
+    --exclude-table-data=registry_internal.registry_external_refresh_receipts \
     --file=/srv/backup/registry-before-build-2.dump registry
   ```
 
   A restore then starts with an empty projection cache, as a fresh install does. Authorized refresh
   rebuilds it under the current binding and source grant; nothing is restored from the backup. See
-  [Logical backups](https://github.com/registrystack/registry-stack/blob/main/products/breg/external-projection-storage.md#logical-backups)
-  in the external projection storage guide.
+  [Back up logically](../../../configure/breg-external-projections/#back-up-logically)
+  in the external projections guide.
 
 - The package directory, the runtime file, and the secret files it
   references. A restore needs the package the backup was taken under.
@@ -62,8 +65,9 @@ up these alongside every database backup, on the same schedule:
 - The attachment bucket, when `attachmentStorage` binds an S3-compatible backend. The database
   holds references; the bucket holds the bytes, so back it up at the same point.
 
-{/* Evidence: products/breg/external-projection-storage.md, Logical backups and Restore;
-    crates/registry-breg/src/postgres/external_projection.rs, INSTALL_SQL. */}
+{/* Evidence: crates/registry-breg/src/postgres/external_projection.rs, INSTALL_SQL;
+    crates/registry-breg/src/postgres/external_refresh_queue.rs, registry_external_refresh_plans,
+    registry_external_refresh_work and registry_external_refresh_receipts. */}
 
 ### Registry Casework state
 
@@ -106,7 +110,7 @@ with swept copies through the remaining payload and receipt periods.
     crates/registry-messaging/src/runtime.rs, message_reader();
     crates/registry-messaging/src/audit.rs, principal_pseudonym() and recipient_reference();
     crates/registry-messaging/src/retention.rs, erase_expired();
-    products/messaging/RUNTIME-CONFIG.md, Secrets and providers. */}
+    crates/registry-messaging/src/config.rs. */}
 
 ### Audit files
 
@@ -221,9 +225,10 @@ supersedes every open import authority in one transaction, and the audit entry r
     detected), check(), adopt_in(); crates/registry-breg/src/startup.rs, verify_instance_claim()
     and the InstanceClaimMismatch message; crates/registry-bregctl/src/doctor.rs,
     startup.instance-claim.mismatch; crates/registry-bregctl/src/lib.rs, InstanceClaimCommand and
-    InstanceClaimAdoptArgs; products/breg/SECURITY-MODEL.md, BREG-RES-01 "Physical copies are not
-    detected (Instance claim)" (a physical
-    restore serves without the adopt that supersedes reopened authorities, an accepted residual). */}
+    InstanceClaimAdoptArgs; crates/registry-breg/tests/postgres_startup.rs,
+    a_restored_copy_refuses_to_serve_until_adopted; docs/site/src/content/docs/security/breg.mdx,
+    BREG-RES-01 (a physical restore serves without the adopt that supersedes reopened authorities,
+    an accepted residual). */}
 
 ### Repeat what the backup undid
 
@@ -436,7 +441,7 @@ or production systems. Test credentials alone do not prevent delivery to a real 
 7. Record the backup time, the restore time, the measured recovery time, and every step that
    failed, and destroy the drill hosts and their copies of the secrets.
 
-{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys and Providers;
+{/* Evidence: crates/registry-messaging/src/config.rs;
     release/notes/config-conventions/messaging.md, "BREAKING: the runtime file's keys and
     apiVersion are renamed" (a package the previous release built is refused, apply to a new
     database);

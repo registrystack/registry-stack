@@ -36,8 +36,8 @@ to an exact client keyed in `authentication.policies`, with a lifetime of at mos
 are read from `registry_scopes` unless the deployment sets `scopeClaim`. A missing, malformed, or
 unverified token answers `401 authentication.refused` with `WWW-Authenticate: Bearer`.
 
-{/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scopeClaim;
-    products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+{/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scopeClaim and
+    with_max_token_lifetime. */}
 
 Each exact verified client identity resolves its keyed caller policy, which lists the token subjects
 it admits, the scopes it requires and the actions it allows. The token's exact `sub` must be one of
@@ -59,9 +59,10 @@ authorized them for the person the run concerns. A caller allowed to start
 a run gains no authority over the products its workflow calls: each call uses the identity the operator
 configured for that connection, and the receiving product decides it.
 
-{/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment;
-    products/coordinator/README.md, Package and deploy;
-    products/coordinator/PRODUCT-CONTRACT.md, Execution and authority. */}
+{/* Evidence: crates/registry-coordinator/src/access.rs, ClientPolicy, subjects and
+    deployment_wide_actions_need_an_operator_policy_listing_the_action_and_no_workflow;
+    crates/registry-coordinator/src/deployment.rs;
+    products/coordinator/README.md, Package and deploy. */}
 
 ## Discover a workflow
 
@@ -91,7 +92,6 @@ whether a start was admitted resends it under its original key.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs, start-key-invalid;
     products/coordinator/generated/openapi/coordinator.openapi.json;
-    products/coordinator/DEPLOYMENT.md, Admit and inspect work;
     products/coordinator/README.md, Package and deploy. */}
 
 A start is refused before admission when:
@@ -202,8 +202,7 @@ authority and the original deadline. Without that edge, or after the wait advanc
 cancellation stops future calls where possible. It never reverses a product effect already accepted.
 
 {/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, Reason, Retention,
-    AdmissionRelease, ExecutionRecovery; products/coordinator/DEPLOYMENT.md, Admit and inspect
-    work and Backup and restore. */}
+    AdmissionRelease, ExecutionRecovery; crates/registry-coordinator/src/store/recovery.rs. */}
 
 These routes authenticate and authorize before they report a malformed body. A body is
 `application/json` or another application media type ending in `+json`; any other media type
@@ -213,7 +212,7 @@ reason answers `400 request.reason-invalid`, and an out-of-bounds cutoff or limi
 `400 request.retention-invalid`. State and recovery conflicts answer `409`.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs, DefaultBodyLimit;
-    products/coordinator/DEPLOYMENT.md, Admit and inspect work. */}
+    crates/registry-coordinator/src/store/recovery.rs, reason-invalid and retention-invalid. */}
 
 ## Review completions
 
@@ -237,7 +236,7 @@ reads the result itself through the connection's producer credential. An event s
 {/* Evidence: crates/registry-coordinator/src/completion.rs, receive_review_completion,
     MAXIMUM_BODY_BYTES; crates/registry-coordinator/src/review.rs, CompletionSender::matches
     (registry_platform_crypto::mac::constant_time_eq); products/coordinator/generated/openapi/coordinator.openapi.json,
-    ReviewCompletion; products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+    ReviewCompletion. */}
 
 ## Problem documents and codes
 
@@ -281,7 +280,8 @@ which this catalogue does not hold.
 `GET /metrics` is not part of this surface. When the deployment configures a metrics listener, the
 metrics are served on that separate socket only, and the service listener has no metrics route.
 
-{/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
+{/* Evidence: crates/registry-coordinator/src/deployment.rs, metrics_listener;
+    crates/registry-coordinator/src/metrics.rs. */}
 
 `coordinatorctl openapi` prints the OpenAPI document offline.
 

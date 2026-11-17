@@ -137,6 +137,7 @@ MESSAGING_TUTORIALS=(
 # unexplained.
 EXCLUDED_MESSAGING_TUTORIALS=(
 	configure/api-connections # requires an operator-provisioned remote connection
+	configure/coordinator     # exports templates from a Messaging project the reader already has
 )
 
 in_list() {

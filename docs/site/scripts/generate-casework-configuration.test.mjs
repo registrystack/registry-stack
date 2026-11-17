@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdir } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
 import { buildCaseworkConfiguration, CONTRACTS } from './generate-casework-configuration.mjs';
@@ -40,6 +40,12 @@ test('Casework runtime reference carries the keys an operator sets', async () =>
   }
 });
 
+test('Casework runtime reference names the page that renders it', async () => {
+  const runtime = CONTRACTS.find((contract) => contract.id === 'runtime');
+  assert.equal(runtime.reference, 'docs/site/src/content/docs/reference/casework-configuration.mdx');
+  const page = await readFile(new URL(`../../../${runtime.reference}`, import.meta.url), 'utf8');
+  assert.match(page, /contract\.id === 'runtime'/u);
+});
 
 test('Casework run-source reference carries explicit producer and identity bindings', async () => {
   const document = await buildCaseworkConfiguration();

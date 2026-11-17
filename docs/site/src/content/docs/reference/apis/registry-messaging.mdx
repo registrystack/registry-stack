@@ -34,7 +34,7 @@ callback verifier authenticates them instead.
 
 {/* Evidence: crates/registry-messaging/src/config.rs, MESSAGING_ACCESS_TOKEN_TYPE;
     crates/registry-messaging/src/auth.rs, authenticate();
-    products/messaging/RUNTIME-CONFIG.md, Keys. */}
+    crates/registry-messaging/src/config.rs, default_scope_claim. */}
 
 `POST /v1/messages` requires an `Idempotency-Key` header of 1 to 128 visible ASCII characters,
 scoped to the verified issuer and principal. The access profile's `principalClaim` selects that
@@ -62,8 +62,7 @@ guess your issuer, principal, and key can confirm that you used it.
     an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again;
     crates/registry-messaging/tests/postgres_retention.rs,
     a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent and
-    a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds;
-    products/messaging/RUNTIME-CONFIG.md, Keys. */}
+    a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds. */}
 
 A repeated key is authorized and rendered again under the active package before the key is looked
 up, so a key never outlives the caller's authority. An exact retry can therefore be refused, for
@@ -161,7 +160,7 @@ retry-after: 1
 {"type":"https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded","title":"Request rate exceeded","status":429,"detail":"The request rate accepted from this caller is exceeded. Try again after the time in Retry-After.","code":"rate-limit.exceeded","traceId":"…"}
 ```
 
-{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package; crates/registry-messaging/src/limits.rs,
+{/* Evidence: crates/registry-messaging/src/config.rs, RuntimePackageConfig; crates/registry-messaging/src/limits.rs,
     CallerLimits and LimitRefusal; crates/registry-messaging-core/src/problem.rs, QuotaExceeded and
     RateLimitExceeded; response observed with messaging 0.33.0-dev on 2026-09-25, headers trimmed and the
     trace identifier elided. */}
@@ -182,7 +181,8 @@ is checked against the template version's JSON Schema before anything renders. A
 `expiresAt` passes before it is sent is never sent.
 
 {/* Evidence: crates/registry-messaging-core/src/wire.rs, MessageReceipt;
-    crates/registry-messaging/src/messages.rs; products/messaging/RUNTIME-CONFIG.md, The package. */}
+    crates/registry-messaging/src/messages.rs; crates/registry-messaging/src/config.rs,
+    RuntimePackageConfig. */}
 
 ## Message status
 
@@ -250,8 +250,7 @@ answers `503 service.unavailable` so the provider retries.
     and callbacks_past_the_rate_are_refused_before_they_are_verified;
     crates/registry-messaging/src/limits.rs, CallbackLimits and
     each_callback_provider_and_the_unrouted_paths_have_separate_budgets;
-    crates/registry-messaging/src/receipts.rs;
-    products/messaging/RUNTIME-CONFIG.md, Provider callbacks. */}
+    crates/registry-messaging/src/receipts.rs. */}
 
 ## Problem codes
 
@@ -287,7 +286,8 @@ HTTP status listed beside it. `request.not-found` answers a path the contract do
 `GET /metrics` is not part of this surface: it is served only on the separate metrics listener, and
 the public listener answers it `404 request.not-found`.
 
-{/* Evidence: crates/registry-messaging/src/metrics.rs; products/messaging/RUNTIME-CONFIG.md, Keys. */}
+{/* Evidence: crates/registry-messaging/src/metrics.rs;
+    crates/registry-messaging/src/config.rs, metrics_listener. */}
 
 ## Source of truth
 

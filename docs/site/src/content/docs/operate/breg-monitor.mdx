@@ -251,8 +251,7 @@ reported as an `external-projection.unavailable` warning instead; see
     crates/registry-breg/src/postgres/external_projection.rs, enabled();
     crates/registry-breg/src/postgres/mod.rs, RetentionFailureReason;
     crates/registry-breg/src/startup.rs, external_projection_retention and background_task_stop_code();
-    crates/registry-bregctl/src/lib.rs, write_doctor_success() and external_projection_status_report();
-    products/breg/external-projection-storage.md, Monitor refresh and purge. */}
+    crates/registry-bregctl/src/lib.rs, write_doctor_success() and external_projection_status_report(). */}
 
 {/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queues();
     crates/registry-breg/src/startup.rs, OperationalEvent, RecordTimerIterationCause,
@@ -262,6 +261,64 @@ reported as an `external-projection.unavailable` warning instead; see
     crates/registry-breg/src/attachment_verification_worker.rs;
     crates/registry-breg/src/subject_access_log.rs, run_retention();
     crates/registry-platform-hooks/src/delivery/service.rs, WORKER_POLL_INTERVAL. */}
+
+## Read audit records
+
+Each audit record names its schema.
+Branch on the schema, because a historical schema version keeps its historical meaning.
+These event classes use these schemas:
+
+- Requests, terminal responses, refusals, unfinished responses, and Review recovery: `breg-audit/v3`.
+- History erasure: `breg-history-erasure-audit/v3`.
+- History rebaseline: `breg-history-rebaseline-audit/v3`.
+- Field encryption maintenance: `breg-field-encryption-audit/v3`.
+- Attachment verification: `breg-attachment-verification-audit/v3`.
+- Evidence retention: `breg-evidence-retention-audit/v2`.
+- Hook delivery attempts and transitions: `breg-hook-audit/v1`.
+- Receipt retention: `breg-idempotency-retention-audit/v2`.
+- Attachment cleanup: `breg-attachment-cleanup-audit/v2`.
+- Access-log exemption: `breg-access-log/v2`.
+- Import authority transitions: `breg-import-authority-audit/v2`.
+
+{/* Evidence: crates/registry-breg/tests/fixtures/audit-identity-goldens.json;
+    crates/registry-breg/tests/support/postgres_harness.rs;
+    crates/registry-breg/src/audit.rs, breg-audit/v3 and breg-hook-audit/v1;
+    crates/registry-breg/src/history_erasure.rs, breg-history-erasure-audit/v3;
+    crates/registry-breg/src/history_rebaseline.rs, breg-history-rebaseline-audit/v3;
+    crates/registry-breg/src/field_encryption_backfill.rs, breg-field-encryption-audit/v3;
+    crates/registry-breg/src/attachment_verification_worker.rs, breg-attachment-verification-audit/v3;
+    crates/registry-breg/src/action_evidence_retention.rs, breg-evidence-retention-audit/v2;
+    crates/registry-breg/src/idempotency_retention.rs, breg-idempotency-retention-audit/v2;
+    crates/registry-breg/src/proposal_retention.rs, breg-attachment-cleanup-audit/v2;
+    crates/registry-breg/src/subject_access_log.rs, breg-access-log/v2;
+    crates/registry-breg/src/import_authority.rs, breg-import-authority-audit/v2. */}
+
+`activationId` is the UUID of the activation under which an operation is observed.
+`packageRevision` is a `sha256:` package digest.
+Neither name is an alias for the other, and a record may omit a field it does not carry.
+An unfinished response keeps the identity of the attempt.
+A hook delivery record names the activation captured with the delivery, including retained work from an earlier activation.
+Import authority transitions also carry `authorityActivationId`, the activation that originally opened the authority.
+After a supersession it differs from the current `activationId`, and both stay observable.
+
+Hook delivery entries changed their reference domains with the schema.
+`breg-hook-audit/v1` replaces `breg-webhook-audit/v3`, every entry carries `"event": "breg.hook-delivery"`, and the keyed event and delivery references are derived under the `breg-hook-event-v1` and `breg-hook-delivery-v1` domains.
+A reference written under an earlier `breg-webhook-*` domain does not match one written under a hook domain for the same delivery, so a reader joining hook delivery entries across that change must branch on the schema.
+Attachment verification entries changed the same way: `breg-attachment-verification-audit/v3` replaces `v2` with the same record fields, and its keyed verification reference is derived under the `breg-attachment-verification-v2` domain from the verification ID and the lease token of the attempt.
+
+A read authorization refusal may carry `refusalReason` with one of three fixed values:
+
+- `surface_unavailable`: the authorized surface is unavailable.
+- `profile_admission`: the access profile did not admit the request.
+- `select_overreach`: the request named a projection field that is withheld or unknown.
+
+These values contain no claim, purpose, field, credential, or Record value, and they do not change the response the caller sees.
+A refusal without one of these causes omits the field.
+
+{/* Evidence: crates/registry-breg/src/audit.rs surface_unavailable, profile_admission,
+    select_overreach, breg-hook-event-v1, breg-hook-delivery-v1;
+    crates/registry-breg/src/attachment_verification_worker.rs breg-attachment-verification-v2;
+    crates/registry-breg/src/import_authority.rs authorityActivationId. */}
 
 ## Troubleshooting
 

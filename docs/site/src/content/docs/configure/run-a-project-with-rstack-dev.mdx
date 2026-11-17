@@ -1,11 +1,11 @@
 ---
 title: Run a project with rstack dev
-description: Start a Base Registry Engine and Registry Casework pair from a project checkout on a local TLS PostgreSQL server, call both with development tokens, and recover a failed run.
+description: Start a Base Registry Engine and Registry Casework pair from a project checkout on a local TLS PostgreSQL server, call both with development tokens, and recover a failed run, with the full plan, journey, isolation, recovery, and error-report reference.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-11"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 persona:
   - operator
@@ -106,7 +106,8 @@ Set the URL through an environment variable, not `--database-url`, because a fla
 other local users in the process list. For a spatial project, install PostGIS for this server and
 create the administrator as a superuser instead.
 
-{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev. */}
+{/* Evidence: crates/registry-rstack/src/cli.rs dispatch_dev;
+    crates/registry-bregctl/src/project_dev/database.rs RSTACK_DEV_DATABASE_CA, sslrootcert. */}
 
 ## Adapt the development plan
 
@@ -134,8 +135,7 @@ To adapt the plan to your own project, change these parts and leave the structur
   starting with `/v1/`, and what it expects back. The file path cannot contain `..` or backslashes.
   The start and status reports include `scenarioDigest` for the exact file bytes captured at start.
 
-The [`rstack dev` reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
-describes every key, capture type and limit.
+[Write the development plan](#write-the-development-plan) describes every key, capture type, and limit.
 
 <ConfigurationFormatChecks product="rstack" />
 
@@ -215,7 +215,9 @@ project's `tests/journeys.yaml` that touches an encrypted Record type fails the 
 test, because that test has no key. Exercise those Record types in an authored Stack scenario
 file, or in an existing plan's inline `journey`, instead.
 
-{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev. */}
+{/* Evidence: crates/registry-rstack/src/cli.rs dispatch_dev;
+    crates/registry-bregctl/src/project_dev/issuer.rs TOKEN_LIFETIME_SECONDS;
+    crates/registry-bregctl/src/project_dev/products.rs field-key, local-file. */}
 
 ## Stop the run
 
@@ -279,18 +281,403 @@ If the supervisor is still running, use plain `stop`. For a lost supervisor, its
 stop the products and any product tools still running. Use the original PostgreSQL cluster and
 maintenance database for `--recover`. Recovery waits for the guards, drops the databases and
 roles, and removes the run directory, including its development key file. If a check or cleanup
-step fails, the report explains what to inspect before retrying. The
-[reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
-lists the manual steps and the recovery fields.
+step fails, the report explains what to inspect before retrying.
+[Recover a run](#recover-a-run) lists the manual steps and the recovery fields.
 
-{/* Evidence: products/platform/PROJECT-DEV.md; crates/registry-rstack/src/cli.rs, dispatch_dev;
-    crates/registry-bregctl/src/project_dev/mod.rs;
-    crates/registry-bregctl/src/project_dev/journey.rs. */}
+{/* Evidence: crates/registry-rstack/src/cli.rs dispatch_dev;
+    crates/registry-bregctl/src/project_dev/mod.rs CLEANUP_CAP, cleanup-pending.json;
+    crates/registry-bregctl/src/project_dev/journey.rs JOURNEY_ATTEMPT_LIMIT. */}
+
+## PostgreSQL server requirements
+
+The server must be PostgreSQL 17 or newer and must serve TLS.
+The runner always verifies the server certificate and host name.
+It trusts the platform's roots, or the CA bundle in PEM format named by `RSTACK_DEV_DATABASE_CA`.
+
+The administrator role named in the URL needs `LOGIN CREATEROLE CREATEDB`.
+Superuser is not needed for a non-spatial run.
+The runner sets `createrole_self_grant` on its own sessions, so you do not configure it.
+The administrator also installs `btree_gist`, which PostgreSQL treats as a trusted extension.
+The runner reads `pg_catalog.pg_control_system()` to identify the cluster for recovery.
+PostgreSQL allows this function by default.
+
+The administrator URL always carries a password.
+Set it through `RSTACK_DEV_DATABASE_URL`, because `--database-url` is visible to other local users in the process list.
+The URL must be a `postgres://` or `postgresql://` URL with one TCP host, a user, a password, and one database name.
+Percent-encode special characters in the password.
+The URL accepts these query parameters and refuses all others:
+
+- `sslmode`: `require`, `verify-ca`, or `verify-full`.
+  The runner verifies the certificate and host name whichever you choose.
+- `connect_timeout` and `application_name`.
+- `sslrootcert` is refused.
+  Set `RSTACK_DEV_DATABASE_CA` instead.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/database.rs createrole_self_grant, btree_gist, pg_control_system, RSTACK_DEV_DATABASE_CA, sslrootcert, application_name. */}
+{/* TODO[evidence]: the PostgreSQL 17 minimum has no located anchor in the runner. */}
+
+### Spatial projects
+
+A spatial BReg project needs PostGIS 3.5 or later installed on the server.
+The administrator must be allowed to `CREATE EXTENSION postgis`, which normally means a superuser or the managed service's equivalent.
+The run checks that the server offers a supported PostGIS before it creates anything.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/database.rs postgis. */}
+
+## Write the development plan
+
+The plan file starts with the schema modeline that editors read, as the licensing example's `dev.yaml` does.
+A versioned plan schema validates it.
+List the project's issuer, product directories, and audiences in startup order, and the test people with synthetic subjects and exact product grants.
+A grant selects the access profile, scopes, and additional claims.
+Each selected profile gets the test person's subject in its principal claim.
+The products enforce their ordinary permissions.
+If several people match a step in the BReg project's `tests/journeys.yaml`, select its alias under `schemaTestPeople.<journey-id>.<step-id>`.
+The run obtains the normal schema-test receipt before packaging.
+
+Every BReg grant must name an access profile the BReg project declares, including a profile that carries only proposal permissions and so belongs to no entity.
+`rstack dev check` refuses a grant that does not, and so does `start`, before it provisions anything.
+The error names the plan pointer, for example `/people/NAME/grants/breg/profile`.
+A Casework grant must name an access profile of the Casework project, reported at `/people/NAME/grants/casework/profile`.
+The run does not compare scopes with the profile: a profile's required scopes are a per-entity rule, and a mismatch appears as a failed journey step.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs schemaTestPeople;
+    products/breg/generated/tools/project-dev.v1alpha1.schema.json maximumWaitMilliseconds. */}
+{/* TODO[evidence]: the plan pointers `/people/NAME/grants/breg/profile` and `/people/NAME/grants/casework/profile` were not located literally. */}
+
+### Native review handoff
+
+For a native review handoff, `bindings.bregReviewAuthority` identifies the Casework producer, and `bindings.caseworkContextProvider` identifies the BReg context provider and action.
+`rstack dev check` refuses a binding that names a review authority or action the BReg project does not declare, or a producer or context provider the Casework project does not declare.
+`start` refuses it before it provisions anything.
+`check` also writes each binding's product configuration exactly as `start` does.
+BReg's review-authority reader and `caseworkctl check --runtime-config` on the Casework configuration refuse what each product would refuse at startup, and `check` reports the refusal, with the rule it broke, at the plan field that produced the value.
+It refuses a BReg grant profile that is not the `service-status` profile the Casework context provider's policy names.
+
+A binding requests tokens for the other product's audience as an OAuth resource, so that audience must be an absolute URI, such as `urn:example:review`.
+It requests the scopes of its identity's grant for that product.
+Those scopes must be OAuth scope-tokens (no quotes or backslashes) that fit in 4096 bytes when joined by spaces.
+`check` reports a violation at the audience or the grant's `scopes`.
+The run pairs the provider on a private copy before packaging.
+
+A reviewer whose Casework context call forwards the bearer to BReg declares both grants, one shared client, and `caseworkContext: true`.
+Both grants declare the same scopes and additional claims.
+Casework reads the token subject or the BReg principal claim.
+The token carries both audiences and the authority explicitly shared by both grants.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/products.rs service-status;
+    crates/registry-bregctl/src/project_dev/bindings.rs bregReviewAuthority, caseworkContextProvider, caseworkContext. */}
+
+### Authored scenario file
+
+Set `scenarioFile: tests/scenarios.yaml` in `dev.yaml` and omit `journey` to run an authored pack.
+The path must stay inside the development project.
+Absolute paths, parent components, backslashes, and symlinks escaping the project are refused.
+The file follows the Stack scenarios schema:
+
+```yaml
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: read
+    steps:
+      - id: list
+        product: breg
+        as: operator
+        method: GET
+        path: /v1/records/records
+        expect:
+          status: 200
+```
+
+The file contains 1 to 16 uniquely named scenarios, each with 1 to 32 steps, and no more than 64 steps in total.
+Each scenario uses the same journey, step, expectation, and capture rules as the inline form described next.
+Captures are available only to later steps in the same scenario.
+`{{run.issuer}}` is the one run value available in strings; it resolves to the effective issuer URL after the runner binds its loopback port.
+Other references must name an earlier capture.
+The runner reads and validates the file during `check` and `start`, then snapshots its content before execution, so edits after `start` do not alter that run.
+Scenarios execute in file order and each gets fresh captures.
+
+The BReg project's `tests/journeys.yaml` remains its separate native schema test input.
+The Stack scenario file does not replace or change it.
+Existing plans with one inline `journey` remain supported, but a plan cannot specify both forms or neither.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs SCENARIOS_API_VERSION, SCENARIOS_KIND, scenarioFile;
+    products/breg/generated/tools/scenarios.v1alpha1.schema.json RStackScenarios. */}
+
+### Journey steps
+
+A journey runs 1 to 32 steps in order.
+Each step names the test person it runs as (`as`), the product, the method, and a relative path that starts with `/v1/`.
+A step sends one of two request bodies:
+
+- `body` is a JSON body.
+- `raw` is a non-JSON body for methods other than GET: `contentType` and `base64`.
+
+A step can also set the `If-Match`, `Idempotency-Key`, and `Registry-Source-Profile` headers.
+Use URI-safe characters for values in a path.
+
+Each step asserts the response with `expect`:
+
+- `status` is one accepted HTTP status from 200 to 599, or a list of up to 16.
+- `json` maps JSON pointers to exact expected values.
+- `checks` lists up to 32 assertions.
+  Each tests one JSON pointer with exactly one of `equals`, `length`, or `contains`.
+- `code` is the problem code an error response must carry.
+
+A step remembers values from its response under `capture`.
+Refer to a capture as `{{capture-name}}` in a later step's path, request body, header, expected value, or `find` value.
+A step cannot use its own captures.
+Capture names are unique across the journey.
+A capture has one `type`:
+
+- `pointer` remembers the string or number at a JSON pointer in the body.
+- `header` remembers a response header.
+  `etag` is the supported header.
+- `find` searches the array at a JSON pointer for the one item whose `where` pointer equals a value, and remembers the item's `pointer` value.
+  The step fails if no item or more than one item matches.
+- `value` remembers the value at a pointer.
+  With `query`, the value must be a URL, and the capture is that query parameter's value.
+
+Use a bounded GET `poll` for asynchronous delivery or result retrieval.
+Set `maximumWaitMilliseconds` up to 60 seconds and choose a `pollIntervalMilliseconds` from 50 to 5000.
+A journey can make at most 512 requests and transfer at most 8 MiB of request and response bodies in total.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs maximumWaitMilliseconds, pollIntervalMilliseconds;
+    crates/registry-bregctl/src/project_dev/journey.rs JOURNEY_ATTEMPT_LIMIT, JOURNEY_TRANSFER_LIMIT. */}
+
+### Token report
+
+`token` writes a short-lived bearer header file for each grant.
+Its JSON report gives the person's `alias`, the `expires_at` time when the tokens expire (five minutes after issue, or with the run if that is sooner), and a `credentials` list whose entries carry the `product`, the selected `profile`, and the `header_file` path.
+Pass the file to curl with `--header @HEADER_FILE`.
+With BReg, include the selected profile as the `accessProfile` query parameter.
+With Casework, the header file carries the profile.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/issuer.rs TOKEN_LIFETIME_SECONDS;
+    crates/registry-bregctl/src/project_dev/mod.rs header_file. */}
+
+## Start a declared application
+
+An optional `application` block starts one already-built local Node 24 host beside the products.
+Set `issuer: run` for this mode and pass its built root at start with `--application-root DIRECTORY`; omit both for the product-only run.
+`check` validates the declaration and deployment file without requiring the built root.
+The application block names a browser `client`, an exact `callbackPath`, a local `healthPath`, a built `entry`, configuration `prepare` and `checker` files, and a `deployment` file relative to the development project.
+It also names the configuration command's `configSchema` and exact `prepareVersion` line, and the `configEnvironment` variable through which the host reads its generated file.
+The built files must stay inside the supplied root; the deployment file must stay inside the development project.
+The entry is explicit, including when the application uses its own default entry.
+
+Before provisioning, `start` checks Node 24, the built files, and the configuration command's `--version` output.
+The runner picks a loopback issuer and application port.
+After the product journey, it writes an owner-only run input with the declared schema name, real addresses, product audiences, and paths to a fresh browser-client secret and an optional Casework recovery key.
+It requests separate resource grants when Casework is present, invokes the declared command with `--deployment`, `--run`, and `--out`, then invokes the checker with the generated configuration path.
+The child receives only the declared configuration-file environment variable and runs in the built root.
+The ready report adds `issuer` and `application` URLs.
+`status` repeats them, and `stop`, expiry, or a crashed child stops the issuer and app alongside the products.
+Configuration commands and built hosts are trusted local code supplied by the operator; the runner does not fetch or build them.
+A later `start` creates a fresh disposable run and databases; it does not restore unfinished application work.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs prepareVersion;
+    crates/registry-bregctl/src/project_dev/mod.rs application-root;
+    crates/registry-bregctl/src/project_dev/products.rs PreparedApplication. */}
+
+### Browser issuer
+
+The browser issuer presents only the plan's synthetic test people.
+It issues one resource-bound token per product after a confidential authorization-code exchange with S256 PKCE.
+It grants the intersection of the requested scopes and the selected person's scopes for that product; a request with no overlap is refused.
+Browser tokens carry the same grant in `scope` and `registry_scopes`.
+In application mode, `name` is presentation-only and `registry_scopes` carries the selected person's narrowed host scopes.
+Do not use either as a BReg or Casework principal claim or as an additional authored grant claim; `check` and `start` refuse those configurations.
+
+One browser session can obtain a second product grant for the same person, and `prompt=login` opens the person picker again.
+The authored BReg and Casework profiles still decide which client and person can use each operation.
+Declare the browser client in the relevant BReg requester profiles; the runner adds it to the runtime's accepted-client list but does not change the authored package.
+Browser tokens last at most 15 minutes and expire with the run; `rstack dev token` continues to issue five-minute CLI tokens.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/browser.rs S256, prompt;
+    crates/registry-bregctl/src/project_dev/issuer.rs BROWSER_TOKEN_LIFETIME_SECONDS, TOKEN_LIFETIME_SECONDS. */}
+
+### Bind an existing Casework producer to a run
+
+A plan for a BReg and Casework pair may explicitly bind the existing review producer's issuer on a private source copy before normal packaging.
+Use `issuer: run`; `application` is optional for this exact paired binding.
+Add exact old-value guards to the existing binding:
+
+```yaml
+bindings:
+  bregReviewAuthority:
+    id: casework
+    producer: registry
+    identity: producer
+    runIssuerBinding:
+      producer:
+        expectedIssuer: https://issuer.example.test
+        expectedProfile: requester
+        expectedSubject: producer
+      initiator:
+        expectedIssuer: https://issuer.example.test
+        trust: run-test-people
+```
+
+The selected Casework producer must already have exactly that issuer, profile, and subject.
+The existing `people.producer` subject and Casework grant profile must match it.
+No producer, person, profile, client, scope, or grant is created.
+`initiator` is separately optional: omission preserves `trustedInitiatorIssuer`, including its absence.
+Opt-in requires an existing exact issuer pin and replaces it with this run's issuer.
+`run-test-people` acknowledges issuer-level initiator trust under the admitted producer; it is not a subject allowlist.
+Existing initiator profiles, exclusion, and requester-read rules still apply.
+
+`check` calls `caseworkctl generate run-source` for structured validation without allocating an issuer or provisioning a database.
+`start` captures the checked Casework source closure privately and refuses drift before activation.
+The worker uses the real allocated issuer, writes a disposable source copy with only the selected issuer members changed, then follows normal provider pairing, check, new packaging, apply, and doctor.
+The original project is never rewritten.
+Private capture and transform receipts contain source and output file hashes, the binding digest, the actual issuer, and changed pointers; normal package and activation reports retain the new package identity.
+Run cleanup removes these run-local receipts with the other private files.
+Each start allocates a reservation and signing key and prepares and packages the source again instead of loading an old bound package.
+The kernel may later recycle a port; that does not reuse an old key or run.
+Fixed HTTPS product-only plans remain unchanged.
+
+An authored exact Casework policy version or digest selection is never rewritten by source binding.
+If the newly packaged policy no longer matches that selection, the ordinary product refusal remains authoritative.
+
+Without `application`, the exact paired binding starts only product APIs.
+It requires no application root, Node, or host build and admits no browser client.
+The reserved loopback issuer URL is a logical issuer identifier in this mode, not a browser sign-in or discovery endpoint.
+Products use the pinned static JWKS; CLI tokens and the separately served run-local machine token endpoint continue to use the same effective issuer.
+The worker holds the reservation until cleanup.
+`issuer: run` without application and without this exact paired binding is refused, including BReg-only plans; fixed HTTP remains refused.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/bindings.rs runIssuerBinding, run-test-people;
+    crates/registry-bregctl/src/project_dev/plan.rs runIssuerBinding. */}
+{/* TODO[evidence]: the `caseworkctl generate run-source` call and the receipt contents were not individually anchored. */}
+
+### Explicit browser roles with separate human source credentials
+
+A paired BReg and Casework built application may declare `application.caseworkSourceCredentialRoles` as 1 through 32 distinct existing role identifiers.
+The runner forwards this exact ordered list to `casework.sourceCredentialRoles` in the application's normal run input.
+It does not pick roles, infer a staff profile, or modify the authored deployment.
+The application's maintained configuration command must verify that each role is served, has its existing explicit BReg mapping, is an eligible non-holder human reviewer, and agrees exactly with its authored declaration.
+Missing roles, mismatches, and unsupported native client capability refuse configuration.
+Omission preserves the previous run-input bytes and grant mode.
+
+The paired application's selected Casework provider receives `humanSourceAuthentication.audience` from the already declared BReg resource.
+This enables independent verification of the separate source bearer; it does not change packages, issuer and key trust, principal, scope, or source authorization.
+Browser tokens keep one audience and only that product's narrowed grant.
+The shared-audience CLI `caseworkContext` compatibility path is unchanged.
+Review and save the authored source and declaration through normal tooling before using a new generated host configuration; post-generation JSON injection is unsupported.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/plan.rs caseworkSourceCredentialRoles;
+    crates/registry-bregctl/src/project_dev/bindings.rs humanSourceAuthentication. */}
+
+## Run isolation
+
+Each run listens on loopback, creates separate databases and migration and runtime logins, and pins its own public signing key in the runtime files.
+The local issuer signs under the project's issuer name with a key unique to the run.
+Use synthetic test people and keep the issuer's private directory under your user account.
+
+Stop and TTL expiry terminate the services and remove the databases, roles, keys, and run files.
+A spatial BReg run also creates a `NOLOGIN` role whose name starts with `breg_bbox_`; cleanup removes it with the others.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/database.rs breg_bbox_. */}
+{/* TODO[evidence]: the NOLOGIN attribute of the breg_bbox_ role was not individually anchored. */}
+
+### Encrypted fields
+
+A BReg project with encrypted fields runs without extra setup.
+`start` draws a development data key for the run from the operating system's random source and writes it as `field-key` in the run directory, readable only by your user.
+BReg reads it through its `local-file` key custody, which it accepts only for a local development database.
+The key is never printed, never written to the checkout, and is removed with the run directory on stop, TTL expiry, and a failed start.
+When a run needs recovery, the report names the key file under `recovery.field_encryption_key` until `stop --recover` removes it.
+Every run gets a new key, so encrypted data does not outlive its run.
+
+The schema test that `start` runs before activation has no field-encryption key.
+A step in `tests/journeys.yaml` that touches a Record type with an encrypted field fails it, and `start` reports `breg test failed (test.step.failed)`.
+Exercise those Record types in the plan's `journey` instead.
+
+This key custody is for development only.
+A deployment supplies its key as [Encrypt a field](../breg-field-encryption/) describes.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/products.rs field-key, local-file;
+    crates/registry-bregctl/src/project_dev/mod.rs field_encryption_key. */}
+
+### State directory
+
+The state directory holds one directory per run.
+It defaults to `rstack-dev-UID` in the system temporary directory.
+Set `RSTACK_DEV_STATE_DIR` to use another location.
+A run directory is renamed to `.<run_id>.removing` before it is deleted, and `status` and `stop` ignore that name.
+If the deletion is interrupted, delete that directory yourself; the run's field-encryption key is deleted before the rename, so it holds no key material.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/mod.rs RSTACK_DEV_STATE_DIR, .removing. */}
+
+## Recover a run
+
+If PostgreSQL becomes unavailable during cleanup, the supervisor retries with backoff for up to 30 minutes.
+It then writes `cleanup-pending.json` in the run directory.
+If the supervisor is lost, the run's process guards stop the product runtimes and any product tool that was still running.
+`stop` and `status` report the run directory, the recorded process groups, and the database and role names.
+
+Release a run whose supervisor is gone with:
+
+```sh test-skip="needs a run that lost its supervisor"
+rstack dev stop RUN_ID --recover [--database-url URL]
+```
+
+Use plain `stop` while the supervisor is still running.
+For recovery, use an administrator URL for the same PostgreSQL cluster and maintenance database used at startup, with the same administrator rights.
+`--database-url` defaults to `RSTACK_DEV_DATABASE_URL`, as for `start`.
+Recovery checks the recorded cluster identifier and maintenance database before dropping any resources.
+It waits for the process guards to finish, then drops the databases and roles and removes the run directory.
+If any step fails, the report gives the reason and the resources you can check before retrying.
+
+An abrupt machine restart can stop a guard before it writes its completed cleanup receipt.
+In that case `--recover` refuses to claim the guarded workload was reaped, even if the process no longer exists.
+Verify ownership and finish cleanup with the manual steps that follow.
+The same manual path applies to runs from an older development build without recovery metadata.
+Recovery releases the disposable run; it does not resume its application or pending work.
+
+A successful recovery reports `status` `stopped` and a `recovered` object with `stopped_process_groups` and `databases_and_roles`.
+
+If you need to finish cleanup by hand, do it in this order:
+
+1. Verify which product processes still belong to the run and stop those groups.
+   Use the run's configuration paths and process details to establish ownership before signaling a group.
+2. Connect to the original PostgreSQL cluster as the administrator.
+   Run `DROP DATABASE IF EXISTS "NAME" WITH (FORCE)` for each listed database.
+3. Run `DROP ROLE IF EXISTS "NAME"` for each listed role, including a `breg_bbox_*` role from a spatial run.
+4. Remove the run directory.
+   It holds the run's development field-encryption key when `field_encryption_key` is listed.
+
+{/* Evidence: crates/registry-bregctl/src/project_dev/mod.rs cleanup-pending.json, stopped_process_groups, lost-supervisor, CLEANUP_CAP;
+    crates/registry-bregctl/src/project_dev/recovery.rs. */}
+
+## Error report fields
+
+With `--json`, a refusal or startup failure from `rstack dev` start, status, token, or stop prints one JSON object on standard output, validated by the `rstack-dev-error` v1 schema.
+The launcher prints the same object for failures before the helper starts, such as a missing component.
+An interrupted `start` is class `domain`.
+Environment failures (class `operational`) also include a PostgreSQL server that cannot provision a run's databases and roles, a cleanup that stalled, and an internal failure of the run's supervisor.
+
+- `schema_version` is `registry.rstack.error.v1` and `status` is `refused`.
+- `error.class` and the exit status are described in [When a run fails](#when-a-run-fails).
+  `error.message` is the human-readable reason.
+- `run_id` is present when the failure concerns a run that still has resources to release.
+  Try `stop --recover`; an incomplete guard receipt requires the verified manual cleanup in [Recover a run](#recover-a-run).
+- `recovery` accompanies `run_id` when the resources are known.
+  It has `kind` (`lost-supervisor` or `cleanup-pending`), `run_directory`, `processes`, `objects` or `databases_and_roles`, and `field_encryption_key` when the run directory still holds the run's key file (the path, never the key).
+  It carries `reason` when `--recover` could not finish.
+
+Without `--json`, the message goes to standard error as `rstack dev: MESSAGE` with the same exit code.
+The reports of `rstack dev check` use `BRegCtlReport` instead.
+A helper started without the launcher's request prints a plain message and exits 2.
+
+{/* Evidence: crates/registry-rstack/src/cli.rs registry.rstack.error.v1;
+    crates/registry-bregctl/src/project_dev/mod.rs registry.rstack.error.v1, lost-supervisor, field_encryption_key;
+    products/platform/schemas/rstack-dev-error.v1.schema.json. */}
 
 ## Next
 
-- [`rstack dev` reference](https://github.com/registrystack/registry-stack/blob/main/products/platform/PROJECT-DEV.md)
-  for the full plan format, journey steps and recovery behaviour.
-- [Call an API with rstack](../api-connections/) to make short requests against the running pair.
-- [Test with journeys](../breg-journeys/) to write the BReg project's own journey tests.
-- [Encrypt a field](../breg-field-encryption/) for the key custody a deployment uses.
+- [Call an API with rstack](../api-connections/)
+- [Test with journeys](../breg-journeys/)
+- [Encrypt a field](../breg-field-encryption/)

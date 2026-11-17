@@ -168,10 +168,10 @@ test('skips a page mirrored from a frozen Evidence Version 1 contract', async ()
   await withSite(async (root) => {
     await writePage(
       root,
-      'products/registry-evidence/concept.md',
+      'products/registry-evidence/operator-contract.md',
       [
         'status: draft',
-        'editUrl: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/CONCEPT.md',
+        'editUrl: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/OPERATOR-CONTRACT.md',
       ].join('\n'),
       'Evidence is not a rewrite or reduced configuration of Registry Notary.',
     );

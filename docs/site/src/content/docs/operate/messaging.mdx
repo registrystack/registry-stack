@@ -1,11 +1,11 @@
 ---
 title: Deploy Registry Messaging
 description: Install Registry Messaging, provision PostgreSQL, write the runtime file that connects each provider, record and serve a package, change it, and operate messages and retention.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -57,6 +57,41 @@ The image `ghcr.io/registrystack/messaging:<tag>` carries both binaries and runs
 file, and secrets read-only, give the audit path writable storage, and deploy by digest.
 
 {/* Evidence: release/docker/Dockerfile.messaging; release v0.41.0 assets. */}
+
+Each release publishes the `messaging` and `messagingctl` binaries for Linux amd64 only, checked
+against the release `SHA256SUMS`, and the container image for linux/amd64 only. There is no
+Messaging installer and no Linux arm64 or macOS build of either binary. The unified clients carry
+a `messaging` namespace: `@registrystack/client` on npm (Linux x64 and arm64 with glibc, macOS
+arm64) and `registry-stack-client` on PyPI (manylinux x86_64 and aarch64, macOS arm64).
+
+{/* Evidence: release/docker/Dockerfile.messaging; crates/registry-messaging-client-node;
+    crates/registry-messaging-client-py. */}
+{/* TODO[evidence]: the per-release asset and wheel platform matrix is recorded only in release workflow files; cite the workflow job that builds them. */}
+
+### Supported providers
+
+- An SMTP relay is the built-in email transport.
+- Twilio SMS uses the `form-sms-gateway` provider example, with signed callbacks.
+- AWS End User Messaging SMS uses the `aws-sms` provider example, with SigV4-authenticated
+  `SendTextMessage`; it records acceptance only and ingests no delivery events.
+- Other HTTP gateways use reviewed request and response scripts over configured HTTP connections.
+- Mailpit and a mock SMS gateway are local development transports.
+
+The AWS example has offline and local wire-contract tests. Verifying actual carrier delivery needs
+a configured AWS account, an approved origination identity, and a real destination.
+
+{/* Evidence: products/messaging/examples/providers/form-sms-gateway/provider.yaml;
+    products/messaging/examples/providers/aws-sms/provider.yaml;
+    products/messaging/examples/providers/mock. */}
+
+### What acceptance means
+
+The `202` from `POST /v1/messages` means Registry Messaging admitted the message to its dispatch
+queue and nothing more: the message can still become `failed`, `expired`, `cancelled`, or
+`unknown`. `submitted` means the provider accepted the message, never that it was delivered.
+Neither acceptance nor `submitted` is proof of delivery to the recipient or of legal service.
+
+{/* TODO[evidence]: cite a test that shows a message moving from accepted to failed or unknown after the 202. */}
 
 ## Provision PostgreSQL
 
@@ -147,7 +182,8 @@ a runtime enforces.
 [Registry Messaging configuration](../../reference/messaging-configuration/) lists every key with
 its default and bounds.
 
-{/* Evidence: products/messaging/RUNTIME-CONFIG.md; crates/registry-messaging/src/config.rs;
+{/* Evidence: products/messaging/generated/runtime/runtime.schema.json;
+    crates/registry-messaging/src/config.rs;
     crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig;
     crates/registry-messaging/src/providers.rs, CallbackReceiver::request_url();
     crates/registry-messaging/src/retention.rs,
@@ -282,6 +318,12 @@ retries before you run `apply`.
     crates/registry-messaging/src/http.rs, is_ready(). */}
 
 ## Operate messages
+
+Each replica's worker runs eight send lanes, and each lane claims, sends, and records one message at
+a time. Per-replica throughput is therefore about 8 divided by the provider's response time (a
+200 ms provider caps one replica at 40 SMS per second); add replicas to go faster.
+
+{/* Evidence: crates/registry-messaging/src/runtime.rs, WORKER_CONCURRENCY. */}
 
 `messages list` prints the newest first, narrowed by `--status` and `--limit`, and `show` prints one
 message with each attempt. Neither shows a recipient:

@@ -89,7 +89,7 @@ one of them. A fixture states inputs and expected outcomes only; the definition 
 function, outputs, and [grant ceiling](../../reference/glossary/#grant-ceiling).
 
 {/* Evidence: crates/registry-evidence-authoring/src/project.rs;
-    products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md;
+    crates/registry-evidence/src/fixture.rs, ReferenceFixture;
     products/evidence/examples/standalone/fixtures/adult-status.yaml,
     boundary-before-bangkok-midnight and boundary-at-bangkok-midnight. */}
 
@@ -118,7 +118,7 @@ source and issuer answer is a separate check, made on the host that serves.
 
 The fixture grammar is closed, so an unknown key, an unsupported expectation, or a real-data
 marker refuses evaluation; the
-[fixture contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md)
+[fixture contract](../../reference/evidence-fixtures/#case-forms)
 lists the case forms. Treat a failed case, warning, or unknown field as a failed build input, and
 never turn a real failure into an ignored case. For CI, `--format json` prints the same report as
 one JSON document.

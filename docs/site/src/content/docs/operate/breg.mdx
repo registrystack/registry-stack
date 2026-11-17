@@ -353,7 +353,7 @@ never accepted by a running server.
 | `registry_actor_kind` | A direct token must carry the configured actor-kind claim as `human`, `agent`, or `service`. A profile that declares `actorKind` requires an exact match; one that omits it accepts any verified direct kind. A verified trusted-actor exchange is always treated as `agent` and requires `actorKind: agent`, regardless of the copied subject claim. |
 | assignment claims | Each row boundary or claim-backed lookup names its own claim. An `equals` boundary needs a scalar; an `in` boundary needs an array. |
 
-Use the [Registry Stack access-token contract](https://github.com/registrystack/registry-stack/blob/main/products/platform/ACCESS-TOKENS.md)
+Use the [Registry Stack access-token contract](../../configure/request-an-access-token/#token-profile-each-service-accepts)
 for the canonical token profile and issuer integration rules.
 
 Use a resource audience dedicated to this registry API, distinct from your application's login
@@ -619,17 +619,121 @@ on.
 {/* Evidence: crates/registry-breg/src/api/mod.rs, the /health, /healthz, and /ready routes;
     crates/registry-breg/src/startup.rs, ActivePackageMismatch, SupervisedTask, finish_prepared_server(). */}
 
+### Ledger rules and migration authority
+
+Each activation, the initial one included, is one row in `registry_internal.registry_migrations`, keyed by a UUID activation id and ordered by apply order.
+A row names the package digest, the predecessor package digest, the registry revision, the plan kind (`initial` or `successor`), the role mode, any backups a destructive migration was bound to, and the keyed hash of `--operator-reference`.
+`apply` accepts a successor only when its predecessor digest is the active package, and refuses the active package again and any older package.
+The migration credential authorizes an activation, and every activation is audited as `breg-activation-audit/v1`.
+With separate migration and runtime roles, the runtime role cannot write the ledger, so it cannot change which package the runtime serves.
+With one role for both, the ledger check catches mistakes but not someone holding that credential.
+
+Authoring and migration authority are separate.
+An author or coding agent can edit configuration, inspect a diff, and run checks, and those commands cannot obtain the production migration credential.
+A runtime configuration without that credential is refused before initial production control-plane state or DDL is created.
+One package is the unit you promote: plan and apply the same package directory, with the same package digest and registry revision, in each environment.
+Only the runtime file's `identity` and database values differ.
+
+The first successor on a database with the legacy 1,024-statement ledger bound widens that constraint when maintenance begins.
+This engine catalog change remains if a later precondition or migration step fails.
+Correct the cause and retry the exact pinned target; if it cannot complete and reconciliation reports `unresolvable`, restore the pre-activation backup.
+A role change re-applies the active package and leaves the ledger bound as that package declares it.
+
+{/* Evidence: crates/registry-breg/src/postgres/migration_ledger.rs, MAX_MIGRATION_ARTIFACTS;
+    crates/registry-breg/src/migration.rs, apply_verified_package() and MigrationError::AlreadyActive;
+    crates/registry-bregctl/src/lib.rs, ApplyArgs and PlanArgs. */}
+
+{/* TODO[evidence]: the legacy 1,024-statement ledger widening and the single-role ledger limitation have no located test. */}
+
+### Row-security policies and catalog drift
+
+Removing or narrowing an access profile removes its obsolete compiled row-security policies during apply.
+Activation still requires the exact candidate catalog, and unexpected policies remain catalog drift that BReg does not delete.
+A compiled policy whose expression was altered in place while it kept its definition comment is also refused as drift, and the activation fails.
+Apply keeps a policy whose comment matches, so it does not repair one.
+A database administrator recovers by clearing that policy's comment and applying the exact target package again, which replaces the policy with its compiled definition:
+
+```sql
+COMMENT ON POLICY name ON table IS NULL;
+```
+
+Do not edit managed tables to make a retry pass.
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs, COMMENT ON POLICY. */}
+
+{/* TODO[evidence]: the in-place policy alteration refusal and the comment-clearing recovery have no located test. */}
+
+### Resolve signing keys
+
+OIDC key resolution is deployment configuration, not governed package content.
+If `authentication.oidc.jwksSource` is omitted, BReg uses discovery.
+Name the key set location directly with `type: uri` and an `https` `uri` (plain `http` only on an IPv4 loopback host), which the verifier fetches and refreshes the way it does a discovered key set.
+Or pin a static document through a protected secret reference:
+
+```yaml
+authentication:
+  oidc:
+    jwksSource:
+      type: static
+      documentRef: secret:file/oidc-jwks
+```
+
+The static document must be a bounded, duplicate-free set of public keys that matches the configured algorithm, signature use, verification operation, key identifier policy, and key shape.
+BReg resolves it once when the verifier is constructed, so rotation requires a reviewed configuration change and a process restart.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, OidcJwksSource::from_block(). */}
+
+### Set the log level
+
+The top-level `logLevel` accepts `error`, `warn`, or `info` and defaults to `info`.
+The `BREG_LOG` environment variable overrides the authored value for process-local operation.
+An unknown value in either source refuses startup, and neither source accepts filter directives or enables dependency logging.
+The generated JSON Schema for runtime files documents bounded defaults for operational tuning while keeping package, database, authority, role, and secret-reference fields explicit, so you can use it for editor validation.
+
+{/* Evidence: crates/registry-breg/src/main.rs, BREG_LOG;
+    crates/registry-breg/src/runtime_config.rs, the log_level field and the BREG_LOG override;
+    crates/registry-breg/tests/startup_http.rs. */}
+
+### Plan the reference-lifecycle upgrade window
+
+An active Record can reference only an active target Record.
+Create and patch, including batch and import writes, refuse a missing or tombstoned target.
+Tombstoning a target refuses while another active Record references it, even when that referencing Record is outside the caller's read permissions.
+These refusals use the generic `409 mutation.conflict` response and disclose no referencing Record IDs or values.
+Action and Proposal target admission continues to require its independently granted current authority.
+A writer authorized to submit a known target ID can still infer whether that target is lifecycle-eligible from success versus conflict, even without target read authority.
+The conflict does not distinguish a missing target from a tombstoned one or disclose target fields.
+
+Clear an optional reference, point it at an active replacement, or tombstone the referencing Record before you tombstone its target.
+Tombstoned Records and retained history keep their original reference IDs.
+A self-reference does not prevent tombstoning that same Record; active references from other Records do.
+There is no automatic cascade or clearing of references.
+
+A registry activated by an earlier compiler receives the lifecycle constraints through a successor package built with the deployed package as `--baseline-package`.
+Use `bregctl plan` to check the activation prerequisites.
+Before live maintenance, apply the successor to a representative restored-data copy to validate existing links.
+If that apply finds an active Record that references a tombstoned target, repair its reference or tombstone that Record through the current package, refresh the restored-data copy, and repeat the validation before you activate the successor in production.
+
+Plan a maintenance window for this upgrade.
+Adding the stored generated lifecycle column rewrites each reference source table.
+Adding the target's unique lifecycle key and temporarily changing `FORCE ROW LEVEL SECURITY` on the source and target take `ACCESS EXCLUSIVE` locks, and PostgreSQL holds the locks from the force changes while it validates existing links.
+An additive activation runs its compiler DDL, runtime grants, and exact target catalog verification in one transaction, so a validation or fingerprint refusal rolls that DDL back.
+Maintenance still pins the exact target for recovery, and the check runs during apply, not in a successor `plan` before maintenance.
+A reviewed activation commits compiler and authored steps at durable checkpoints.
+A later reference validation refusal leaves those earlier checkpoints in place and pins maintenance as failed, so follow the exact-target retry, reconciliation, or backup-restore procedure in [Change an active registry](../breg-changes/#recover-a-failed-activation).
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs, REFERENCE_LIFECYCLE_COLUMN;
+    crates/registry-breg/tests/postgres_package/reference_upgrade.rs, reference_lifecycle_column_exists. */}
+
+{/* TODO[evidence]: the 409 mutation.conflict refusal for tombstoning a referenced target and for create or patch against a tombstoned target has no located test in the files searched. */}
+
 ## Operate Record timers
 
 Projects that grant Record timers add an operator surface for inspecting, pausing, resuming, and
 retrying timer work. It uses the runtime configuration and its companion audit journal, not the
-migration credential used for package activation. Read the canonical [Record timers
-guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
-before upgrading an active Registry or changing timer state. It covers the package compatibility
-step, live status and pagination limits, audit recovery, replicas, and restores.
+migration credential used for package activation. Read [Schedule Actions with Record timers](../../configure/breg-record-timers/) before upgrading an active Registry or changing timer state. It covers the package compatibility step, live status and pagination limits, audit recovery, replicas, and restores.
 
-{/* Evidence: products/breg/record-timers.md;
-    crates/registry-breg/src/timer_operator.rs, TimerOperatorService::from_runtime_config(). */}
+{/* Evidence: crates/registry-breg/src/timer_operator.rs, TimerOperatorService::from_runtime_config(). */}
 
 ## Serve the container image
 
@@ -729,8 +833,7 @@ file and secret files; inject secrets through `secret:env/<NAME>` instead.
 - [Change an active registry](../breg-changes/) for successor packages, blocked Proposals, and
   turning on field encryption over existing data.
 - [Retain, erase, and audit](../breg-retention/) for history erasure and the audit journal.
-- [Operate Record timers](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
-  when a project grants autonomous Record-controlled Actions.
+- [Operate Record timers](../../configure/breg-record-timers/) when a project grants autonomous Record-controlled Actions.
 - [Publish a statistical series](../../configure/breg-statistics/) when the project declares
   datasets.
 - [Harden a production deployment](../../security/hardening-checklist/) for the controls around

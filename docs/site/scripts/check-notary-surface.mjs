@@ -21,13 +21,8 @@ const codeSpan = /`[^`]*`/gu;
 // needs a recorded re-approval. The mirrored page names the file it was
 // generated from in `editUrl`.
 const frozenEvidenceContracts = [
-  'products/evidence/CONCEPT.md',
-  'products/evidence/IMPLEMENTATION.md',
-  'products/evidence/SOURCE-TESTING.md',
   'products/evidence/OPERATOR-CONTRACT.md',
-  'products/evidence/reference/request-adapter/ADAPTER-API.md',
   'products/evidence/reference/request-adapter/deployment-projects/CONFIG.md',
-  'products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md',
 ];
 
 // A specification's version table is that document's own history, held to the

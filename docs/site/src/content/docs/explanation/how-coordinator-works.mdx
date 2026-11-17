@@ -1,11 +1,11 @@
 ---
 title: How Registry Coordinator works
 description: What you define in a Coordinator project, what exists once a run is admitted, who owns each effect a run causes, and how an operator inspects and recovers a run.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-17"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -49,8 +49,8 @@ execution; titles, descriptions, and `project.version` do not change it. `coordi
 What you do not define is equally deliberate: no SQL steps, no dynamic fan-out, no arbitrary HTTP
 method or destination, and no automatic compensation or rollback.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Execution and authority";
-    crates/registry-coordinator/src/definition.rs. */}
+{/* Evidence: crates/registry-coordinator/src/definition.rs seal_revisions;
+    crates/registry-coordinator/src/authoring.rs CoordinatorProject. */}
 
 ## What exists once a run is admitted?
 
@@ -77,9 +77,8 @@ no run.
 A timeout means the workflow stopped waiting, not that the review stopped, so `reviewed-notice`
 withdraws its request and reads whether a decision arrived anyway.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Admission and integration",
-    "Standalone review and named completions"; crates/registry-coordinator/src/completion.rs;
-    crates/registry-coordinator/src/protected_state.rs, seal;
+{/* Evidence: crates/registry-coordinator/src/event_trigger.rs event_triggers;
+    crates/registry-coordinator/src/review.rs already-terminal;
     crates/registry-platform-crypto/src/sealed_value.rs and field_encryption.rs, AES-256-GCM. */}
 
 ## Who owns each effect?
@@ -102,8 +101,8 @@ A product refusal is a fact about the product's policy. An immediate Action call
 owner-declared no-effect refusal through `onDeclaredRefusal` as `{refusalCode}`; any other refusal
 fails the run with `product-refused`.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Execution and authority",
-    "Governed Actions"; crates/registry-coordinator/src/breg_action.rs;
+{/* Evidence: crates/registry-coordinator/src/contracts.rs coordinator.operation.proposal-action;
+    crates/registry-coordinator/src/breg_action.rs;
     crates/registry-coordinator/src/adapters.rs. */}
 
 ## How do you inspect and recover a run?
@@ -132,13 +131,12 @@ whose state has moved on. The operator starts `coordinator --recovery-only`, whi
 dispatches nothing, and places a restore hold with `coordinatorctl restore-hold`. Each unfinished
 run then waits for review, and work resumes only after the operator releases the hold.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Recovery and limits";
-    products/coordinator/DEPLOYMENT.md, Backup and restore;
-    crates/registry-coordinator/src/service.rs, recovery_only;
+{/* Evidence:     crates/registry-coordinator/src/service.rs, recovery_only;
     crates/registry-coordinator/src/cli.rs, RestoreHold, ReleaseRestoreHold;
     products/coordinator/generated/openapi/coordinator.openapi.json, RunStatus. */}
 
 ## Next
 
-[Author a Coordinator workflow](../../configure/coordinator/) builds, checks, and packages a
-workflow of your own.
+- [author a coordinator workflow](../../configure/coordinator/)
+- [deploy registry coordinator](../../operate/coordinator/)
+- [registry coordinator configuration reference](../../reference/coordinator-configuration/)

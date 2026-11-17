@@ -24,7 +24,9 @@ export const PRODUCT_PAGES = Object.freeze({
     'configure/scheduling',
     'operate/scheduling',
     'reference/scheduling-configuration',
+    'reference/scheduling-task-grants',
     'reference/apis/registry-scheduling',
+    'security/scheduling',
   ]),
   'registry-render': Object.freeze([
     'start/registry-render',
@@ -32,6 +34,8 @@ export const PRODUCT_PAGES = Object.freeze({
     'explanation/render-determinism',
     'operate/registry-render',
     'reference/render-configuration',
+    'reference/render-payload',
+    'security/render',
   ]),
   'registry-messaging': Object.freeze([
     'start/messaging',
@@ -41,6 +45,7 @@ export const PRODUCT_PAGES = Object.freeze({
     'operate/messaging',
     'reference/messaging-configuration',
     'reference/apis/registry-messaging',
+    'security/messaging',
   ]),
   'registry-coordinator': Object.freeze([
     'start/coordinator',
@@ -49,6 +54,7 @@ export const PRODUCT_PAGES = Object.freeze({
     'operate/coordinator',
     'reference/coordinator-configuration',
     'reference/apis/registry-coordinator',
+    'security/coordinator',
   ]),
   'registry-documents': Object.freeze([
     'start/documents',
@@ -56,6 +62,17 @@ export const PRODUCT_PAGES = Object.freeze({
     'operate/documents',
     'reference/documents-configuration',
     'reference/apis/registry-documents',
+    'security/documents',
+  ]),
+  'registry-adapter': Object.freeze([
+    'configure/adapter',
+    'configure/adapter-routes',
+    'configure/adapter-consultation',
+    'configure/adapter-jobs',
+    'configure/adapter-ingestion-jobs',
+    'configure/adapter-packs',
+    'operate/adapter',
+    'reference/adapter-effective-contract',
   ]),
 });
 

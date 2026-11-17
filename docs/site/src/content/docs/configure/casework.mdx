@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-22"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -311,6 +311,512 @@ exchange support before enabling the policy.
     crates/registry-casework/src/review.rs, review_task_context;
     crates/registry-mcp/src/casework.rs, CaseworkProvider. */}
 
+## Pin a policy and submit a request
+
+Policy, stage, routing-rule, queue, team and outcome labels are presentation text for people.
+They are single-line values: tabs, line feeds, carriage returns and other control characters are refused.
+Stable references use ids, and labels do not change a policy's behavioral binding digest.
+
+A policy binding closes over every access profile, queue, team and the project inbox, even when one policy does not currently name them.
+It also closes over that policy's referenced clocks and calendars, context provider, task templates and trusted producers.
+This whole-project staffing closure means adding an otherwise unused queue or team changes every policy binding.
+`explain` keeps that closure in `dependencies` and reports narrower usage separately.
+It also lists all project clocks, calendars and trusted producers at project level.
+It reports the queues a policy uses, including clock reassignment queues, the union of its deciding profiles, and every Staff or Supervisor profile eligible to be selected.
+
+Each protected API call authenticates with `Authorization: Bearer ...` and selects one declared profile.
+Shared producer Review routes use `Registry-Review-Profile`; Casework policy inspection, human and administrative routes use `Registry-Casework-Profile`.
+The development header file includes both, so the same registered caller can use its permitted routes.
+The producer's Requester profile is separate from the human Staff or Supervisor profile.
+Bootstrap a team serving the policy's queue through the authenticated Directory API before you expect reviewers to see work.
+
+{/* Evidence: crates/registry-casework-core/src/review.rs digest_with;
+    crates/registry-caseworkctl/src/report.rs ExplainStage;
+    crates/registry-casework-core/src/http.rs REVIEW_POLICY_MISMATCH_PROBLEM */}
+
+### Select the policy
+
+The producer normally submits `policy: {"id":"decision"}`.
+Casework selects and freezes its current compiled policy at first acceptance.
+This delegates policy-version governance to the trusted Casework administrator.
+A producer that must approve every policy change instead submits the exact `{id, version, digest}` binding; both pin fields are required together.
+
+For strict mode, read `policyBindings[]` from the checked project's flat report:
+
+```sh
+caseworkctl --format json check ./casework
+```
+
+For a deployed service, the authenticated `GET /v1/review-policies/decision` returns a policy closure whose `identity` is the exact binding for strict mode.
+Use that identity, or the generated typed client, rather than inventing a digest.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs PolicySelection;
+    crates/registry-casework-core/src/http.rs REVIEW_POLICY_MISMATCH_PROBLEM */}
+
+### Submit the request
+
+A request to `POST /v1/review-requests` carries:
+
+- `policy`.
+- An immutable `subject` with `source`, `type`, `id`, `version` and a real content `digest`.
+- An opaque `requesterReference`.
+- `context: {"mode":"submitted","snapshot":{...}}` that validates against the pinned display schema.
+- An optional qualified `initiator`, which supports reviewer exclusion.
+
+Send `Idempotency-Key`.
+A retry with the same key and original body recovers the accepted request before consulting current policy, even after policy updates.
+Acceptance, polling and results retain the concrete accepted policy; never fill that binding into the original selector or change its submission digest.
+New review work requires a new submission.
+
+Current producer authority and context compatibility remain required.
+The admitted producer identity, namespace, policy, subject binding and submission digest govern later cancellation and result access.
+Creation and recovery responses include `Registry-Review-Producer`, naming the admitted producer explicitly, so a source can diagnose a producer-ID configuration mismatch without guessing from a digest.
+
+{/* Evidence: crates/registry-casework/tests/review_http.rs;
+    crates/registry-review-client/tests/http_boundary.rs registry-review-producer */}
+
+### Show applicant progress
+
+A stage can declare `publicProgressCode`, a lowercase local identifier such as `identity-check`.
+The code is part of the frozen policy digest.
+The admitted producer can request the current mapped code with `GET /v1/review-requests/{requestId}?include=progress`.
+Casework includes `progressCode` only when a reviewing request's active stage declares one.
+Producers map the code to applicant-facing language and verify the exact accepted request, subject, policy and submission digest before displaying it.
+
+Upgrade clients that decode full policy or task-context closures before you activate a policy that sets progress codes.
+Older Casework clients can reject the added stage field.
+Policies that omit the field keep the earlier closure shape and digest.
+
+{/* Evidence: crates/registry-casework-core/src/review.rs public_progress_code;
+    crates/registry-casework/tests/review_http.rs include=progress */}
+
+### Cancel a request
+
+The same admitted producer can cancel an open Review even when its current source conceals the item.
+Cancellation uses the retained exact subject binding, settles its tasks and clocks, and retains the terminal evidence without reading source content.
+This does not expand reviewer or supervisor visibility or cancellation authority.
+A source package activation can use this operation to close a round that requires Rebase and fresh Review.
+
+{/* Evidence: crates/registry-casework/tests/breg_review_journey.rs */}
+{/* TODO[evidence]: name the test that cancels a review whose source conceals the item */}
+
+### Read the result
+
+The same producer reads `GET /v1/review-requests/{requestId}/result` or its resumable result feed.
+A `ReviewResult` repeats the subject, policy and submission digest, and carries a terminal status such as `approved`, `rejected`, `answered`, `cancelled` or `superseded`.
+A decided result names its `outcome` and any `publicReason`; a cancelled or superseded one carries neither.
+
+A completion destination, when configured, receives an authenticated wake with event, request and result identifiers.
+Delivery is at-least-once.
+A wake carries no decision payload; the producer fetches the result and authorizes any later mutation independently.
+[Receive Casework completion wakes](../casework-completion-receivers/) defines the wake.
+
+## Record decisions
+
+Human reviewers read `GET /v1/review-tasks`, then claim, assign, delegate, release, draft privately, or decide a task under its current revision.
+Send `If-Match` and `Idempotency-Key` on the documented mutations.
+Decisions and task holdings are revision-fenced; an old response cannot authorize a later state.
+
+The decision vocabulary belongs to the policy: `approve`, `reject`, `changes-requested` or `answer`, each naming one of the policy's declared outcomes.
+A reason or structured result is required when the selected outcome requires one.
+An approval names an outcome too; one without it is refused at `$.outcome`, and the `Registry-Casework-Validation-Allowed` header lists the current stage's approval outcomes.
+
+{/* Evidence: crates/registry-casework/src/http.rs approval-outcome-differs;
+    crates/registry-casework-core/src/http.rs registry-casework-validation-allowed */}
+
+### Public and private reasons
+
+Each outcome declares `publicReason: required`, `optional` or `none`.
+A public reason of at most 2000 UTF-8 bytes reaches the producer on the ReviewResult.
+The private `reason` stays in the accountability record, and the audit journal records only that a public reason was given.
+
+An approval carries no private `reason`: only `outcome` and `publicReason`.
+A member the request type does not declare, such as `reason` on an approval, is refused with 422 `request.unprocessable`.
+The `Registry-Casework-Validation-Path` header names it (`$.decision.reason`) with reason `schema-mismatch`; the submitted value is never echoed.
+
+{/* Evidence: crates/registry-casework-core/src/review.rs PUBLIC_REASON_PATH;
+    crates/registry-casework-core/src/http.rs registry-casework-validation-path */}
+
+### Thresholds and settlement
+
+Stage thresholds count independent eligible reviewers.
+Every approval in one stage names the same outcome.
+One naming another outcome than the stage already chose is refused at `$.outcome` with `approval-outcome-differs`, and the `Registry-Casework-Validation-Allowed` header names the chosen outcome.
+
+The final stage settles the request with that outcome and the public reason of the approval that meets its threshold.
+Earlier stages' outcomes and reasons, and other approvers' public reasons, are kept for accountability and not released.
+
+{/* Evidence: crates/registry-casework/src/http.rs approval-outcome-differs */}
+
+### Offer different outcomes per stage
+
+Each stage can set `outcomes` to the non-empty subset of policy outcome ids it offers.
+Omitting the field offers every policy outcome.
+`caseworkctl check` refuses an unknown outcome id and a stage with no available path to advance or settle the review: every stage must offer an outcome whose settlement is `approved` (`answered` for an answer policy).
+`caseworkctl explain` always reports the effective outcomes for each stage, including the all-policy default.
+
+A `changes-requested` result ends that review version.
+A resubmission is a new version that starts at the policy's first stage; it does not resume the earlier review in place.
+
+{/* Evidence: crates/registry-casework-core/src/review.rs ReviewNegativeDecisionMode;
+    products/casework/examples/stage-outcomes/casework.yaml outcomes */}
+
+### Distinct approvals
+
+Each approval in a stage must come from a different eligible person.
+A development clients file can bind several clients to the same access profile.
+Each client has its own identity and token, and two clients on a team's staff list that resolve to the same principal are refused.
+Use two clients on one Staff profile to exercise `requiredApprovals: 2` locally; separate profile names are not a substitute for independent people.
+
+A repeat claim after that person's decision returns `403 review.distinct-approver-required`.
+The bounded `insufficient-distinct-approvers` task notice identifies a staffing shortfall without listing team members.
+`caseworkctl doctor` warns when current serving-team membership cannot staff a configured stage; offline `check` cannot inspect live Directory membership.
+
+{/* Evidence: crates/registry-casework/src/problem.rs distinct-approver-required;
+    crates/registry-casework/tests/support/distinct_approvers.rs;
+    crates/registry-casework/src/review.rs insufficient-distinct-approvers */}
+
+### Matching versions
+
+Deploy the BReg context provider and BReg at exactly the same Registry Stack version.
+The provider checks `Registry-Engine-Version` before reading subjects, including when incompatible metadata cannot decode.
+`source.version-mismatch` names an incompatible peer; `source.version-unavailable` means the peer did not supply a usable version.
+Neither refusal echoes the peer's header or source data.
+
+{/* Evidence: crates/registry-casework-breg/tests/support/peer_version.rs;
+    crates/registry-casework/src/problem.rs source.version-mismatch */}
+
+## Pair a current-source provider
+
+A current-source review adds one read-only context provider.
+The canonical review example project contains a submitted-context policy and a BReg Proposal policy.
+Its vendored schema and `context.contract` pin the exact native `correct-address` review-context export.
+The compiled policy checks the schema offline; an open review never silently adopts a later producer contract.
+The `facility-address-review` policy has `purpose: approval` and `context.mode: current-source`, one provider and exact contract, and a vendored bounded display schema.
+Casework keeps the request binding and derived task metadata, not the current-source business projection.
+
+The provider exposes only the capabilities a compiled policy uses.
+Human display, service status and task-grant context are separate purpose-bound reads; routing context remains a separate capability.
+A BReg provider can expose task-grant context only when the paired package declares a distinct `get-task-grant-context` service profile with the exact source fields.
+`caseworkctl check` and the runtime refuse a task template with `subjects` when the provider or runtime binding omits that capability.
+There is no fallback to human display or service status.
+
+{/* Evidence: products/casework/examples/canonical-review/casework.yaml facility-address-review;
+    crates/registry-casework-breg/src/served.rs task-grant-context */}
+
+### Declare the profiles
+
+Before pairing, declare access profiles with `actsAs: staff`, `actsAs: supervisor` and `actsAs: administrator` in `casework.yaml`.
+Casework requires all three even when only Staff decide the review.
+Use a separate `actsAs: requester` profile for the trusted producer that submits the review.
+The canonical project gives each role its own scope.
+
+For native local development, add a client bound to the Administrator profile in `dev-clients.yaml`.
+`caseworkctl dev start` uses that client's authority to seed the directory on first start.
+Use a separate Staff client for claims and decisions, and list that client under `staff` for the review queue's directory team.
+These entries show the Casework scopes from the canonical local client configuration:
+
+```yaml title="products/casework/examples/canonical-review/dev-clients.yaml"
+clients:
+  - id: administrator
+    accessProfile: administrator
+    scopes: [casework:admin]
+    claims: {registry_actor_kind: human}
+  - id: supervisor
+    accessProfile: supervisor
+    scopes: [casework:supervisor]
+    claims: {registry_actor_kind: human}
+  - id: staff
+    accessProfile: staff
+    scopes: [casework:staff]
+    claims: {registry_actor_kind: human}
+```
+
+{/* Evidence: products/casework/examples/canonical-review/dev-clients.yaml administrator, staff */}
+
+### Generate the policy from a BReg Action
+
+To generate one of the approval patterns for an existing Proposal-mode Action, use `caseworkctl provider add`:
+
+```sh
+caseworkctl provider add ./review --breg-project ./facility \
+  --action correct-address --pattern single-reviewer-approval \
+  --breg-package ./facility-package
+```
+
+The command reads BReg through the matching `bregctl` public CLI.
+Missing review requirements, context or reader grants produce `casework.provider-add.breg-changes-needed`, proposed YAML and no project.
+The flat JSON report names the command result in `outcome`, such as `changes-needed`, `created` or `in-agreement`; `status` remains the process result class.
+Review and apply those source changes, then rerun.
+Existing context, policy IDs and authority names are retained.
+
+The suggested context contains the Plan's used inputs and changed fields.
+A changes projection needs ordinary Record read authority over those fields and rows, and an inputs-only alternative is printed beside that grant.
+Bypass writes are warnings for an operator to assess, and documents are never added to the proposed context.
+If the Action writes encrypted fields, BReg cannot export their before and after values.
+The command then asks you to author a supported context explicitly, such as an inputs-only context, and rerun; it never silently drops changed fields.
+An automatic context exceeding 64 context fields or 64 selected fields in one changes projection also requires an explicitly authored, minimized context.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_add.rs breg-changes-needed;
+    crates/registry-caseworkctl/src/report.rs breg-changes-needed */}
+{/* TODO[evidence]: the 64 context field and 64 selected field limits are not named by a symbol found in provider_add.rs */}
+
+If the Action's start profiles use different row boundaries, author the human reviewer's Proposal and Record grants explicitly, then rerun.
+The command preserves a complete reviewer grant bound to `actorKind: human` and explicit `requesterClients`.
+Existing profiles without a human binding remain unchanged, and the proposed profile uses a separate ID.
+Bind its suggested reviewer client ID to the intended UI clients before you apply it.
+Its status service must have only the selected Action's Review status authority, with no Record, Action, other Proposal or statistical dataset authority.
+
+When BReg is ready, Casework writes the pattern with exact current-source pins and the native exported schema.
+With `--breg-package`, its compiled registry revision must match the inspected project before pairing and schema comparison.
+The selected policy ID must fit Casework's local identifier format.
+An exact BReg policy selection must match the compiled Casework policy's version and digest; matching exact selections and ID-only selections are both supported.
+
+`--package-output` writes a package when creating the project and sets the runtime example's package root to that destination.
+Without a package it checks the generated project and prints the pairing step.
+A repeat invocation compares effective policy values and the source status profile, accepts explicitly written defaults, and rechecks agreement without rewriting files.
+When `runtime.example.yaml` is present, its status profile must match and its scopes must include every scope currently required by BReg; additional operator-configured scopes are preserved.
+To write a package for an existing project, use `caseworkctl package --output`.
+Generated producer identities use reserved `.test` placeholders, and runtime examples contain secret references only.
+The command never edits BReg or creates credentials.
+
+### Pair and verify the export
+
+Build the matching BReg package, then pair and verify its native export:
+
+```sh
+caseworkctl provider pair ./review \
+  --provider-id facility-proposal-context \
+  --breg-package /absolute/path/to/breg-package \
+  --action-id correct-address --apply
+caseworkctl check ./review \
+  --against-breg-package /absolute/path/to/breg-package
+```
+
+Pairing writes the provider export under `context-providers/` and records its path in `casework.yaml`.
+It changes no BReg package, runtime permissions or lifecycle hooks.
+The agreement check verifies the native package and compares its exact source, action, context contract and schema bytes with the imported export.
+The registry revision is diagnostic metadata; unrelated package changes do not alter the accepted context binding.
+If the BReg package declares a distinct `get-task-grant-context` profile, the export also declares the `task-grant-context` capability and that exact service profile.
+Regenerate and re-pair if the producer contract changes.
+
+Pairing refusals retain `casework.provider-pair.contract-mismatch`, `casework.provider-pair.unserved-capability` or `casework.provider-pair.version-mismatch`.
+The diagnostic names the review policy's contract path, the provider's capabilities path, or `--bregctl-bin`, with a specific corrective action.
+Peer command output and secret values are excluded.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs contract-mismatch, unserved-capability, version-mismatch;
+    crates/registry-caseworkctl/src/lib.rs against_breg_package */}
+
+### Bind the provider at runtime
+
+Bind the provider's `deploymentRef` in `runtime.yaml` under `contextProviders`, as `contextProviders.facility-registry` does in the canonical runtime example.
+The binding carries the BReg URL, the token endpoint, `statusProfile`, the exact audience, resource and scopes, and secret references for a purpose-specific service reader.
+The status profile must equal `serviceProfiles.service-status` in `casework.yaml`, and BReg must grant that service client `get-review-status` for the action.
+The status reader needs only that purpose; it never supplies fields displayed to a person.
+
+When the provider declares `task-grant-context`, set `taskGrantProfile` to the distinct `serviceProfiles.task-grant-context` value.
+Grant that service client `get-task-grant-context` for the exact subject fields.
+Neither service profile needs generic Proposal `get`.
+Configure the exact issuer audience, resource and scopes that BReg accepts, and use `caseworkctl check PROJECT --runtime-config FILE` before packaging and applying.
+[Registry Casework runtime configuration reference](../../reference/casework-configuration/#context-providers) lists every key.
+
+### Run it locally against BReg
+
+For a local session with the same issuer as BReg, add an explicit `integrations` block to Casework's `dev-clients.yaml`.
+Declare `integrations.resource`, `integrations.contextProviders` keyed by `deploymentRef`, and a `serviceClients` entry for the status reader.
+Each provider binding has the same fields as the runtime example.
+A generated local service client's references are `secret:file/service-CLIENT-id` and `secret:file/service-CLIENT-key`; imported owner-only files go through `integrations.secretFiles`.
+
+Start the already configured BReg dev session separately.
+Use `caseworkctl dev start ./casework --issuer-project ./breg-project` only when that ready BReg owner has pre-registered the Casework clients, their exact scopes, claims and resource.
+The Casework session retains that owner's issuer endpoint and selects free ports only for its own Casework service and database.
+Casework does not start BReg or modify its access profiles.
+
+On first start, a development session uses the usual local ports when they are free and selects other free loopback ports when they are occupied.
+It retains the selected ports with the session, so stop and restart keep the same endpoints.
+Use `--casework-port`, `--issuer-port` and `--database-port` when a project needs explicit assignments.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/integrations.rs;
+    crates/registry-caseworkctl/src/dev/tests.rs */}
+
+### How a human read reaches the source
+
+The reviewer sends the current human bearer and selects an authorized BReg source profile with `Registry-Source-Profile` for open Casework work, source context, lists, decisions and new notes.
+BReg must trust that issuer and audience, authorize the selected profile and subject, and grant `get-review-context` with the intended field disclosure.
+It applies that profile's disclosure and checks the exact Proposal binding.
+Casework never substitutes its service credential for a human display read.
+
+Casework selects the action and purpose from current caller-visible metadata, then checks the observed Proposal binding and exact context contract at visibility and decision boundaries.
+Context meaning, field semantics and schema bytes stay pinned while profile and row disclosure remain current.
+A concealed, changed or non-reviewable Proposal is refused or omitted from the visible task list.
+Open work must still be reviewable at the source: claim, decide, `next` and reads of an open task refuse or omit it once it is not.
+
+The service credential uses only its separate status and optional task-grant profiles.
+A task-grant read sends Casework's request and task correlation plus the frozen Proposal identity, contract, accepted policy, purpose and exact requested fields.
+Those values bind the read; they do not grant authority or prove BReg verified a Casework task exists.
+BReg can match the request ID and exact policy against its accepted review binding; the task ID and purpose remain Casework correlation.
+There is no generic Proposal read or source synchronization in this integration.
+
+{/* Evidence: crates/registry-casework-breg/tests/context_provider.rs;
+    crates/registry-casework-core/src/http.rs registry-source-authorization */}
+
+### Read decided and settled work
+
+Decided tasks and settled requests release their retained Casework-owned task, decision, history and existing notes under current Casework authority and retention.
+Their `/context` read still requires current source disclosure.
+New notes still require current source disclosure.
+
+Once the request has left review (it is terminal) and the exact source binding remains disclosed but is no longer reviewable, the reviewer who recorded a task's retained decision can read that task's context, and only that task's.
+Other eligible reviewers, including the authors of other tasks on the same request, receive not found.
+An earlier stage's author receives not found while the request is still in review.
+The author reads the source's current projection, still authorized by the source with the caller's own token and source profile, until the result's retention ends.
+Casework checks authorship and the reviewer's current membership, profile and retention before the provider read, and checks them again after it.
+
+{/* TODO[evidence]: name the test that proves the retained-decision author context read and the not-found cases for other reviewers */}
+
+### Read the operator summary
+
+An inbox page that omits current-source work emits one value-free operator summary.
+Expected concealment, source authorization filtering or binding movement is `INFO`.
+An explicit provider denial, contract mismatch or missing source-profile selection is `WARN`.
+The summary carries refusal classes but no task count, profile value, subject, reference or credential.
+
+BReg deliberately maps its 401, 403 and 404 responses to concealment.
+Its wrong-profile and missing-grant cases therefore appear in the `INFO` summary and remain indistinguishable from ordinary concealment.
+Diagnose those cases by checking the selected BReg profile and its `get-review-context` grant.
+A `WARN` summary identifies a refusal that Casework can prove is a provider or configuration fault, not merely expected filtering.
+
+{/* TODO[evidence]: name the test that asserts the INFO and WARN classification of the inbox summary */}
+
+### Who does what
+
+The trusted BReg producer creates or recovers the ReviewRequest and later fetches the immutable ReviewResult.
+An apply principal authorized by BReg independently rechecks and applies the Proposal, with a separate BReg principal and BReg's own fresh authority check.
+Casework neither synchronizes source records nor executes a source action.
+Use submitted context when the producer is authorized to give Casework a stable minimized snapshot and source availability or revocable disclosure is unnecessary.
+
+## Staff and account for review work
+
+All staffing operates on `ReviewTask`.
+Six supported outcomes share the same current Directory, policy, task and source-disclosure checks:
+
+1. `GET /v1/review-tasks/next` returns the earliest due visible eligible task; it ignores `sort`, `limit` and `cursor`.
+2. `GET /v1/review-tasks/holdings` returns the caller's claimed or assigned tasks.
+3. `POST /v1/directory/caseload/preview` and `/apply` move an exact, revision-fenced set atomically.
+4. `GET /v1/review-tasks` filters by an exact five-part SubjectBinding or a visible reference and sorts by due date, subject or reference.
+5. `POST /v1/directory/clocks/recompute/preview` and `/apply` recompute deadlines against the request's pinned policy closure.
+6. Authored routing evaluates only declared fields at task or stage creation.
+
+{/* Evidence: crates/registry-casework/src/http.rs review-tasks/next, review-tasks/holdings, caseload/preview, clocks/recompute */}
+
+### Find tasks
+
+Selection never discovers arbitrary source records.
+Follow `nextCursor` unchanged; restart the walk when a live source change makes a cursor stale.
+The reference filter and sort match the exact reference the producer or provider supplies.
+A BReg producer supplies its machine string `breg:{registry}:{action}:{proposal}:{version}`, so staff cannot find a BReg review by a business number such as a licence number.
+
+A subject clock covers one request, and a resubmission starts a new budget.
+Submitted routing reads the admitted snapshot; current-source routing uses the provider's minimized routing capability and retains derived metadata.
+
+### Recover and supervise
+
+`GET /v1/review-tasks/own-decisions` lets an eligible reviewer recover their own retained decision receipts.
+Supervisors can inspect their serving queues through `/v1/review-tasks/supervision` and the independently authorized, audited `/v1/review-accountability/{eventId}`.
+Own receipts omit private reasons and producer results; accountability does not release review context.
+
+Directory teams, absence cover, membership and queue service remain current authority.
+An opaque task reference or cursor grants no access.
+A decided row in either list still asks the current source whether the caller can see the subject, with the caller's bearer and source profile.
+A concealed subject is omitted and any source error fails closed.
+
+A decided task read and the history, including notes, of a settled request instead release retained Casework-owned records under current Casework authority until terminal retention expires.
+They do not release source context: `/v1/review-tasks/{taskId}/context` still asks the source and answers not found when the source conceals the subject.
+Adding a new note also retains the current source-visibility check.
+
+Supervisory discovery deliberately omits holder identities and due dates.
+It is an accountability view, not a team holdings board.
+Use the Directory to choose the source officer and an authorized caseload preview to inspect the proposed move.
+Reviewer eligibility is not a substitute for supervisor authority.
+
+{/* Evidence: crates/registry-casework/src/http.rs own-decisions, review-tasks/supervision, review-accountability */}
+
+### Bound the list reads
+
+List, next-task and holdings reads ordered by due date or subject select a bounded SQL page before current-source reads.
+Their opaque continuation binds the caller, profiles and query, and rechecks the anchor's current authority.
+Live-reference filtering or sorting still completes a bounded scan before returning globally ordered results; a smaller page cannot reduce that scan.
+
+Three `inbox` settings bound the work:
+
+- `inbox.maximumCandidateScan` defaults to 100.
+- `maximumSourceReads` defaults to 25.
+- `pageDeadlineMilliseconds` defaults to 2000.
+
+Source observations are shared by task slots belonging to the same request for this invocation only.
+Continuation anchor validation consumes the same source-observation budget as candidates.
+Exceeding a scan or source-observation budget refuses the whole ordinary read with `review.query-too-broad`; a provider timeout reports source unavailability.
+Narrow the queue or exact subject, reduce an ordinary page size, or size the budgets for the candidate page and measured source latency.
+These three reads do not return partial budget-exhausted pages.
+
+{/* Evidence: crates/registry-casework-core/src/config.rs maximum_candidate_scan, maximum_source_reads, page_deadline_milliseconds;
+    crates/registry-casework/src/problem.rs query-too-broad */}
+
+### Move caseloads
+
+Caseload preview selects all of the source officer's claimed tasks, optionally restricted to one queue, with a maximum of 100 tasks.
+It has no subset, limit or continuation parameter.
+Apply moves that exact revision-fenced set atomically.
+Use individual authorized task assignments for a selected subset; those assignments are independent transactions.
+
+Apply a caseload or clock recompute preview within 15 minutes.
+Once applied, a retry with the same preview answers the same result for 24 hours, even if the Directory changed since, so a lost response can be recovered.
+
+### Staffing notices
+
+An authorized ReviewTask read or supervisory row can include `staffingDiagnostic: no-cover-available` when assignment or absence recompute finds no eligible cover.
+This notice reveals no holder or source context.
+Successful assignment, claim, caseload transfer, release or task closure clears it; a closed task does not display an old staffing notice.
+
+{/* Evidence: crates/registry-casework/src/review.rs no-cover-available */}
+{/* TODO[evidence]: the 100 task caseload limit, 15 minute preview window and 24 hour replay are not named by a symbol found in review.rs or http.rs */}
+
+## Check a deployment before activation
+
+`caseworkctl check ./casework --production` reads the exact package input closure and points an unpaired context provider back to its authored `description` with the `provider pair` recovery command.
+It writes no package and contacts no runtime dependency.
+`plan` reads the configured database, and `doctor` also checks the audit destination.
+[Deploy Registry Casework](../../operate/casework/) covers activation.
+
+JSON CLI reports use one versioned typed envelope with machine-readable codes and suggested actions.
+A domain refusal exits 1, invalid usage exits 2, and unavailable local or remote resources exit 3.
+
+{/* Evidence: crates/registry-caseworkctl/src/lib.rs production, CheckArgs */}
+{/* TODO[evidence]: the exit codes 1, 2 and 3 are not named by a symbol found in the caseworkctl crate */}
+
+### Prepare a synthetic browser run
+
+For an explicitly declared synthetic browser run, `caseworkctl generate run-source PROJECT --binding FILE` checks an existing producer's exact old issuer, profile and subject, and its declared development identity and grant chain.
+The closed request format is `CaseworkRunSource` v1alpha1.
+The `run-source` example project carries one.
+
+- `--output NEW_DIRECTORY` captures the checked source closure.
+- `--expected-source-digest DIGEST` refuses drift.
+- `--issuer ACTUAL_LOOPBACK_URL` changes only the selected producer issuer and, when separately opted in, its existing initiator issuer on the new copy.
+  Without `--issuer`, original bytes are preserved.
+- Inspection without `--output` writes nothing.
+
+This source preparation does not activate a package: run normal provider pairing, check, package, apply and doctor on the prepared source.
+Missing provider descriptions remain missing until normal pairing, and ordinary production packaging still refuses an incomplete closure.
+Subjects and grants never change.
+Initiator opt-in acknowledges issuer trust under the existing producer, not an enforced subject allowlist.
+Original and transformed hashes and the exact permitted pointers are reported without subjects or secrets.
+A failure to write the owner-only output receipt fails the command, and an existing output directory is never overwritten.
+`rstack dev` owns the corresponding run declaration; [Run a project with rstack dev](../run-a-project-with-rstack-dev/) describes it.
+
+{/* Evidence: crates/registry-caseworkctl/src/run_source.rs CaseworkRunSource;
+    crates/registry-caseworkctl/src/lib.rs expected_source_digest */}
+
 ## Configuration reference
 
 <ConfigurationFormatChecks product="casework" />
@@ -323,4 +829,7 @@ exchange support before enabling the policy.
 
 ## Next
 
-[Staff the directory](../casework-directory/)
+- [staff the directory](../casework-directory/)
+- [receive casework completion wakes](../casework-completion-receivers/)
+- [deploy registry casework](../../operate/casework/)
+- [registry casework task grants](../../reference/casework-task-grants/)

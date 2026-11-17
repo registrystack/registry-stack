@@ -1,11 +1,11 @@
 ---
 title: Author a Scheduling policy
-description: Close a holiday, read the hold and reminder rules, bind an appointment observer, and plan the package, all offline in one Registry Scheduling project.
-status: draft
+description: Close a holiday, read the hold and reminder rules, bind an appointment observer, plan the package, and configure attendance, external references, booking parties, receipts, finite series, and calendar export for Registry Scheduling.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-17"
 doc_type: how-to
 persona:
   - operator
@@ -87,6 +87,11 @@ schedulingctl test ./scheduling --format json
 }
 ```
 
+A passing report carries `proofBoundary: offline-synthetic` and `productionClosure: false`, so it
+does not establish source reachability or deployment readiness.
+
+{/* Evidence: crates/registry-schedulingctl/src/project.rs, proofBoundary and productionClosure. */}
+
 `schedule.unpublished` is the answer for any start the policy does not publish, whether the day
 is a holiday, a weekend, or outside the opening hours.
 
@@ -142,7 +147,7 @@ Every entry carries `because`, a sentence for the next person who reads the poli
 the policy, so a changed reason changes the digest too.
 
 {/* Evidence: crates/registry-scheduling-core/src/policy.rs, HoldPolicy, OfferingPolicy and
-    ReminderOffsetPolicy; products/scheduling/README.md, Events and observers. */}
+    ReminderOffsetPolicy. */}
 
 ## Tell another system when an appointment is confirmed
 
@@ -203,7 +208,7 @@ at least once, signed with HMAC-SHA256, and the receiver's answer never changes 
 {/* Evidence: crates/registry-scheduling-core/src/policy.rs, HookPolicy and ObserverTrigger;
     crates/registry-scheduling/src/hooks.rs; crates/registry-schedulingctl/src/project.rs, check()
     and the runtime example check; crates/registry-scheduling/src/store.rs, the cancellation
-    outbox payload; products/scheduling/README.md, Events and observers (at least once). */}
+    outbox payload. */}
 
 ## Plan the package
 
@@ -254,10 +259,490 @@ The window itself is a record in `./arrival/records.yaml`, with its start, end, 
 `subquotas` entry caps how many of those units one channel, `public` or `assisted`, may take. A
 subquota is a ceiling, not a reservation: the other channel may still use units the first leaves
 free.
+A channel the policy declares but gives no subquota draws from the window's total alone, and a request naming an undeclared channel is refused.
+Nothing in the grammar reserves capacity for a channel.
+
+A records window may also list `resources`.
+Each names an exact-time requirement offering at the window's location with `partyCounts: optional` that sells the window's whole span, an optional resource, and physical units.
+The window reserves them once for its whole span through a parent claim in the allocation ledger, so the reservation conflicts with exact-time bookings and other windows that need the same resource.
+`records apply` refuses a window whose resource is unavailable, busy, or not freshly covered by a configured busy source.
+`records apply` and a policy publication both refuse a requirement the deployed policy cannot reserve that way with `mismatched-reference`.
+A window whose record is unchanged keeps what it holds across later records applies and policy publications, and a later absence of its resource shows in `resourceImpacts` instead.
+Bookings in the window consume only the window's units.
 
 {/* Evidence: crates/registry-schedulingctl/src/templates.rs, standalone-arrival-window;
-    products/scheduling/generated/records/records.schema.json, PublishedWindow and WindowSubquota;
-    products/scheduling/README.md, Arrival windows and channel subquotas. */}
+    products/scheduling/generated/records/records.schema.json, PublishedWindow and WindowSubquota. */}
+
+## Send reminders and appointment events
+
+The runtime has two outbound integration seams.
+Both carry the same envelope, and neither lets a receiver change a booking.
+
+A commitment mints the reminder intents its offering declares, each due a fixed number of minutes before the appointment.
+A worker renders every due intent as one shared hook envelope in canonical JSON and POSTs it to the configured reminder destination with `content-type: application/json`.
+An appointment observer receives the same envelope.
+
+Every event carries these members:
+
+| Field | Value |
+| --- | --- |
+| `id` | The outbox intent's identifier |
+| `type` | `org.registrystack.scheduling.` plus the intent's purpose |
+| `source` | `urn:registrystack:scheduling:` plus the deployment's `scheduling.id` from the policy |
+| `time` | When the intent fell due, RFC 3339 in UTC at millisecond precision |
+| `subject` | `recordReference` `/v1/appointments/<id>` and `recordRevision`, the appointment revision the intent was minted for |
+| `dataschema` | `urn:registrystack:scheduling:reminder-data:` plus the intent's purpose |
+| `data` | The payload the runtime committed |
+| `causation` | A root chain: `root` is the event's own `id` and `hop` is `0` |
+
+There are four purposes, so four types:
+
+- `confirmation` and `change` carry the committed appointment's identifier, revision, offering, start, end, and the policy revision it was committed under.
+- `cancellation` carries the identifier, revision, and reason.
+- `reminder` carries the identifier, revision, offering, start, and how many minutes before the start it was minted for.
+
+Delivery runs on the shared dispatch core.
+Each attempt is bounded at five seconds, and a transport failure retries after thirty seconds, doubling to about thirty-two minutes.
+A refusal the retry classes do not cover sets the intent aside for the operator, and the eighth failed attempt sets it aside.
+A worker that stops mid-attempt leaves its lease to lapse, and the attempt counts as a failure.
+If the destination accepts an event but the runtime cannot record that outcome, recovery applies the retry schedule and may send the event again.
+Retries are bounded, so successful delivery is not guaranteed.
+The destination deduplicates on the envelope `id`, which is the same on every attempt.
+
+A cancellation or reschedule cancels the appointment's reminders no attempt has started on, in the same transaction.
+Immediately before each send, the runtime reads under the attempt's lease whether the intent still describes the appointment.
+A reminder whose appointment was cancelled or moved to a newer revision is set aside as superseded and never sent, and a lapsed lease starts no send.
+With no reminder destination configured, each intent stays readable in the outbox and is set aside as local when it falls due, never pretended delivered.
+Adopting the product does not require wiring a notification bus first.
+
+You can sign reminder delivery with the optional `destinations.reminders.hmacSha256KeyRef`.
+Signed delivery uses the shared CloudEvents delivery headers and an HMAC-SHA-256 signature that binds the request target, the envelope bytes, and the delivery metadata.
+`destinations.reminders.url` is the fallback for every purpose.
+The optional closed `purposeUrls` block selects separate `confirmation`, `change`, `cancellation`, and `reminder` endpoints on that fallback URL's origin, and missing purposes keep using the fallback.
+The runtime compiles every effective endpoint at startup and signs the exact selected path, so a proxy cannot reroute a signed event to another typed receiver.
+The event identity and idempotency key stay fixed across retries, while the attempt and delivery time change.
+Configure the matching trusted source and key at the receiver.
+The optional `destinations.reminders.bearerTokenRef` authenticates access to the destination independently and can be used with signing, and omitting the signing key keeps bearer-only delivery.
+A valid event signature proves origin and integrity; it does not grant appointment-read or message-send authority.
+
+### Appointment observers
+
+An observer is a governed hook.
+A policy may declare `phase: after` with a URL handler for exactly four triggers:
+
+| Trigger | Allowed projected fields |
+| --- | --- |
+| `appointment.confirmed` | `appointmentId`, `revision`, `offering`, `start`, `end`, `state`, `policyRevision` |
+| `appointment.rescheduled` | `appointmentId`, `revision`, `offering`, `start`, `end`, `state`, `policyRevision` |
+| `appointment.cancelled` | `appointmentId`, `revision`, `state` |
+| `appointment.attendance-observed` | `appointmentId`, `appointmentRevision`, `attendanceRevision`, `attendanceState`, `observedAt`, `recordedAt`, `policyRevision` |
+
+The runtime refuses conditions, principals, Rhai or Wasm handlers, unknown triggers, and fields outside that table.
+It captures one canonical event and its delivery row in the same transaction as the appointment change.
+An after-commit worker then POSTs it to the deployment-bound destination.
+Delivery is at least once, signed with HMAC-SHA256, retried within fixed product ceilings, and audited without payload values.
+Each attempt's audit entry is accepted before the request leaves, or the delivery stays pending and nothing is sent.
+A receiver response is observation only: Registry Scheduling deterministically refuses every proposal and never turns it into a booking, reschedule, or cancellation.
+
+The hook id becomes the event `type`.
+The source is `urn:registrystack:scheduling:<scheduling-id>`, the subject record reference is `/v1/appointments/<appointment-id>`, and `data` contains only the requested fields.
+`state` is the public value `confirmed` or `cancelled`.
+Actor identity, task grants, resource and channel identifiers, duplicate keys, and cancellation reasons cannot be projected.
+Operator replay is not exposed.
+
+Retained payloads expire after `retention.hookPayloadRetentionDays`, and terminal delivery metadata ages out under `retention.receiptRetentionDays`.
+[Registry Scheduling configuration reference](../../reference/scheduling-configuration/#retention) states the exact cleanup rules.
+
+{/* Evidence: crates/registry-scheduling/src/hooks.rs; crates/registry-scheduling-core/src/policy.rs ObserverTrigger;
+    crates/registry-scheduling/src/config.rs reminder_purpose_urls_are_typed_and_optional;
+    crates/registry-scheduling/tests/postgres_commitments/attendance.rs attendance_commit_captures_one_minimized_signed_after_event;
+    crates/registry-platform-dispatch/src/retry.rs. */}
+{/* TODO[evidence]: the envelope member table (causation root and hop, dataschema) has no single test that asserts every member. */}
+
+## Record attendance
+
+Registry Scheduling can retain one current attendance observation for a logical appointment.
+The observation is separate from the capacity lifecycle.
+Recording `arrived`, `completed`, or `no-show` does not confirm, cancel, move, release, or consume a hold or appointment, and changing the booking later does not rewrite the attendance history.
+
+An observation describes the appointment as a whole.
+It does not identify an individual participant and is never expanded to one row per party member.
+Optional party counts do not decide whether an authorized observation may be recorded.
+A resource-only reservation can therefore carry an explicit appointment-level observation.
+Registry Scheduling does not infer a person, a headcount, equipment return, condition, damage, or any source-system outcome from it.
+
+### Write authority
+
+Every write requires a current task grant whose exact service and location permission contains `attendance.record`.
+Catalogue access, ordinary owner reads, source-manager appointment detail, operational appointment profiles, and other commitment actions do not imply this action.
+The task grant is checked before the transaction opens, and its deadline is checked again at commit.
+The source that approved the grant remains independent of the booking record and any institutional decision that follows from attendance.
+[Registry Scheduling task grants](../../reference/scheduling-task-grants/) describes the grant.
+
+The write is:
+
+```http
+PUT /v1/appointments/{appointment_id}/attendance
+Authorization: Bearer TASK_TOKEN
+Idempotency-Key: caller-chosen-key
+Content-Type: application/json
+
+{
+  "observedAppointmentRevision": 3,
+  "observedRevision": 0,
+  "state": "arrived",
+  "observedAt": "2026-10-23T08:15:00Z"
+}
+```
+
+`observedAt` is when staff say the attendance fact became effective.
+`recordedAt` is when Registry Scheduling made the recording decision after acquiring the appointment lock.
+The observation row, history detail, receipt, and after-event use that same time, and it does not claim the exact database commit instant.
+An effective time after the decision time is refused.
+A late or backfilled observation is permitted, including for a past or cancelled appointment, because the observation is a corrigible fact rather than a capacity transition.
+
+`observedAppointmentRevision` must equal the booking revision under the transaction lock.
+That stops a staff client that read an earlier visit from attaching a no-show or arrival after another caller rescheduled it.
+`observedRevision: 0` records the first fact for the current visit.
+A correction supplies that visit's exact current attendance revision, and each accepted correction appends a new revision.
+A stale concurrent correction is refused with `revision.mismatch`.
+A no-show can therefore be corrected to arrived or completed without changing the appointment revision or state.
+The caller supplies an idempotency key: an exact retry returns its original answer, and reusing the key for changed bytes is refused.
+
+The visit binding is the revision of the latest `confirmed` or `rescheduled` appointment history event.
+Cancellation advances the appointment revision but does not mint a new visit, so it does not hide an observation.
+A reschedule does mint a new visit, and its exact detail initially has no current attendance.
+Rescheduling away and later back still produces a new visit revision, which avoids reviving the older visit's observation even when its displayed times match.
+
+The current response keeps the two revision streams explicit:
+
+```json
+{
+  "appointmentId": "25b91ea4-75ca-48de-b9ef-4326fec81f28",
+  "appointmentRevision": 3,
+  "revision": 2,
+  "state": "completed",
+  "observedAt": "2026-10-23T08:45:00Z",
+  "recordedAt": "2026-10-23T09:00:00Z"
+}
+```
+
+The exact appointment detail may include this minimized current document for the current owner, the retained source manager, or the exact appointment-detail task grant.
+Attendance corrections also appear in the authorized exact appointment history, using its existing pseudonymized actor envelope.
+The current detail does not expose the attendance writer, and neither surface exposes the grant or task subjects.
+Operational reads omit attendance unless their selected profile explicitly projects `attendance`, which returns only the permitted current observation and never the correction history.
+
+### After event
+
+The write appends its correction, idempotency receipt, history entry, and `appointment.attendance-observed` after-event in the same database transaction.
+Hook delivery signs the event and delivers it after commit.
+The event carries appointment identity, booking and attendance revisions, state, effective time, and recorded time through a closed projection.
+It carries no writer, grant, party identity, participant list, resource condition, or institutional decision.
+
+A Registry Coordinator workflow can follow the event only through its own configured, authorized trigger.
+Event admission grants no authority for the workflow's later product calls, and a receiver response cannot change the appointment or attendance observation.
+
+{/* Evidence: crates/registry-scheduling/src/service.rs record_attendance;
+    crates/registry-scheduling/tests/postgres_commitments/attendance.rs
+    cancelled_and_elapsed_bookings_keep_corrigible_attendance_without_capacity_effects,
+    a_future_effective_time_is_refused_without_a_row_receipt_or_event,
+    attendance_is_off_by_default_and_explicit_in_operational_projection,
+    attendance_commit_captures_one_minimized_signed_after_event,
+    party_counts_resource_only_bookings_and_window_sessions_each_get_one_stream. */}
+
+## Link bookings to records in other systems
+
+An admission may carry `externalReferences`, each a typed opaque tuple of `product`, `recordType`, and `identifier`.
+Registry Scheduling stores only that tuple.
+It never calls the referenced product, resolves the identifier, or grants any authority through the link.
+Identifiers name records only, so never put personal data in a reference.
+Existing admissions may omit the field, and existing appointments return an empty set.
+
+A hold returns the references it was created with.
+Confirming that hold copies the same immutable references to the appointment, and a direct booking takes them from its admission.
+A reschedule must omit `externalReferences`, and rescheduling and cancellation retain the original set.
+Exact retries may reorder the set, but changing a reference under the same idempotency key is `idempotency.key-reused`.
+
+`GET /v1/appointments` requires `externalReferenceProduct`, `externalReferenceRecordType`, and `externalReferenceIdentifier`, and accepts the ordinary `cursor` and `limit` parameters.
+It returns only appointments owned by the authenticated caller that carry the exact tuple.
+Its cursor is bound to both that caller and the tuple, and ownership is rechecked on every page.
+The link lets another product find appointments created by its stable service principal without giving Registry Scheduling access to that product.
+
+An orchestrator that books for another product's record needs `externalReferences` on every create it makes.
+The reference is how it learns an outcome it never received.
+The listing needs only the read scope, so a token for the same issuer and subject that carries no task grant finds the appointment after the grant that booked it has expired.
+The token that carried the expired grant cannot do this, because an expired grant refuses the whole token, read scope included.
+A hold is not listed; a hold that is never confirmed expires and returns its capacity.
+
+Ordinary listing is per principal by design.
+By default a hold or appointment is owned by the verified token issuer and subject that booked it, so another principal sees an empty page even when it serves the same product.
+An orchestrator that must observe its own outcomes books and reads under one principal.
+An appointment an orchestrator books for a party is therefore the orchestrator's, not the party's: an external party reference alone permits no read or change.
+The official books for the party, and changes go through the process that booked it.
+
+History and audit carry the keyed pseudonym of that pair, derived with the audit hash key (`audit.hashKeyRef`).
+The key decides no ownership, and rotating it leaves every live claim with its owner.
+After an appointment ends or is cancelled, or a hold expires, is released, or is consumed, the `retention.claimOwnerRetentionDays` window bounds the raw pair.
+It defaults to seven days and accepts 1 through 365 days.
+The sweep replaces the pair with an inert digest, and the former owner can no longer list, read, act on, or recover a receipt for that claim.
+The claim, its history, and audit stay.
+[Registry Scheduling API](../../reference/apis/registry-scheduling/) gives the full recovery rules for an unknown outcome.
+
+{/* Evidence: crates/registry-scheduling/tests/postgres_commitments.rs
+    external_references_survive_the_lifecycle_and_filter_only_owned_appointments,
+    a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt,
+    a_booking_stays_observable_by_reference_after_its_grant_expires;
+    crates/registry-scheduling/src/config.rs claim_owner_retention_accepts_its_own_bounded_window. */}
+
+## Record booking parties and management
+
+An exact-time offering may opt into `partyCounts: optional`.
+Room and equipment bookings can then omit `party` without inventing a recipient or attendee.
+Omitted policy configuration keeps required counts, as do arrival windows.
+Supplied counts are validated and retained independently from capacity units, and a booking that omits `party` under `partyCounts: optional` records no counts.
+
+`partyReferences` can record up to sixteen typed `beneficiary` or `organization` references to source-owned records.
+Use opaque identifiers without names or contact details; these references grant no authority.
+They are retained through confirmation and rescheduling and follow identity retention.
+Changing the booking's time does not change its recorded parties or manager.
+
+Assisted booking can explicitly select `manager: schedulingManager`, using a fixed value from the source grant's signed identity rather than a caller-supplied person identifier.
+The actor and manager are then separate.
+Additional exact actions, fresh online grant status, and the retained source-manager binding authorize creation, management, and current-detail reads.
+This path grants no list or history access.
+[Registry Scheduling task grants](../../reference/scheduling-task-grants/#source-managed-assisted-bookings) describes the complete authority and recovery contract.
+
+Operational staff can use a separate bounded appointment work list when runtime configuration grants an explicit role scope and a service, location, and resource profile.
+Its projection contains only permitted scheduling data, not booking identity or contact data.
+[Registry Scheduling configuration reference](../../reference/scheduling-configuration/#operational-appointment-read-profiles) describes the profiles.
+
+{/* Evidence: crates/registry-scheduling-core/src/party.rs party_count_policy_defaults_to_required;
+    crates/registry-scheduling-core/src/schema.rs partyReferences;
+    crates/registry-scheduling/tests/postgres_commitments/booking_party.rs
+    declared_party_and_typed_references_survive_hold_confirmation_and_reschedule,
+    a_resource_reservation_omits_people_only_under_explicit_exact_time_policy,
+    required_exact_time_and_arrival_window_refuse_missing_or_incoherent_counts. */}
+{/* TODO[evidence]: no test names the sixteen-reference limit directly. */}
+
+## Observe an original receipt
+
+`POST /v1/appointments/receipt` accepts the original request body and `Idempotency-Key` under current ordinary read authority.
+It returns `200` with the retained original success receipt for the same verified issuer and subject.
+It never repeats the business operation.
+A same-principal read credential can observe work after task authority ends, and another service identity cannot impersonate that principal.
+`409 receipt.unresolved` covers unavailable evidence such as a missing, expired, or changed receipt, or a claim whose owner has been erased.
+It does not prove that no effect occurred.
+
+The receipt route authenticates before checking the JSON media type and decoding its bounded body.
+The router still rejects a declared body larger than one MiB before entering the handler.
+Authenticated callers keep the usual malformed JSON, unsupported media type, request-shape, and body-size refusals.
+
+{/* Evidence: crates/registry-scheduling/tests/postgres_commitments.rs
+    original_appointment_receipt_is_readable_without_a_grant_and_never_creates_capacity,
+    a_refused_attempt_never_resolves_an_original_appointment_receipt,
+    original_appointment_receipt_authenticates_before_parsing_its_bounded_body. */}
+
+## Book a finite weekly series
+
+The finite series recipe lets a source application reserve a bounded weekly series through the public Python client.
+The source owns the recurrence rule, series revisions, occurrence identities, and recovery journal.
+Registry Scheduling remains the only capacity authority, and every create, reschedule, and cancellation goes through its ordinary public API and capacity transaction.
+
+The recipe implements explicit partial results.
+It can confirm some occurrences and refuse others, and its durable result always names every occurrence.
+It never presents the series as wholly booked when a subset was committed.
+The SQLite journal is a compact reference for an adopter that needs a complete single-node implementation or a concrete schema to port.
+An institution's existing durable source application is the preferred owner when it already has transactions, locking, and recovery operations.
+
+### Bounds and civil time
+
+A definition contains:
+
+- A UUID `seriesId`.
+- An IANA `timezone` and an offset-free `localStart`.
+- `intervalWeeks`, from 1 through 52.
+- Exactly one end rule: `count`, or an inclusive local `throughDate`.
+- `ambiguousTime`, set to `reject`, `earlier`, or `later`.
+- Zero or more `exclusionDates`, each of which must name a generated local candidate date.
+
+`count` counts weekly candidates before exclusions, and an excluded date does not extend the term.
+Each candidate receives `UUIDv5(seriesId, "occurrence:<ordinal>")`, so its identity survives retries, exclusion, and later time changes.
+A nonexistent wall time is always refused.
+An ambiguous wall time is refused unless the definition selects the earlier or later actual instant.
+
+The default maximum is 64 candidates over at most 366 days.
+Aggregate capacity work is limited to 256 allocation lines.
+The recipe calculates that value from the actual admission template as one primary allocation plus the length of `additionalAllocations`, multiplied by non-excluded occurrences, and the caller cannot supply a smaller count.
+An adopter can choose lower `Limits`.
+
+The full admission template is copied for each occurrence, and only `start` and the recipe's correlation references are added or replaced.
+`durationMinutes`, `resource`, party data, and `additionalAllocations` bundle constraints pass through without being reconstructed or dropped.
+Registry Scheduling still validates the complete admission under the active offering, task grant, and capacity ledger.
+On reschedule, the recipe preserves the complete interval, resource, party counts, and bundle request, and omits `externalReferences`, `partyReferences`, and `manager`, as the public contract requires.
+Registry Scheduling retains the appointment's immutable create-time references, party references, and manager.
+
+### Durable partial results and recovery
+
+`SeriesJournal` uses a source-owned SQLite database with WAL, foreign keys, full synchronous commits, and `BEGIN IMMEDIATE` revision changes.
+Each command stores its exact credential-profile label, idempotency key, canonical request, request hash, method kind, attempts, and outcome before a summary is returned.
+Bearer tokens are never stored.
+
+Before network I/O, a prepared command is committed as `dispatched`.
+A process-wide and operating-system file lock prevents another process from reconciling an in-flight HTTP call, and the SQLite lease generation fences stale completions after a crash.
+A restart handles a dispatched create through `appointment_receipt` with the exact original key and body.
+A missing or expired receipt remains `unresolved` and never licenses a new key.
+Reschedule and cancel have no separate receipt observer, so recovery sends only the identical stored mutation under its original key and current authority.
+An expired key or unusable response remains unresolved, and the recipe does not infer mutation success from a current appointment read.
+
+The credential-profile label identifies the operator-configured credential source that may resume the journal.
+It is not a verified token identity, because Registry Scheduling verifies the bearer token and exact actor on every call.
+A different local profile cannot take over prepared work, and a mismatch while recovering an already dispatched command leaves that outcome unresolved with its original profile, key, and request intact.
+Before dispatch or receipt recovery, the processor checks the stored request against its prepared hash, and a mismatch raises an explicit integrity error without making a client call.
+That detects inconsistent local journal data; it does not authenticate a database against someone who can rewrite both the command and its hash.
+
+SQLite gives complete durability and concurrency for one mounted journal, but it is not an active-active database.
+An application with a durable source store can port the same invariants: compare-and-swap series revisions, immutable prepared commands, commit-before-dispatch, fenced leases, exact-key recovery, and per-occurrence outcomes.
+
+### Correlation and disclosure
+
+Each admission retains two opaque references:
+
+```text
+source-application / reservation-series / <series UUID>
+source-application / reservation-occurrence / <occurrence UUID>
+```
+
+They contain no personal data and grant no authority.
+Supported owner and operational appointment reads can select or return these references under their own authorization.
+An explicitly configured observer projection may include allowed references under the hook disclosure policy.
+The default iCalendar export strips external references, so the recipe makes no default calendar-correlation claim.
+
+### Run the recipe
+
+Install the unified Registry Stack Python client for the deployment, then use its public Scheduling namespace:
+
+```python
+from registry_client import scheduling
+
+from finite_series import SeriesJournal, SeriesProcessor
+
+client = scheduling.SchedulingClient("https://scheduling.example.gov/")
+journal = SeriesJournal("reservation-series.sqlite3")
+
+journal.prepare_series(
+    {
+        "seriesId": "c4207bf4-e7c3-4de4-bb14-36797183b480",
+        "timezone": "Europe/Zurich",
+        "localStart": "2026-10-20T18:00:00",
+        "intervalWeeks": 1,
+        "count": 8,
+        "ambiguousTime": "reject",
+        "exclusionDates": ["2026-11-03"],
+    },
+    {
+        "offering": "meeting-room",
+        "start": "2026-10-20T16:00:00Z",
+        "durationMinutes": 120,
+        "resource": "room-a",
+        "policyRevision": 7,
+        "capabilities": [],
+        "prerequisites": [],
+        "externalReferences": [],
+    },
+    owner="room-reservations-production",
+)
+
+result = SeriesProcessor(
+    journal,
+    client,
+    credential_profile="room-reservations-production",
+).process(series_id="c4207bf4-e7c3-4de4-bb14-36797183b480", token=current_token)
+```
+
+Show `result["occurrences"]` rather than deriving a single success flag.
+Outcomes are `succeeded`, `refused`, `excluded`, `unresolved`, or `pending` before dispatch.
+
+`prepare_edit` requires the current `expected_revision`.
+It accepts scope `one`, `this-and-future`, or `all`, and the caller must provide one explicit change for every non-past occurrence the scope selects.
+A reschedule names its new local wall time, and a cancellation may carry a reason.
+The journal records the complete diff before preparing commands.
+An occurrence with a prepared, dispatched, or unresolved command cannot accept another edit, so resolve that command first.
+Every mutation uses the occurrence's current appointment identifier and observed Scheduling revision.
+A stale series revision fails before command preparation, and a Scheduling revision or capacity conflict is retained as that occurrence's refusal.
+A failed reschedule leaves the old confirmed appointment and its history intact, and past occurrences are never edited or erased.
+
+{/* Evidence: products/scheduling/integrations/finite-series/finite_series.py SeriesJournal, SeriesProcessor, prepare_edit;
+    products/scheduling/integrations/finite-series/test_finite_series.py
+    test_count_exclusions_and_identity_are_stable, test_nonexistent_and_ambiguous_wall_times_are_explicit,
+    test_occurrence_horizon_and_aggregate_allocation_bounds, test_partial_result_records_every_success_conflict_and_exclusion,
+    test_lost_response_is_recovered_after_restart_with_exact_key_and_body, test_unresolved_receipt_never_uses_a_fresh_key,
+    test_reschedule_omits_every_create_only_member_of_the_template,
+    test_edit_cannot_hide_an_unresolved_occurrence_operation, test_past_occurrence_cannot_be_edited. */}
+
+## Export appointments as iCalendar
+
+The calendar export example writes a bounded snapshot of current appointments as an iCalendar file.
+It is an adapter over the Rust Scheduling client, not a calendar service.
+It has no calendar write credential, feed URL, subscription token, webhook receiver, recurrence model, or background synchronization authority.
+
+Each appointment is one `VEVENT` under RFC 5545.
+`UID` is stable from the runtime-minted appointment UUID, and `SEQUENCE` is the Scheduling revision.
+`DTSTAMP` is the explicit export clock, and `DTSTART` and `DTEND` are the current displayed interval in UTC.
+A cancelled appointment has `STATUS:CANCELLED`.
+Output uses CRLF and folds UTF-8 content lines at 75 octets.
+A revision outside RFC 5545's signed 32-bit `INTEGER` range, a non-positive interval, or interval precision the format cannot preserve is a hard error.
+
+By default, an event contains only its stable identifier, revision, displayed interval, state, a generic `Appointment` summary, and opaque busy-time status.
+It contains no person name, contact, organizer, attendee, location, offering, resource, channel, party count, party reference, external record reference, manager selection, cancellation reason, description, or URL.
+
+Supply the bearer token through `REGISTRY_SCHEDULING_TOKEN` using the deployment's normal secret injection.
+The command accepts no token argument and never puts a token in a URL or diagnostic.
+A personal export rereads each explicitly named appointment through the owner-authorized detail route:
+
+```sh
+cargo run --locked -p registry-scheduling-client --example calendar-export -- \
+  personal \
+  --base-url https://scheduling.example.gov/ \
+  --appointment 03f4f87d-82c1-4e89-9554-620118a560d0 \
+  > appointments.ics
+```
+
+A staff export uses the separately authorized operational query.
+It requires the current configured projection profile and a service, location, and time interval:
+
+```sh
+cargo run --locked -p registry-scheduling-client --example calendar-export -- \
+  staff \
+  --base-url https://scheduling.example.gov/ \
+  --service registry-update \
+  --location north-counter \
+  --start 2026-11-01T00:00:00Z \
+  --end 2026-12-01T00:00:00Z \
+  --profile calendar-export \
+  > appointments.ics
+```
+
+The staff path requests at most 50 rows per page, follows at most 10 pages, and accepts at most 500 source rows.
+Personal export accepts at most 500 appointment identifiers, and repeated rows count toward the limit.
+Repeated appointment rows converge to the highest revision, while inconsistent rows at the same revision are refused.
+Page, row, interval, and empty-result bounds are errors, never silent truncation.
+The adapter buffers the complete export before writing standard output, so a failed read or continuation cannot produce a partial calendar file.
+
+Every invocation fetches current state and accepts no lifecycle signals.
+A delayed or duplicate create, reschedule, or cancellation signal therefore cannot overwrite a newer appointment during export, and the three project to the same `UID` with a higher `SEQUENCE` and current state.
+Registry Scheduling supplies authoritative instants, and the adapter writes them in UTC.
+It does not infer a civil time zone, emit `VTIMEZONE`, or recalculate daylight-saving transitions, and an interval spanning a daylight-saving change keeps its actual elapsed duration.
+
+The saved `.ics` file is a snapshot.
+Browser, proxy, filesystem, and calendar-application caches can retain an older copy, and importing a later snapshot is an action owned by the person or institution operating that calendar.
+Calendar applications vary in whether an import updates, duplicates, or ignores an existing event, so the adapter makes no claim of automatic importer convergence and infers no recurrence from similar appointments.
+
+{/* Evidence: crates/registry-scheduling-client/examples/calendar-export.rs OPERATIONAL_PAGE_SIZE,
+    MAXIMUM_OPERATIONAL_PAGES, TOKEN_ENVIRONMENT_VARIABLE, personal_mode_rereads_current_owner_detail_before_projection,
+    staff_mode_follows_bounded_current_profile_pages, staff_mode_refuses_page_and_row_overflow;
+    crates/registry-scheduling-client/tests/calendar_export.rs default_projection_omits_private_and_operational_details,
+    event_count_is_a_hard_error_instead_of_truncation, conflicting_rows_at_one_revision_are_refused. */}
+{/* TODO[evidence]: no independent iCalendar parser checks the output, so third-party parser acceptance is unproven. */}
 
 ## Configuration reference
 
@@ -266,5 +751,9 @@ every key of `scheduling.yaml`, `records.yaml`, the fixtures, and the runtime fi
 
 ## Next
 
-[Deploy and operate Registry Scheduling](../../operate/scheduling/) packages this project, activates
-it on PostgreSQL, applies its records, and starts the runtime.
+- [Deploy and operate Registry Scheduling](../../operate/scheduling/) packages this project,
+  activates it on PostgreSQL, applies its records, and starts the runtime.
+- [Registry Scheduling task grants](../../reference/scheduling-task-grants/) describes the authority
+  behind every commitment.
+- [Registry Scheduling configuration reference](../../reference/scheduling-configuration/) lists
+  every key.

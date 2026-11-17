@@ -1,0 +1,64 @@
+---
+title: Signed hook deliveries
+description: How receivers authenticate signed Base Registry Engine, Scheduling, and Coordinator hook deliveries, including the raw timestamp rule and freshness handling.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Base Registry Engine (BReg), Scheduling, and Coordinator sign every hook delivery they send.
+A receiver authenticates a delivery with the shared verifier before it acts on the body.
+
+## Verify a delivery
+
+In Rust, authenticate a delivery through the receiver verifier in the hooks platform crate.
+The HMAC-SHA256 signature itself comes from the platform crypto crate, whose Version 1 signing domain and length-prefixed field order are part of the wire contract.
+One JSON fixture of signed deliveries is shared by the Rust, Node, and Python tests.
+
+{/* Evidence: crates/registry-platform-hooks/src/receiver.rs verify_delivery;
+    crates/registry-platform-crypto/src/delivery_signature.rs SIGNATURE_DOMAIN, sign_v1, verify_v1;
+    crates/registry-platform-crypto/tests/fixtures/delivery-signatures.json. */}
+
+Pass the exact method, request target, signed headers, and body bytes.
+The signature authenticates the raw delivery-time bytes before the shared verifier parses freshness.
+Valid RFC 3339 fractions such as `.12Z`, `.120Z`, and `.000Z` are accepted.
+Never normalize the timestamp before comparison: replacing `.120Z` with `.12Z` changes the signature even though it represents the same instant.
+Invalid times, changed signatures, and stale deliveries remain refused.
+
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs verify_v1_authenticity;
+    crates/registry-platform-crypto/tests/fixtures/delivery-signatures.json deliveryTime. */}
+
+## Freshness
+
+Rust receivers select the freshness mode with `DeliveryFreshness::Within { now, skew }`, which checks the delivery time against the clock and skew you pass.
+
+{/* Evidence: crates/registry-platform-hooks/src/receiver.rs DeliveryFreshness, Within. */}
+
+The Node and Python bindings expose the same check as an entry point that takes the request parts and your key:
+
+- Node: `breg.verifyHookDelivery({method, path, headers, body, key})`
+- Python: `breg.verify_hook_delivery(method=..., path=..., headers=..., body=..., key=...)`
+
+Both return the authenticated exact values, including `deliveryTime` (Python `delivery_time`) and `idempotencyKey` (Python `idempotency_key`).
+These binding entry points use caller-enforced freshness.
+Compare the returned instant with your trusted clock and chosen window, and durably deduplicate on the idempotency key before taking an effect.
+Verification alone creates no source, schema, recipient, or business authority.
+
+{/* Evidence: crates/registry-platform-hooks/src/receiver.rs CallerEnforced;
+    crates/registry-breg-client-py/src/lib.rs verify_hook_delivery;
+    crates/registry-breg-client-node/__test__/webhook-verification.test.js verifyHookDelivery, deliveryTime. */}
+
+## Casework completion wakes
+
+Casework completion wakes use their own bearer and named-header receiver contract, not this hook-signature scheme.
+See [Casework completion receivers](../../configure/casework-completion-receivers/).
+
+## Next
+
+- [Request an access token from your own code](../../configure/request-an-access-token/)
+- [Errors](../errors/)

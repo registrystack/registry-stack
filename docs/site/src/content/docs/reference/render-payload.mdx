@@ -1,0 +1,206 @@
+---
+title: What a Render template receives
+description: The envelope Registry Render hands a Typst template as its only input, the rules for labels, assets, the issuance clock and the seal member, and the authoring loop that checks them.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+---
+
+Registry Render injects exactly one input into a template, `sys.inputs.data`, as a JSON string.
+Those bytes are the RFC 8785 canonicalization of the envelope below. The sha256 of those exact
+bytes is the `dataDigest` the caller stores on the record.
+
+```typst
+#let payload = json(bytes(sys.inputs.data))
+#let d = payload.data
+#let L = payload.labels.ar
+```
+
+{/* Evidence: crates/registry-render/src/envelope.rs, build_envelope() and canonical_bytes();
+    crates/registry-render/tests/golden.rs, injected_bytes_are_the_hashed_canonical_bytes. */}
+
+## The envelope
+
+```json
+{
+  "data": {},
+  "assets": {
+    "photo": "<base64>"
+  },
+  "labels": {
+    "ar": {},
+    "fr": {}
+  },
+  "locale": "ar",
+  "issuedAt": "2026-09-16T10:32:00Z",
+  "document": {
+    "id": "receipt",
+    "version": 3
+  },
+  "signing": {
+    "mode": "seal",
+    "signerName": "Ministry of Licensing",
+    "testOnly": false
+  }
+}
+```
+
+- `data` is your request data, validated against the document's schema.
+- `assets` holds request images. The template reads them as virtual files, such as
+  `image("/assets/photo")`.
+- `labels` holds every label table the document declared in its manifest.
+- `locale` is present only when the request sent one, and is validated.
+- `issuedAt` is the document's issuance claim. It is also the world clock and the PDF date.
+- `document` carries the document type's `id` and its `version` from the manifest.
+- `signing` is present only on the seal route, `POST /v1/seal/{type}`, and in
+  `compile --preview-seal`.
+
+{/* Evidence: crates/registry-render/src/envelope.rs, EnvelopeInput, SigningPayload and
+    build_envelope(); crates/registry-render/tests/golden.rs, golden_hashes_match. */}
+
+## Labels
+
+`labels` is bundle-owned content: one label table per `labels/<locale>.yaml` (`kind: RenderLabels`),
+whose `labels` map of key to text the template receives flat. Label keys match
+`^[a-z][a-z0-9_-]{0,63}$`, for example `example_title`. The
+[Registry Render configuration reference](../render-configuration/) lists the label table fields.
+
+Label values use the shared display-text rules: multilingual joiners and direction marks remain
+valid, while controls that can invisibly reorder text are refused.
+
+The manifest lists the locales in `labels: [...]`, and the template receives every declared table,
+so a bilingual document consumes both. A key present in one locale and missing from another is a
+`registry-render check` error, not a runtime surprise. A key no locale declares is a template error
+at compile time.
+
+{/* Evidence: products/render/schemas/labels.schema.json, pattern;
+    crates/registry-render/tests/scaffold.rs, check_names_a_locale_missing_a_label_key. */}
+
+## Assets
+
+`assets` values are the base64 text as received. The template never decodes them: reference the
+decoded image as `image("/assets/photo")`, with the leading slash, because the assets namespace
+sits at the bundle root. Hashing covers the exact bytes.
+
+{/* Evidence: crates/registry-render/tests/golden.rs, wrong_media_type_and_oversize_assets_are_refused;
+    crates/registry-render/src/envelope.rs, build_envelope(). */}
+
+## The issuance clock
+
+`issuedAt` is the clock. `datetime.today()`, `set document(date: auto)`, and the PDF creation date
+all derive from it. A re-render with the same `issuedAt` and data is byte-identical; changing it
+changes bytes.
+
+The instant is normalized to UTC: `2026-09-16T13:32:00+03:00` and `2026-09-16T10:32:00Z` are the
+same render. The caller's UTC offset is deliberately not preserved, and the envelope carries the
+`Z` form only.
+
+A local-date layout can still shift the instant: `datetime.today(offset: 3)` answers "what date is
+it 3 hours after issuance". The offset is total hours, so fractional values work and land at
+full-second precision. An offset large enough to overflow the shift answers `none` instead of
+failing.
+
+{/* Evidence: crates/registry-render/src/envelope.rs, format_issued_at();
+    crates/registry-render/src/world.rs, today_follows_the_issued_instant_with_and_without_offset,
+    today_offset_honors_fractional_hours and today_with_an_absurd_offset_returns_none_without_panicking;
+    crates/registry-render/tests/golden.rs, issued_at_changes_bytes_and_is_the_only_knob. */}
+
+## Version, data and paths
+
+`document.version` is the template's own version from the manifest, so print it on paper if you
+like. The renderer version appears nowhere in the envelope or the PDF bytes.
+
+Data is inert. Values are Typst values and are never evaluated; a string that looks like code is
+only a string.
+
+Paths are contained. `image()` and `read()` resolve only exact keys in the immutable bundle
+snapshot and the virtual `/assets/...` namespace. The renderer's world refuses `..` and absolute
+paths, and bundle symlinks are refused before a snapshot is accepted.
+
+{/* Evidence: crates/registry-render/tests/golden.rs, pdf_bytes_carry_no_renderer_version and
+    data_paths_cannot_escape_the_bundle; crates/registry-render/tests/scaffold.rs,
+    bundle_with_symlink_cannot_be_packaged. */}
+
+## The signing member
+
+`signing` means the file will be sealed. Only the seal route adds it. The render route and every
+other render never do, so a template prints its seal block only on files that carry a seal.
+
+The one exception is a preview. `registry-render compile --preview-seal test-only` (or
+`production`, which sets `testOnly`) adds the member, with `--signer-name <text>` as `signerName`,
+and signs nothing. Its output is byte for byte the first revision the seal route signs for the same
+inputs, so a golden can cover a template's sealed variant.
+
+Read the member with `payload.at("signing", default: none)` so one template serves both routes.
+
+- `mode` is always `"seal"`.
+- `signerName` is the seal certificate's display name (its organization, else its common name). It
+  is absent when the certificate names neither.
+- `testOnly` is `true` when the runtime declares `assuranceProfile: local`. Print a visible test
+  marking then, because a test seal is not an official document. The `registry-render init`
+  scaffold prints the block below, labelled.
+
+The member is part of the canonical envelope, so a sealed render's `dataDigest` differs from a plain
+render of the same request. The signature itself is added after the template runs, as an invisible
+field: the template draws no signature appearance.
+
+```typst
+#let signing = payload.at("signing", default: none)
+#if signing != none [
+  Electronically sealed by #signing.at("signerName", default: "the issuing authority").
+  #if signing.testOnly [ TEST SEAL: not a valid official document. ]
+]
+```
+
+{/* Evidence: crates/registry-render/src/envelope.rs, SigningPayload;
+    crates/registry-render/tests/golden.rs, the_sealed_variant_golden_matches;
+    crates/registry-render/tests/scaffold.rs, compile_preview_seal_renders_the_sealed_variant_without_a_signature;
+    crates/registry-render/tests/serve_seal.rs, compile_preview_seal_renders_the_seal_routes_first_revision. */}
+
+## Authoring loop
+
+Edit templates freely with upstream tooling: tinymist and VS Code give a live preview when you point
+them at the source bundle. `registry-render compile`, `validate` and `check` accept raw source
+during authoring.
+
+When the bundle is ready, `registry-render package --bundle <source> --output <new-directory>`
+validates the source and writes the shared `SHA256SUMS` envelope plus an optional `REVISION`.
+`registry-render serve` always verifies that package, including an optional `package.expectedDigest`
+pin, before it listens.
+
+`registry-render check` verifies everything, including that every label character is drawable by
+some bundle or baseline font. A successful render that prints tofu is wrong on paper, so coverage
+gaps are named at check time and warnings fail `--strict` at render time.
+
+`serve` includes `X-Registry-Warning-Count` on every PDF response, including zero for a render
+without warnings. A host can withhold a document when that count is nonzero, and request
+`Accept: application/json` to inspect `warnings`. Only the count reaches the header, never warning
+text or document values.
+
+When in doubt, the exact injected bytes are the ground truth:
+
+```sh
+registry-render compile ... --emit-envelope env.json
+```
+
+The repository carries three complete working
+[example bundles](https://github.com/registrystack/registry-stack/tree/main/products/render/bundles):
+a bilingual right-to-left receipt, a PDF/A certificate, and an ID-1 card with a photo.
+
+{/* Evidence: crates/registry-render/src/cli.rs, emit_envelope and preview_seal;
+    crates/registry-render/src/check.rs, check_script_coverage();
+    crates/registry-render/src/server.rs, X-Registry-Warning-Count;
+    crates/registry-render/tests/scaffold.rs, watch_and_emit_envelope_are_refused_together;
+    products/render/bundles. */}
+
+## Next
+
+- [Registry Render configuration reference](../render-configuration/)
+- [Deploy Registry Render](../../operate/registry-render/)
+- [Render your first document](../../tutorials/first-render-document/)
