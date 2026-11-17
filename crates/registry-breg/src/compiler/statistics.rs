@@ -8,8 +8,8 @@ use serde_json::json;
 
 use crate::contract::{
     AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource, Operation,
-    RegistryProject, StatisticalPeriodGranularitySource, StatisticalPeriodSource,
-    StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
+    RegistryProject, StatisticalMeasureTypeSource, StatisticalPeriodGranularitySource,
+    StatisticalPeriodSource, StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -18,7 +18,9 @@ use crate::model::{
     CompiledStatisticalValidity,
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
-use crate::statistics::{period_for_code, DisclosureParameters, PeriodGranularity};
+use crate::statistics::{
+    period_for_code, DisclosureParameters, Measure, MeasureType, PeriodGranularity,
+};
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
 
@@ -70,6 +72,7 @@ pub(super) fn compile(
         referenced_fields.extend(period_fields);
         let dimensions = compile_dimensions(source, unit, &root, &mut errors);
         referenced_fields.extend(dimensions.iter().map(|dimension| dimension.field.clone()));
+        let measures = compile_measures(source, &root, &mut errors);
         validate_referenced_fields(source, unit, &referenced_fields, &root, &mut errors);
 
         let grants = DatasetGrants::of(project, &source.id);
@@ -266,9 +269,12 @@ pub(super) fn compile(
                 &format!("set roundingBase to at most {MAX_EXACT_JSON_INTEGER}"),
             ));
         }
-        let cell_count = dimensions.iter().try_fold(1_usize, |cells, dimension| {
-            cells.checked_mul(dimension.codes.len() + usize::from(dimension.include_unknown) + 1)
-        });
+        let cell_count = dimensions
+            .iter()
+            .try_fold(measures.len().max(1), |cells, dimension| {
+                cells
+                    .checked_mul(dimension.codes.len() + usize::from(dimension.include_unknown) + 1)
+            });
         if cell_count.is_none_or(|cells| cells > MAX_STATISTICAL_CELLS_PER_PERIOD) {
             errors.push(error(
                 "breg.statistical-dataset.cells-exceeded",
@@ -309,6 +315,7 @@ pub(super) fn compile(
             source,
             &period,
             &dimensions,
+            &measures,
             &disclosure,
             DefinitionDependencies {
                 entities,
@@ -325,6 +332,7 @@ pub(super) fn compile(
                     source,
                     &period,
                     &dimensions,
+                    &measures,
                     disclosure,
                     &definition_digest,
                     cells,
@@ -351,6 +359,7 @@ pub(super) fn compile(
                 population: source.population.clone(),
                 period,
                 dimensions,
+                measures,
                 disclosure,
                 access_profiles,
                 live_profiles,
@@ -373,6 +382,7 @@ fn maximum_release_document_bytes(
     source: &crate::contract::StatisticalDatasetSource,
     period: &CompiledStatisticalPeriod,
     dimensions: &[CompiledStatisticalDimension],
+    measures: &[Measure],
     disclosure: DisclosureParameters,
     definition_digest: &str,
     cell_count: usize,
@@ -410,7 +420,7 @@ fn maximum_release_document_bytes(
         "dataset": {
             "id": source.id,
             "unit": source.unit,
-            "measure": "count",
+            "measures": measures,
             "periodKind": period_kind,
             "granularity": granularity,
             "population": source.population,
@@ -476,9 +486,15 @@ fn maximum_release_document_bytes(
     let dimension_object = 2_usize
         .checked_add(dimension_members)?
         .checked_add(dimensions.len().saturating_sub(1))?;
+    let longest_measure_id = measures
+        .iter()
+        .map(|measure| measure.id.len())
+        .max()
+        .unwrap_or(0);
     let empty_cell = canonicalize_json(&json!({
         "period": "9999-12-31",
         "dimensions": {},
+        "measure": "x".repeat(longest_measure_id),
         "value": MAX_EXACT_JSON_INTEGER,
         "status": "suppressed",
     }))
@@ -646,6 +662,58 @@ fn compile_period(
     (Some(compiled), fields)
 }
 
+fn compile_measures(
+    source: &crate::contract::StatisticalDatasetSource,
+    root: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<Measure> {
+    let path = format!("{root}.measures");
+    if source.measures.is_empty() {
+        errors.push(error(
+            "breg.statistical-dataset.measures-empty",
+            &path,
+            &source.id,
+            "declare at least one measure, or remove `measures` to publish one `count` measure",
+        ));
+        return Vec::new();
+    }
+    let mut seen = BTreeSet::new();
+    let mut counts = 0_usize;
+    let mut measures = Vec::new();
+    for (index, measure) in source.measures.iter().enumerate() {
+        let path = format!("{path}[{index}]");
+        if !seen.insert(measure.id.as_str()) {
+            errors.push(error(
+                "breg.statistical-dataset.measure-duplicate",
+                &format!("{path}.id"),
+                &source.id,
+                &format!("declare measure `{}` once", measure.id),
+            ));
+            continue;
+        }
+        let measure_type = match measure.measure_type {
+            StatisticalMeasureTypeSource::Count => {
+                counts += 1;
+                if counts > 1 {
+                    errors.push(error(
+                        "breg.statistical-dataset.measure-count-duplicate",
+                        &format!("{path}.type"),
+                        &source.id,
+                        "declare one count measure; a second would publish the same numbers twice",
+                    ));
+                    continue;
+                }
+                MeasureType::Count
+            }
+        };
+        measures.push(Measure {
+            id: measure.id.to_string(),
+            measure_type,
+        });
+    }
+    measures
+}
+
 fn compile_dimensions(
     source: &crate::contract::StatisticalDatasetSource,
     unit: &CompiledEntity,
@@ -665,7 +733,7 @@ fn compile_dimensions(
             ));
             continue;
         }
-        if matches!(field_id.as_str(), "period" | "value" | "status") {
+        if matches!(field_id.as_str(), "period" | "measure" | "value" | "status") {
             errors.push(error(
                 "breg.statistical-dataset.dimension-reserved",
                 &path,
@@ -959,6 +1027,7 @@ fn definition_digest(
     source: &crate::contract::StatisticalDatasetSource,
     period: &CompiledStatisticalPeriod,
     dimensions: &[CompiledStatisticalDimension],
+    measures: &[Measure],
     disclosure: &DisclosureParameters,
     dependencies: DefinitionDependencies<'_>,
     publisher: Option<&str>,
@@ -1082,6 +1151,7 @@ fn definition_digest(
         "referencedFieldDefinitions": referenced_field_definitions,
         "period": period_definition,
         "dimensions": dimensions,
+        "measures": measures,
         "disclosure": disclosure,
         "derived": derived,
         "publisherVisibility": visibility,

@@ -35,6 +35,7 @@ pub(crate) fn statistical_dataset_metadata_entry(
                 "codes": codes,
             })
         }).collect::<Vec<_>>(),
+        "measures": dataset.measures,
         "definitionDigest": dataset.definition_digest,
         "operations": operations,
     }))
@@ -66,6 +67,7 @@ pub(crate) fn all_statistical_dataset_metadata(
                         codes.push(TOTAL_CODE.to_owned());
                         json!({"field":dimension.field,"vocabulary":dimension_vocabulary(dimension),"codes":codes})
                     }).collect::<Vec<_>>(),
+                    "measures": dataset.measures,
                     "definitionDigest": dataset.definition_digest,
                     "accessProfiles": profiles,
                 })
@@ -526,10 +528,20 @@ fn document_schema() -> Value {
         "properties":{
             "dataset":{
                 "type":"object","additionalProperties":false,
-                "required":["id","unit","measure","periodKind","granularity","population","definitionDigest"],
+                "required":["id","unit","measures","periodKind","granularity","population","definitionDigest"],
                 "properties":{
                     "id":{"type":"string"},"unit":{"type":"string"},
-                    "measure":{"const":"count"},
+                    "measures":{
+                        "type":"array","minItems":1,
+                        "items":{
+                            "type":"object","additionalProperties":false,
+                            "required":["id","type"],
+                            "properties":{
+                                "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                "type":{"type":"string","enum":["count"]}
+                            }
+                        }
+                    },
                     "periodKind":{"type":"string","enum":["flow","stock"]},
                     "granularity":{"type":"string","enum":["day","month","quarter","year"]},
                     "population":{"type":"string"},
@@ -558,7 +570,7 @@ fn document_schema() -> Value {
                 }
             },
             "dimensions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["field","vocabulary","codes"],"properties":{"field":{"type":"string"},"vocabulary":{"type":"string"},"codes":{"type":"array","items":{"type":"string"}}}}},
-            "cells":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["period","dimensions","value","status"],"properties":{"period":{"type":"string"},"dimensions":{"type":"object","additionalProperties":{"type":"string"}},"value":{"type":["integer","null"],"minimum":0},"status":{"type":"string","enum":["exact","suppressed","rounded"]}}}},
+            "cells":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["period","dimensions","measure","value","status"],"properties":{"period":{"type":"string"},"dimensions":{"type":"object","additionalProperties":{"type":"string"}},"measure":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"value":{"type":["integer","null"],"minimum":0},"status":{"type":"string","enum":["exact","suppressed","rounded"]}}}},
             "release":{
                 "type":"object","additionalProperties":false,
                 "required":["period","version","status","snapshot","computedAt","packageDigest"],

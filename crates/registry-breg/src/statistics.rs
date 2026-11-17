@@ -74,6 +74,8 @@ pub enum CellStatus {
 pub struct Cell {
     pub period: String,
     pub dimensions: BTreeMap<String, String>,
+    /// The id of the declared measure this cell reports.
+    pub measure: String,
     pub value: Option<u64>,
     pub status: CellStatus,
 }
@@ -94,9 +96,18 @@ pub enum WithdrawalReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Measure {
+#[serde(rename_all = "kebab-case")]
+pub enum MeasureType {
     Count,
+}
+
+/// One declared measure: its local id and how its value is computed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Measure {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub measure_type: MeasureType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,7 +115,8 @@ pub enum Measure {
 pub struct DatasetDocument {
     pub id: String,
     pub unit: String,
-    pub measure: Measure,
+    /// Declared measures in publication order; every cell names one of them.
+    pub measures: Vec<Measure>,
     pub period_kind: PeriodKind,
     pub granularity: PeriodGranularity,
     pub population: String,
@@ -362,9 +374,11 @@ pub fn build_exact_cells(
     dataset: &str,
     periods: &[Period],
     dimensions: &[DimensionDomain],
+    measures: &[Measure],
     grouped: &[GroupedCell],
 ) -> Result<Vec<Cell>, StatisticsError> {
     validate_dimensions(dimensions)?;
+    validate_measures(measures)?;
     let period_codes: BTreeSet<&str> = periods.iter().map(|period| period.code.as_str()).collect();
     let base_codes: Vec<Vec<String>> = dimensions
         .iter()
@@ -386,7 +400,8 @@ pub fn build_exact_cells(
         .collect();
     let cells_per_period = checked_product(output_codes.iter().map(Vec::len))?;
     let total_cells = cells_per_period
-        .checked_mul(periods.len())
+        .checked_mul(measures.len())
+        .and_then(|cells| cells.checked_mul(periods.len()))
         .ok_or(StatisticsError::TooManyCells)?;
     if total_cells > MAX_CELLS_PER_RESPONSE {
         return Err(StatisticsError::TooManyCells);
@@ -441,22 +456,27 @@ pub fn build_exact_cells(
     let mut cells = Vec::with_capacity(total_cells);
     for period in periods {
         for_each_combination(&output_codes, |codes| {
-            let dimensions_map = dimensions
+            let dimensions_map: BTreeMap<String, String> = dimensions
                 .iter()
                 .zip(&codes)
                 .map(|(dimension, code)| (dimension.field.clone(), code.clone()))
                 .collect();
-            cells.push(Cell {
-                period: period.code.clone(),
-                dimensions: dimensions_map,
-                value: Some(
-                    values
-                        .get(&(period.code.clone(), codes))
-                        .copied()
-                        .unwrap_or(0),
-                ),
-                status: CellStatus::Exact,
-            });
+            let value = values
+                .get(&(period.code.clone(), codes))
+                .copied()
+                .unwrap_or(0);
+            // Every measure is a count, which reads the grouped row counts.
+            for measure in measures {
+                match measure.measure_type {
+                    MeasureType::Count => cells.push(Cell {
+                        period: period.code.clone(),
+                        dimensions: dimensions_map.clone(),
+                        measure: measure.id.clone(),
+                        value: Some(value),
+                        status: CellStatus::Exact,
+                    }),
+                }
+            }
         });
     }
     Ok(cells)
@@ -531,7 +551,11 @@ pub fn document_csv(document: &StatisticsDocument) -> Result<Vec<u8>, Statistics
             .iter()
             .map(|dimension| dimension.field.clone()),
     );
-    header.extend(["value".to_owned(), "status".to_owned()]);
+    header.extend([
+        "measure".to_owned(),
+        "value".to_owned(),
+        "status".to_owned(),
+    ]);
     write_csv_row(&mut output, &header);
     for cell in &document.cells {
         let period =
@@ -555,6 +579,7 @@ pub fn document_csv(document: &StatisticsDocument) -> Result<Vec<u8>, Statistics
                     .clone(),
             );
         }
+        row.push(cell.measure.clone());
         row.push(
             cell.value
                 .map(|value| value.to_string())
@@ -699,6 +724,16 @@ fn validate_dimensions(dimensions: &[DimensionDomain]) -> Result<(), StatisticsE
     Ok(())
 }
 
+fn validate_measures(measures: &[Measure]) -> Result<(), StatisticsError> {
+    let ids: BTreeSet<&str> = measures.iter().map(|measure| measure.id.as_str()).collect();
+    if measures.is_empty() || ids.len() != measures.len() || ids.contains("") {
+        return Err(StatisticsError::InvalidDocument(
+            "measures must be a non-empty list of unique ids",
+        ));
+    }
+    Ok(())
+}
+
 fn checked_product(lengths: impl IntoIterator<Item = usize>) -> Result<usize, StatisticsError> {
     let product = lengths
         .into_iter()
@@ -831,6 +866,14 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
             "dimension field ids must be unique",
         ));
     }
+    validate_measures(&document.dataset.measures)?;
+    let measure_ids: BTreeSet<&str> = document
+        .dataset
+        .measures
+        .iter()
+        .map(|measure| measure.id.as_str())
+        .collect();
+    let mut seen_cells = BTreeSet::new();
     for cell in &document.cells {
         if !period_codes.contains(cell.period.as_str()) {
             return Err(StatisticsError::InvalidDocument(
@@ -845,6 +888,16 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
         {
             return Err(StatisticsError::InvalidDocument(
                 "each cell must carry exactly the declared dimensions",
+            ));
+        }
+        if !measure_ids.contains(cell.measure.as_str()) {
+            return Err(StatisticsError::InvalidDocument(
+                "a cell names a measure the dataset does not declare",
+            ));
+        }
+        if !seen_cells.insert((&cell.period, &cell.dimensions, &cell.measure)) {
+            return Err(StatisticsError::InvalidDocument(
+                "a period, dimension combination, and measure appears more than once",
             ));
         }
         match (cell.status, cell.value) {

@@ -12,6 +12,7 @@ use registry_breg::diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity}
 use registry_breg::package::{
     compiled_registry_change_set, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
 };
+use registry_breg::statistics::MeasureType;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use registry_breg::tooling::{classify_registry_diff, DiffClassification};
 use serde_json::{json, Value};
@@ -920,7 +921,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
         "breg.statistical-dataset.dimension-code-reserved",
     );
 
-    for id in ["period", "value", "status"] {
+    for id in ["period", "value", "status", "measure"] {
         assert_refused(
             |value| {
                 value["recordTypes"][0]["fields"]
@@ -2012,4 +2013,103 @@ fn a_statistics_dataset_requires_the_registry_timezone_for_its_current_period() 
         "the refusal names the dataset: {}",
         refusals[0].message
     );
+}
+
+fn measures_of(compiled: &registry_breg::CompiledRegistry) -> Vec<(String, MeasureType)> {
+    compiled.statistical_datasets()["records-by-category"]
+        .measures
+        .iter()
+        .map(|measure| (measure.id.clone(), measure.measure_type))
+        .collect()
+}
+
+#[test]
+fn omitted_measures_compile_to_one_count_measure_named_count() {
+    let compiled = compile(&source()).expect("a dataset without measures compiles");
+    assert_eq!(
+        measures_of(&compiled),
+        [("count".to_owned(), MeasureType::Count)]
+    );
+}
+
+#[test]
+fn declared_measures_compile_in_declared_order_with_their_ids() {
+    let mut value = source();
+    value["statisticalDatasets"][0]["measures"] = json!([{"id":"parcels","type":"count"}]);
+    let compiled = compile(&value).expect("a declared count measure compiles");
+    assert_eq!(
+        measures_of(&compiled),
+        [("parcels".to_owned(), MeasureType::Count)]
+    );
+    let metadata = artifact_json(&compiled, "generated/metadata/registry.json");
+    assert_eq!(
+        metadata["statisticalDatasets"][0]["measures"],
+        json!([{"id":"parcels","type":"count"}])
+    );
+}
+
+#[test]
+fn measure_declarations_are_refused_with_stable_codes() {
+    assert_refused(
+        |v| v["statisticalDatasets"][0]["measures"] = json!([]),
+        "breg.statistical-dataset.measures-empty",
+    );
+    assert_refused(
+        |v| {
+            v["statisticalDatasets"][0]["measures"] = json!([
+                {"id":"parcels","type":"count"},
+                {"id":"parcels","type":"count"}
+            ])
+        },
+        "breg.statistical-dataset.measure-duplicate",
+    );
+    assert_refused(
+        |v| {
+            v["statisticalDatasets"][0]["measures"] = json!([
+                {"id":"parcels","type":"count"},
+                {"id":"holdings","type":"count"}
+            ])
+        },
+        "breg.statistical-dataset.measure-count-duplicate",
+    );
+}
+
+#[test]
+fn a_measure_with_an_unknown_type_or_member_or_a_bad_id_does_not_read() {
+    for measures in [
+        json!([{"id":"parcels","type":"sum"}]),
+        json!([{"id":"parcels","type":"count","field":"x"}]),
+        json!([{"id":"Parcels","type":"count"}]),
+        json!([{"id":"parcels"}]),
+        json!([{"type":"count"}]),
+    ] {
+        let mut value = source();
+        value["statisticalDatasets"][0]["measures"] = measures.clone();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(
+            parse_project_json(&bytes).is_err(),
+            "{measures} must not read"
+        );
+    }
+}
+
+#[test]
+fn definition_digest_covers_the_measures_including_the_defaulted_one() {
+    let digest = |value: &Value| {
+        compile(value).expect("compiles").statistical_datasets()["records-by-category"]
+            .definition_digest
+            .clone()
+    };
+    let omitted = digest(&source());
+    let mut spelled = source();
+    spelled["statisticalDatasets"][0]["measures"] = json!([{"id":"count","type":"count"}]);
+    assert_eq!(
+        omitted,
+        digest(&spelled),
+        "the default is the spelled value"
+    );
+
+    let mut renamed = source();
+    renamed["statisticalDatasets"][0]["measures"] = json!([{"id":"parcels","type":"count"}]);
+    assert_ne!(omitted, digest(&renamed));
 }

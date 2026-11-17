@@ -21,6 +21,11 @@ use url::Url;
 
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+// The client returns statistical documents as the server's exact bytes. These
+// fixtures carry the served shape: a `measures` list on the dataset and a
+// `measure` member on every cell, and a `measure` column in CSV.
+const STATISTICS_JSON: &[u8] = br#"{"dataset":{"id":"enrolments","unit":"person","measures":[{"id":"count","type":"count"},{"id":"headcount","type":"count"}],"periodKind":"stock","granularity":"month","population":"People enrolled.","definitionDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"cells":[{"period":"2025-01","dimensions":{},"measure":"count","value":5,"status":"rounded"},{"period":"2025-01","dimensions":{},"measure":"headcount","value":null,"status":"suppressed"}]}"#;
+const STATISTICS_CSV: &[u8] = b"period,periodStart,periodEnd,measure,value,status\r\n2025-01,2025-01-01,2025-02-01,count,5,rounded\r\n2025-01,2025-01-01,2025-02-01,headcount,,suppressed\r\n";
 const MAX_SERVER_ISSUED_CURSOR_BYTES: usize = ((1_usize + 24 + 8 * 1024 + 16) * 4).div_ceil(3);
 
 #[derive(Clone, Debug)]
@@ -140,10 +145,9 @@ async fn handler(
         }))
         .unwrap()
     } else if accept == "text/csv" {
-        b"period,periodStart,periodEnd,value,status\r\n2025-01,2025-01-01,2025-02-01,5,rounded\r\n"
-            .to_vec()
+        STATISTICS_CSV.to_vec()
     } else {
-        br#"{"dataset":"enrolments","ok":true}"#.to_vec()
+        STATISTICS_JSON.to_vec()
     };
     let mut response = Response::new(Body::from(response_body.clone()));
     *response.status_mut() = if publish {
@@ -353,6 +357,27 @@ async fn statistics_reads_map_every_route_query_and_media_type() {
     assert_eq!(version.value.media_type(), "text/csv; charset=utf-8");
     assert!(version.value.representation_digest().is_some());
     assert_eq!(requests[4].uri, "/tenant/v1/statistics/enrolments/releases:series?from=2025-01&to=2025-03&accessProfile=reader");
+}
+
+#[tokio::test]
+async fn statistics_documents_are_returned_as_the_exact_served_bytes() {
+    let (client, _captured) = client().await;
+    let json = client
+        .statistics_live("enrolments", None, None, None, BRegStatisticsFormat::Json)
+        .await
+        .unwrap();
+    assert_eq!(json.value.as_bytes(), STATISTICS_JSON);
+    let document: serde_json::Value = serde_json::from_slice(json.value.as_bytes()).unwrap();
+    assert!(document["dataset"].get("measure").is_none());
+    assert_eq!(document["dataset"]["measures"].as_array().unwrap().len(), 2);
+    let cells = document["cells"].as_array().unwrap();
+    assert_eq!(cells[0]["measure"], "count");
+    assert_eq!(cells[1]["measure"], "headcount");
+    let csv = client
+        .statistics_live("enrolments", None, None, None, BRegStatisticsFormat::Csv)
+        .await
+        .unwrap();
+    assert_eq!(csv.value.as_bytes(), STATISTICS_CSV);
 }
 
 #[tokio::test]

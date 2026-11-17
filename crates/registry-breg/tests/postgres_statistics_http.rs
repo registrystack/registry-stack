@@ -656,7 +656,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     assert_eq!(csv.status(), StatusCode::OK);
     assert_eq!(csv.headers()["content-type"], "text/csv; charset=utf-8");
     let csv_text = String::from_utf8(body_bytes(csv).await).expect("CSV is UTF-8");
-    assert!(csv_text.starts_with("period,periodStart,periodEnd,category,value,status\r\n"));
+    assert!(csv_text.starts_with("period,periodStart,periodEnd,category,measure,value,status\r\n"));
 
     let unauthorized_publish = publish(
         &app,

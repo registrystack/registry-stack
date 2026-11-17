@@ -193,7 +193,7 @@ async fn publication_uses_null_snapshot_until_erased_history_is_rebaselined() {
     )
     .unwrap();
     assert!(csv.starts_with(
-        "period,periodStart,periodEnd,administrative-boundary,expiring-soon,value,status\r\n"
+        "period,periodStart,periodEnd,administrative-boundary,expiring-soon,measure,value,status\r\n"
     ));
 
     let rebaseline = rebaseline_history_coverage(

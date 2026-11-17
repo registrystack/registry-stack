@@ -113,7 +113,7 @@ test('statistics methods preserve route, representation, status and caller key',
       if (!request.url.includes('/vary-missing')) {
         response.setHeader('vary', request.url.includes('/vary-wrong') ? 'accept' : 'authorization, accept');
       }
-      const body = request.headers.accept === 'text/csv' ? 'period,periodStart,periodEnd,value,status\r\n' : '{"ok":true}';
+      const body = request.headers.accept === 'text/csv' ? 'period,periodStart,periodEnd,measure,value,status\r\n' : '{"ok":true}';
       if (!request.url.includes('/digest-missing/')
           && (request.method === 'POST' || !request.url.includes('/releases?'))) {
         const representedBody = request.url.includes('/digest-mismatch/') ? '{"wrong":true}' : body;

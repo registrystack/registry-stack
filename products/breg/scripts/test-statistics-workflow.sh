@@ -239,7 +239,7 @@ if not headers.get("Repr-Digest"):
 
 csv_body, csv_headers = get(latest_path, reader, "text/csv")
 rows = list(csv.reader(io.StringIO(csv_body.decode("utf-8"))))
-expected_header = ["period", "periodStart", "periodEnd", "administrative-boundary", "has-measured-quantity", "value", "status"]
+expected_header = ["period", "periodStart", "periodEnd", "administrative-boundary", "has-measured-quantity", "measure", "value", "status"]
 if not rows or rows[0] != expected_header or not any(row[-2] == "5" for row in rows[1:]):
     raise SystemExit(f"the CSV release was not the same disclosed count: {rows[:3]}")
 if not csv_headers.get("Repr-Digest"):
@@ -273,7 +273,7 @@ python3 - "$temporary_root/series.csv" <<'PY'
 import csv, sys
 with open(sys.argv[1], encoding="utf-8", newline="") as source:
     rows = list(csv.reader(source))
-expected = ["period", "periodStart", "periodEnd", "administrative-boundary", "has-measured-quantity", "value", "status"]
+expected = ["period", "periodStart", "periodEnd", "administrative-boundary", "has-measured-quantity", "measure", "value", "status"]
 if not rows or rows[0] != expected or not any(row[-2] == "5" for row in rows[1:]):
     raise SystemExit("the API command did not preserve the released CSV count")
 if any(row[0] != "2025-01" for row in rows[1:]):

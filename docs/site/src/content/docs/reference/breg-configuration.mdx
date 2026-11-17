@@ -97,7 +97,12 @@ with; they fail a check only under `--deny-warnings`.
 
 ## Statistical dataset declarations
 
-`statisticalDatasets[].unit` names the Record type a dataset counts. `minimumCount` and
+`statisticalDatasets[].unit` names the Record type a dataset counts. `measures` is an optional list
+of `id` and `type` pairs, where `count` is the only type; omitting it declares one count measure with
+the id `count`. `bregctl check` refuses an empty list (`breg.statistical-dataset.measures-empty`),
+a repeated id (`breg.statistical-dataset.measure-duplicate`), and more than one `count` measure
+(`breg.statistical-dataset.measure-count-duplicate`). `measure` is a reserved column name, so no
+dimension may use it. `minimumCount` and
 `roundingBase` are required and take no value below 2. At most one access profile holds `publish`
 on a dataset. Once one does, it and every `read-live` profile must also hold `read-releases`;
 without one, no profile may hold `read-releases`. See [Publish a statistical
