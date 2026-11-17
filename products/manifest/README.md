@@ -87,33 +87,10 @@ Publish a static metadata directory:
 cargo run --locked -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml --output target/metadata/public
 ```
 
-The generated bundle uses `/metadata/index.json` as its canonical metadata
-entry point. When the output directory is mounted as `/metadata`, the publisher
-also writes `/.well-known/api-catalog` at the public root for standards-aligned
-API and metadata discovery. The older `/.well-known/registry-manifest.json`
-document is retained for compatibility with early Registry Manifest clients.
-The index records the canonical `source_manifest_digest`, package-level digest,
-and per-artifact SHA-256 digests operators can use to compare published bundles.
-
 Workspace build:
 
 ```sh
 cargo build --workspace --all-targets
-```
-
-Commons contract-kernel check:
-
-```sh
-scripts/check-contract-kernel.sh
-```
-
-Consumer manifests can be passed as arguments. Each file is validated and
-published into `target/contract-kernel/` so adopter demos can
-exercise the same schema and renderer contract before a commons release:
-
-```sh
-SOLMARA_LAB_DIR=/path/to/solmara-lab
-scripts/check-contract-kernel.sh "$SOLMARA_LAB_DIR/metadata/solmara-wave1.metadata.yaml"
 ```
 
 Optional ITB/SEMIC smoke check for selected DCAT and BRegDCAT-AP artifacts:
@@ -125,23 +102,6 @@ ITB_SEMIC_REMOTE=1 scripts/itb-semic-smoke.sh
 
 See [ITB/SEMIC validation smoke checks](docs/itb-semic-validation.md) for the
 claim boundary and known BRegDCAT-AP warning behavior.
-
-## Supported Render Formats
-
-`registry-manifest render` supports:
-
-- `catalog`
-- `evidence-offerings`
-- `evidence-offering` with `--offering <id>`
-- `policies`
-- `policy` with `--dataset <id>`
-- `dcat`
-- `bregdcat-ap`
-- `cpsv-ap`
-- `shacl`
-- `json-schema` with `--dataset <id> --entity <name>`
-- `form-json-schema` with `--form <id>`
-- `ogc-records`
 
 ## Evidence Offering Metadata
 

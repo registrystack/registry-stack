@@ -41,7 +41,7 @@ The CLI reads manifests and profile descriptors only through
 hand.
 
 Renderer changes need representative golden-output coverage. Shared model
-changes also need affected BReg publication checks. The broader
-`products/manifest/scripts/check-contract-kernel.sh` runs a workspace suite;
-use it when that breadth is justified. External ITB/SEMIC validation is opt-in
+changes also need affected BReg publication checks. Run the
+workspace format, clippy and test commands from the Manifest README when that
+breadth is justified. External ITB/SEMIC validation is opt-in
 under [its documented claim boundary](docs/itb-semic-validation.md).

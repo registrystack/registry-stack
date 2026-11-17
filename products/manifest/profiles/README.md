@@ -9,9 +9,7 @@ Check every descriptor and fixture from `products/manifest` with
 a descriptor nor a fixture a descriptor lists is reported as a warning, since no
 check reads it.
 
-The `example-*` profiles are non-normative working examples. The named-system
-profiles (`opencrvs`, `openimis`, `openspp`, `spdci`) are placeholders pending
-review against official artifacts or maintainer feedback.
+The `example-*` profiles are non-normative working examples.
 
 | Profile | Status | Purpose |
 | --- | --- | --- |
@@ -20,7 +18,3 @@ review against official artifacts or maintainer feedback.
 | example-multi-dataset | example | Two datasets served by one data service, with one first-class distribution |
 | example-person-schema | example | Non-normative example metadata expectations for person concept and JSON Schema publication |
 | example-social-benefits | example | Non-normative example metadata expectations for a fictional social benefits application |
-| opencrvs | placeholder | Placeholder for OpenCRVS-reviewed metadata profile data, validators, and fixtures |
-| openimis | placeholder | Placeholder for OpenIMIS-reviewed metadata profile data, validators, and fixtures |
-| openspp | placeholder | Placeholder for OpenSPP-reviewed metadata profile data, validators, and fixtures |
-| spdci | placeholder | Placeholder for SP DCI-reviewed metadata profile data, validators, and fixtures |
