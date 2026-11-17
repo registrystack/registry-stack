@@ -1,4 +1,6 @@
 /target/
+/products/manifest/target/
+**/*.rs.bk
 /.cargo-home/
 /dist/
 /.repo-docs-cache/
@@ -9,6 +11,8 @@ __pycache__/
 *.py[cod]
 
 .DS_Store
+*.swp
+*.swo
 
 # Local agent tooling (private skills are symlinked here; never commit).
 /.claude/

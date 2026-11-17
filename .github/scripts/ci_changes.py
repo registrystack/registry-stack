@@ -1282,11 +1282,7 @@ def classify(
     platform_hygiene = complete or any(
         matches(
             path,
-            "products/platform/clippy.toml",
-            "products/platform/deny.toml",
-            "products/platform/rustfmt.toml",
             "products/platform/scripts/*",
-            "products/platform/templates/*",
             "products/platform/config-formats.yaml",
             "*.rs",
             "*Cargo.toml",

@@ -1255,7 +1255,7 @@ class CiChangesTest(unittest.TestCase):
 
     def test_adapter_crates_and_product_select_its_shard(self) -> None:
         for path in (
-            "products/adapter/CONCEPT.md",
+            "products/adapter/scripts/camel-port-table.yaml",
             "crates/registry-adapter-core/src/lib.rs",
             "crates/registry-adapter-engine/src/lib.rs",
             "crates/registry-adapter/src/lib.rs",
@@ -1269,7 +1269,7 @@ class CiChangesTest(unittest.TestCase):
                     {row["name"] for row in outputs["rust_matrix"]["include"]},
                 )
                 self.assertTrue(outputs["adapter_contracts"])
-        product = classify(self.workspace, ("products/adapter/CONCEPT.md",))
+        product = classify(self.workspace, ("products/adapter/scripts/camel-port-table.yaml",))
         self.assertLessEqual(set(ADAPTER_PACKAGES), set(product["rust_packages"]))
         unrelated = classify(self.workspace, ("crates/registry-documents/src/lib.rs",))
         self.assertNotIn(
@@ -2446,7 +2446,7 @@ class CiChangesTest(unittest.TestCase):
         # so the closure reaches every dependent shard.
         for path in (
             "products/evidence/contracts/source-contract.yaml",
-            "products/evidence/reference/request-adapter/ADAPTER-API.md",
+            "products/evidence/OPERATOR-CONTRACT.md",
             "products/evidence/reference/request-adapter/deployment-projects/dhis2-adult-status/bundle/fixtures/cases.yaml",
         ):
             with self.subTest(path=path):

@@ -154,10 +154,6 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Platform coverage version pin", 'CARGO_LLVM_COV_VERSION: "0.8.7"'),
     ("Platform coverage threshold", "--fail-under-lines 80"),
     (
-        "Platform hygiene alignment",
-        "run: products/platform/scripts/check-hygiene-alignment.sh",
-    ),
-    (
         "YAML reader boundary",
         "run: products/platform/scripts/check-yaml-reader-boundary.sh",
     ),

@@ -69,7 +69,7 @@ external: {}
 
 class MonorepoSourceModelTest(unittest.TestCase):
     def test_requires_coordinator_release_sources(self) -> None:
-        for relative in ("crates/registry-coordinator", "products/coordinator/DEPLOYMENT.md", "crates/registry-coordinator/src/main.rs", "crates/registry-coordinator/src/ctl.rs", "products/coordinator/generated/runtime/runtime.schema.json", "products/coordinator/generated/openapi/coordinator.openapi.json"):
+        for relative in ("crates/registry-coordinator", "crates/registry-coordinator/src/main.rs", "crates/registry-coordinator/src/ctl.rs", "products/coordinator/generated/runtime/runtime.schema.json", "products/coordinator/generated/openapi/coordinator.openapi.json"):
             with self.subTest(relative=relative), MonorepoFixture() as stack_root:
                 path = stack_root / relative
                 if path.is_dir():
@@ -451,7 +451,6 @@ class MonorepoFixture:
         release_scripts = stack_root / "release" / "scripts"
         coordinator = stack_root / "products" / "coordinator"
         coordinator.mkdir(parents=True)
-        (coordinator / "DEPLOYMENT.md").write_text("Coordinator deployment runbook\n", encoding="utf-8")
         for source in ("crates/registry-coordinator/src/main.rs", "crates/registry-coordinator/src/ctl.rs", "products/coordinator/generated/runtime/runtime.schema.json", "products/coordinator/generated/openapi/coordinator.openapi.json"):
             target = stack_root / source
             target.parent.mkdir(parents=True, exist_ok=True)

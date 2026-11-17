@@ -2,13 +2,14 @@ name: Registry Render golden gate
 
 # The Render byte-stability gate: the three coequal example bundles must
 # produce the exact golden hashes pinned in products/render/golden.json on
-# BOTH operating systems. Any difference — Typst pin, lockfile (including
-# the deflate stack, see products/render/EVIDENCE.md), bundle content, or
-# platform-dependent layout — fails here and must be reviewed, never
+# BOTH operating systems. Any difference in the Typst pin, the lockfile
+# (including the deflate stack, whose upgrades change compressed bytes and
+# are reviewed like a Typst pin change), the bundle content or the
+# platform-dependent layout fails here and must be reviewed, never
 # silenced. Invariant: cross-machine byte stability as promised by the
 # product. Owner: the Render product. Removal condition: only if the
-# Render product contract (products/render/CONCEPT.md) deliberately
-# narrows the byte-stability promise to same-machine reproducibility.
+# Render product contract deliberately narrows the byte-stability promise
+# to same-machine reproducibility.
 
 on:
   pull_request:
