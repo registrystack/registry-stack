@@ -4,7 +4,7 @@
 model {
   application = external 'Application' {
     description 'An institutional application using product HTTP APIs or maintained Rust, Node.js and Python clients. The active BReg package determines available records, actions, routes and fields. As an Evidence relying party, the application separately chooses credentials, pins verification trust and verifies assertions.'
-    link https://github.com/registrystack/registry-stack/blob/main/products/breg/metadata.md 'Application metadata contract'
+    link https://docs.registrystack.org/reference/breg-api/ 'Application metadata contract'
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence-client/README.md 'Relying-party verification contract'
   }
   operator = actor 'Registry operator' {
@@ -52,7 +52,7 @@ model {
     task_grants = component 'Task grant verification' {
       #optional #taskAuthority
       description 'For access profiles that declare a task grant, binds the presented authority for reads and new submissions, then preserves submitted authority separately from later reviewers. Each read checks exact task bounds and the earlier token or grant expiry without Casework status. Issuer re-exchange may renew the token, so revocation alone does not end read access before the original grant deadline, at most 900 seconds after Casework approval. New task-bound mutations, later approval or application and database retries require fresh source status and an unexpired grant. The grant never authorizes direct target-record mutation or widens the profile permissions.'
-      link https://github.com/registrystack/registry-stack/blob/main/products/breg/TASK_GRANTS.md 'Task-grant contract and recovery'
+      link https://docs.registrystack.org/reference/breg-task-grants/ 'Task-grant contract and recovery'
       link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/task_grant.rs 'Status verification client'
     }
     reads = component 'Record and history reads' {

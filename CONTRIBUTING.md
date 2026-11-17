@@ -178,8 +178,9 @@ Every pull request should make the review path clear:
   minimization as security-sensitive. These changes need explicit maintainer
   review notes in the pull request description, even when the maintainer is
   also the author. When a change moves a trust boundary, an operator
-  obligation, or an accepted residual, update the product's
-  `SECURITY-MODEL.md` in the same change.
+  obligation, or an accepted residual, update the product's security model
+  page on the docs site (`docs/site/src/content/docs/security/<product>.mdx`)
+  in the same change.
 - Schema and migration code refuses when it would drop rows; it never drops
   them silently. A change that would lose persisted state fails with an error
   that names what would be lost, and the operator decides the next step. Cover
@@ -262,18 +263,23 @@ without an approved compatibility or security rationale.
 Keep changes focused on the owning area:
 
 - `crates/` for Rust crates and runnable binaries.
-- `products/` for product-owned specs, examples, fixtures, and docs.
+- `products/` for product-owned specs, schemas, examples, fixtures, and check
+  scripts. Prose stays there only when a machine reads, parses, embeds, or
+  ships that exact file, or as a short companion README beside consumed
+  examples, fixtures, or packs. Each product keeps its `README.md`,
+  `AGENTS.md`, and `CHANGELOG.md`. Write adopter and operator documentation as
+  pages in `docs/site/`.
 - `docs/site/` for the public documentation site.
 - `release/` for public release manifests, schemas, notes, and tooling.
 
 Private planning, release evidence that is not already public, credentials,
 hosted deployment details, and internal review notes do not belong in this
-repository. BReg, Casework, Coordinator, Documents, Messaging, and Scheduling each keep a
-`SECURITY-MODEL.md` (for example `products/breg/SECURITY-MODEL.md`) as the
-public security model: trust boundaries, operator obligations, and accepted
-residuals. Other products record security invariants in their own contracts
-(`contracts/security-invariant-matrix.yaml`) or security document (for example
-`products/render/SECURITY-MATRIX.md`).
+repository. BReg, Casework, Coordinator, Documents, Evidence, Messaging,
+Render, and Scheduling each publish a security model page on the docs site
+(for example [BReg](https://docs.registrystack.org/security/breg/)): trust
+boundaries, operator obligations, and accepted residuals. Other products
+record security invariants in their own contracts
+(`contracts/security-invariant-matrix.yaml`).
 
 ## Issue Labels
 

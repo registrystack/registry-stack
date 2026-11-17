@@ -55,7 +55,7 @@ not products of their own.
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
 | `crates/registry-adapter-job` | Adapter ingestion-job host and the `adapter-job` binary: item table, pass, interval and authenticated hook triggers, and destination seam; identity and position only, never payloads |
 | `crates/registry-adapter-connectors` | BReg connector over `registry-breg-client`, reachable only through the job host's explicit off-by-default `direct-breg` feature; never through the engine or facade; the dependency gate enforces this boundary |
-| `products/adapter` | Adapter product contract (`CONCEPT.md`), delivery plan, schemas, profiles, packs, examples, fixtures, and contributor check scripts |
+| `products/adapter` | Adapter schemas, profiles, packs, examples, fixtures, the Camel port table, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
@@ -121,7 +121,7 @@ not products of their own.
 | `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
 | `crates/registry-cli-reference` | Deterministic reference data walked from one Clap command tree, shared by `registry-cli-docs` and each binary's `help --format json` |
 | `crates/registry-cli-report` | Shared CLI report serialization, result classes, and value-free internal-error reporting; products retain payload and failure policy |
-| `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
+| `products/` | Product-owned specs, schemas, examples, fixtures, and check scripts (not crates). Prose stays here only when a machine reads, parses, embeds, or ships that exact file, or as a short companion README beside consumed examples, fixtures, or packs. Each product keeps its `README.md`, `AGENTS.md`, and `CHANGELOG.md`. Adopter and operator documentation is written in `docs/site/` |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `tools/payment-simulator` | Synthetic payment simulator (Python, SQLite): a test double for G2P and P2G payment APIs that never moves money and refuses non-loopback serving without `--allow-network`; run from its directory with `uv` |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
@@ -234,15 +234,14 @@ profiles. `registry-evidence-oid4vci` delivers Evidence credentials to a
 wallet over OID4VCI 1.0 Final; it never signs, never holds a holder private
 key, and no Evidence crate depends on it at runtime.
 `registry-evidence-oid4vp` runs the OpenID4VP exchange for holder-presented
-sources (`products/evidence/CONCEPT.md` section 15.10): it holds a received
+sources: it holds a received
 presentation in memory only, until Evidence reads it or the result window
 ends, and never verifies a credential, decides issuer trust, or signs. Evidence
 reads it over its public HTTP contract through a fixed source binding and
 verifies the credential itself with `registry-evidence-presentation`; no
 Evidence crate depends on the protocol service. The optional credential
-status module inside `registry-evidence` (`products/evidence/CONCEPT.md`
-section 15.9, approved; its ledger is library code the served runtime does not
-call yet) follows these rules: it is the only
+status module inside `registry-evidence` (its ledger is library code the
+served runtime does not call yet) follows these rules: it is the only
 writer of its PostgreSQL ledger; allocation happens inside the signing
 transaction; nothing outside Evidence reads the ledger; hook intake and the
 operator endpoints are the only mutation surface; with status disabled there is
@@ -322,8 +321,8 @@ metadata into trust or credentials.
 standard registry API over a source an institution already operates, from a
 reviewed, digest-pinned pack. The core is the source-neutral model and
 authoring checks; the runtime is a bounded port of Apache Camel concepts
-whose port table is the contract (`products/adapter/CONCEPT.md` section
-8.10); `adapterctl` is authoring and operator tooling. The connector crate
+whose port table is the contract
+(`products/adapter/scripts/camel-port-table.yaml`); `adapterctl` is authoring and operator tooling. The connector crate
 reaches exactly `registry-breg-client` behind the job host's explicit
 off-by-default `direct-breg` feature, is linked by no engine or facade binary,
 never reaches a product runtime, CLI, database crate, or any Coordinator
@@ -410,11 +409,11 @@ that still resolves in the pull request, not a rewritten or squashed SHA.
   audit integrity, release provenance, deployment defaults, or data
   minimization are security-sensitive and need explicit review notes in the
   pull request description. When such a change moves a trust boundary, an
-  operator obligation, or an accepted residual, update the product's
-  `SECURITY-MODEL.md` (BReg, Casework, Coordinator, Documents, Messaging, and
-  Scheduling keep one) or, for other products, its security invariant matrix
-  or security document (for example `products/render/SECURITY-MATRIX.md`) in
-  the same change.
+  operator obligation, or an accepted residual, update the product's security
+  model page on the docs site
+  (`docs/site/src/content/docs/security/<product>.mdx`; BReg, Casework,
+  Coordinator, Documents, Evidence, Messaging, Render, and Scheduling keep one)
+  or, for other products, its security invariant matrix in the same change.
 - Generated outputs (site references, OpenAPI, release artifacts) must be
   reproduced by their documented generator commands, never hand-edited, and
   must be bit-for-bit repeatable. Site CLI pages and the site's generated data

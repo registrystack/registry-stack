@@ -78,7 +78,7 @@ model {
     task_grants = component 'Institutional task grants' {
       #optional #taskAuthority
       description 'A current eligible ReviewTask holder approves immutable agent, client, resource, scope, purpose, subject and deadline bounds. Submitted context uses its admitted snapshot; current-source fields require human disclosure at approval and separate purpose-bound rechecks. Immediate and explicit deferred modes retain their own lifetime limits. Casework signs short assertions, while the issuer and resource authorize execution independently.'
-      link https://github.com/registrystack/registry-stack/blob/main/products/casework/TASK_GRANTS.md 'Approval, recheck, revocation and deadlines'
+      link https://docs.registrystack.org/reference/casework-task-grants/ 'Approval, recheck, revocation and deadlines'
     }
     source_contract = component 'Read-only context provider boundary' {
       technology 'Source-neutral contract'
