@@ -6461,3 +6461,271 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
     server.abort();
     idp.stop().await;
 }
+
+const SOURCE_PAIR_AUDIENCE: &str = "urn:test:breg-human-source";
+
+/// One call with exactly the headers given. A name listed twice is sent twice.
+async fn pair_call(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    headers: &[(&str, String)],
+    body: Option<&Value>,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder().method(method).uri(path);
+    for (name, value) in headers {
+        request = request.header(*name, value.as_str());
+    }
+    let body = match body {
+        Some(body) => {
+            request = request.header(CONTENT_TYPE, "application/json");
+            Body::from(serde_json::to_vec(body).unwrap())
+        }
+        None => Body::empty(),
+    };
+    let response = app
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| json!(String::from_utf8_lossy(&bytes)))
+    };
+    (status, body)
+}
+
+/// Primary credential and profile for `profile`, plus a well-formed source
+/// pair that no source is ever asked to honour.
+fn pair_headers(idp: &MockIdp, profile: &str, with_pair: bool) -> Vec<(&'static str, String)> {
+    let primary = human_token(idp, "reviewer", profile);
+    let mut headers = vec![
+        (
+            "authorization",
+            primary
+                .authorization_header_value()
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        ),
+        (CASEWORK_PROFILE_HEADER, profile.to_owned()),
+        (
+            "traceparent",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01".to_owned(),
+        ),
+    ];
+    if with_pair {
+        let source = idp.mint_token(json!({"aud":SOURCE_PAIR_AUDIENCE,"sub":"human-one","client_id":"source-client","registry_principal":"reviewer","scope":"source-read","registry_actor_kind":"human"}));
+        headers.push((SOURCE_PROFILE_HEADER, "reviewer-source".to_owned()));
+        headers.push((SOURCE_AUTHORIZATION_HEADER, format!("Bearer {source}")));
+    }
+    headers
+}
+
+/// Admission refuses on header shape and caller role before it looks at the
+/// target's policy, so a submitted-context target refuses the same way a
+/// current-source one does. Only a well-formed pair from a staff caller is
+/// neither verified nor forwarded.
+#[tokio::test]
+async fn source_pair_refusals_before_policy_lookup_apply_to_submitted_context_targets() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_database(&idp).await;
+    let (created, task) = create_answer_task(&app, &database, &idp, "pair-refusals").await;
+    let targets = [
+        format!("/v1/review-tasks/{task}/context"),
+        format!("/v1/review-requests/{}/history", created.request_id),
+        format!("/v1/review-tasks/{task}"),
+        format!("/v1/review-requests/{}/clocks", created.request_id),
+    ];
+    let requester = pair_headers(&idp, "initiator", true);
+    type Headers = Vec<(&'static str, String)>;
+    type Edit = fn(&mut Headers);
+    type Case<'a> = (&'a str, Edit, Headers, StatusCode, &'a str);
+    let cases: Vec<Case> = vec![
+        (
+            "malformed source bearer",
+            |h| {
+                h.retain(|(n, _)| *n != SOURCE_AUTHORIZATION_HEADER);
+                h.push((SOURCE_AUTHORIZATION_HEADER, "Bearer not-a-token".into()));
+            },
+            vec![],
+            StatusCode::UNAUTHORIZED,
+            "authentication.refused",
+        ),
+        (
+            "empty source bearer",
+            |h| {
+                h.retain(|(n, _)| *n != SOURCE_AUTHORIZATION_HEADER);
+                h.push((SOURCE_AUTHORIZATION_HEADER, "Bearer".into()));
+            },
+            vec![],
+            StatusCode::UNAUTHORIZED,
+            "authentication.refused",
+        ),
+        (
+            "duplicated source authorization",
+            |h| {
+                let again = h
+                    .iter()
+                    .find(|(n, _)| *n == SOURCE_AUTHORIZATION_HEADER)
+                    .cloned()
+                    .unwrap();
+                h.push(again);
+            },
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "request.invalid",
+        ),
+        (
+            "duplicated primary authorization",
+            |h| {
+                let again = h
+                    .iter()
+                    .find(|(n, _)| *n == "authorization")
+                    .cloned()
+                    .unwrap();
+                h.push(again);
+            },
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "request.invalid",
+        ),
+        (
+            "duplicated casework profile",
+            |h| {
+                let again = h
+                    .iter()
+                    .find(|(n, _)| *n == CASEWORK_PROFILE_HEADER)
+                    .cloned()
+                    .unwrap();
+                h.push(again);
+            },
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "request.invalid",
+        ),
+        (
+            "source bearer without source profile",
+            |h| h.retain(|(n, _)| *n != SOURCE_PROFILE_HEADER),
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "source-profile.required",
+        ),
+        (
+            "duplicated source profile",
+            |h| {
+                let again = h
+                    .iter()
+                    .find(|(n, _)| *n == SOURCE_PROFILE_HEADER)
+                    .cloned()
+                    .unwrap();
+                h.push(again);
+            },
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "request.invalid",
+        ),
+        (
+            "invalid source profile identifier",
+            |h| {
+                h.retain(|(n, _)| *n != SOURCE_PROFILE_HEADER);
+                h.push((SOURCE_PROFILE_HEADER, "Not A Profile!".into()));
+            },
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "request.invalid",
+        ),
+        (
+            "requester caller",
+            |_| {},
+            requester,
+            StatusCode::FORBIDDEN,
+            "profile.not-authorized",
+        ),
+    ];
+    for (name, edit, replacement, status, code) in cases {
+        for path in &targets {
+            let mut headers = if replacement.is_empty() {
+                pair_headers(&idp, "staff", true)
+            } else {
+                replacement.clone()
+            };
+            edit(&mut headers);
+            let (observed, body) = pair_call(&app, "GET", path, &headers, None).await;
+            assert_eq!(observed, status, "{name} on {path}: {body}");
+            assert_eq!(body["code"], code, "{name} on {path}");
+            let problem_type = body["type"].as_str().unwrap();
+            assert!(
+                problem_type.starts_with(CASEWORK_PROBLEM_TYPE_BASE)
+                    && problem_type.ends_with(&code.replace('.', "/")),
+                "{name} on {path}: {problem_type}"
+            );
+        }
+    }
+    // A profile header with no source bearer is the single-bearer forwarding
+    // form: a submitted-context target has no source to forward it to. The
+    // task context read does not check it, so it is not pinned here.
+    let mut profile_only = pair_headers(&idp, "staff", true);
+    profile_only.retain(|(n, _)| *n != SOURCE_AUTHORIZATION_HEADER);
+    for path in &targets[1..] {
+        let (observed, body) = pair_call(&app, "GET", path, &profile_only, None).await;
+        assert_eq!(observed, StatusCode::BAD_REQUEST, "{path}: {body}");
+        assert_eq!(body["code"], "source-profile.not-applicable", "{path}");
+    }
+    idp.stop().await;
+}
+
+/// A well-formed pair from a staff caller on a submitted-context target is
+/// decided as without the pair, on every single-target route the admission
+/// table accepts. Requests carry no body or preconditions so each call is a
+/// deterministic read or refusal and repeats without mutating state.
+#[tokio::test]
+async fn well_formed_source_pair_is_ignored_on_every_admitted_submitted_context_route() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_database(&idp).await;
+    let (created, task) = create_answer_task(&app, &database, &idp, "pair-routes").await;
+    let request = created.request_id;
+    let mut routes: Vec<(&str, String)> = Vec::new();
+    for suffix in ["", "/context", "/draft", "/task-templates", "/task-grants"] {
+        routes.push(("GET", format!("/v1/review-tasks/{task}{suffix}")));
+    }
+    for suffix in [
+        "/claim",
+        "/assign",
+        "/delegate",
+        "/decisions",
+        "/task-grants",
+    ] {
+        routes.push(("POST", format!("/v1/review-tasks/{task}{suffix}")));
+    }
+    for method in ["PUT", "DELETE"] {
+        routes.push((method, format!("/v1/review-tasks/{task}/draft")));
+    }
+    for suffix in ["history", "clocks"] {
+        routes.push(("GET", format!("/v1/review-requests/{request}/{suffix}")));
+    }
+    routes.push(("POST", format!("/v1/review-requests/{request}/notes")));
+    for (method, path) in &routes {
+        let without = pair_call(
+            &app,
+            method,
+            path,
+            &pair_headers(&idp, "staff", false),
+            None,
+        )
+        .await;
+        let with = pair_call(&app, method, path, &pair_headers(&idp, "staff", true), None).await;
+        assert_eq!(
+            with, without,
+            "{method} {path} decided differently with the pair"
+        );
+        assert_ne!(
+            with.1["code"], "source-profile.not-applicable",
+            "{method} {path} reached a handler that saw the pair"
+        );
+    }
+    idp.stop().await;
+}
