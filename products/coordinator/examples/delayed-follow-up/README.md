@@ -63,5 +63,5 @@ For a deployment, the institution must supply these prerequisites:
 
 The runtime template uses loopback endpoints and secret references only. Copy
 it outside the package and adapt its endpoints, PostgreSQL identity and roles,
-clients and package pin. Follow [the deployment runbook](../../DEPLOYMENT.md)
+clients and package pin. Follow [the deployment runbook](https://docs.registrystack.org/operate/coordinator/)
 for installation and apply.

@@ -128,7 +128,7 @@ it does not deploy the offline placeholder digest.
 The runtime template contains HTTPS reference endpoints and secret references.
 Copy it outside the package and adapt its endpoints, database identity, client
 registrations, completion secret and package digest. Follow the
-[deployment runbook](../../DEPLOYMENT.md) for packaging, activation and
+[deployment runbook](https://docs.registrystack.org/operate/coordinator/) for packaging, activation and
 recovery.
 
 The review wait names `completion: {step: submit-review, name: result}`. Casework remains the

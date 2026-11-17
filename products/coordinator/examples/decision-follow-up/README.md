@@ -57,7 +57,7 @@ it. An uncertain evaluation has no proven receipt or safe replay contract:
 authorized new start, accepting possible additional model cost and a different
 answer. Neither cancellation nor a new start retracts provider processing.
 Cancellation remains visible as `cancelRequested: true` alongside the unknown
-outcome. After a restore, use the [recovery procedure](../../DEPLOYMENT.md#backup-and-restore)
+outcome. After a restore, use the [recovery procedure](https://docs.registrystack.org/operate/coordinator/#back-up-and-restore)
 to abandon that cancelled evaluation without blocking unrelated work or replaying it.
 
 General JSON generation, images, asynchronous jobs, training, and model tool

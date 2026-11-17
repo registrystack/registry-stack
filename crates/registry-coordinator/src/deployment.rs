@@ -1151,8 +1151,10 @@ mod tests {
             assert!(refusal.message.contains(part), "{refusal:?}");
         }
         let advice = refusal.suggested_action.as_deref().unwrap();
-        assert!(advice.contains("\"Apply and start\""), "{advice}");
-        assert!(advice.contains("DEPLOYMENT.md"), "{advice}");
+        assert!(
+            advice.contains("https://docs.registrystack.org/operate/coordinator/#apply-and-start"),
+            "{advice}"
+        );
         assert!(!advice.contains("Map request"), "{advice}");
         // The advice names the fix in the project, not an upgrade procedure.
         assert!(advice.contains("Correct the workflow project"), "{advice}");

@@ -10,6 +10,5 @@ for every external effect.
 applies PostgreSQL activation and operates the authenticated API. `coordinator`
 serves the activated packages and runs the worker without migrating at startup.
 
-See the [product contract](../../products/coordinator/PRODUCT-CONTRACT.md),
-[deployment runbook](../../products/coordinator/DEPLOYMENT.md), and
+See the [Registry Coordinator documentation](https://docs.registrystack.org/start/coordinator/) and the
 [maintained projects](../../products/coordinator/README.md).

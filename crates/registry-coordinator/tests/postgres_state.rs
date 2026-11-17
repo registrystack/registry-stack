@@ -2492,7 +2492,10 @@ async fn inspection_refuses_recovery_after_deadline_receipt_expiry_and_unsupport
         assert!(refusal.message.contains(part), "{refusal:?}");
     }
     let advice = refusal.suggested_action.as_deref().unwrap();
-    assert!(advice.contains("\"Apply and start\""), "{advice}");
+    assert!(
+        advice.contains("https://docs.registrystack.org/operate/coordinator/#apply-and-start"),
+        "{advice}"
+    );
     assert!(
         advice.contains("Only a release that accepts that definition can end the run"),
         "{advice}"

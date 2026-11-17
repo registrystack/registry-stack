@@ -34,7 +34,7 @@ workflow decides what they mean. A busy or failing gateway is retried first:
 the adapter reports a 429 as the retryable `external-rate-limited` and a 502,
 503 or 504, like a timeout or connection failure, as the retryable
 `external-unavailable`, and the Coordinator retries it on its own, as
-[Recover safely](../../DEPLOYMENT.md#recover-safely) describes. Only the tenth
+[Recover safely](https://docs.registrystack.org/operate/coordinator/#recover-a-run) describes. Only the tenth
 attempt hands the status to the workflow. Ten attempts with nine waits of at
 most the 300-second backoff cap, which a `Retry-After` never exceeds, take
 less than an hour, so the run's 3600-second deadline lets a directory that
@@ -71,4 +71,4 @@ For a deployment, the institution must supply these prerequisites:
 The runtime template binds `directory` as `type: external-http`, uses a loopback endpoint, and
 contains secret references only. Copy it outside the package and adapt its
 endpoint, response schema, PostgreSQL identity and roles, and package pin.
-Follow [the deployment runbook](../../DEPLOYMENT.md) for installation and apply.
+Follow [the deployment runbook](https://docs.registrystack.org/operate/coordinator/) for installation and apply.

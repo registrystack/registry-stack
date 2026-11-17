@@ -34,7 +34,7 @@ For deployment, configure `jobs` as `type: external-http`, with the actual base 
 allowed query name, and response schema. The loopback runtime is a local fixture, not an
 institutional deployment. Use HTTPS and separately configured service authorization where needed;
 omitting authorization means a public read. Copy runtime configuration outside the package and
-follow the [deployment runbook](../../DEPLOYMENT.md).
+follow the [deployment runbook](https://docs.registrystack.org/operate/coordinator/).
 
 Offline scenarios prove interpretation and routing with synthetic replies. They do not prove a
 live job service or downstream authority. HTTP adapter and PostgreSQL wait tests cover their own
