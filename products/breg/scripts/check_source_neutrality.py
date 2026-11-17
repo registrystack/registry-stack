@@ -139,6 +139,9 @@ DOMAIN_COMPONENT = re.compile(
     + "|".join(re.escape(value) for value in FORBIDDEN_DOMAIN_COMPONENTS)
     + r")(?=$|[._:/-])"
 )
+# A repository path into the documentation site names that directory, not a
+# fixture domain; the rest of the path is still checked.
+DOCUMENTATION_SITE_PATH = re.compile(r"^(?:\.\./)*docs/site/")
 DOMAIN_WORD = re.compile(
     r"(?i)\b(?:"
     + "|".join(re.escape(value) for value in FORBIDDEN_DOMAIN_COMPONENTS)
@@ -404,7 +407,7 @@ def find_violations(repository_root: Path) -> list[str]:
                     "crates/registry-breg/src/proposal_ddl.rs",
                 }:
                     continue
-                identifier = domain_identifier(literal)
+                identifier = domain_identifier(DOCUMENTATION_SITE_PATH.sub("", literal))
                 if identifier is not None:
                     violations.append(
                         f"{relative}: contains fixture metric/error identifier {identifier}"

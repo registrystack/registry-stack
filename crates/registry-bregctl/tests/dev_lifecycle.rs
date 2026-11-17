@@ -2198,8 +2198,7 @@ fn dev_help_names_the_owning_document_and_both_record_options() {
     assert!(start.status.success(), "{start:?}");
     let start = String::from_utf8(start.stdout).expect("help is UTF-8");
     for fact in [
-        "products/breg/DEV.md",
-        "'Native local BReg lifecycle'",
+        "https://docs.registrystack.org/reference/bregctl-dev/",
         "'Retained state and recovery'",
         "uncatchable outside kill",
         ".breg/dev/logs",
@@ -2213,7 +2212,7 @@ fn dev_help_names_the_owning_document_and_both_record_options() {
         "--remove",
         "discarding records",
         "copy the authored files to a new project directory",
-        "products/breg/DEV.md",
+        "https://docs.registrystack.org/reference/bregctl-dev/",
         "'Retained state and recovery'",
     ] {
         assert!(stop.contains(fact), "dev stop --help omits {fact}");

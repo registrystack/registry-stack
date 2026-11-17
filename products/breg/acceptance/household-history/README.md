@@ -40,4 +40,4 @@ resources created by this run. The existing adopter workflow invokes the same te
 automatically.
 
 For the API and operator semantics behind the assertions, see
-[Corrections and historical queries](../../HISTORY.md).
+[Corrections and historical queries](https://docs.registrystack.org/configure/breg-history/).

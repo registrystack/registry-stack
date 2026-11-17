@@ -136,7 +136,7 @@ capability. An unsupported temporal mode keeps its `temporal`
 descriptor as served and uninterpreted, because null already means the
 collection is not temporal. Unsupported executable vocabulary remains inert until
 exact selection. Known field shapes, references, identities, and disclosure grants
-remain strict. See `products/breg/metadata.md` for the failure scopes.
+remain strict. See [the BReg API reference](https://docs.registrystack.org/reference/breg-api/) for the failure scopes.
 
 Immediate action target conditions are an explicit read before invocation;
 invocation never refreshes them. Batch builders send one atomic same-entity

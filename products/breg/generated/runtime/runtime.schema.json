@@ -12,7 +12,7 @@
     },
     "AdapterEndpointBindings": {
       "additionalProperties": false,
-      "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares (`products/adapter/CONCEPT.md` sections 10.2 and 17).\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
+      "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares.\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
       "properties": {
         "allowedPrivateCidrs": {
           "default": [],
@@ -127,7 +127,7 @@
     },
     "EndpointBinding": {
       "additionalProperties": false,
-      "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions (`products/adapter/CONCEPT.md` section 10.2).",
+      "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions.",
       "properties": {
         "anonymousHttps": {
           "$ref": "#/$defs/AnonymousHttpsAcknowledgement",
@@ -764,7 +764,7 @@
     },
     "MtlsIdentity": {
       "additionalProperties": false,
-      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind (`products/adapter/CONCEPT.md` section 10.2). It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
+      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind. It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
       "properties": {
         "certificateRef": {
           "$ref": "#/$defs/SecretReference",
@@ -783,7 +783,7 @@
     },
     "OutboundTls": {
       "additionalProperties": false,
-      "description": "The private certificate authorities endpoints may trust beside the\nsystem roots (`products/adapter/CONCEPT.md` section 10.2), in the shape\nEvidence ships: a named profile is a process-local PEM file. A CA\nbundle is not a secret, so the profile names a file, never a secret\nreference.",
+      "description": "The private certificate authorities endpoints may trust beside the\nsystem roots, in the shape\nEvidence ships: a named profile is a process-local PEM file. A CA\nbundle is not a secret, so the profile names a file, never a secret\nreference.",
       "properties": {
         "trustProfiles": {
           "additionalProperties": {
@@ -1923,7 +1923,7 @@
       "type": "object"
     },
     "RuntimeCredential": {
-      "description": "The credential binding of one endpoint in the runtime config\n(`products/adapter/CONCEPT.md` section 10.2): Evidence's\n`SourceAuthentication` variant field for field, minus the pack-side\n`headerName` and `scheme`. The kind must match the endpoint's declared\nkind; the checks refuse a mismatch.",
+      "description": "The credential binding of one endpoint in the runtime config: Evidence's\n`SourceAuthentication` variant field for field, minus the pack-side\n`headerName` and `scheme`. The kind must match the endpoint's declared\nkind; the checks refuse a mismatch.",
       "oneOf": [
         {
           "additionalProperties": false,

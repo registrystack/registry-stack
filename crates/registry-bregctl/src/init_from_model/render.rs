@@ -667,7 +667,8 @@ fn dev_clients(plan: &Plan) -> String {
          tests/journeys.yaml uses, with the claims those journeys expect, so a first start \
          runs the journeys and serves the package without another file. A maintained \
          refusal step can name the exact client for its profile with `testBindings`; the \
-         'Explicit teaching clients' section of products/breg/DEV.md documents the closed \
+         'Explicit teaching clients' section of \
+         https://docs.registrystack.org/reference/bregctl-dev/ documents the closed \
          binding format. `dev` generates a \
          fresh private key per client under `.breg/dev/credentials/`; nothing here is a \
          credential, and none of it belongs in a deployment.",
@@ -2037,7 +2038,7 @@ mod tests {
         let (plan, selection) = starter_plan("household");
         let files = render(&plan, &selection);
         // The header the generated file carries names the explicit binding it
-        // does not generate and the DEV.md section documenting it.
+        // does not generate and the bregctl dev reference section documenting it.
         let header = String::from_utf8(files["dev-clients.yaml"].clone()).expect("UTF-8");
         assert!(header.contains("testBindings"), "{header}");
         assert!(header.contains("'Explicit teaching clients'"), "{header}");

@@ -41,4 +41,4 @@ ordinary writer ordering, and bounded recovery seams. The assertions use fresh
 PostgreSQL time and check the relevant Record revision, durable timer
 occurrence, Action receipt, history, and logical outbox effect. This focused
 target does not establish every milestone 1 recovery or operator obligation;
-see [Record timers](../../record-timers.md) for the explicit boundary.
+see [Record timers](https://docs.registrystack.org/configure/breg-record-timers/) for the explicit boundary.

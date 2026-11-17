@@ -3,9 +3,8 @@
 Run this acceptance fixture against the same paired candidate binaries as
 the [small licensing example](../../examples/external-views/README.md). The native run uses two fresh
 loopback PostgreSQL 18 TLS databases, distinct migration and runtime
-roles, and a dedicated plan log. The predeclared machine is the shared
-M5 Max workstation with local storage. Load and timing on the shared
-machine can vary.
+roles, and a dedicated plan log, on local storage. Request-count targets are
+exact; elapsed-time targets depend on the host and its load.
 
 | Measure | Predeclared target |
 |---|---|

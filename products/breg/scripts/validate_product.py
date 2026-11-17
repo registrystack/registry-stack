@@ -25,7 +25,8 @@ PRODUCT_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = PRODUCT_ROOT.parents[1]
 CONTRACTS = PRODUCT_ROOT / "contracts"
 IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9-]+$")
-WAVE = re.compile(r"^W[0-9]+$")
+# Target waves a security invariant may name.
+SECURITY_TARGET_WAVES = frozenset(f"W{index}" for index in range(6))
 PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
@@ -336,35 +337,6 @@ def python_test_definitions(tree: ast.Module) -> list[str]:
     return tests
 
 
-def validate_schedule(errors: list[str]) -> set[str]:
-    value = as_mapping(load_yaml(CONTRACTS / "implementation-schedule.yaml"), "schedule", errors)
-    exact_keys(value, {"apiVersion", "product", "currentWave", "waves"}, "schedule", errors)
-    if value.get("product") != "breg":
-        errors.append("schedule: wrong product")
-    current = value.get("currentWave")
-    if not isinstance(current, str) or not WAVE.fullmatch(current):
-        errors.append("schedule.currentWave: expected a wave identifier")
-    waves = as_list(value.get("waves"), "schedule.waves", errors)
-    identifiers: set[str] = set()
-    for index, raw in enumerate(waves):
-        wave = as_mapping(raw, f"schedule.waves[{index}]", errors)
-        exact_keys(wave, {"id", "outcome", "exitCriteria"}, f"schedule.waves[{index}]", errors)
-        identifier = wave.get("id")
-        if not isinstance(identifier, str) or not WAVE.fullmatch(identifier):
-            errors.append(f"schedule.waves[{index}].id: expected a wave identifier")
-        elif identifier in identifiers:
-            errors.append(f"schedule.waves: duplicate wave {identifier}")
-        else:
-            identifiers.add(identifier)
-        nonempty_string(wave.get("outcome"), f"schedule.waves[{index}].outcome", errors)
-        criteria = as_list(wave.get("exitCriteria"), f"schedule.waves[{index}].exitCriteria", errors)
-        if not criteria or any(not isinstance(item, str) or not item for item in criteria):
-            errors.append(f"schedule.waves[{index}].exitCriteria: expected non-empty identifiers")
-    if current not in identifiers:
-        errors.append("schedule.currentWave: does not name a declared wave")
-    return identifiers
-
-
 def validate_evidence(value: Any, label: str, errors: list[str]) -> None:
     evidence = as_list(value, label, errors)
     if not evidence:
@@ -380,7 +352,7 @@ def validate_evidence(value: Any, label: str, errors: list[str]) -> None:
         executable_test_resolves(item, f"{label}[{index}]", errors)
 
 
-def validate_definition_of_done(waves: set[str], errors: list[str]) -> set[str]:
+def validate_definition_of_done(errors: list[str]) -> set[str]:
     value = as_mapping(load_yaml(CONTRACTS / "definition-of-done.yaml"), "definition of done", errors)
     exact_keys(value, {"apiVersion", "product", "requirements"}, "definition of done", errors)
     if value.get("product") != "breg":
@@ -399,15 +371,12 @@ def validate_definition_of_done(waves: set[str], errors: list[str]) -> set[str]:
     for index, raw in enumerate(requirements):
         item = as_mapping(raw, f"definition of done.requirements[{index}]", errors)
         state = item.get("state")
-        expected = {"id", "phase", "state", "doneWhen", "journeys"}
+        expected = {"id", "state", "doneWhen", "journeys"}
         if state in {"enforced", "partial"}:
             expected.add("evidence")
         if state in {"partial", "planned"}:
             expected.add("gap")
         exact_keys(item, expected, f"definition of done.requirements[{index}]", errors)
-        phase = item.get("phase")
-        if phase not in waves:
-            errors.append(f"definition of done.requirements[{index}].phase: unknown wave")
         if state not in CONTRACT_STATES:
             errors.append(f"definition of done.requirements[{index}].state: expected enforced, partial, or planned")
         nonempty_string(item.get("doneWhen"), f"definition of done.requirements[{index}].doneWhen", errors)
@@ -696,7 +665,7 @@ def validate_postgres_tls_entrypoint(errors: list[str]) -> None:
             errors.append(f"PostgreSQL TLS entrypoint: CI is missing required integration {fragment!r}")
 
 
-def validate_security(waves: set[str], errors: list[str]) -> None:
+def validate_security(waves: frozenset[str] | set[str], errors: list[str]) -> None:
     matrix = as_mapping(load_yaml(CONTRACTS / "security-invariant-matrix.yaml"), "security matrix", errors)
     traceability = as_mapping(load_yaml(CONTRACTS / "security-test-traceability.yaml"), "security traceability", errors)
     exact_keys(matrix, {"apiVersion", "product", "invariants"}, "security matrix", errors)
@@ -851,14 +820,13 @@ def validate_all() -> list[str]:
     errors: list[str] = []
     for contract in CONTRACTS.glob("*.yaml"):
         no_placeholders(load_yaml(contract), contract.name, errors)
-    waves = validate_schedule(errors)
-    requirements = validate_definition_of_done(waves, errors)
+    requirements = validate_definition_of_done(errors)
     journeys = validate_acceptance(errors)
     validate_artifacts(errors)
     validate_package_layout(errors)
     validate_postgres_entrypoint(errors)
     validate_postgres_tls_entrypoint(errors)
-    validate_security(waves, errors)
+    validate_security(SECURITY_TARGET_WAVES, errors)
     validate_fixture(errors)
     for requirement in as_list(load_yaml(CONTRACTS / "definition-of-done.yaml").get("requirements"), "definition requirements", errors):
         if isinstance(requirement, dict):
@@ -867,12 +835,6 @@ def validate_all() -> list[str]:
                     errors.append(f"definition of done: {requirement.get('id')} references unknown journey {journey}")
     if "BREG-W0-CONTRACTS" not in requirements:
         errors.append("definition of done: W0 contract requirement is missing")
-    schedule = as_mapping(load_yaml(CONTRACTS / "implementation-schedule.yaml"), "schedule", errors)
-    for index, raw_wave in enumerate(as_list(schedule.get("waves"), "schedule.waves", errors)):
-        wave = as_mapping(raw_wave, f"schedule.waves[{index}]", errors)
-        for criterion in as_list(wave.get("exitCriteria"), f"schedule.waves[{index}].exitCriteria", errors):
-            if criterion not in requirements:
-                errors.append(f"schedule.waves[{index}]: exit criterion does not resolve: {criterion}")
     return errors
 
 

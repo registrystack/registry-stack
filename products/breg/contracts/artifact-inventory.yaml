@@ -1,22 +1,12 @@
 apiVersion: registry.registrystack.org/product-contract/v1
 product: breg
 artifacts:
-  - {path: README.md, kind: product-boundary, state: authored}
-  - {path: IMPLEMENTATION.md, kind: implementation-guide, state: authored}
-  - {path: ACCEPTANCE-JOURNEYS.md, kind: acceptance-guide, state: authored}
-  - {path: proposals.md, kind: proposal-example-guide, state: authored}
-  - {path: EVENTS-AND-WEBHOOKS.md, kind: extension-direction-spec, state: authored}
-  - {path: HISTORY.md, kind: historical-query-guide, state: authored}
-  - {path: SPATIAL-QUERIES.md, kind: spatial-query-guide, state: authored}
-  - {path: INGESTION-RUNS.md, kind: ingestion-run-guide, state: authored}
   - {path: contracts/definition-of-done.yaml, kind: machine-readable-dod, state: authored}
-  - {path: contracts/implementation-schedule.yaml, kind: delivery-schedule, state: authored}
   - {path: contracts/acceptance-scenario-matrix.yaml, kind: acceptance-matrix, state: authored}
   - {path: contracts/artifact-inventory.yaml, kind: artifact-inventory, state: authored}
   - {path: contracts/package-layout.yaml, kind: package-layout, state: authored}
   - {path: contracts/security-invariant-matrix.yaml, kind: security-lifecycle, state: authored}
   - {path: contracts/security-test-traceability.yaml, kind: security-traceability, state: authored}
-  - {path: contracts/explain/README.md, kind: explain-wire-contract-guide, state: authored}
   - {path: contracts/explain/ModelExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/AccessExplanation.schema.json, kind: explain-wire-contract-schema, state: authored}
   - {path: contracts/explain/AccessPreview.schema.json, kind: explain-wire-contract-schema, state: authored}
@@ -49,5 +39,4 @@ artifacts:
   - {path: scripts/local-postgres-tls.sh, kind: local-postgresql-tls-helper, state: authored}
   - {path: scripts/test-adopter-workflow.sh, kind: adopter-workflow-entrypoint, state: authored}
   - {path: scripts/test-historical-workflow.sh, kind: historical-workflow-entrypoint, state: authored}
-  - {"path": "STATISTICS.md", "kind": "statistical-dataset-guide", "state": "authored"}
   - {"path": "scripts/test-statistics-workflow.sh", "kind": "statistical-adopter-workflow-entrypoint", "state": "authored"}
