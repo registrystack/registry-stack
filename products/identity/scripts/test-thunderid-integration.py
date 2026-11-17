@@ -56,8 +56,7 @@ CASES: dict[str, list[str]] = {
 
 # The package each subcase first becomes runnable in. A case selected before
 # its package is implemented fails loudly with this reason rather than
-# skipping green. Packages P4 and later are not yet wired in this branch;
-# see the implementation checklist in registry-internal for their status.
+# skipping green. Packages P4 and later are not yet wired in this branch.
 FIRST_REQUIRED_AT: dict[str, str] = {
     "A01": "P3/P5",
     "A02": "P3",
@@ -103,8 +102,7 @@ def run_subcase(case: str, subcase: str, args: argparse.Namespace) -> bool:
     if package not in IMPLEMENTED_PACKAGES:
         print(
             f"FAIL {case}.{subcase}: first required at {FIRST_REQUIRED_AT[case]}, "
-            "whose owning package is not implemented on this branch; see the "
-            "implementation checklist in registry-internal",
+            "whose owning package is not implemented on this branch",
             file=sys.stderr,
         )
         return False
