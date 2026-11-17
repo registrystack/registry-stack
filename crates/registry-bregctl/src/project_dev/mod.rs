@@ -127,7 +127,7 @@ struct RunInput {
     #[serde(default)]
     scenarios: Vec<plan::Journey>,
     #[serde(default)]
-    scenario_digest: Option<String>,
+    scenario_digest: String,
     ttl_seconds: u64,
     schema_people: Vec<SchemaPerson>,
     breg_authority: Option<BregAuthority>,
@@ -421,10 +421,9 @@ pub(crate) fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) ->
         Ok(value) => {
             let code = u8::from(
                 starting
-                    && (value["journey"]["result"] == "failed"
-                        || value["scenarios"].as_array().is_some_and(|scenarios| {
-                            scenarios.iter().any(|item| item["result"] == "failed")
-                        })),
+                    && value["scenarios"].as_array().is_some_and(|scenarios| {
+                        scenarios.iter().any(|item| item["result"] == "failed")
+                    }),
             );
             (emit(stdout, &value, machine), code)
         }
@@ -536,12 +535,7 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     if let Some(application) = report["application"].as_str() {
         writeln!(output, "  Application {application}")?;
     }
-    for journey in report["journey"]
-        .as_object()
-        .into_iter()
-        .map(|_| &report["journey"])
-        .chain(report["scenarios"].as_array().into_iter().flatten())
-    {
+    for journey in report["scenarios"].as_array().into_iter().flatten() {
         let Some(result) = journey["result"].as_str() else {
             continue;
         };
@@ -943,12 +937,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         .context("cannot record the PostgreSQL cluster for recovery")
         .map_err(operational)?;
         let urls = products.start(database.insert(connected), issuer.clone())?;
-        let journeys = if let Some(journey) = &input.plan.journey {
-            std::slice::from_ref(journey)
-        } else {
-            &input.scenarios
-        };
-        let journey_reports = journeys
+        let journey_reports = input
+            .scenarios
             .iter()
             .map(|journey| products.journey(&issuer, &urls, journey))
             .collect::<Result<Vec<_>>>()?;
@@ -980,12 +970,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             "products": urls, "people": input.plan.people.keys().collect::<Vec<_>>(),
             "expires_at": expires_at, "logs": root.join("logs"),
         });
-        if input.plan.scenario_file.is_some() {
-            report["scenarios"] = json!(journey_reports);
-            report["scenarioDigest"] = json!(input.scenario_digest);
-        } else {
-            report["journey"] = json!(journey_reports.into_iter().next().expect("inline journey"));
-        }
+        report["scenarios"] = json!(journey_reports);
+        report["scenarioDigest"] = json!(input.scenario_digest);
         let application = application_url.map(|url| {
             (
                 url,
@@ -1658,11 +1644,7 @@ mod tests {
                     "subject": "operator", "client": "operator-client",
                     "grants": {"breg": {"profile": "operator", "scopes": []}}
                 }},
-                "journey": {"id": "smoke", "steps": [{
-                    "id": "read", "product": "breg", "as": "operator",
-                    "method": "GET", "path": "/v1/records",
-                    "expect": {"status": 200}
-                }]}
+                "scenarioFile": "tests/scenarios.yaml"
             },
             "schema_people": [],
             "breg_authority": {

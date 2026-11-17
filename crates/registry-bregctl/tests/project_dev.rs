@@ -119,23 +119,21 @@ kind: BRegProjectDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {{product: breg, project: ., audience: registry}}\n\
 people:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: []}}\n\
-journey:\n  id: smoke\n  steps:\n    - {{id: read, product: breg, as: operator, method: GET, path: /v1/records, expect: {{status: 200}}}}\n\
+scenarioFile: tests/scenarios.yaml\n\
 {extra}"
         ),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("tests")).unwrap();
+    fs::write(
+        root.join("tests/scenarios.yaml"),
+        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\nkind: RStackScenarios\nscenarios:\n  - id: smoke\n    steps:\n      - {id: read, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
     )
     .unwrap();
 }
 
 fn authored_scenarios(root: &std::path::Path, scenarios: &str) {
     project(root, "");
-    let dev = fs::read_to_string(root.join("dev.yaml")).unwrap();
-    let (prefix, _) = dev.split_once("journey:\n").unwrap();
-    fs::write(
-        root.join("dev.yaml"),
-        format!("{prefix}scenarioFile: tests/scenarios.yaml\n"),
-    )
-    .unwrap();
-    fs::create_dir(root.join("tests")).unwrap();
     fs::write(
         root.join("tests/scenarios.yaml"),
         format!(
@@ -401,7 +399,15 @@ kind: BRegProjectDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {{product: breg, project: ., audience: private-audience-marker}}\n\
 people:\n  operator:\n    subject: private-subject-marker\n    client: private-client-marker\n    grants:\n      {grant}: {{profile: private-profile-marker, scopes: []}}\n\
-journey:\n  id: smoke\n  steps:\n    - id: read\n      product: breg\n      as: operator\n      method: GET\n      path: /v1/records\n      expect: {{status: 200}}\n{step_extra}"
+scenarioFile: tests/scenarios.yaml\n"
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("tests")).unwrap();
+    fs::write(
+        root.join("tests/scenarios.yaml"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\nkind: RStackScenarios\nscenarios:\n  - id: smoke\n    steps:\n      - id: read\n        product: breg\n        as: operator\n        method: GET\n        path: /v1/records\n        expect: {{status: 200}}\n{step_extra}"
         ),
     )
     .unwrap();
@@ -409,7 +415,6 @@ journey:\n  id: smoke\n  steps:\n    - id: read\n      product: breg\n      as: 
 
 fn fixture_project(root: &std::path::Path, extra: &str) {
     project(root, extra);
-    fs::create_dir(root.join("tests")).unwrap();
     fs::write(
         root.join("tests/journeys.yaml"),
         concat!(
@@ -435,7 +440,7 @@ fn authored_stack_scenarios_coexist_with_native_breg_fixture_journeys() {
     let state = scratch.path().join("state");
     fixture_project(scratch.path(), "");
     let dev = fs::read_to_string(scratch.path().join("dev.yaml")).unwrap();
-    let (prefix, _) = dev.split_once("journey:\n").unwrap();
+    let (prefix, _) = dev.split_once("scenarioFile:").unwrap();
     fs::write(
         scratch.path().join("dev.yaml"),
         format!("{prefix}scenarioFile: tests/scenarios.yaml\nschemaTestPeople:\n  real-journey:\n    real-step: operator\n"),
@@ -622,9 +627,14 @@ kind: BRegProjectDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {{product: breg, project: ., audience: \"urn:example:registry\"}}\n  - {{product: casework, project: casework, audience: \"urn:example:review\"}}\n\
 people:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: [registry:read]}}\n  reviewer:\n    subject: reviewer\n    client: reviewer-client\n    grants:\n      casework: {{profile: {casework_profile}, scopes: [casework:review]}}\n\
-journey:\n  id: smoke\n  steps:\n    - {{id: read, product: breg, as: operator, method: GET, path: /v1/records, expect: {{status: 200}}}}\n\
+scenarioFile: tests/scenarios.yaml\n\
 {bindings}"
         ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("tests/scenarios.yaml"),
+        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\nkind: RStackScenarios\nscenarios:\n  - id: smoke\n    steps:\n      - {id: read, product: breg, as: operator, method: GET, path: /v1/records, expect: {status: 200}}\n",
     )
     .unwrap();
     fake_casework_tool(root)
@@ -825,7 +835,7 @@ fn check_refuses_a_backslash_in_an_existing_scenario_file_name() {
 }
 
 #[test]
-fn check_refuses_ambiguous_or_missing_scenario_selection() {
+fn check_refuses_an_inline_journey_or_a_missing_scenario_file() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
     authored_scenarios(
@@ -976,8 +986,8 @@ fn implicit_fixture_person_refusals_keep_the_intended_assignment_pointer() {
         let plan = fs::read_to_string(scratch.path().join("dev.yaml")).unwrap();
         let plan = if ambiguous {
             plan.replace(
-                "journey:\n",
-                "  second:\n    subject: second\n    client: second-client\n    grants:\n      breg: {profile: operator, scopes: []}\njourney:\n",
+                "scenarioFile:",
+                "  second:\n    subject: second\n    client: second-client\n    grants:\n      breg: {profile: operator, scopes: []}\nscenarioFile:",
             )
         } else {
             plan.replace("profile: operator", "profile: other")
@@ -1104,7 +1114,7 @@ fn check_reports_an_invalid_fixture_as_an_actionable_plan_refusal() {
         scratch.path(),
         "schemaTestPeople:\n  real-journey:\n    real-step: operator\n",
     );
-    fs::create_dir(scratch.path().join("tests")).unwrap();
+    fs::create_dir_all(scratch.path().join("tests")).unwrap();
     fs::write(
         scratch.path().join("tests/journeys.yaml"),
         "not a fixture\n",
@@ -1136,7 +1146,7 @@ fn check_reports_an_oversized_fixture_as_an_actionable_plan_refusal() {
         scratch.path(),
         "schemaTestPeople:\n  real-journey:\n    real-step: operator\n",
     );
-    fs::create_dir(scratch.path().join("tests")).unwrap();
+    fs::create_dir_all(scratch.path().join("tests")).unwrap();
     fs::write(
         scratch.path().join("tests/journeys.yaml"),
         vec![b' '; 1024 * 1024 + 1],
@@ -1227,7 +1237,7 @@ fn check_renders_both_locations_of_a_duplicate_key() {
     assert!(result.stdout.is_empty());
     let human = String::from_utf8(result.stderr).unwrap();
     assert!(human.starts_with("error[yaml.duplicate-key] "), "{human}");
-    assert!(human.contains("dev.yaml:17:1 /issuer"), "{human}");
+    assert!(human.contains("dev.yaml:14:1 /issuer"), "{human}");
     assert!(human.contains("dev.yaml:4:1 /issuer"), "{human}");
     assert!(
         human.contains("next: Keep one definition of the key."),
@@ -1260,7 +1270,7 @@ fn check_reports_an_actionable_value_free_poll_relationship() {
     semantic_project(
         scratch.path(),
         "breg",
-        "      poll: {maximumWaitMilliseconds: 173, pollIntervalMilliseconds: 211}\n",
+        "        poll: {maximumWaitMilliseconds: 173, pollIntervalMilliseconds: 211}\n",
     );
 
     let result = check(scratch.path(), &state, true);
@@ -1268,10 +1278,10 @@ fn check_reports_an_actionable_value_free_poll_relationship() {
     assert_eq!(result.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "breg.project-dev.invalid-plan");
+    assert_eq!(diagnostic["code"], "breg.project-dev.invalid-scenarios");
     assert_eq!(
         diagnostic["path"],
-        "/journey/steps/0/poll/pollIntervalMilliseconds"
+        "/scenarios/0/steps/0/poll/pollIntervalMilliseconds"
     );
     assert_eq!(
         diagnostic["message"],
@@ -1398,7 +1408,12 @@ kind: BRegProjectDev\n\
 issuer: https://issuer.example.invalid\n\
 products:\n  - {product: breg, project: ., audience: registry}\n\
 people:\n  editor:\n    subject: editor\n    client: editor-client\n    grants:\n      breg:\n        profile: directory-editor\n        scopes: [registry:directory:write]\n        claims: {registry_purpose: directory-administration}\n  unused:\n    subject: unused\n    client: unused-client\n    grants:\n      breg: {profile: private-profile-marker, scopes: []}\n\
-journey:\n  id: smoke\n  steps:\n    - {id: read, product: breg, as: editor, method: GET, path: /v1/records, expect: {status: 200}}\n",
+scenarioFile: tests/scenarios.yaml\n",
+    )
+    .unwrap();
+    fs::write(
+        scratch.path().join("tests/scenarios.yaml"),
+        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\nkind: RStackScenarios\nscenarios:\n  - id: smoke\n    steps:\n      - {id: read, product: breg, as: editor, method: GET, path: /v1/records, expect: {status: 200}}\n",
     )
     .unwrap();
 
@@ -1788,11 +1803,11 @@ fn check_distinguishes_an_unavailable_casework_helper_from_an_invalid_project() 
     assert_eq!(diagnostic["path"], "/products/1/project");
     assert_eq!(
         diagnostic["message"],
-        "The Casework project did not pass validation by its owning tool."
+        "The Casework project did not pass validation by its owning tool: /reviewPolicies: The authored project was refused."
     );
     assert_eq!(
         diagnostic["suggestedAction"],
-        "Run `rstack casework check` for authored diagnostics, then correct the Casework project."
+        "Correct the Casework project where the diagnostics point."
     );
     assert!(!state.exists());
 }
@@ -1803,7 +1818,7 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
     let state = scratch.path().join("state");
     fs::write(
         scratch.path().join("dev.yaml"),
-        "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\nkind: BRegProjectDev\nissuer: https://example.test\nproducts: [{product: coordinator, project: registry, audience: test}]\npeople: {}\njourney: {id: licensing, steps: []}\n",
+        "apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1\nkind: BRegProjectDev\nissuer: https://example.test\nproducts: [{product: coordinator, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
     )
     .unwrap();
     let request = serde_json::json!({
@@ -1924,19 +1939,29 @@ fn worker_restores_a_valid_plan_whose_captured_input_exceeds_512_kib() {
             "subject": "operator", "client": "operator-client",
             "grants": {"breg": {"profile": "operator", "scopes": []}}
         }},
-        "journey": {"id": "smoke", "steps": [{
+        "scenarioFile": "tests/scenarios.yaml"
+    });
+    let scenarios = serde_json::json!({
+        "apiVersion": "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+        "kind": "RStackScenarios",
+        "scenarios": [{"id": "smoke", "steps": [{
             "id": "send-raw", "product": "breg", "as": "operator", "method": "POST",
             "path": "/v1/records",
             "raw": {"contentType": "application/octet-stream", "base64": raw},
             "expect": {"status": 200}
-        }]}
+        }]}]
     });
-    let document = serde_json::to_vec(&plan).unwrap();
+    let document = serde_json::to_vec(&scenarios).unwrap();
     assert!(
         document.len() <= registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES,
-        "the regression fixture must remain a valid-size development plan"
+        "the regression fixture must remain a valid-size scenarios file"
     );
-    fs::write(project_root.join("dev.yaml"), &document).unwrap();
+    fs::write(project_root.join("tests/scenarios.yaml"), &document).unwrap();
+    fs::write(
+        project_root.join("dev.yaml"),
+        serde_json::to_vec(&plan).unwrap(),
+    )
+    .unwrap();
 
     let checked = check(&project_root, &scratch.path().join("check-state"), true);
     assert!(
@@ -2405,7 +2430,11 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
         "issuer":"https://issuer.example.invalid",
         "products":[{"product":"breg","project":".","audience":"registry"}],
         "people":people,"schemaTestPeople":assignments,
-        "journey":{"id":"public-directory","steps":[{"id":"read-registry","product":"breg","as":"editor","method":"GET","path":"/v1/registry","expect":{"status":200}}]}
+        "scenarioFile":"tests/scenarios.yaml"
+    })).unwrap()).unwrap();
+    fs::write(project.join("tests/scenarios.yaml"), serde_json::to_vec_pretty(&serde_json::json!({
+        "apiVersion":"id.registrystack.org/formats/rstack/scenarios/v1alpha1","kind":"RStackScenarios",
+        "scenarios":[{"id":"public-directory","steps":[{"id":"read-registry","product":"breg","as":"editor","method":"GET","path":"/v1/registry","expect":{"status":200}}]}]
     })).unwrap()).unwrap();
     let original = snapshot(&project);
     let mut owned = OwnedRun {
@@ -2475,7 +2504,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     );
     assert!(started["status"] == "ready", "native start must be ready");
     assert!(
-        started["journey"]["result"] == "passed",
+        started["scenarios"][0]["result"] == "passed",
         "native journey must pass"
     );
     let id = owned.run.as_deref().unwrap();
@@ -2535,7 +2564,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
     assert!(status["status"] == "ready", "native status must be ready");
     assert!(
-        status["journey"] == started["journey"],
+        status["scenarios"] == started["scenarios"],
         "native status must match the start journey"
     );
     owned.stop();

@@ -104,7 +104,7 @@ offline. See [Generate ThunderID configuration](../../docs/site/src/content/docs
 
 Run BReg and Casework together with `rstack dev start PROJECT` against a
 dedicated TLS PostgreSQL server. The project's `dev.yaml` declares the
-products, test people and journey. See [Run a project for development](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
+products, test people and the scenarios file it names. See [Run a project for development](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
 
 ## Command migration
 

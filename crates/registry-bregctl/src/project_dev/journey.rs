@@ -294,12 +294,7 @@ fn execute_step(
     let person = &input.plan.people[&step.person];
     let grant = &person.grants[&step.product];
     if step.product == Product::Breg {
-        ensure!(
-            !url.query_pairs().any(|(name, _)| name == "accessProfile"),
-            "the plan's grant selects the BReg profile"
-        );
-        url.query_pairs_mut()
-            .append_pair("accessProfile", &grant.profile);
+        select_access_profile(&mut url, &grant.profile)?;
     }
 
     let headers = step
@@ -417,6 +412,26 @@ fn poll_timed_out(
         updates: BTreeMap::new(),
         failure,
     }
+}
+
+/// Sends the request under the profile the test person's grant selects. A
+/// step that already names that profile keeps its single parameter; a step that
+/// names another profile is refused.
+fn select_access_profile(url: &mut url::Url, profile: &str) -> Result<()> {
+    let named = url
+        .query_pairs()
+        .find(|(name, _)| name == "accessProfile")
+        .map(|(_, value)| value.into_owned());
+    match named {
+        Some(named) => ensure!(
+            named == profile,
+            "the step names access profile `{named}` but the plan's grant selects `{profile}`"
+        ),
+        None => {
+            url.query_pairs_mut().append_pair("accessProfile", profile);
+        }
+    }
+    Ok(())
 }
 
 fn request_url(base: &str, path: &str) -> Result<url::Url> {
@@ -886,15 +901,17 @@ mod tests {
                 "subject": "reader", "client": "reader-client",
                 "grants": {"breg": {"profile": "reader", "scopes": ["registry:read"]}}
             }},
-            "journey": {"id": "poll", "steps": [{
-                "id": "wait", "product": "breg", "as": "reader", "method": "GET",
-                "path": "/v1/result", "expect": {"status": 200, "json": {"/state": "ready"}},
-                "poll": {
-                    "maximumWaitMilliseconds": maximum_wait,
-                    "pollIntervalMilliseconds": interval
-                }
-            }]}
+            "scenarioFile": "tests/scenarios.yaml"
         }))
+        .unwrap();
+        let journey: Journey = serde_json::from_value(json!({"id": "poll", "steps": [{
+            "id": "wait", "product": "breg", "as": "reader", "method": "GET",
+            "path": "/v1/result", "expect": {"status": 200, "json": {"/state": "ready"}},
+            "poll": {
+                "maximumWaitMilliseconds": maximum_wait,
+                "pollIntervalMilliseconds": interval
+            }
+        }]}))
         .unwrap();
         RunInput {
             run_id: "0123456789abcdef0123456789abcdef".to_owned(),
@@ -902,8 +919,8 @@ mod tests {
             application_root: None,
             application_node: None,
             plan,
-            scenarios: Vec::new(),
-            scenario_digest: None,
+            scenarios: vec![journey],
+            scenario_digest: String::new(),
             ttl_seconds: 300,
             schema_people: Vec::new(),
             breg_authority: Some(super::super::BregAuthority {
@@ -970,14 +987,7 @@ mod tests {
         let input = polling_input(1000, 50);
         let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
 
-        let report = run(
-            &input,
-            &issuer,
-            &urls,
-            input.plan.journey.as_ref().unwrap(),
-            || Ok(()),
-        )
-        .unwrap();
+        let report = run(&input, &issuer, &urls, &input.scenarios[0], || Ok(())).unwrap();
 
         assert_eq!(report.result, "failed");
         assert_eq!(report.steps[0].status, 202);
@@ -999,14 +1009,7 @@ mod tests {
         let input = polling_input(1000, 1000);
         let urls = BTreeMap::from([(Product::Breg, server.url.clone())]);
 
-        let report = run(
-            &input,
-            &issuer,
-            &urls,
-            input.plan.journey.as_ref().unwrap(),
-            || Ok(()),
-        )
-        .unwrap();
+        let report = run(&input, &issuer, &urls, &input.scenarios[0], || Ok(())).unwrap();
 
         assert_eq!(report.result, "failed");
         assert_eq!(report.steps[0].status, 202);
@@ -1055,6 +1058,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(expanded, json!({"revision": 7, "label": "revision-7"}));
+    }
+
+    #[test]
+    fn a_step_naming_the_grant_profile_keeps_one_access_profile_parameter() {
+        let mut url = request_url(
+            "http://127.0.0.1:31415/",
+            "/v1/records?accessProfile=reader&id=one",
+        )
+        .unwrap();
+        select_access_profile(&mut url, "reader").unwrap();
+        assert_eq!(
+            url.query_pairs()
+                .filter(|(name, _)| name == "accessProfile")
+                .count(),
+            1
+        );
+        let mut bare = request_url("http://127.0.0.1:31415/", "/v1/records").unwrap();
+        select_access_profile(&mut bare, "reader").unwrap();
+        assert_eq!(bare.query(), Some("accessProfile=reader"));
+    }
+
+    #[test]
+    fn a_step_naming_another_profile_is_refused_at_run_time() {
+        let mut url = request_url(
+            "http://127.0.0.1:31415/",
+            "/v1/records?accessProfile=applicant",
+        )
+        .unwrap();
+        let error = select_access_profile(&mut url, "reader")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("applicant") && error.contains("reader"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1197,14 +1235,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let issuer = Issuer::create(root.path()).unwrap();
         let mut input = polling_input(1000, 50);
-        input.plan.journey.as_mut().unwrap().steps[0].poll = None;
-        input.plan.journey.as_mut().unwrap().steps[0].expect.status =
-            serde_json::from_value(json!(404)).unwrap();
+        input.scenarios[0].steps[0].poll = None;
+        input.scenarios[0].steps[0].expect.status = serde_json::from_value(json!(404)).unwrap();
         let report = run(
             &input,
             &issuer,
             &BTreeMap::from([(Product::Breg, url)]),
-            input.plan.journey.as_ref().unwrap(),
+            &input.scenarios[0],
             || Ok(()),
         )
         .unwrap();
@@ -1566,7 +1603,7 @@ mod tests {
             &input,
             &issuer,
             &BTreeMap::from([(Product::Breg, server.url.clone())]),
-            input.plan.journey.as_ref().unwrap(),
+            &input.scenarios[0],
             || Ok(()),
         )
         .unwrap();

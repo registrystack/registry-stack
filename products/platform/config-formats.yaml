@@ -751,11 +751,11 @@ formats:
     conformance:
       requiredText: /issuer
       optionalText: none
-      integer: /journey/steps/0/expect/status
+      integer: none
       boolean: none
-      idList: /journey/steps
+      idList: none
       set: /people/operator/grants/breg/scopes
-      reference: /journey/steps/0/as
+      reference: none
       operand: none
       relativePath: none
     securityMembers:

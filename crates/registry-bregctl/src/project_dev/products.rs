@@ -1693,13 +1693,7 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
         return Ok(None);
     };
     let registry = crate::compile(&project.root, crate::ProfileArg::Production, "project-dev")
-        .map_err(|_| {
-            plan::SemanticRefusal::new(
-                &project.field,
-                "The BReg project did not pass its owning validation.",
-                "Run `rstack breg check` for authored diagnostics, then correct the BReg project.",
-            )
-        })?;
+        .map_err(|report| breg_validation_refusal(&project.field, &report))?;
     let review_authorities = registry
         .review_authorities()
         .iter()
@@ -1722,6 +1716,45 @@ fn breg_authority(root: &Path, plan: &Plan) -> Result<Option<BregAuthority>> {
         requires_postgis: breg_requires_postgis(&registry),
         encrypts_fields: breg_encrypts_fields(&registry),
     }))
+}
+
+/// The refusal for a BReg project its owning compiler rejected. It carries the
+/// compiler's own diagnostics (file, line, message, suggested action) so the
+/// adopter does not need a second command to learn what to correct. A
+/// diagnostic without a source location is placed in `registry.yaml`.
+fn breg_validation_refusal(field: &str, report: &crate::FailureReport) -> plan::SemanticRefusal {
+    let findings = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let location = match &diagnostic.source {
+                Some(source) => match (source.line, source.column) {
+                    (Some(line), Some(column)) => format!("{}:{line}:{column}", source.file),
+                    (Some(line), None) => format!("{}:{line}", source.file),
+                    _ => source.file.clone(),
+                },
+                None => format!("registry.yaml {}", diagnostic.path),
+            };
+            format!("{location}: {}", diagnostic.message.trim_end_matches('.'))
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let actions = report
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| serde_json::to_value(diagnostic.suggested_action).ok())
+        .filter_map(|action| action.as_str().map(str::to_owned))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    plan::SemanticRefusal::new(
+        field,
+        format!("The BReg project did not pass its owning validation: {findings}."),
+        format!(
+            "Correct the BReg project where the diagnostics point (suggested action: {actions})."
+        ),
+    )
 }
 
 fn breg_principal(
@@ -1844,11 +1877,18 @@ fn casework_principals(
     let facts = match explain_casework_facts(&tool, &project.root, terminate) {
         Ok(facts) => facts,
         Err(error) if error.is::<InvalidCaseworkProject>() => {
+            let findings = error
+                .downcast_ref::<InvalidCaseworkProject>()
+                .map(|invalid| invalid.findings.as_str())
+                .unwrap_or_default();
             return Err(plan::SemanticRefusal::new(
                 &project.field,
-                "The Casework project did not pass validation by its owning tool.",
-                "Run `rstack casework check` for authored diagnostics, then correct the Casework project.",
-            ).into());
+                format!(
+                    "The Casework project did not pass validation by its owning tool: {findings}."
+                ),
+                "Correct the Casework project where the diagnostics point.",
+            )
+            .into());
         }
         Err(error) => {
             return Err(inspection_failed(
@@ -1928,7 +1968,10 @@ fn explain_casework_facts(
         return casework_report_facts(&report);
     }
     if status.code() == Some(1) && casework_domain_refusal(&report, "explain") {
-        return Err(InvalidCaseworkProject.into());
+        return Err(InvalidCaseworkProject {
+            findings: casework_findings(&report),
+        }
+        .into());
     }
     anyhow::bail!("caseworkctl explain did not complete successfully")
 }
@@ -2132,8 +2175,28 @@ fn casework_binding_check(code: Option<i32>, report: &Value, id: &str) -> Bindin
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("the Casework project did not pass its owning validation")]
-struct InvalidCaseworkProject;
+#[error("the Casework project did not pass its owning validation: {findings}")]
+struct InvalidCaseworkProject {
+    /// The owning tool's error diagnostics, one `path: message` entry each.
+    findings: String,
+}
+
+fn casework_findings(report: &Value) -> String {
+    report["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|diagnostic| diagnostic["severity"] == "error")
+        .filter_map(|diagnostic| {
+            Some(format!(
+                "{}: {}",
+                diagnostic["path"].as_str()?,
+                diagnostic["message"].as_str()?.trim_end_matches('.')
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
 
 #[derive(Debug, Eq, PartialEq)]
 struct CaseworkFacts {
@@ -2634,6 +2697,42 @@ mod tests {
         os::unix::fs::PermissionsExt,
         sync::mpsc,
     };
+
+    #[test]
+    fn breg_validation_refusal_carries_the_compiler_diagnostics() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("registry.yaml"),
+            "apiVersion: [unterminated\n",
+        )
+        .unwrap();
+        let report = crate::compile(root.path(), crate::ProfileArg::Production, "project-dev")
+            .expect_err("an invalid registry.yaml must not compile");
+        let refusal = breg_validation_refusal("/products/0/project", &report).to_string();
+        assert!(
+            refusal.contains("registry.yaml project.apiVersion[1]: the document ends"),
+            "the refusal must name the file: {refusal}"
+        );
+        assert!(
+            !refusal.contains(".."),
+            "each sentence ends once: {refusal}"
+        );
+        assert!(
+            !refusal.contains("rstack breg check"),
+            "the refusal must not send the adopter to a second command"
+        );
+    }
+
+    #[test]
+    fn casework_findings_keep_the_owning_tool_error_diagnostics() {
+        let report = json!({"diagnostics":[
+            {"severity":"error","path":"casework.yaml#/forms/0","message":"unknown form field"},
+            {"severity":"warning","path":"casework.yaml#/x","message":"ignored warning"}]});
+        assert_eq!(
+            casework_findings(&report),
+            "casework.yaml#/forms/0: unknown form field"
+        );
+    }
 
     #[test]
     fn schema_failure_projection_actual_tool_and_reader_producers() {
@@ -3265,7 +3364,7 @@ mod tests {
                 },
                 "caseworkContext": context
             }},
-            "journey": {"id": "smoke", "steps": []}
+            "scenarioFile": "tests/scenarios.yaml"
         }))
         .unwrap()
     }
@@ -3718,10 +3817,7 @@ mod tests {
                 "subject": "reviewer", "client": "reviewer-client",
                 "grants": {"casework": {"profile": "reviewer", "scopes": ["casework:review"]}}
             }},
-            "journey": {"id": "read", "steps": [{
-                "id": "read", "product": "casework", "as": "reviewer", "method": "GET",
-                "path": "/v1/review-tasks", "expect": {"status": 200}
-            }]}
+            "scenarioFile": "tests/scenarios.yaml"
         }))
         .unwrap();
         let identity = format!("dev-{}-casework", input.run_id);
@@ -4270,14 +4366,11 @@ mod tests {
                     "subject": "reader", "client": "reader-client",
                     "grants": {"breg": {"profile": "reader", "scopes": []}}
                 }},
-                "journey": {"id": "read", "steps": [{
-                    "id": "read", "product": "breg", "as": "reader", "method": "GET",
-                    "path": "/v1/records", "expect": {"status": 200}
-                }]}
+                "scenarioFile": "tests/scenarios.yaml"
             }))
             .unwrap(),
             scenarios: Vec::new(),
-            scenario_digest: None,
+            scenario_digest: String::new(),
             ttl_seconds: 300,
             schema_people: Vec::new(),
             breg_authority: Some(BregAuthority {
