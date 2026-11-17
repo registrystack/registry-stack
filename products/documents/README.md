@@ -23,8 +23,9 @@ profile in `documents.yaml`; the profile and the document policy decide what
 the caller may do. The token is an RFC 9068 `at+jwt` access token signed with
 `RS256` or `ES256`, whose `azp` or `client_id` is in a profile's
 `requesterClients`, whose scopes include the profile's `requiredScopes`, and
-whose `registry_actor_kind` is the profile's `actorKind`; `RUNTIME-CONFIG.md`
-states every rule under "Access tokens".
+whose `registry_actor_kind` is the profile's `actorKind`; the
+[Deploy and operate the Document Store](https://docs.registrystack.org/operate/documents/#access-tokens)
+guide states every rule.
 `generated/registry-documents.openapi.json` is the full contract.
 
 | Route | Does |
@@ -223,8 +224,9 @@ Two operator documents configure a deployment:
   `examples/starter/documents.yaml`.
 - the runtime configuration, a `DocumentsRuntimeConfig`: listener, database,
   authentication, audit, storage, content verification, cleanup, hook
-  destinations, and retention. See `RUNTIME-CONFIG.md` and
-  `examples/starter/runtime.example.yaml`.
+  destinations, and retention. See the
+  [configuration reference](https://docs.registrystack.org/reference/documents-configuration/)
+  and `examples/starter/runtime.example.yaml`.
 
 Check them offline, with no database, network, or secret:
 
@@ -311,37 +313,6 @@ re-armed by the sweep: `documentsctl erasure list` shows each one with its
 generation, and `documentsctl erasure replay`, with the same `--version-id`
 and `--expected-generation` options, returns it to pending, audited the same
 way. While erasure is paused a replayed job waits.
-
-## Volume fit
-
-What `bytea` storage costs at a stated count and size was measured once:
-a database filled through the runtime's own routes with verified documents of
-pseudo-random bytes (which do not compress, as the streams of real PDFs
-already are), dumped with `pg_dump --format=custom`, and restored into
-another database, which held the same content.
-
-Indicative results, 2026-10-21, PostgreSQL 17.10 in an OrbStack container on
-an Apple M5 Max (18 cores, 128 GiB) shared with many other workloads (load
-average between 6.7 and 27.5 during the runs), `pg_dump` and `pg_restore` 18.4 over
-loopback TCP:
-
-| Documents | Size | Payload | Database | Dump file | Dump | Restore |
-|---|---|---|---|---|---|---|
-| 1,000 | 1 MiB | 1.05 GB | 1.10 GB | 1.20 GB | 41.6 s | 7.8 s |
-| 10,000 | 64 KiB | 655 MB | 718 MB | 751 MB | 25.8 s | 7.1 s |
-
-The sizes do not depend on the machine. The database is the payload plus
-about 44 KB a document at 1 MiB and about 5.4 KB at 64 KiB (1.04 and 1.08
-times the payload). TOAST stores incompressible content as is. The
-custom-format dump is larger than the payload, about 1.14 times in both
-runs: `pg_dump` writes `bytea` as hex text and its compression wins back
-less than the hex encoding added. Plan backup space at more than the
-database size. Each restored database held the same content as its source, by count,
-total length, and a digest over every version's content.
-
-The times are indicative only: the machine was contended and the database
-ran in a VM. An authoritative run on a dedicated host is still owed before
-the times are quoted for sizing.
 
 ## Events and observers
 

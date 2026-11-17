@@ -45,6 +45,6 @@ rules that govern it and the invariant rows in `contracts/` that prove them.
   records the behaviour; the reasoning belongs in the pull request description.
 - Changes to authentication, authorization, content verification, audit, data
   minimization, retention, or erasure are security-sensitive and need
-  `SECURITY-MODEL.md` updated in the same change when a trust boundary,
+  the security model page (`docs/site/src/content/docs/security/documents.mdx`) updated in the same change when a trust boundary,
   operator obligation, or accepted residual changes, with the review narrative
   in the pull request description.
