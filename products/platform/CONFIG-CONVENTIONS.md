@@ -706,7 +706,7 @@ patterns, JSON Schema fragments, and RFC 9535 JSONPath selectors may be
 written inline: a selector is a query, not code.
 *Why:* a selector queries the document the way a pattern matches it, which is
 why the Adapter expression languages write `jsonpath` inline
-(products/adapter/CONCEPT.md section 8.5).
+(see https://docs.registrystack.org/configure/adapter/).
 
 **CFG-EMBED-2 (MUST). An embedded foreign document (a JSON Schema, an
 OpenAPI fragment) is read by its own rules, not ours,** and the schema marks
@@ -765,7 +765,7 @@ A product may add other optional members to a diagnostic when its own
 contract documents them, such as the field a finding is about. They are
 value-free under CFG-SEC-3, never change the meaning of the members above, and
 a client ignores members it does not know. `adapterctl mapping check` adds
-`target` and `cause`, documented in `products/adapter/VISUAL-MAPPING.md`.
+`target` and `cause`, documented in the [Adapter configuration page](https://docs.registrystack.org/configure/adapter/).
 
 **CFG-DIAG-2 (MUST). Human output puts the position first:**
 

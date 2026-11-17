@@ -63,7 +63,7 @@ Startup and the actual call establish those conditions.
 
 Keep `breg-mcp` for existing BReg citizen deployments. It is the released path;
 `registry-mcp` requires building from source and is useful when its explicit
-provider bindings are needed. See [the design record](../../products/platform/MCP-GATEWAY.md).
+provider bindings are needed. See [Configure the MCP gateway](https://docs.registrystack.org/configure/breg-mcp/).
 
 Existing `breg-mcp` configuration and CLI remain supported by their compatibility wrapper.
 It uses the shared edge and the same BReg provider.

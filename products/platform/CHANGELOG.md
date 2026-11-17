@@ -4,7 +4,7 @@
 
 - `rstack dev check|start|status|token|stop` runs a checkout's BReg and Casework
   projects together against a PostgreSQL server you supply. See
-  [PROJECT-DEV.md](PROJECT-DEV.md). It is an alpha developer tool and may
+  [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/). It is an alpha developer tool and may
   change.
 - `rstack dev stop RUN_ID --recover` releases a run whose supervisor is gone.
   It waits for the process guards to finish, drops the run's databases and roles

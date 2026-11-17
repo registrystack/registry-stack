@@ -113,10 +113,7 @@ level B-B or B-T. This is the only meaning of "seal" in `document_signature`;
 `sealed_value::seal` and `field_encryption::seal_field` mean authenticated
 encryption of a stored value, not a document seal. The product owns
 the document format: for a PDF it reserves the signature dictionary, computes
-the byte ranges the signature covers, and embeds the returned CMS. The
-pyHanko, EU DSS and veraPDF runs on sealed files Registry Render answered,
-and what they do not show, are recorded in
-[`products/render/EVIDENCE.md`](../../products/render/EVIDENCE.md).
+the byte ranges the signature covers, and embeds the returned CMS.
 
 ```rust
 use registry_platform_crypto::{
@@ -244,9 +241,15 @@ interoperability and security policy.
   `status = active` plus `readiness = ready` is accepted. Degraded,
   not-ready, unknown, publish-only, and disabled keys fail closed before
   anti-rollback state changes.
-- Provider posture should use the shared provider/readiness labels and follow
-  the product-neutral redaction contract in
-  [`docs/secret-provider-readiness.md`](../../docs/secret-provider-readiness.md).
+- Provider posture should use the shared provider/readiness labels. Posture and
+  signed bundles carry only those labels, public key identifiers, public JWKs,
+  public certificate chains and readiness labels. They never carry environment
+  variable names that point at secrets, local filesystem paths, PKCS#11 slots,
+  token labels, PIN sources or object labels, cloud KMS resource names, key
+  ring paths or account identifiers, workload identity trust domains,
+  audiences, subject selectors or token exchange diagnostics, Transit socket
+  paths, mount paths or key names, data-key reference names, or raw provider
+  error strings that can contain any of these.
 - `did:web` validation rejects IP literals, localhost, obvious metadata hosts,
   empty labels, and path traversal.
 - Signing helpers validate key material before use.

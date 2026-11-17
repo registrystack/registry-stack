@@ -809,7 +809,7 @@ exceptions:
   format: adapter/pack
   location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/pollEnrich
   class: protocol-constant
-  reason: The EIP name is written as Apache Camel names the poll enricher; the pack grammar preserves Camel's step vocabulary, and the port table (CONCEPT 8.10) carries the row
+  reason: The EIP name is written as Apache Camel names the poll enricher; the pack grammar preserves Camel's step vocabulary, and the Camel port table (products/adapter/scripts/camel-port-table.yaml) carries the row
   resolution: Permanent.
 - rule: CFG-NAME-5
   format: adapter/pack
@@ -839,7 +839,7 @@ exceptions:
   format: adapter/job-runtime
   location: products/adapter/schemas/job-runtime.v1alpha1.schema.json#/$defs/FileSource/properties/maxMessagesPerPoll
   class: exchange-model
-  reason: The member keeps the Camel file component's option name so a ported route reads the same option (CONCEPT 8.10 port table, file job source)
+  reason: The member keeps the Camel file component's option name so a ported route reads the same option (Camel port table, file job source, in products/adapter/scripts/camel-port-table.yaml)
   resolution: Permanent for the adapter job-runtime v1alpha1 file source; the reader refuses zero, so every read stays bounded.
 - rule: CFG-EMPTY-2
   format: adapter/job-runtime
