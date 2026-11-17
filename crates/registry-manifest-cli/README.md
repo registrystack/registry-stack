@@ -79,17 +79,6 @@ Regenerate the editor schemas after changing a reader type:
 cargo run -p registry-manifest-cli --features schema --example manifest-schema -- --output products/manifest/schemas
 ```
 
-Run the commons contract-kernel check, optionally with consumer manifests:
-
-```sh
-SOLMARA_LAB_DIR=/path/to/solmara-lab
-products/manifest/scripts/check-contract-kernel.sh \
-  "$SOLMARA_LAB_DIR/metadata/solmara-wave1.metadata.yaml"
-```
-
-The script runs formatting, clippy, workspace tests, checked-in profile
-validation, and static publication for any passed consumer manifests.
-
 ## Supported Render Formats
 
 - `catalog`
