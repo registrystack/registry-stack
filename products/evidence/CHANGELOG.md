@@ -37,6 +37,12 @@
   to the authorization server's issuer identifier, exactly as its metadata
   publishes it.
 
+- BREAKING: `evidencectl tooling language-server` is removed. Registry Stack
+  navigation is served by `registry-language-server`, a release asset of its
+  own that Studio runs; no desktop editor integration replaces the command.
+  `evidencectl tooling editor` still writes schema mappings for a stock YAML
+  language server. See the platform changelog.
+
 ## 0.46.0 - 2026-11-08
 
 - Experimental public certificate check. An assertion definition may declare

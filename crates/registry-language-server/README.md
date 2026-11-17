@@ -1,10 +1,11 @@
 # Registry Stack language server
 
 `registry-language-server` adds Registry Stack project semantics to YAML and JSON documents through the
-Language Server Protocol. Registry Studio is the supported editor and uses this server for navigation.
-Registry Stack provides no VS Code, Zed or other standalone editor integration, and no guide for
-connecting a desktop editor to it; the default stdio mode described under Run is the protocol the
-server speaks, not a supported desktop setup. It provides go to definition, find references, workspace symbols, document
+Language Server Protocol. Registry Studio is the supported client and uses this server for navigation.
+Registry Stack provides no VS Code, Zed or other desktop editor integration for this server, and no
+guide for connecting one; the default stdio mode described under Run is the protocol the server
+speaks, not a supported desktop setup. Schema validation in a desktop editor through a stock YAML
+language server is separate and unchanged (`evidencectl tooling editor`). It provides go to definition, find references, workspace symbols, document
 symbols, completion and hover on the names one document writes and another spells back, and errors
 for missing, duplicate, or ambiguous references. It deliberately leaves syntax, schemas, mapping-key
 completion, and formatting to the editor's existing language servers. Product
