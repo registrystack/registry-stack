@@ -1,6 +1,6 @@
 ---
 title: Publish a statistical series
-description: Declare a count dataset, decide who reads live counts and who publishes releases, then publish, list, and withdraw released periods.
+description: Declare a statistical dataset, decide who reads live values and who publishes releases, then publish, list, and withdraw released periods.
 status: current
 owner: registry-docs
 source_repos:
@@ -32,13 +32,28 @@ The facility template declares none; add one under the root `statisticalDatasets
 - `period`, either `type: flow` with a date `field` that places each record in one period, or `type: stock` with a `validity` (`temporal`, or `from` and an optional `until` date field) that counts the records valid on the period's reference date
 - `granularity` (`day`, `month`, `quarter`, or `year`) and `firstPeriod`, both inside `period`
 - `dimensions`, boolean or vocabulary-code fields of the unit Record type
-- `measures`, optional, a list of `id` and `type` pairs; `count` is the only type, and omitting the list gives one count measure with the id `count`
+- `measures`, optional, a list tagged by `type`: `count`; `sum` with a `field`; `mean` with a `field` and a `scale` from 0 to 38. Omitting the list gives one count measure with the id `count`
 - `disclosure`, with `minimumCount` and `roundingBase`, each at least 2
 
-One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and the refusals `bregctl check` reports.
+One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. A sum or a mean needs an unencrypted `int64` or `decimal` field of the unit, readable by every `read-live` profile, and the dataset then cannot be released:
+
+```yaml
+measures:
+  - id: count
+    type: count
+  - id: amount_total
+    type: sum
+    field: amount
+  - id: amount_mean
+    type: mean
+    field: amount
+    scale: 2
+```
+
+The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and the refusals `bregctl check` reports.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, StatisticalDatasetSource,
-    StatisticalPeriodSource, StatisticalDisclosureSource;
+    StatisticalMeasureSource, StatisticalPeriodSource, StatisticalDisclosureSource;
     crates/registry-breg/src/compiler/statistics.rs,
     MAX_STATISTICAL_CELLS_PER_PERIOD. */}
 
@@ -75,7 +90,7 @@ and CSV representation, so a dimension cannot use one of them.
 
 ## Live counts and releases
 
-A live count is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live cell is a count the profile could already obtain by listing records.
+A live value is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live count is one the profile could already obtain by listing records. A live sum or mean is exact and can reveal one record's value in a small cell, so it is granted only to a profile that can read the records and the field, and it is not disclosure-controlled. Releases carry counts only.
 
 A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, measures, and disclosure parameters. Changing who may read a dataset keeps the series; changing what it counts starts another one.
 
@@ -116,7 +131,7 @@ The `read-releases` and `read-live` grants and `firstPeriod` do not change it.
 
 Each [access profile](../../reference/glossary/#access-profile) that reaches it says so under `permissions.datasets`, beside its record permissions under `permissions.records`. A dataset permission holds `dataset` and `operations`, drawn from three operations:
 
-- `read-live`, exact live counts
+- `read-live`, exact live values
 - `publish`, publishing and withdrawing releases
 - `read-releases`, released documents
 
@@ -359,6 +374,8 @@ bregctl api \
 ```
 
 A suppressed value is blank, not zero; a period without a release has no cells. A JSON document lists the declared measures in `dataset.measures`, and each cell names its measure in `measure`, with one cell per period, dimension combination, and measure.
+
+A sum or a mean is read live. Its `value` is a decimal string such as `"1234.50"`, not a JSON number, with exactly the measure's `scale` digits after the point; a count stays an integer. A mean over no values has a null `value` and the status `not-applicable`. The status vocabulary (`exact`, `suppressed`, `rounded`, `not-applicable`) can grow, so treat an unknown status as no usable value.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs, routes;
     crates/registry-breg/src/statistics.rs. */}

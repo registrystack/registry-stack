@@ -152,6 +152,7 @@ postgres_targets=(
   postgres_statistics_byte_limits
   postgres_statistics_first_period
   postgres_statistics_history
+  postgres_statistics_measures
   postgres_logical_sql_names
   schema_fingerprint_rehearsal
 )

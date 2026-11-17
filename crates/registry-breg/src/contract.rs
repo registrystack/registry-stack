@@ -822,27 +822,59 @@ pub struct StatisticalDatasetSource {
 /// One value a statistical dataset publishes.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct StatisticalMeasureSource {
-    /// Names the measure on every cell that reports it.
-    pub id: LocalId,
-    /// How the value is computed.
-    #[serde(rename = "type")]
-    pub measure_type: StatisticalMeasureTypeSource,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum StatisticalMeasureTypeSource {
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum StatisticalMeasureSource {
     /// The number of unit Records in the population.
-    Count,
+    Count {
+        /// Names the measure on every cell that reports it.
+        id: LocalId,
+    },
+    /// The sum of an `int64` or `decimal` unit Record field over the
+    /// population, at the field's scale. Records with no value for the field
+    /// are left out. Served on live reads only.
+    Sum {
+        /// Names the measure on every cell that reports it.
+        id: LocalId,
+        /// The unit Record field to add up.
+        field: String,
+    },
+    /// The mean of an `int64` or `decimal` unit Record field over the records
+    /// that have a value for it, rounded half away from zero to `scale`
+    /// fractional digits. Served on live reads only.
+    Mean {
+        /// Names the measure on every cell that reports it.
+        id: LocalId,
+        /// The unit Record field to average.
+        field: String,
+        /// Fractional digits of the reported mean, 0 to 38.
+        #[serde(deserialize_with = "bounded_u8::<_, 0, MAX_DECIMAL_PRECISION>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<0, MAX_DECIMAL_PRECISION>")
+        )]
+        scale: u8,
+    },
+}
+registry_platform_yaml::tagged_union!(StatisticalMeasureSource, tag = "type");
+serialize_tagged_union!(StatisticalMeasureSource, tag = "type");
+
+impl StatisticalMeasureSource {
+    pub fn id(&self) -> &LocalId {
+        match self {
+            Self::Count { id } | Self::Sum { id, .. } | Self::Mean { id, .. } => id,
+        }
+    }
 }
 
 fn default_statistical_measures() -> Vec<StatisticalMeasureSource> {
-    vec![StatisticalMeasureSource {
+    vec![StatisticalMeasureSource::Count {
         id: LocalId::new("count").expect("`count` is a local id"),
-        measure_type: StatisticalMeasureTypeSource::Count,
     }]
 }
 
@@ -6220,7 +6252,6 @@ pub(crate) fn external_id_map_schema<V: schemars::JsonSchema>(
     })
 }
 
-#[cfg(feature = "runtime")]
 pub(crate) fn bounded_u8<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
     deserializer: D,
 ) -> Result<u8, D::Error> {

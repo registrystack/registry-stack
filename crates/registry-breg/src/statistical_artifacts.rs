@@ -533,14 +533,36 @@ fn document_schema() -> Value {
                     "id":{"type":"string"},"unit":{"type":"string"},
                     "measures":{
                         "type":"array","minItems":1,
-                        "items":{
-                            "type":"object","additionalProperties":false,
-                            "required":["id","type"],
-                            "properties":{
-                                "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
-                                "type":{"type":"string","enum":["count"]}
+                        "items":{"oneOf":[
+                            {
+                                "type":"object","additionalProperties":false,
+                                "required":["id","type"],
+                                "properties":{
+                                    "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "type":{"const":"count"}
+                                }
+                            },
+                            {
+                                "type":"object","additionalProperties":false,
+                                "required":["id","type","field","scale"],
+                                "properties":{
+                                    "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "type":{"const":"sum"},
+                                    "field":{"type":"string"},
+                                    "scale":{"type":"integer","minimum":0,"maximum":38}
+                                }
+                            },
+                            {
+                                "type":"object","additionalProperties":false,
+                                "required":["id","type","field","scale"],
+                                "properties":{
+                                    "id":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                                    "type":{"const":"mean"},
+                                    "field":{"type":"string"},
+                                    "scale":{"type":"integer","minimum":0,"maximum":38}
+                                }
                             }
-                        }
+                        ]}
                     },
                     "periodKind":{"type":"string","enum":["flow","stock"]},
                     "granularity":{"type":"string","enum":["day","month","quarter","year"]},
@@ -570,7 +592,7 @@ fn document_schema() -> Value {
                 }
             },
             "dimensions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["field","vocabulary","codes"],"properties":{"field":{"type":"string"},"vocabulary":{"type":"string"},"codes":{"type":"array","items":{"type":"string"}}}}},
-            "cells":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["period","dimensions","measure","value","status"],"properties":{"period":{"type":"string"},"dimensions":{"type":"object","additionalProperties":{"type":"string"}},"measure":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"value":{"type":["integer","null"],"minimum":0},"status":{"type":"string","enum":["exact","suppressed","rounded"]}}}},
+            "cells":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["period","dimensions","measure","value","status"],"properties":{"period":{"type":"string"},"dimensions":{"type":"object","additionalProperties":{"type":"string"}},"measure":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},"value":{"oneOf":[{"type":"integer","minimum":0},{"type":"string","pattern":"^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"},{"type":"null"}]},"status":{"type":"string","enum":["exact","suppressed","rounded","not-applicable"]}}}},
             "release":{
                 "type":"object","additionalProperties":false,
                 "required":["period","version","status","snapshot","computedAt","packageDigest"],

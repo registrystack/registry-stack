@@ -97,12 +97,19 @@ with; they fail a check only under `--deny-warnings`.
 
 ## Statistical dataset declarations
 
-`statisticalDatasets[].unit` names the Record type a dataset counts. `measures` is an optional list
-of `id` and `type` pairs, where `count` is the only type; omitting it declares one count measure with
-the id `count`. `bregctl check` refuses an empty list (`breg.statistical-dataset.measures-empty`),
-a repeated id (`breg.statistical-dataset.measure-duplicate`), and more than one `count` measure
-(`breg.statistical-dataset.measure-count-duplicate`). `measure` is a reserved column name, so no
-dimension may use it. `minimumCount` and
+`statisticalDatasets[].unit` names the Record type a dataset aggregates. `measures` is an optional list
+whose items are tagged by `type`: `{id, type: count}`, `{id, type: sum, field}`, and
+`{id, type: mean, field, scale}`, where `scale` is required and an integer from 0 to 38. Omitting the list
+declares one count measure with the id `count`. `bregctl check` refuses an empty list
+(`breg.statistical-dataset.measures-empty`), a repeated id (`breg.statistical-dataset.measure-duplicate`),
+and more than one `count` measure (`breg.statistical-dataset.measure-count-duplicate`). The `field` of a sum
+or a mean must be a declared, unencrypted field of the unit
+(`breg.statistical-dataset.field-unknown`, `breg.statistical-dataset.field-encrypted`) of type `int64` or
+`decimal` (`breg.statistical-dataset.measure-field-type`). Every profile with `read-live` on the dataset must
+be able to read that field (`breg.statistical-dataset.measure-field-not-readable`), and a dataset with a sum
+or a mean cannot have a `publish` or `read-releases` grant
+(`breg.statistical-dataset.measure-release-unsupported`), because a release carries counts only.
+`measure` is a reserved column name, so no dimension may use it. `minimumCount` and
 `roundingBase` are required and take no value below 2. At most one access profile holds `publish`
 on a dataset. Once one does, it and every `read-live` profile must also hold `read-releases`;
 without one, no profile may hold `read-releases`. See [Publish a statistical
@@ -110,7 +117,7 @@ series](../../configure/breg-statistics/).
 
 {/* Evidence: crates/registry-breg/src/compiler/statistics.rs, compile() and
     validate_publisher_independence();
-    crates/registry-breg/src/contract.rs, StatisticalDisclosureSource. */}
+    crates/registry-breg/src/contract.rs, StatisticalDisclosureSource and StatisticalMeasureSource. */}
 
 ## Attachment storage
 

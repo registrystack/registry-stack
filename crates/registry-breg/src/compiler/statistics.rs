@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::contract::{
     AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource, Operation,
-    RegistryProject, StatisticalMeasureTypeSource, StatisticalPeriodGranularitySource,
+    RegistryProject, StatisticalMeasureSource, StatisticalPeriodGranularitySource,
     StatisticalPeriodSource, StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
@@ -19,7 +19,7 @@ use crate::model::{
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
 use crate::statistics::{
-    period_for_code, DisclosureParameters, Measure, MeasureType, PeriodGranularity,
+    maximum_decimal_characters, period_for_code, DisclosureParameters, Measure, PeriodGranularity,
 };
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
@@ -74,7 +74,11 @@ pub(super) fn compile(
         referenced_fields.extend(period_fields);
         let dimensions = compile_dimensions(source, unit, &root, &mut errors);
         referenced_fields.extend(dimensions.iter().map(|dimension| dimension.field.clone()));
-        let measures = compile_measures(source, &root, &mut errors);
+        // The fields a live reader must be able to filter on. A measure field is
+        // read, never filtered, so it joins the referenced fields only afterwards.
+        let filtered_fields = referenced_fields.clone();
+        let (measures, measure_fields) = compile_measures(source, unit, &root, &mut errors);
+        referenced_fields.extend(measure_fields.iter().cloned());
         validate_referenced_fields(source, unit, &referenced_fields, &root, &mut errors);
 
         let grants = DatasetGrants::of(project, &source.id);
@@ -120,6 +124,25 @@ pub(super) fn compile(
                     "breg.access-profile.standing-agent-publish-forbidden",
                     path,
                     "a standing agent profile without a taskGrant cannot publish or withdraw a statistical release; give publish to a profile a person or a service uses directly",
+                ));
+            }
+        }
+        if !measure_fields.is_empty() {
+            let releasing = grants
+                .publish
+                .iter()
+                .chain(&grants.read_releases)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if !releasing.is_empty() {
+                errors.push(error(
+                    "breg.statistical-dataset.measure-release-unsupported",
+                    &root,
+                    &source.id,
+                    &format!(
+                        "a release carries counts only and a sum or mean is read live: remove publish and read-releases from {}, or declare count measures only",
+                        quoted(&releasing)
+                    ),
                 ));
             }
         }
@@ -206,11 +229,12 @@ pub(super) fn compile(
             })
             .collect();
         for profile in &live_profiles {
-            validate_count_grant(
+            validate_count_grant(source, unit, profile, &filtered_fields, &root, &mut errors);
+            validate_measure_fields_readable(
                 source,
                 unit,
                 profile,
-                &referenced_fields,
+                &measure_fields,
                 &root,
                 &mut errors,
             );
@@ -220,7 +244,7 @@ pub(super) fn compile(
                 source,
                 unit,
                 &releases.publisher,
-                &referenced_fields,
+                &filtered_fields,
                 &root,
                 &mut errors,
             );
@@ -321,6 +345,17 @@ pub(super) fn compile(
             minimum_count: disclosure_source.minimum_count,
             rounding_base: disclosure_source.rounding_base,
         };
+        let longest_decimal = measures
+            .iter()
+            .filter_map(|measure| {
+                let field_id = match measure {
+                    Measure::Sum { field, .. } | Measure::Mean { field, .. } => field,
+                    Measure::Count { .. } => return None,
+                };
+                let (field_type, _) = field(unit, field_id)?;
+                maximum_decimal_characters(measure, field_type)
+            })
+            .max();
         let definition_digest = definition_digest(
             source,
             &period,
@@ -346,6 +381,7 @@ pub(super) fn compile(
                     disclosure,
                     &definition_digest,
                     cells,
+                    longest_decimal,
                 )
                 .is_none_or(|bytes| bytes > super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES)
         }) {
@@ -388,6 +424,7 @@ pub(super) fn compile(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn maximum_release_document_bytes(
     source: &crate::contract::StatisticalDatasetSource,
     period: &CompiledStatisticalPeriod,
@@ -396,6 +433,7 @@ fn maximum_release_document_bytes(
     disclosure: DisclosureParameters,
     definition_digest: &str,
     cell_count: usize,
+    longest_decimal: Option<usize>,
 ) -> Option<usize> {
     let (period_kind, granularity) = match period {
         CompiledStatisticalPeriod::Flow { granularity, .. } => ("flow", granularity),
@@ -498,15 +536,22 @@ fn maximum_release_document_bytes(
         .checked_add(dimensions.len().saturating_sub(1))?;
     let longest_measure_id = measures
         .iter()
-        .map(|measure| measure.id.len())
+        .map(|measure| measure.id().len())
         .max()
         .unwrap_or(0);
+    // A count is a JSON integer of at most 16 characters. A sum or mean is a
+    // string of at most `longest_decimal` characters, and its cell may state
+    // `not-applicable`; the widest of either bounds every cell.
+    let (value, status) = match longest_decimal {
+        Some(characters) => (json!("9".repeat(characters.max(14))), "not-applicable"),
+        None => (json!(MAX_EXACT_JSON_INTEGER), "suppressed"),
+    };
     let empty_cell = canonicalize_json(&json!({
         "period": "9999-12-31",
         "dimensions": {},
         "measure": "x".repeat(longest_measure_id),
-        "value": MAX_EXACT_JSON_INTEGER,
-        "status": "suppressed",
+        "value": value,
+        "status": status,
     }))
     .expect("statistical cell size envelope canonicalizes")
     .len();
@@ -672,12 +717,15 @@ fn compile_period(
     (Some(compiled), fields)
 }
 
+/// The declared measures, and the unit fields the sums and means read.
 fn compile_measures(
     source: &crate::contract::StatisticalDatasetSource,
+    unit: &CompiledEntity,
     root: &str,
     errors: &mut Vec<Diagnostic>,
-) -> Vec<Measure> {
+) -> (Vec<Measure>, BTreeSet<String>) {
     let path = format!("{root}.measures");
+    let mut measure_fields = BTreeSet::new();
     if source.measures.is_empty() {
         errors.push(error(
             "breg.statistical-dataset.measures-empty",
@@ -685,24 +733,25 @@ fn compile_measures(
             &source.id,
             "declare at least one measure, or remove `measures` to publish one `count` measure",
         ));
-        return Vec::new();
+        return (Vec::new(), measure_fields);
     }
     let mut seen = BTreeSet::new();
     let mut counts = 0_usize;
     let mut measures = Vec::new();
     for (index, measure) in source.measures.iter().enumerate() {
         let path = format!("{path}[{index}]");
-        if !seen.insert(measure.id.as_str()) {
+        let id = measure.id();
+        if !seen.insert(id.as_str()) {
             errors.push(error(
                 "breg.statistical-dataset.measure-duplicate",
                 &format!("{path}.id"),
                 &source.id,
-                &format!("declare measure `{}` once", measure.id),
+                &format!("declare measure `{id}` once"),
             ));
             continue;
         }
-        let measure_type = match measure.measure_type {
-            StatisticalMeasureTypeSource::Count => {
+        let compiled = match measure {
+            StatisticalMeasureSource::Count { .. } => {
                 counts += 1;
                 if counts > 1 {
                     errors.push(error(
@@ -713,15 +762,80 @@ fn compile_measures(
                     ));
                     continue;
                 }
-                MeasureType::Count
+                Measure::Count { id: id.to_string() }
+            }
+            StatisticalMeasureSource::Sum {
+                field: field_id, ..
+            }
+            | StatisticalMeasureSource::Mean {
+                field: field_id, ..
+            } => {
+                // An unknown field is refused with every other referenced field.
+                measure_fields.insert(field_id.clone());
+                let Some((field_type, _)) = field(unit, field_id) else {
+                    continue;
+                };
+                let field_scale = match field_type {
+                    FieldTypeSource::Int64 => 0,
+                    FieldTypeSource::Decimal { scale, .. } => *scale,
+                    _ => {
+                        errors.push(error(
+                            "breg.statistical-dataset.measure-field-type",
+                            &format!("{path}.field"),
+                            &source.id,
+                            &format!(
+                                "measure `{id}` adds or averages field `{field_id}`; use an int64 or decimal field"
+                            ),
+                        ));
+                        continue;
+                    }
+                };
+                match measure {
+                    StatisticalMeasureSource::Mean { scale, .. } => Measure::Mean {
+                        id: id.to_string(),
+                        field: field_id.clone(),
+                        scale: *scale,
+                    },
+                    _ => Measure::Sum {
+                        id: id.to_string(),
+                        field: field_id.clone(),
+                        scale: field_scale,
+                    },
+                }
             }
         };
-        measures.push(Measure {
-            id: measure.id.to_string(),
-            measure_type,
-        });
+        measures.push(compiled);
     }
-    measures
+    (measures, measure_fields)
+}
+
+/// A live reader gets the sum or mean of a field it can read, never of one it
+/// could not list: a measure field must be readable, though not filterable.
+fn validate_measure_fields_readable(
+    source: &crate::contract::StatisticalDatasetSource,
+    unit: &CompiledEntity,
+    profile_id: &str,
+    measure_fields: &BTreeSet<String>,
+    root: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    // A missing grant is reported by the count grant check.
+    let Some(grant) = unit.access_profiles.get(profile_id) else {
+        return;
+    };
+    for field in measure_fields {
+        if !grant.readable_fields.contains(field) {
+            errors.push(error(
+                "breg.statistical-dataset.measure-field-not-readable",
+                root,
+                &source.id,
+                &format!(
+                    "add field `{field}` to readableFields for profile `{profile_id}` on `{}`, or remove the sum or mean over it",
+                    unit.id
+                ),
+            ));
+        }
+    }
 }
 
 fn compile_dimensions(

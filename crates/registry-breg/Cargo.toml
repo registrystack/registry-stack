@@ -627,6 +627,11 @@ path = "tests/postgres_statistics_load.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_statistics_measures"
+path = "tests/postgres_statistics_measures.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
 name = "postgres_statistics_stock"
 path = "tests/postgres_statistics_stock.rs"
 required-features = ["postgres-test", "tooling"]
