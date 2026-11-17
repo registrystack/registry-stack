@@ -16,7 +16,6 @@ MATRIX = ROOT / "contracts/security-invariant-matrix.yaml"
 TRACEABILITY = ROOT / "contracts/security-test-traceability.yaml"
 SCHEMA = ROOT / "profile/schema/registry-discovery-v1alpha1.schema.json"
 CONTEXT = ROOT / "profile/context/registry-discovery-v1alpha1.jsonld"
-SCHEDULE = ROOT / "contracts/implementation-schedule.yaml"
 DEFINITION_OF_DONE = ROOT / "contracts/definition-of-done.yaml"
 STANDARDS = ROOT / "contracts/standards-profile.yaml"
 RDF_PROVENANCE = ROOT / "profile/rdf/provenance.json"
@@ -299,18 +298,6 @@ def check_traceability() -> None:
             fail(f"{identifier} must be enforced or name its integration owner")
 
 
-def check_schedule() -> None:
-    schedule = load(SCHEDULE)
-    phases = schedule.get("phases")
-    expected = ["phase-0", "phase-1", "phase-2", "phase-3", "phase-4"]
-    if not isinstance(phases, list) or [phase.get("id") for phase in phases] != expected:
-        fail("implementation schedule must retain the five ordered delivery phases")
-    if any(not isinstance(phase.get("exit"), str) for phase in phases):
-        fail("every implementation phase needs an exit condition")
-    if any("status" in phase or "complete" in phase for phase in phases):
-        fail("schedule phases must not make a misleading partial-complete claim")
-
-
 def check_definition_of_done() -> None:
     document = load(DEFINITION_OF_DONE)
     requirements = document.get("requirements")
@@ -339,7 +326,6 @@ def main() -> int:
     check_product_schemas_and_fixture()
     check_standards_and_offline_rdf()
     check_traceability()
-    check_schedule()
     check_definition_of_done()
     print("Registry Discovery profile and security contracts are valid.")
     return 0

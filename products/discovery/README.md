@@ -57,10 +57,6 @@ state: it is never derived from catalog metadata, creates no Discovery
 authority, and does not make Discovery a native-provider proxy. Endpoint and
 request handling follow the shared
 [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
-`api_and_saved_connections_are_available_without_a_runtime_config` in
-`crates/registry-discoveryctl/tests/api_cli.rs` pins the product surface; the
-shared README names the transport and credential tests. These are maintained
-references, not claims of execution here.
 
 ## Independent release installation
 
@@ -79,7 +75,7 @@ selections, provider descriptions, and server configuration remain strict.
 
 ## HTTP problems
 
-Discovery uses the [shared problem contract](../platform/HTTP-PROBLEMS.md),
+Discovery uses the [shared problem contract](https://docs.registrystack.org/reference/errors/),
 including fixed safe `detail`, `family.reason` `code`, and a `traceId` matching
 `traceparent`. Existing problem type URIs remain stable. An indeterminate
 503 has no synthetic Retry-After interval.
