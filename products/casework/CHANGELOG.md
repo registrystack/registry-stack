@@ -53,8 +53,12 @@
   disclosure. Once the header is supplied there is no fallback to the Casework
   token. A task or request under a submitted-context policy reads no source, so
   Casework ignores the pair there: it neither verifies nor forwards the source
-  token, and the call is decided exactly as without it, so a reviewer app can
-  send the pair on every call. The Rust, Node.js and Python clients take a
+  token, and the call is decided as without it when the pair is well formed
+  and the caller is staff. A reviewer app can send the pair on every single
+  task and request call that accepts it, whatever the policy's context mode.
+  A collection call still needs exactly one current-source provider (zero or
+  several answer 400), and source-free routes answer 400; see
+  RUNTIME-CONFIG.md. The Rust, Node.js and Python clients take a
   `HumanSourceCredential` per call and report
   `humanSourceCredentialContract()` (Python:
   `human_source_credential_contract`). See
