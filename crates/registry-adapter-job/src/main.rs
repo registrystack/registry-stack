@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `adapter-job` binary entry point: the operator surface of the
-//! governed-ingestion job (`products/adapter/CONCEPT.md` section 17.4).
+//! governed-ingestion job.
 //! Init-store applies the job-store schema without running a job, check
 //! compiles a job the engine compiles, pass runs one bounded pass or the
 //! trigger loop, status counts what the item table holds, inspect reads

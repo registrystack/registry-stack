@@ -39,4 +39,4 @@ The check reads the project only. It does not start BReg or contact an
 identity provider. Package the project, apply it, and bind the
 `adapter-kobo-ingestion` client with the operator steps in
 [`products/breg`](../../../breg/README.md). Then run the direct job as
-[the Kobo runbook](../kobotoolbox-job/OPERATIONS.md) describes.
+[Operate the Adapter](https://docs.registrystack.org/operate/adapter/) describes.

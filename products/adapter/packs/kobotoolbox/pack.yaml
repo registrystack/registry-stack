@@ -1,12 +1,12 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
 #
 # The kobotoolbox pack: KoboToolbox submission acquisition for the
-# governed-ingestion job mode, one source route, one page per run
-# (CONCEPT 17.1 and 17.2). Controlled synthetic deployment validation
-# exercised KoboToolbox 2.026.37c: paged reads, authenticated source edits,
-# and a direct BReg Proposal with human Casework review and application.
-# The committed fixtures remain synthetic `documented` examples, not
-# captured service responses. The README records probe results and limits.
+# governed-ingestion job mode, one source route, one page per run.
+# Controlled synthetic deployment validation exercised KoboToolbox
+# 2.026.37c: paged reads, authenticated source edits, and a direct BReg
+# Proposal with human Casework review and application. The committed
+# fixtures remain synthetic `documented` examples, not captured service
+# responses. The README records probe results and limits.
 #
 # What the pack covers: the v2 submissions listing, `GET
 # /api/v2/assets/{uid}/data/` (the v1 `/submissions/` name was renamed
@@ -30,9 +30,9 @@
 # Deployment scoping: the asset (form) a job reads is a deployment
 # value, and a source route carries no template parameters. The
 # deployment-owned slot is the endpoint binding's `baseUrl`: the engine
-# pins the origin plus its base path (CONCEPT 8.11.5) and every send
-# stays under it, so the runtime config binds `kobo-api` to the data
-# URL of the deployment's own asset (see
+# pins the origin plus its base path and every send stays under it, so
+# the runtime config binds `kobo-api` to the data URL of the deployment's
+# own asset (see
 # products/adapter/examples/kobotoolbox-job/job-runtime.example.yaml) and
 # this pack sends `path: /`, which lands on the documented trailing
 # slash. If the job compiler grows a parameters block on the job
@@ -105,9 +105,9 @@ sourceRoutes:
             retryDelaySeconds: 2
       # The keyset filter this run sends: the engine restores the job
       # cursor into the AdapterJobCursor property, absent on the first
-      # run (CONCEPT 17.2); scripts/seed-query.rhai turns that into the
-      # Kobo `query` value, or null on the first run, which leaves the
-      # parameter out of the send.
+      # run; scripts/seed-query.rhai turns that into the Kobo `query`
+      # value, or null on the first run, which leaves the parameter out
+      # of the send.
       - setProperty:
           name: koboQuery
           value:
@@ -152,18 +152,18 @@ sourceRoutes:
       # one, the incoming cursor back on an empty page
       # (scripts/shape-page.rhai). This body is the whole route output;
       # the job entry validates it against the item contract and the
-      # job profile (CONCEPT 17.2).
+      # job profile.
       - setBody:
           rhai:
             file: scripts/shape-page.rhai
             entrypoint: shape_page
 scripts:
   - path: scripts/seed-query.rhai
-    digest: sha256:c5efebf12bacdad15bfac273001ef5ce75ef255392875ca8b3c06a553f9421f7
+    digest: sha256:74ae6824846b7e0495b66ae33065ec842d3119eeae08f77067b9df4070918d0d
   - path: scripts/shape-item.rhai
-    digest: sha256:72bd93d487f9c7541030c84392e432a934c306b01068bdebec6b7de84b1f7472
+    digest: sha256:84ee12a9439e8393e28fe7ed1f8265c3f05cbcf8635e521d3c08936a8aebae28
   - path: scripts/shape-page.rhai
-    digest: sha256:082b42ead3f5f2f0bb7bdfc73869ef384419a849537780bd7c9c9cb1406b6bb5
+    digest: sha256:96f8c2ed97d76fa0e2705619ee57b4e38d328aca49cb23de73ca4fbaa4854dd3
 capabilities:
   components:
     - http

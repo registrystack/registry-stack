@@ -100,7 +100,7 @@ export ADAPTERCTL_BIN="${CARGO_TARGET_DIR}/debug/adapterctl"
 # plain cargo test run never silently skips them.
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter --features postgres-test
 
-# The governed-ingestion job sources (CONCEPT 17), each behind its own
+# The governed-ingestion job sources (ingestion jobs), each behind its own
 # default-off feature: the file source lane, the postgres source lane,
 # and the live postgres suite, whose read-only authority, statement
 # bound, and bounded fetch prove themselves against this same server

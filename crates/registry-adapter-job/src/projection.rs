@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The pass-time projection and the plain digest
-//! (`products/adapter/CONCEPT.md` section 17.2). The item value is the
+//! The pass-time projection and the plain digest. The item value is the
 //! route's projection of the destination's fields, and the job declares
 //! the dotted fields the destination needs; the pass enforces that list,
 //! picking exactly those fields from each item value at hand-off time, so

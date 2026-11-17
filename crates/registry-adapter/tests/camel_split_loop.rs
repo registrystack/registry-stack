@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Engine conformance for the splitting and repeating processors of the
-//! port table (`products/adapter/CONCEPT.md` sections 8.6 and 8.11.7):
+//! port table:
 //! `split`, `loop`, `enrich`, and the aggregation strategies, with the
 //! engine-set exchange properties each places.
 
@@ -57,7 +57,7 @@ async fn run(step_list: Vec<Step>, scripts: &ScriptSet) -> RouteOutcome {
 
 /// A script set over one in-memory script file, pinned by its digest,
 /// with its entrypoint registered under the one-argument `exchange`
-/// contract (section 8.11.3).
+/// contract.
 /// A script set registering every entrypoint one script file serves, the
 /// way a route references several entrypoints from one pack file.
 fn scripts_of(source: &str, entrypoints: &[&str]) -> ScriptSet {
@@ -83,7 +83,7 @@ fn one_script(entrypoint: &str, source: &str) -> ScriptSet {
 }
 
 /// A script set with a two-argument aggregation entrypoint registered
-/// under the `old`/`new` strategy contract (section 8.11.7).
+/// under the `old`/`new` strategy contract.
 fn strategy_script(entrypoint: &str, body: &str) -> ScriptSet {
     let source = format!("fn {entrypoint}(oldExchange, newExchange) {{ {body} }}");
     let directory = tempfile::tempdir().expect("a scratch directory");
@@ -155,7 +155,7 @@ fn split_of(extra: Value, item_steps: Value) -> Value {
 /// `CamelSplitIndex` (zero-based), `CamelSplitSize`, and
 /// `CamelSplitComplete` on the last piece (manual/split-eip.html), and a
 /// split without a strategy returns the original message, Camel's
-/// `use-original` default (section 8.6).
+/// `use-original` default.
 ///
 /// Camel cases:
 /// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterTest.java#testSendingAMessageUsingMulticastReceivesItsOwnExchange`,
@@ -278,7 +278,7 @@ async fn a_stop_inside_a_piece_ends_the_split_and_the_route() {
 /// failure is raised after the split completes; `stopOnException` raises
 /// the first failure instead, and a declared `use-original` with
 /// `propagateException: false` swallows the failures
-/// (manual/split-eip.html, section 8.6).
+/// (manual/split-eip.html).
 ///
 /// Camel cases:
 /// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterNoStopOnExceptionTest.java#testSplitNoStopOnExceptionStop`,
@@ -376,7 +376,7 @@ async fn split_item_failures_raise_after_the_split_or_sooner_or_never() {
 /// The failure accounting keeps the split going under its thresholds,
 /// sets `CamelSplitResult` on the exchange with the counts, and stops at
 /// the threshold, raising the piece's failure
-/// (manual/split-eip.html, section 8.6).
+/// (manual/split-eip.html).
 ///
 /// Camel cases:
 /// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/SplitterErrorThresholdTest.java#testErrorThresholdBelowRatio`,
@@ -554,7 +554,7 @@ async fn split_failure_accounting_counts_stops_and_reports() {
 /// `json-array-append` appends the array held by the named property of
 /// each piece into the named body member, refuses a `uniqueBy` duplicate
 /// with `aggregation.duplicate`, and a piece naming no array property
-/// fails the exchange (section 8.6's additions).
+/// fails the exchange (an Adapter addition).
 #[tokio::test]
 async fn split_json_array_append_merges_a_named_property_and_refuses_duplicates() {
     let carrying_records = json!({
@@ -682,7 +682,7 @@ async fn split_json_array_append_merges_a_named_property_and_refuses_duplicates(
 /// The `properties` map of a JSON strategy carries named values out of
 /// each piece's body onto the route exchange, and an absent selection
 /// removes the property, so a pagination loop's cursor ends absent on
-/// the last page (section 8.11.7).
+/// the last page.
 #[tokio::test]
 async fn split_strategy_properties_carry_values_and_clear_absent_ones() {
     let records = json!({
@@ -824,7 +824,7 @@ async fn a_custom_split_strategy_cannot_manufacture_collection_metadata() {
 
 /// A split expression that yields no array fails as `validation`, a
 /// piece count over the declared bound fails as `budget.exhausted`, and
-/// the load refuses a split without its bound (sections 8.6 and 5.5).
+/// the load refuses a split without its bound.
 #[tokio::test]
 async fn split_refuses_its_shape_and_bound_faults() {
     let not_an_array = run(
@@ -1035,7 +1035,7 @@ async fn a_do_while_loop_tests_its_predicate_before_each_iteration() {
 
 /// A loop that reaches its bound still counting or still holding raises
 /// the catchable `loop.maximum-iterations-reached`, while a loop that
-/// lands exactly on its bound completes (section 8.6).
+/// lands exactly on its bound completes.
 #[tokio::test]
 async fn a_loop_at_its_bound_completes_and_one_past_it_raises() {
     let holding = run(
@@ -1087,8 +1087,7 @@ async fn a_loop_at_its_bound_completes_and_one_past_it_raises() {
 }
 
 /// A count that is no integer fails the exchange, and a `doWhile`
-/// predicate that yields no boolean fails as a script fault
-/// (section 8.5), while the load refuses the malformed loop shapes.
+/// predicate that yields no boolean fails as a script fault, while the load refuses the malformed loop shapes.
 #[tokio::test]
 async fn a_loop_count_must_be_an_integer_and_the_shape_must_be_well_formed() {
     let not_an_integer = run(
@@ -1392,7 +1391,7 @@ async fn direct_enrich_runs_the_resource_route_on_a_copy() {
 /// `enrich` sends on a copy of the exchange and merges the reply through
 /// its strategy: the default replaces the body with the resource reply,
 /// `use-original` keeps the route's body, and a custom strategy folds
-/// both bodies (manual/enrich-eip.html, section 8.11.7).
+/// both bodies (manual/enrich-eip.html).
 ///
 /// Camel cases:
 /// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherDefaultAggregationStrategyTest.java#testEnrichInOut` and
@@ -1478,8 +1477,7 @@ async fn enrich_merges_the_resource_reply_through_its_strategy() {
 /// A failed resource send propagates to the error handler unless the
 /// step aggregates on exception, when the failure's own reply state
 /// merges instead; and the JSON strategies, which read a named property
-/// of the resource exchange, find none on an http reply
-/// (section 8.6, section 8.11.7).
+/// of the resource exchange, find none on an http reply.
 ///
 /// Camel cases:
 /// `camel-4.23.0:core/camel-core/src/test/java/org/apache/camel/processor/enricher/EnricherAggregateOnExceptionTest.java#testEnrichTrueKaboom` and
@@ -1542,7 +1540,7 @@ async fn enrich_failure_propagates_unless_it_aggregates_on_exception() {
 /// The load admits a static `direct:` resource and refuses the enrich shapes
 /// this runtime does not serve: parameters on a direct resource, a non-GET
 /// HTTP method, the split-only `grouped-body` strategy, and a missing HTTP
-/// parameter block (sections 8.6 and 8.11.7).
+/// parameter block.
 #[test]
 fn enrich_refuses_the_unserved_shapes_at_load() {
     check_servable(&steps(json!([{"enrich": {

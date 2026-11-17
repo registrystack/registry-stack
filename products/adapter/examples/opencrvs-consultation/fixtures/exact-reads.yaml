@@ -7,7 +7,7 @@ pack: opencrvs-events
 upstreamVersion: unverified
 provenance:
   type: documented
-  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+  reference: products/evidence/source-recipes/opencrvs-event-search/
 intercepts:
 - type: endpoint
   endpoint: events

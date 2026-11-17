@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The audit journal's PostgreSQL store: the schema migration and the
-//! append path for its value-free event rows
-//! (`products/adapter/CONCEPT.md` section 11).
+//! append path for its value-free event rows.
 //!
 //! Rows are append-only: writers only insert, retention deletes whole rows
 //! by `occurred_at`, and a trigger refuses anything else. `occurred_at` is
@@ -257,7 +256,7 @@ pub async fn delete_expired(
 /// query string.
 #[derive(Clone, Debug)]
 pub struct JournalEvent {
-    /// The closed Camel kind (`CONCEPT.md` section 11), for example
+    /// The closed Camel kind, for example
     /// `exchangeCreated`.
     pub event_kind: &'static str,
     /// The exchange the event belongs to.

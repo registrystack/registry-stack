@@ -67,7 +67,7 @@ cargo run --locked -p registry-adapter-job --features job-postgres,direct-breg -
 Inspect the job result, then use the [reconciliation lookup](registry/README.md#look-up-an-applied-record) to read the resulting record by source submission UUID.
 For the Proposal job, the submitting service can also read the Proposal's current state using its retained reference.
 For a continuous deployment, use the interval trigger with the same bindings.
-[Job operation and recovery instructions](../kobotoolbox-job/OPERATIONS.md).
+[Job operation and recovery instructions](https://docs.registrystack.org/operate/adapter/).
 
 ## Read and recover
 

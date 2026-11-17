@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The bounded decoders of the governed-ingestion read step
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 17.2): the port of
+//! The bounded decoders of the governed-ingestion read step: the port of
 //! Camel's `CsvDataFormat` restricted to a bounded row decoder, the
-//! `jsonl` addition under section 5.4, and the `raw` fallback.
+//! `jsonl` addition, and the `raw` fallback.
 //!
 //! Deterministic rules every decoder shares: values are strings, never
 //! inferred, so leading zeros and quoted multiline fields survive; a
@@ -25,7 +24,7 @@
 //! camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java
 //! as landed in `registry_adapter_core::CsvDecoder`; the row identity,
 //! per-record refusal, and paged decoding are original work Camel does
-//! not supply (`products/adapter/CONCEPT.md` section 17.2).
+//! not supply.
 
 use std::collections::HashSet;
 

@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AggregationStrategy": {
-      "description": "An aggregation strategy, compiled in and named after Camel's built-ins,\nplus two JSON additions marked as such in\n`products/adapter/CONCEPT.md` section 8.6. Tagged by `type` on the\nwire; every variant is a struct variant, the shape\n`registry-platform-yaml`'s `tagged_union!` reads.",
+      "description": "An aggregation strategy, compiled in and named after Camel's built-ins,\nplus two JSON additions (`json-array-append` and `json-merge`). Tagged by `type` on the\nwire; every variant is a struct variant, the shape\n`registry-platform-yaml`'s `tagged_union!` reads.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -65,7 +65,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
+              "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property.",
               "type": "object"
             },
             "type": {
@@ -100,7 +100,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property (section 8.11.7).",
+              "description": "Property names carried out of each reply, each naming a\nsingular `jsonpath` on the reply body; an absent selection\nremoves the property.",
               "type": "object"
             },
             "type": {
@@ -170,7 +170,7 @@
     },
     "Capabilities": {
       "additionalProperties": false,
-      "description": "The engine capabilities a pack requires: the components, languages, and\nEIPs its routes use. The ctl refuses a pack the binary cannot run\n(`products/adapter/CONCEPT.md` section 6).",
+      "description": "The engine capabilities a pack requires: the components, languages, and\nEIPs its routes use. The ctl refuses a pack the binary cannot run.",
       "properties": {
         "components": {
           "default": [],
@@ -225,7 +225,7 @@
     },
     "CircuitBreakerStep": {
       "additionalProperties": false,
-      "description": "A `circuitBreaker` step: resilience4j semantics and defaults\n(`products/adapter/CONCEPT.md` section 8.7), per EIP node,\nprocess-local. Divergence: a rejected call always raises\n`breaker.open`, and `onFallback` runs on failure and on rejection.",
+      "description": "A `circuitBreaker` step: resilience4j semantics and defaults, per EIP node,\nprocess-local. Divergence: a rejected call always raises\n`breaker.open`, and `onFallback` runs on failure and on rejection.",
       "properties": {
         "automaticTransitionFromOpenToHalfOpenEnabled": {
           "description": "Automatic open-to-half-open transition (default false).",
@@ -316,7 +316,7 @@
     },
     "CodeMap": {
       "additionalProperties": false,
-      "description": "One code map: an explicit conversion table, the port of Camel's type\nconverter (`products/adapter/CONCEPT.md` sections 8.6 and 8.10). No\nconverter chains; a key with no entry raises `conversion.unmapped`.\nThe member stays small enough for CFG-YAML-6 so its content can move to\na digest-pinned data file without a format change.",
+      "description": "One code map: an explicit conversion table, the port of Camel's type\nconverter. No\nconverter chains; a key with no entry raises `conversion.unmapped`.\nThe member stays small enough for CFG-YAML-6 so its content can move to\na digest-pinned data file without a format change.",
       "properties": {
         "entries": {
           "additionalProperties": true,
@@ -338,7 +338,7 @@
       "type": "object"
     },
     "ComponentKind": {
-      "description": "A component kind, the ported subset of Camel's component library\n(`products/adapter/CONCEPT.md` sections 8.8 and 17.2). `rest` is the\nfacade consumer; `direct` calls routes in process; `http`, `graphql`,\n`postgres` and `sqlite-extract` are read-only producers; `file`, `rabbitmq`,\nand `sftp` are job-only sources a facade route may never reach (section\n17.1).",
+      "description": "A component kind, the ported subset of Camel's component library. `rest` is the\nfacade consumer; `direct` calls routes in process; `http`, `graphql`,\n`postgres` and `sqlite-extract` are read-only producers; `file`, `rabbitmq`,\nand `sftp` are job-only sources a facade route may never reach.",
       "enum": [
         "direct",
         "file",
@@ -354,7 +354,7 @@
     },
     "ConvertStep": {
       "additionalProperties": false,
-      "description": "One conversion step: `convertBodyTo`, `convertHeaderTo`, and the\n`convertPropertyTo` addition (`products/adapter/CONCEPT.md`\nsection 8.6). Camel's `charset` option is not ported, and `type`\nnames a code map, never a Java type.",
+      "description": "One conversion step: `convertBodyTo`, `convertHeaderTo`, and the\n`convertPropertyTo` addition. Camel's `charset` option is not ported, and `type`\nnames a code map, never a Java type.",
       "properties": {
         "mandatory": {
           "description": "Whether a miss fails the exchange; Camel's default true.",
@@ -380,7 +380,7 @@
     },
     "CsvDecoder": {
       "additionalProperties": false,
-      "description": "The CSV decoder options, the port of Camel's `CsvDataFormat` at\ncamel-4.23.0 restricted to a bounded row decoder\n(`products/adapter/CONCEPT.md` section 8.10, the CSV row). Every kept\noption cites the Java field it ports, and every default is that\nfield's effective default: the reference `DEFAULT` format's comma\ndelimiter, double quote, no comment marker, header record on, and no\ntrimming. The dropped options and the reason each is dropped are\nrecorded in `products/adapter/scratch/core/port-record.md`. Our rows\nare maps keyed by the header record, so `useMaps` has no false form\nhere; type inference is refused, so a field decodes as the text the\nfile carries.",
+      "description": "The CSV decoder options, the port of Camel's `CsvDataFormat` at\ncamel-4.23.0 restricted to a bounded row decoder\n(the CSV row of the Camel port table, products/adapter/scripts/camel-port-table.yaml). Every kept\noption cites the Java field it ports, and every default is that\nfield's effective default: the reference `DEFAULT` format's comma\ndelimiter, double quote, no comment marker, header record on, and no\ntrimming. Our rows\nare maps keyed by the header record, so `useMaps` has no false form\nhere; type inference is refused, so a field decodes as the text the\nfile carries.",
       "properties": {
         "commentMarker": {
           "description": "The comment marker; absent, comments are off, the reference\nformat's default. Ports `commentMarker`\n(camel-4.23.0:core/camel-core-model/src/main/java/org/apache/camel/model/dataformat/CsvDataFormat.java#commentMarker);\nthe separate `commentMarkerDisabled` flag is folded into absence.",
@@ -420,7 +420,7 @@
       "type": "object"
     },
     "DecoderEncoding": {
-      "description": "The character encoding a decoder reads. UTF-8 only: Camel carries a\ncharset per exchange where its CSV data format has no encoding option\nof its own; the bounded decoder pins one encoding instead\n(`products/adapter/CONCEPT.md` section 17.2).",
+      "description": "The character encoding a decoder reads. UTF-8 only: Camel carries a\ncharset per exchange where its CSV data format has no encoding option\nof its own; the bounded decoder pins one encoding instead.",
       "oneOf": [
         {
           "const": "utf-8",
@@ -431,7 +431,7 @@
     },
     "DefaultErrorHandler": {
       "additionalProperties": false,
-      "description": "Camel's `defaultErrorHandler`: a redelivery policy nested under\n`redeliveryPolicy`, as Camel's YAML DSL writes it\n(`products/adapter/CONCEPT.md` section 8.7; CFG-NAME spelling inside).\n`delayPattern` is not ported. Redelivery is per failing endpoint send,\nas in Camel.",
+      "description": "Camel's `defaultErrorHandler`: a redelivery policy nested under\n`redeliveryPolicy`, as Camel's YAML DSL writes it\n(CFG-NAME spelling inside).\n`delayPattern` is not ported. Redelivery is per failing endpoint send,\nas in Camel.",
       "properties": {
         "redeliveryPolicy": {
           "$ref": "#/$defs/RedeliveryOptions",
@@ -439,7 +439,7 @@
         },
         "retryWhile": {
           "$ref": "#/$defs/Expression",
-          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the default error handler as in\nCamel's `DefaultErrorHandlerDefinition`, not of the redelivery\npolicy; section 8.7). Divergence from Camel: the predicate only\nstops redelivery earlier and `maximumRedeliveries` remains the\nhard cap, where Camel lets `retryWhile` override it, so\n`maximumUpstreamCalls` stays a check-time guarantee. The checks\nrefuse the predicate when the handler's policy carries no\nredeliveries."
+          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the default error handler as in\nCamel's `DefaultErrorHandlerDefinition`, not of the redelivery\npolicy). Divergence from Camel: the predicate only\nstops redelivery earlier and `maximumRedeliveries` remains the\nhard cap, where Camel lets `retryWhile` override it, so\n`maximumUpstreamCalls` stays a check-time guarantee. The checks\nrefuse the predicate when the handler's policy carries no\nredeliveries."
         }
       },
       "type": "object"
@@ -518,7 +518,7 @@
       "type": "object"
     },
     "Eip": {
-      "description": "An EIP a pack may require of the engine, named after the step union in\n`crate::route` (`products/adapter/CONCEPT.md` section 8.6).",
+      "description": "An EIP a pack may require of the engine, named after the step union in\n`crate::route`.",
       "enum": [
         "choice",
         "circuitBreaker",
@@ -551,7 +551,7 @@
     },
     "Endpoint": {
       "additionalProperties": false,
-      "description": "One endpoint a route may send to: the component, the authentication\nkind, the declared response headers, the endpoint operations with their\n`idempotentUpstream` claims, and the tested upstream versions\n(`products/adapter/CONCEPT.md` sections 6, 8.8, and 10.2).",
+      "description": "One endpoint a route may send to: the component, the authentication\nkind, the declared response headers, the endpoint operations with their\n`idempotentUpstream` claims, and the tested upstream versions.",
       "properties": {
         "attemptTimeoutMilliseconds": {
           "description": "The longest one attempt to this endpoint may take, in milliseconds.\nEvidence defaults an omission to 30 seconds; facade and job require an\nexplicit value within their ten-second policy. The profile compiler\nowns that policy rather than the shared wire shape.",
@@ -566,7 +566,7 @@
         },
         "component": {
           "$ref": "#/$defs/ComponentKind",
-          "description": "The producer component: `http`, `graphql`, or the read-only\n`postgres` source; or the job-only `file` and `sftp` sources a\n`pollEnrich` step reads (section 17.1)."
+          "description": "The producer component: `http`, `graphql`, or the read-only\n`postgres` source; or the job-only `file` and `sftp` sources a\n`pollEnrich` step reads."
         },
         "hostProtocol": {
           "$ref": "#/$defs/HostProtocol",
@@ -581,7 +581,7 @@
           "description": "The PostgreSQL result column whose scalar is the source item's\nstable identity. Required for a `postgres` endpoint and absent\nfrom every other component."
         },
         "maximumResponseBytes": {
-          "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform cap is\nrefused, never shortened. The runtime binding may lower it, never\nraise it. A facade-reachable endpoint stays within the facade\nceiling and a source-route-only endpoint may declare up to the\nplatform cap (`products/adapter/CONCEPT.md` section 8.8); the checks\nrefuse the facade-reachable excess\nunder `adapter.job.endpoint-response-bound`.",
+          "description": "The largest response body one send to this endpoint may take in, in\nbytes. Required, no default; a value above the platform cap is\nrefused, never shortened. The runtime binding may lower it, never\nraise it. A facade-reachable endpoint stays within the facade\nceiling and a source-route-only endpoint may declare up to the\nplatform cap; the checks\nrefuse the facade-reachable excess\nunder `adapter.job.endpoint-response-bound`.",
           "format": "uint64",
           "maximum": 16777216,
           "minimum": 1,
@@ -611,7 +611,7 @@
           "type": "string"
         },
         "requestHeaders": {
-          "description": "The request headers the engine sends upstream on every send to\nthis endpoint, Camel's `HeaderFilterStrategy` as an allowlist,\nunique (CFG-ID-6). Never allowlistable: the reserved header names\nof `products/adapter/CONCEPT.md` section 8.11.4 and this\nendpoint's own api-key header name.",
+          "description": "The request headers the engine sends upstream on every send to\nthis endpoint, Camel's `HeaderFilterStrategy` as an allowlist,\nunique (CFG-ID-6). Never allowlistable: the reserved header names\n(credential, cookie, host and hop-by-hop headers, including every\n`Proxy-` name), this endpoint's own api-key header name, and the\nnames the platform transport owns on a request; see\n`https://docs.registrystack.org/configure/adapter/#headers-on-the-wire`.",
           "items": {
             "$ref": "#/$defs/ExternalId"
           },
@@ -671,7 +671,7 @@
       "type": "object"
     },
     "EndpointAuthentication": {
-      "description": "The authentication kind a pack endpoint declares\n(`products/adapter/CONCEPT.md` section 10.2): the kind tag itself, plus\nonly the API-intrinsic parameters (`headerName` for `static-api-key`,\n`scheme` for `static-authorization`). Every credential value lives in\nthe runtime config, in [`RuntimeCredential`].",
+      "description": "The authentication kind a pack endpoint declares: the kind tag itself, plus\nonly the API-intrinsic parameters (`headerName` for `static-api-key`,\n`scheme` for `static-authorization`). Every credential value lives in\nthe runtime config, in [`RuntimeCredential`].",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -770,7 +770,7 @@
     },
     "EndpointOperation": {
       "additionalProperties": false,
-      "description": "One operation of an endpoint, with the reviewed write claim\n(`products/adapter/CONCEPT.md` sections 8.7 and 9): redelivery over a\nnon-safe send is admitted only when the endpoint operation declares\n`idempotentUpstream: true`.",
+      "description": "One operation of an endpoint, with the reviewed write claim: redelivery over a\nnon-safe send is admitted only when the endpoint operation declares\n`idempotentUpstream: true`.",
       "properties": {
         "asyncCompletion": {
           "$ref": "#/$defs/EndpointAsyncCompletion",
@@ -778,7 +778,7 @@
         },
         "graphql": {
           "$ref": "#/$defs/GraphQlOperationKind",
-          "description": "The GraphQL operation kind the pinned query file declares, on a\n`graphql` endpoint; a send naming this operation is safe only for\na query (`products/adapter/CONCEPT.md` section 8.8)."
+          "description": "The GraphQL operation kind the pinned query file declares, on a\n`graphql` endpoint; a send naming this operation is safe only for\na query."
         },
         "id": {
           "$ref": "#/$defs/LocalId",
@@ -789,7 +789,7 @@
           "type": "boolean"
         },
         "safeUpstream": {
-          "description": "The reviewed claim that the upstream serves this operation's POST\nas its safe search form, as FHIR servers serve `POST _search`\n(`products/adapter/CONCEPT.md` section 8.8): a route of a read\noperation may then reach the send. The claim names POST only; a\nPUT, PATCH, or graphql mutation send never reads it.",
+          "description": "The reviewed claim that the upstream serves this operation's POST\nas its safe search form, as FHIR servers serve `POST _search`: a route of a read\noperation may then reach the send. The claim names POST only; a\nPUT, PATCH, or graphql mutation send never reads it.",
           "type": "boolean"
         }
       },
@@ -825,7 +825,7 @@
       "type": "object"
     },
     "ErrorClass": {
-      "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+      "description": "A closed error class, the port of Camel's Java exception hierarchy (https://docs.registrystack.org/configure/adapter-routes/#error-classes).",
       "enum": [
         "aggregation.duplicate",
         "breaker.open",
@@ -914,7 +914,7 @@
       "type": "object"
     },
     "Expression": {
-      "description": "An expression in one of the ported languages, externally tagged by\nlanguage name as in Camel's YAML DSL (`products/adapter/CONCEPT.md`\nsection 8.5). `rhai` replaces Simple, Groovy, JavaScript, and `bean`.\nA predicate is an expression whose result is a boolean; the runtime\nnever coerces.\n\nRound-trip forms are covered beside the steps that carry them, in\n`crate::route`.",
+      "description": "An expression in one of the ported languages, externally tagged by\nlanguage name as in Camel's YAML DSL. `rhai` replaces Simple, Groovy, JavaScript, and `bean`.\nA predicate is an expression whose result is a boolean; the runtime\nnever coerces.\n\nRound-trip forms are covered beside the steps that carry them, in\n`crate::route`.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -1012,7 +1012,7 @@
           "description": "The `rhai` language member."
         },
         "statusPropertyName": {
-          "description": "The exchange property that records the boolean outcome, absent by\ndefault: Camel 4's `statusPropertyName`. Camel 4 sets no fixed\nfilter property, and neither does the port\n(`products/adapter/CONCEPT.md` section 8.6).",
+          "description": "The exchange property that records the boolean outcome, absent by\ndefault: Camel 4's `statusPropertyName`. Camel 4 sets no fixed\nfilter property, and neither does the port.",
           "type": "string"
         },
         "steps": {
@@ -1026,7 +1026,7 @@
       "type": "object"
     },
     "GraphQlOperationKind": {
-      "description": "The GraphQL operation kind an endpoint operation declares, as the\npinned query file writes it (`products/adapter/CONCEPT.md` section\n8.8).",
+      "description": "The GraphQL operation kind an endpoint operation declares, as the\npinned query file writes it.",
       "oneOf": [
         {
           "const": "query",
@@ -1060,7 +1060,7 @@
       "type": "object"
     },
     "HttpMethod": {
-      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
+      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not.",
       "enum": [
         "GET",
         "POST",
@@ -1071,7 +1071,7 @@
     },
     "IdempotentConsumerStep": {
       "additionalProperties": false,
-      "description": "An `idempotentConsumer` step (`products/adapter/CONCEPT.md` section 9).\nThe key is namespaced by caller identity and concrete operation and\nbound to the request digest; a duplicate replays the recorded facade\nresponse; `skipDuplicate` is not ported.",
+      "description": "An `idempotentConsumer` step.\nThe key is namespaced by caller identity and concrete operation and\nbound to the request digest; a duplicate replays the recorded facade\nresponse; `skipDuplicate` is not ported.",
       "properties": {
         "completionEager": {
           "description": "Release the key on completion (Camel default false).",
@@ -1103,7 +1103,7 @@
       "type": "object"
     },
     "Language": {
-      "description": "An expression language a pack may require of the engine\n(`products/adapter/CONCEPT.md` section 8.5).",
+      "description": "An expression language a pack may require of the engine.",
       "enum": [
         "constant",
         "header",
@@ -1120,7 +1120,7 @@
     },
     "LoopStep": {
       "additionalProperties": false,
-      "description": "A `loop` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).\nCamel's shape with our bound: the count or predicate is the same flat\nsingle-language-key form as `filter` and `when`, and `doWhile: true`\nmakes the expression a predicate loop (Camel's boolean flag, default\nfalse). `maximumIterations` stays mandatory, a declared divergence:\nthe check refuses its absence and the runtime enforces it again.\nReaching the bound with a dynamic count above it, or a predicate\nstill holding, raises the catchable `loop.maximum-iterations-reached`\nclass, never a silent stop. Pagination is `loop` with `doWhile` over\nthe upstream cursor.",
+      "description": "A `loop` step.\nCamel's shape with our bound: the count or predicate is the same flat\nsingle-language-key form as `filter` and `when`, and `doWhile: true`\nmakes the expression a predicate loop (Camel's boolean flag, default\nfalse). `maximumIterations` stays mandatory, a declared divergence:\nthe check refuses its absence and the runtime enforces it again.\nReaching the bound with a dynamic count above it, or a predicate\nstill holding, raises the catchable `loop.maximum-iterations-reached`\nclass, never a silent stop. Pagination is `loop` with `doWhile` over\nthe upstream cursor.",
       "properties": {
         "constant": {
           "description": "The `constant` language member: the iteration count, or with\n`doWhile`, the predicate's constant form."
@@ -1173,7 +1173,7 @@
     },
     "OnExceptionStep": {
       "additionalProperties": false,
-      "description": "An `onException` clause over the closed error-class hierarchy\n(`products/adapter/CONCEPT.md` section 8.7). No clause may name an\nuncatchable class; `crate::checks` refuses one that does. Redelivery\nnests under `redeliveryPolicy`, as Camel's exception clause does in\nYAML (`manual/exception-clause.html`, `manual/exception-redelivery.html`).",
+      "description": "An `onException` clause over the closed error-class hierarchy. No clause may name an\nuncatchable class; `crate::checks` refuses one that does. Redelivery\nnests under `redeliveryPolicy`, as Camel's exception clause does in\nYAML (`manual/exception-clause.html`, `manual/exception-redelivery.html`).",
       "properties": {
         "continued": {
           "description": "Whether the route resumes after the failure point (Camel\n`continued`).",
@@ -1201,7 +1201,7 @@
         },
         "retryWhile": {
           "$ref": "#/$defs/Expression",
-          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the clause as in Camel's\n`OnExceptionDefinition`, not of the redelivery policy; section\n8.7). Divergence from Camel: the predicate only stops redelivery\nearlier and `maximumRedeliveries` remains the hard cap, where\nCamel lets `retryWhile` override it, so `maximumUpstreamCalls`\nstays a check-time guarantee. The redeliveries behind it are the\nclause's own policy, or the route handler's when the clause\ndeclares no policy and produces no output steps. An output-bearing\nclause instead has Camel's clause-local default of zero\nredeliveries. The checks refuse the predicate when its effective\npolicy carries none."
+          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`, an option of the clause as in Camel's\n`OnExceptionDefinition`, not of the redelivery policy\n(https://docs.registrystack.org/configure/adapter-routes/#exception-clauses)). Divergence from Camel: the predicate only stops redelivery\nearlier and `maximumRedeliveries` remains the hard cap, where\nCamel lets `retryWhile` override it, so `maximumUpstreamCalls`\nstays a check-time guarantee. The redeliveries behind it are the\nclause's own policy, or the route handler's when the clause\ndeclares no policy and produces no output steps. An output-bearing\nclause instead has Camel's clause-local default of zero\nredeliveries. The checks refuse the predicate when its effective\npolicy carries none."
         },
         "steps": {
           "description": "The clause's steps.",
@@ -1259,7 +1259,7 @@
     },
     "PollEnrichStep": {
       "additionalProperties": false,
-      "description": "A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one\nbounded page from a static `file:`, `rabbitmq:`, or `sftp:` endpoint the pack\ndeclares; no dynamic endpoint expression and no `consumerSendTo` are\nported. Absent a strategy, the page replaces the body, as `enrich`\nreplaces it. `timeoutMilliseconds` is mandatory: the checks refuse its\nabsence under `adapter.job.poll-timeout`, and the reader refuses a\nvalue outside 1 to 10000 (the platform-frozen per-attempt ceiling of\n`products/adapter/CONCEPT.md` section 8.8 holds for every endpoint). The step never appears in a\nfacade-reachable route (`adapter.job.poll-facade-refused`).",
+      "description": "A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher. It reads one\nbounded page from a static `file:`, `rabbitmq:`, or `sftp:` endpoint the pack\ndeclares; no dynamic endpoint expression and no `consumerSendTo` are\nported. Absent a strategy, the page replaces the body, as `enrich`\nreplaces it. `timeoutMilliseconds` is mandatory: the checks refuse its\nabsence under `adapter.job.poll-timeout`, and the reader refuses a\nvalue outside 1 to 10000 (the platform-frozen per-attempt ceiling\nthat holds for every endpoint). The step never appears in a\nfacade-reachable route (`adapter.job.poll-facade-refused`).",
       "properties": {
         "aggregationStrategy": {
           "$ref": "#/$defs/AggregationStrategy",
@@ -1398,7 +1398,7 @@
     },
     "RedeliveryOptions": {
       "additionalProperties": false,
-      "description": "The redelivery option set, shared by the error handler and an\n`onException` clause (`products/adapter/CONCEPT.md` section 8.7; the\nnesting under `redeliveryPolicy` follows Camel's own YAML DSL,\n`manual/exception-clause.html` and `manual/exception-redelivery.html`).\nOption spellings stay ours (CFG-NAME); only the nesting is Camel's.\nOnly the non-default members serialize.",
+      "description": "The redelivery option set, shared by the error handler and an\n`onException` clause (the\nnesting under `redeliveryPolicy` follows Camel's own YAML DSL,\n`manual/exception-clause.html` and `manual/exception-redelivery.html`).\nOption spellings stay ours (CFG-NAME); only the nesting is Camel's.\nOnly the non-default members serialize.",
       "properties": {
         "backOffMultiplier": {
           "description": "The exponential multiplier (default 2); it grows delays, so the\nreader refuses a value below 1 (CFG-QTY-4).",
@@ -1444,7 +1444,7 @@
     },
     "ResumeBinding": {
       "additionalProperties": false,
-      "description": "One resume binding of a non-safe send: the source-native identifier a\nlater step needs, read by an RFC 9535 selector and stored typed as an\nidentifier, never as an arbitrary value\n(`products/adapter/CONCEPT.md` section 9).",
+      "description": "One resume binding of a non-safe send: the source-native identifier a\nlater step needs, read by an RFC 9535 selector and stored typed as an\nidentifier, never as an arbitrary value.",
       "properties": {
         "name": {
           "$ref": "#/$defs/LocalId",
@@ -1463,7 +1463,7 @@
     },
     "RhaiExpression": {
       "additionalProperties": false,
-      "description": "A Rhai expression reference: the digest-pinned file from the pack's\nscript inventory and the precompiled entrypoint to call\n(`products/adapter/CONCEPT.md` sections 5.6 and 8.5). Inline code is\nrefused (CFG-EMBED-1).",
+      "description": "A Rhai expression reference: the digest-pinned file from the pack's\nscript inventory and the precompiled entrypoint to call. Inline code is\nrefused (CFG-EMBED-1).",
       "properties": {
         "entrypoint": {
           "description": "The precompiled entrypoint the engine calls.",
@@ -1482,7 +1482,7 @@
     },
     "RouteDefinition": {
       "additionalProperties": false,
-      "description": "A route as Camel's YAML DSL writes it: one `from`, `direct:` only, and\nan ordered step list (`products/adapter/CONCEPT.md` section 8.3). Pack\ntemplates carry the same steps without the `from`; the instantiated\nroute's `from` is `direct:<routeId>`.",
+      "description": "A route as Camel's YAML DSL writes it: one `from`, `direct:` only, and\nan ordered step list. Pack\ntemplates carry the same steps without the `from`; the instantiated\nroute's `from` is `direct:<routeId>`.",
       "properties": {
         "from": {
           "$ref": "#/$defs/RouteFrom",
@@ -1508,7 +1508,7 @@
     },
     "RouteFrom": {
       "additionalProperties": false,
-      "description": "The `from` of a route: Camel's route consumer, bounded to `direct:`\n(divergence: the `rest` consumer dispatches to `direct:` routes;\nsection 8.8).",
+      "description": "The `from` of a route: Camel's route consumer, bounded to `direct:`\n(divergence: the `rest` consumer dispatches to `direct:` routes).",
       "properties": {
         "uri": {
           "$ref": "#/$defs/SendUri",
@@ -1522,7 +1522,7 @@
     },
     "RouteTemplate": {
       "additionalProperties": false,
-      "description": "A route template, Camel's `routeTemplate` without its `from`\n(`products/adapter/CONCEPT.md` section 8.4): the instantiated route's\n`from` is `direct:<routeId>`, bound by the contract.",
+      "description": "A route template, Camel's `routeTemplate` without its `from`: the instantiated route's\n`from` is `direct:<routeId>`, bound by the contract.",
       "properties": {
         "id": {
           "$ref": "#/$defs/LocalId",
@@ -1558,7 +1558,7 @@
     },
     "ScriptReference": {
       "additionalProperties": false,
-      "description": "A script seam: code in its own file beside the pack, referenced by a\nrelative path and pinned by digest (CFG-EMBED-1). Scripts never carry\ncredentials and never construct URLs; the `http` component builds every\nrequest from its declared template\n(`products/adapter/CONCEPT.md` section 5.6).",
+      "description": "A script seam: code in its own file beside the pack, referenced by a\nrelative path and pinned by digest (CFG-EMBED-1). Scripts never carry\ncredentials and never construct URLs; the `http` component builds every\nrequest from its declared template.",
       "properties": {
         "digest": {
           "$ref": "#/$defs/Digest",
@@ -1576,7 +1576,7 @@
       "type": "object"
     },
     "SendUri": {
-      "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:`, `graphql:`, or `postgres:` endpoint declared in the pack\n(`products/adapter/CONCEPT.md` sections 8.3, 8.8, and 17.2). The URI is\nstatic; no `toD` is ported. A `file:` or `sftp:` URI parses so the\nauthoring checks can refuse it under its own code\n(`adapter.job.send-component-refused`): a job source is read through the\n`pollEnrich` step, never through a send.",
+      "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:`, `graphql:`, or `postgres:` endpoint declared in the pack. The URI is\nstatic; no `toD` is ported. A `file:` or `sftp:` URI parses so the\nauthoring checks can refuse it under its own code\n(`adapter.job.send-component-refused`): a job source is read through the\n`pollEnrich` step, never through a send.",
       "pattern": "^(direct|http|graphql|postgres|file|rabbitmq|sftp|sqlite-extract):.+$",
       "type": "string"
     },
@@ -1732,7 +1732,7 @@
       ]
     },
     "SourceRecovery": {
-      "description": "The recovery semantics of a source route's `next` cursor, the closed\nset CONCEPT 17.2 pins.",
+      "description": "The recovery semantics of a source route's `next` cursor, the closed\nset the item contract pins.",
       "oneOf": [
         {
           "const": "exact-replay",
@@ -1748,7 +1748,7 @@
     },
     "SourceRouteDecl": {
       "additionalProperties": false,
-      "description": "One source entry point for an ingestion, Evidence or projection host.\nThe host's declaration supplies the operation contract alongside the\nsteps. A source route is never a subroutine: a facade binding naming it,\nor a `direct:` send targeting it, refuses\n(`adapter.job.source-bound-refused`,\n`adapter.job.source-called-refused`). There is no `from`: the\n`from: file:` consumer form was rejected with the job's read step\n(section 17.2).",
+      "description": "One source entry point for an ingestion, Evidence or projection host.\nThe host's declaration supplies the operation contract alongside the\nsteps. A source route is never a subroutine: a facade binding naming it,\nor a `direct:` send targeting it, refuses\n(`adapter.job.source-bound-refused`,\n`adapter.job.source-called-refused`). There is no `from`; a job reads\nthrough its declared source, not a `from: file:` consumer.",
       "properties": {
         "edits": {
           "description": "How the source reports edits to items the scan has already read,\none of [`SOURCE_EDIT_VALUES`]: `ordered`, where an edit moves the\nitem past the read position or items never change so an ordinary\npass suffices, or `rescan`, where an edit can stay behind the\nposition and the declared `rescanDelaySeconds` starts an ordinary\npass from the first page. Mandatory; the checks refuse its absence\nunder `adapter.job.source-edits-required` and a value outside the\nclosed set under `adapter.job.source-edits-unknown`.",
@@ -1799,7 +1799,7 @@
       "type": "object"
     },
     "SourceScan": {
-      "description": "Whether a source route's scan ends: the closed set CONCEPT 17.2 pins\nfor the item contract.",
+      "description": "Whether a source route's scan ends: the closed set the\nitem contract pins.",
       "oneOf": [
         {
           "const": "finite",
@@ -1864,7 +1864,7 @@
     },
     "SplitStep": {
       "additionalProperties": false,
-      "description": "A `split` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).\n`parallelProcessing`, `streaming`, and `timeout` are not ported.",
+      "description": "A `split` step.\n`parallelProcessing`, `streaming`, and `timeout` are not ported.",
       "properties": {
         "aggregationStrategy": {
           "$ref": "#/$defs/AggregationStrategy",
@@ -2018,7 +2018,7 @@
       "type": "object"
     },
     "Step": {
-      "description": "One step of a route body, externally tagged by the Camel EIP name\n(CFG-ID-7). Every port-table row for Increments 0 to 3 has a variant,\nso the format does not change when a later increment lands\n(`products/adapter/CONCEPT.md` section 8.10).\n\nStep round-trip forms are pinned one per variant by the tests of this\nmodule; each test names the Camel 4.x page the variant's semantics port\nfrom.",
+      "description": "One step of a route body, externally tagged by the Camel EIP name\n(CFG-ID-7). Every port-table row has a variant.\n\nStep round-trip forms are pinned one per variant by the tests of this\nmodule; each test names the Camel 4.x page the variant's semantics port\nfrom.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -2126,7 +2126,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Convert the message body through a code map\n(`products/adapter/CONCEPT.md` section 8.6).",
+          "description": "Convert the message body through a code map.",
           "properties": {
             "convertBodyTo": {
               "$ref": "#/$defs/ConvertStep"
@@ -2230,7 +2230,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Raise a closed error class now; the route's clauses handle it like\nany error (`products/adapter/CONCEPT.md` section 8.11.6).",
+          "description": "Raise a closed error class now; the route's clauses handle it like\nany error.",
           "properties": {
             "throwException": {
               "$ref": "#/$defs/ThrowExceptionStep"
@@ -2282,7 +2282,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Poll a job source through a static `file:` or `sftp:` URI and merge\nor replace the body with one bounded page\n(`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Job-only:\nthe authoring checks refuse the step in every facade-reachable\nroute.",
+          "description": "Poll a job source through a static `file:` or `sftp:` URI and merge\nor replace the body with one bounded page. Job-only:\nthe authoring checks refuse the step in every facade-reachable\nroute.",
           "properties": {
             "pollEnrich": {
               "$ref": "#/$defs/PollEnrichStep"
@@ -2321,7 +2321,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Wrap a write route in idempotent consumption\n(`products/adapter/CONCEPT.md` section 9).",
+          "description": "Wrap a write route in idempotent consumption.",
           "properties": {
             "idempotentConsumer": {
               "$ref": "#/$defs/IdempotentConsumerStep"
@@ -2380,7 +2380,7 @@
     },
     "TemplateParameter": {
       "additionalProperties": false,
-      "description": "A route template parameter (`products/adapter/CONCEPT.md` section 8.4).\nDivergence from Camel: typed and checked under CFG-VAL-9, where Camel\nparameters are untyped strings.",
+      "description": "A route template parameter.\nDivergence from Camel: typed and checked under CFG-VAL-9, where Camel\nparameters are untyped strings.",
       "properties": {
         "defaultValue": {
           "description": "The value used when the instantiation omits the parameter."
@@ -2444,7 +2444,7 @@
     },
     "ThrottleStep": {
       "additionalProperties": false,
-      "description": "A `throttle` step (`products/adapter/CONCEPT.md` section 8.6).\nDivergence: a waiting exchange waits at most until its deadline, then\nraises `throttle.rejected`.",
+      "description": "A `throttle` step.\nDivergence: a waiting exchange waits at most until its deadline, then\nraises `throttle.rejected`.",
       "properties": {
         "limit": {
           "$ref": "#/$defs/Expression",
@@ -2480,7 +2480,7 @@
     },
     "ThrowExceptionStep": {
       "additionalProperties": false,
-      "description": "A `throwException` step: raise one closed error class, with an\noptional bounded constant message\n(`products/adapter/CONCEPT.md` section 8.11.6). The checks refuse a\nboundary or facade class, which never enters a route.",
+      "description": "A `throwException` step: raise one closed error class, with an\noptional bounded constant message. The checks refuse a\nboundary or facade class, which never enters a route.",
       "properties": {
         "data": {
           "$ref": "#/$defs/Expression",
@@ -2502,7 +2502,7 @@
     },
     "ToParameters": {
       "additionalProperties": false,
-      "description": "The parameters of an upstream send, Camel's `http` component options\n(`products/adapter/CONCEPT.md` section 8.8). The path template's\n`{{name}}` segments are filled from `pathParameters` expressions and\npercent-encoded by the engine as single segments; query members are\nengine-encoded.",
+      "description": "The parameters of an upstream send, Camel's `http` component options. The path template's\n`{{name}}` segments are filled from `pathParameters` expressions and\npercent-encoded by the engine as single segments; query members are\nengine-encoded.",
       "properties": {
         "body": {
           "$ref": "#/$defs/Expression",
@@ -2514,7 +2514,7 @@
         },
         "httpUri": {
           "$ref": "#/$defs/Expression",
-          "description": "An origin-pinned link carried as an expression instead of `path`\n(`products/adapter/CONCEPT.md` section 8.11.5): at send time the\nengine parses the value as an absolute URL and refuses it with\n`egress.refused` unless it stays inside the endpoint's origin and\nbase path, carries no userinfo or fragment, and fits the URL\nlength bound. The checks refuse a send carrying both members, a\nquery beside this one, and this member on a non-http send."
+          "description": "An origin-pinned link carried as an expression instead of `path`: at send time the\nengine parses the value as an absolute URL and refuses it with\n`egress.refused` unless it stays inside the endpoint's origin and\nbase path, carries no userinfo or fragment, and fits the URL\nlength bound. The checks refuse a send carrying both members, a\nquery beside this one, and this member on a non-http send."
         },
         "okStatusCodeRange": {
           "description": "The inclusive status range treated as success (Camel default\n`200-299`).",
@@ -2552,14 +2552,14 @@
           "additionalProperties": {
             "$ref": "#/$defs/Expression"
           },
-          "description": "Named parameter name to expression of a `postgres:` send, each key\na parameter the endpoint's digest-pinned query file declares\n(`products/adapter/CONCEPT.md` section 8.10, the SQL row; CFG-ID-1\nkeys, engine-evaluated expressions). The checks refuse more than\nsixteen parameters (`adapter.job.postgres-parameters-unbounded`)\nand the member on any non-postgres send.",
+          "description": "Named parameter name to expression of a `postgres:` send, each key\na parameter the endpoint's digest-pinned query file declares\n(CFG-ID-1\nkeys, engine-evaluated expressions). The checks refuse more than\nsixteen parameters (`adapter.job.postgres-parameters-unbounded`)\nand the member on any non-postgres send.",
           "propertyNames": {
             "$ref": "#/$defs/ExternalId"
           },
           "type": "object"
         },
         "resumeBindings": {
-          "description": "The source-native identifiers a later write-resume step needs\n(`products/adapter/CONCEPT.md` section 9).",
+          "description": "The source-native identifiers a later write-resume step needs.",
           "items": {
             "$ref": "#/$defs/ResumeBinding"
           },
@@ -2574,7 +2574,7 @@
     },
     "ToStep": {
       "additionalProperties": false,
-      "description": "A `to` send: the static destination and its parameters\n(`products/adapter/CONCEPT.md` section 8.8). The `http` component\nbuilds the request from the declared template; no expression can change\nthe origin or inject a path segment.",
+      "description": "A `to` send: the static destination and its parameters. The `http` component\nbuilds the request from the declared template; no expression can change\nthe origin or inject a path segment.",
       "properties": {
         "parameters": {
           "$ref": "#/$defs/ToParameters",

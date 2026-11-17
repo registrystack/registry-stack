@@ -269,7 +269,7 @@ scripts:
   - path: scripts/is-not-found.rhai
     digest: sha256:7d2e9e274f6dd4377b8f3209c42a7907ec1f80f930202afe7e0bfea7d9e6fa3e
   - path: scripts/is-present.rhai
-    digest: sha256:e749ecd4e94d9f484ff97c0df07b10410b9104b1af2f802a6ef017893df542a8
+    digest: sha256:8d3f21ffd0981a525e666d99aa8e644f6cdcaa8531eb9111964a056a3aba40ab
   - path: scripts/to-households.rhai
     digest: sha256:90c1bf942c402ec13cd85cf83df2ea99bb67465b1cf377084b016e20fbf7e37c
   - path: scripts/to-household.rhai

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The journal: Camel's event notifier ported as a synchronous,
-//! value-free PostgreSQL journal written before the response is sent
-//! (`products/adapter/CONCEPT.md` section 11).
+//! value-free PostgreSQL journal written before the response is sent.
 //!
 //! Event kinds follow Camel's: `exchangeCreated`, `exchangeSending` and
 //! `exchangeSent` (endpoint id, method, path template, status, duration,

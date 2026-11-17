@@ -2,10 +2,10 @@
 #
 # Bad-corpus member adapter.fixture.credential-recorded: this artifact set must be refused with
 # exactly adapter.fixture.credential-recorded. The recorded read request carries the reserved
-# header `authorization`, and a fixture never sees credentials (CONCEPT 10.2); replay supplies
-# credentials from the runtime configuration, never from a recording. The token exchange itself
-# stays clean: no authorization header, no request body, and the reply's token is a synthetic
-# value, never a captured one.
+# header `authorization`, and a fixture never sees credentials; replay supplies credentials
+# from the runtime configuration, never from a recording. The token exchange itself stays
+# clean: no authorization header, no request body, and the reply's token is a synthetic value,
+# never a captured one.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.credential-recorded/project.yaml

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The route model (`products/adapter/CONCEPT.md` sections 8.3 and 8.4).
+//! The route model.
 //!
 //! A route run interprets the ordered EIP steps compiled from pack routes
 //! and instantiated route templates. The authored YAML follows Camel's DSL:
@@ -74,7 +74,7 @@ pub const EXCHANGE_DEADLINE: Duration = Duration::from_secs(60);
 /// registered, so nothing it says can be silently skipped.
 pub fn check_servable(steps: &[Step]) -> Result<(), String> {
     // An errorHandler step configures the whole route; a second one
-    // would silently shadow the first (section 8.7).
+    // would silently shadow the first.
     if steps
         .iter()
         .filter(|step| matches!(step, Step::ErrorHandler(_)))
@@ -102,8 +102,7 @@ pub(crate) fn check_evidence_servable(steps: &[Step]) -> Result<(), String> {
     check_steps(steps, false, false, true)
 }
 
-/// The same served-shape walk for a job source route
-/// (`products/adapter/CONCEPT.md` section 17.2): the one difference is
+/// The same served-shape walk for a job source route: the one difference is
 /// the pollEnrich read step, which the job compiler serves and the
 /// facade never does.
 pub(crate) fn check_job_servable(steps: &[Step]) -> Result<(), String> {
@@ -119,8 +118,7 @@ pub(crate) fn check_job_servable(steps: &[Step]) -> Result<(), String> {
 }
 
 /// The served shape of a `pollEnrich` read: a static `file:`, `rabbitmq:`, or `sftp:`
-/// uri and a mandatory timeout (`products/adapter/CONCEPT.md` sections
-/// 17.1 and 17.2). The authoring checks hold the endpoint and the
+/// uri and a mandatory timeout. The authoring checks hold the endpoint and the
 /// decoder; the engine holds the step shape again so a source route
 /// assembled without them is refused by name.
 fn check_poll(poll: &registry_adapter_core::PollEnrichStep) -> Result<(), String> {
@@ -167,7 +165,7 @@ fn check_steps(
     evidence_route: bool,
 ) -> Result<(), String> {
     // The redeliveries behind a clause's retryWhile are its own policy's,
-    // or the route handler's when the clause declares none (section 8.7).
+    // or the route handler's when the clause declares none.
     // Nested bodies serve no errorHandler, so their clauses find none.
     let handler_policy = steps.iter().find_map(|step| match step {
         Step::ErrorHandler(handler) => handler
@@ -179,7 +177,7 @@ fn check_steps(
     for step in steps {
         match step {
             Step::To(to) => check_to(to)?,
-            // The poll is a job-only read step (section 17.2): the facade
+            // The poll is a job-only read step: the facade
             // never serves it, so a bound route carrying one is left
             // unserved by name, while a job source route is held to the
             // poll's own served shape.
@@ -345,7 +343,7 @@ fn check_steps(
                     }
                 }
                 // A minimum above the window can never be reached inside
-                // it, so the breaker would never judge (section 8.7).
+                // it, so the breaker would never judge.
                 if breaker.minimum_number_of_calls.get() > breaker.sliding_window_calls.get() {
                     return Err(
                         "a circuitBreaker judges from more calls than its window holds".to_owned(),
@@ -445,7 +443,7 @@ fn check_steps(
 
 /// A `jsonpath` expression compiles under the declared bounds before the
 /// route is registered, so nothing the bounds refuse evaluates per
-/// exchange (section 8.11.8).
+/// exchange.
 fn check_expression(site: &str, expression: &Expression) -> Result<(), String> {
     if let Expression::JsonPath(selector) = expression {
         compile_selector(selector).map_err(|fault| format!("the {site} jsonpath {fault}"))?;
@@ -454,7 +452,7 @@ fn check_expression(site: &str, expression: &Expression) -> Result<(), String> {
 }
 
 /// A predicate additionally must be one singular query: a node list has
-/// no boolean meaning (section 8.11.8).
+/// no boolean meaning.
 fn check_predicate_expression(site: &str, expression: &Expression) -> Result<(), String> {
     check_expression(site, expression)?;
     if let Expression::JsonPath(selector) = expression {
@@ -482,7 +480,7 @@ fn check_predicate(site: &str, predicate: &Option<Expression>) -> Result<(), Str
 
 /// A route sets its own properties and the one reserved property the
 /// facade reads back; every other `Adapter` name belongs to the engine.
-/// The served shape of a conversion step (section 8.6). The authoring
+/// The served shape of a conversion step. The authoring
 /// checks hold it first; the engine repeats it so a route assembled
 /// without them is refused by name, never silently misrun.
 fn check_convert(form: &str, convert: &ConvertStep, evidence_route: bool) -> Result<(), String> {
@@ -618,7 +616,7 @@ fn check_clause(
 
 /// A `retryWhile` that could never fire, because no redelivery stands
 /// behind it: the redeliveries are the site's own policy's, or none at
-/// all when the site declares no policy (section 8.7).
+/// all when the site declares no policy.
 fn check_retry_while(
     site: &str,
     retry_while: Option<&Expression>,
@@ -662,8 +660,7 @@ fn check_to(to: &ToStep) -> Result<(), String> {
         return Ok(());
     }
     if to.uri.component == SendComponent::GraphQl {
-        // The graphql shape carries `operation` and `body` only (section
-        // 8.8): no address members, no method of its own, no status
+        // The graphql shape carries `operation` and `body` only: no address members, no method of its own, no status
         // range of its own. `body` names the send's variables and is
         // checked beside them.
         let Some(parameters) = &to.parameters else {
@@ -722,7 +719,7 @@ fn check_to(to: &ToStep) -> Result<(), String> {
         {
             // The postgres source send carries its named parameters and
             // nothing else: no address, method, body, or status range of
-            // its own (section 8.10, the SQL row).
+            // its own.
             let Some(parameters) = &to.parameters else {
                 return Err("a postgres send declares no parameters".into());
             };
@@ -770,7 +767,7 @@ fn check_to(to: &ToStep) -> Result<(), String> {
         check_expression("body", body)?;
     }
     if let Some(expression) = &parameters.http_uri {
-        // The one dynamic form (section 8.11.5): exactly one of `path`
+        // The one dynamic form: exactly one of `path`
         // and `httpUri`, and nothing that would build a second address
         // beside the link.
         if parameters.path.is_some() {
@@ -841,7 +838,7 @@ fn check_enrich(enrich: &EnrichStep) -> Result<(), String> {
 /// The JSON strategies' `properties` selectors compile under the declared
 /// bounds before the route is registered, and the names they write stay
 /// out of the engine's reserved `Adapter` namespace, the same line
-/// `setProperty` holds (section 8.11.7).
+/// `setProperty` holds.
 fn check_strategy(strategy: Option<&AggregationStrategy>) -> Result<(), String> {
     if let Some(
         AggregationStrategy::JsonArrayAppend { properties, .. }
@@ -1008,7 +1005,7 @@ pub struct RouteContext<'a> {
     /// Every route the deployment declares, keyed by the direct name the
     /// active profile resolves: facade route id or Evidence `from` URI id.
     pub routes: &'a RouteTable,
-    /// The deployment's declared code maps (section 8.6): the one
+    /// The deployment's declared code maps: the one
     /// table the conversion steps and the Rhai `code_map` helper read.
     pub code_maps: crate::scripts::CodeMaps,
     /// The binding's `maximumUpstreamCalls`.
@@ -1028,7 +1025,7 @@ pub type RouteTable = BTreeMap<String, Arc<Vec<Step>>>;
 
 /// Every `direct:` send the table holds resolves against the table
 /// itself, so a route that calls a route the deployment never declared
-/// is refused at load, not at the first exchange (section 8.11.7). The
+/// is refused at load, not at the first exchange. The
 /// authoring checks bound the call graph statically; this holds the
 /// runtime's table to the same name discipline.
 ///
@@ -1410,7 +1407,7 @@ impl RouteFailure {
 
 /// A selector or predicate evaluation fault as a route failure: the
 /// matched-node budget is the script budget, every other fault is a
-/// script fault (sections 8.5 and 8.11.8).
+/// script fault.
 fn language_failure(fault: LanguageError) -> RouteFailure {
     match fault {
         LanguageError::MatchedNodeBudgetExceeded { .. } => {
@@ -1445,10 +1442,10 @@ enum AsyncRoutePolicy<'a> {
 }
 
 /// How a step body ended: `stop` ends the route without failing the
-/// exchange (`products/adapter/CONCEPT.md` section 8.6), so it is not an
+/// exchange, so it is not an
 /// error. A clause that `handled` its failure ends the route's own
 /// remaining steps the same way, with one difference a `direct:` call
-/// sees (section 8.11.7): the caller continues after a handled failure
+/// sees: the caller continues after a handled failure
 /// and stops for a `stop`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Flow {
@@ -1777,8 +1774,7 @@ pub async fn run_route_within(
     .await
 }
 
-/// Run a job page's source route
-/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): the same
+/// Run a job page's source route: the same
 /// interpreter with the caller's deadline and the job profile's
 /// retained-JSON ceiling instead of the facade's one-exchange budget,
 /// which a job endpoint's raised response bound may exceed. The
@@ -2126,7 +2122,7 @@ async fn run_route_within_profile<'a>(
 }
 
 /// A script failure as a route failure: an unmapped lookup keeps its
-/// map id in the message (section 8.6); the class alone answers for
+/// map id in the message; the class alone answers for
 /// the rest.
 pub(crate) fn script_failure(failure: crate::scripts::ScriptFailure) -> RouteFailure {
     match failure {
@@ -2157,7 +2153,7 @@ pub(crate) struct Run<'a, 'c> {
     direct_depth: u32,
     /// Exception-clause steps are a terminal fallback scope. A `direct:`
     /// route called from one stays in that scope and cannot recursively
-    /// activate the callee's own handler (section 8.7 divergence).
+    /// activate the callee's own handler (a divergence from Camel).
     exception_clause_depth: u32,
     /// Token endpoint calls are budgeted per endpoint across this whole
     /// exchange, including direct calls and redelivery.
@@ -2181,7 +2177,7 @@ pub(crate) struct Run<'a, 'c> {
     pub(crate) deadline: tokio::time::Instant,
     /// The retained-JSON ceiling this run applies to the exchange: the
     /// facade's fixed budget, or the job profile's response bound for a
-    /// job page run (section 17.2).
+    /// job page run.
     pub(crate) maximum_exchange_bytes: usize,
     async_policy: Option<AsyncRoutePolicy<'a>>,
     async_source_acceptance: Option<AsyncSourceAcceptance>,
@@ -2327,8 +2323,7 @@ impl Run<'_, '_> {
         Ok(())
     }
 
-    /// Run one route's step list under that route's own error handling
-    /// (section 8.7): the clauses and handler policy its top level
+    /// Run one route's step list under that route's own error handling: the clauses and handler policy its top level
     /// declares, with breaker and top-level `doTry` blocks bare. The route the facade
     /// dispatches and the route a `to: direct:` send calls run through
     /// here alike; a `stop` anywhere in the body ends that route and is
@@ -2370,7 +2365,7 @@ impl Run<'_, '_> {
             if self.async_accepted() {
                 return Ok(Flow::Stop);
             }
-            // A breaker and a top-level doTry run bare (section 8.7):
+            // A breaker and a top-level doTry run bare:
             // the route error handler does not wrap either scope.
             let attempted = match step {
                 Step::CircuitBreaker(_) | Step::DoTry(_) => self.step(step).await,
@@ -2391,7 +2386,7 @@ impl Run<'_, '_> {
 
     /// Run a route body without its error handler or exception clauses.
     /// This is the terminal fallback scope used by a `direct:` call made
-    /// from inside an exception clause (section 8.7 divergence).
+    /// from inside an exception clause (a divergence from Camel).
     async fn run_route_body_bare(&mut self, steps: &[Step]) -> Result<Flow, RouteFailure> {
         for step in steps
             .iter()
@@ -2419,8 +2414,7 @@ impl Run<'_, '_> {
     /// clause's steps. An error inside a clause is final. A `stop` in the
     /// step or in the clause's steps ends the route without failing.
     ///
-    /// Redelivery reaches only a failing upstream component send
-    /// (section 8.7): the matched clause's policy for its classes, the
+    /// Redelivery reaches only a failing upstream component send: the matched clause's policy for its classes, the
     /// handler's for every other failure. The `retryWhile` in force
     /// follows the same split: a matched clause's own predicate governs
     /// its classes, the handler's governs every other failure. It only
@@ -2435,7 +2429,7 @@ impl Run<'_, '_> {
         let mut redeliveries = 0_u32;
         let mut previous_delay: Option<Duration> = None;
         // Redelivery reaches only a failing upstream send, never a
-        // direct call (section 8.11.7): the target's own sends carry
+        // direct call: the target's own sends carry
         // their redelivery inside the target.
         let endpoint_send =
             matches!(step, Step::To(sent) if sent.uri.component != SendComponent::Direct);
@@ -2463,7 +2457,7 @@ impl Run<'_, '_> {
                 _ => None,
             };
             // The predicate follows the clause that claimed the failure,
-            // not the site the policy came from (section 8.7).
+            // not the site the policy came from.
             let retry_while = match clause {
                 Some(clause) => clause.retry_while.as_ref(),
                 None => handler_retry_while,
@@ -2522,7 +2516,7 @@ impl Run<'_, '_> {
             let stopped = clause_outcome?;
             // `handled` ends the exchange successfully with the clause's
             // result and `continued` resumes the route after the failure
-            // point; with neither, the failure surfaces (section 8.7).
+            // point; with neither, the failure surfaces.
             // A `stop` inside the clause's steps outranks both: it ends
             // the whole route, a `direct:` caller included.
             if stopped {
@@ -2544,7 +2538,7 @@ impl Run<'_, '_> {
 
     /// Whether the `retryWhile` in force still allows another redelivery:
     /// absent is yes; a predicate that does not hold, or one that raises,
-    /// stops the redelivery (section 8.7).
+    /// stops the redelivery.
     fn retry_while_allows(&self, retry_while: Option<&Expression>) -> bool {
         retry_while.is_none_or(|condition| self.predicate(condition).unwrap_or(false))
     }
@@ -2800,9 +2794,8 @@ impl Run<'_, '_> {
     }
 
     /// An expression whose site requires a value: an absent singular
-    /// jsonpath result raises `validation` instead of null (section
-    /// 8.11.8 names `setBody` and a `pathParameters` entry; the path
-    /// slot rule already refuses null in `fill_path`).
+    /// jsonpath result raises `validation` instead of null (a required-value site such as `setBody` or a
+    /// `pathParameters` entry; the path slot rule already refuses null in `fill_path`).
     pub(crate) fn eval_required(&self, expression: &Expression) -> Result<Value, RouteFailure> {
         match expression {
             Expression::JsonPath(selector) => {
@@ -2824,8 +2817,8 @@ impl Run<'_, '_> {
     }
 
     /// An expression used as a predicate: its result is a boolean or the
-    /// evaluation fails, never a truthiness guess (section 8.5). A jsonpath
-    /// predicate follows section 8.11.8's singular-boolean rule, absent
+    /// evaluation fails, never a truthiness guess. A jsonpath
+    /// predicate follows the singular-boolean rule, absent
     /// counting as false.
     pub(crate) fn predicate(&self, expression: &Expression) -> Result<bool, RouteFailure> {
         match expression {
@@ -3062,7 +3055,7 @@ impl Run<'_, '_> {
         // A graphql send posts one document over the endpoint's base link:
         // the pinned query text, the endpoint's operation name, and the
         // variables the send's body member yields, or the endpoint's
-        // expression when the send carries none (section 8.8). Every
+        // expression when the send carries none. Every
         // other send travels in the query string.
         let host_protocol = self
             .evidence
@@ -3845,8 +3838,7 @@ impl Run<'_, '_> {
                             message.set_header(name, Value::String(value.to_owned()));
                         }
                     }
-                    // A GraphQL `errors` array fails the exchange (section
-                    // 8.8), whatever the status said: the reply keeps its
+                    // A GraphQL `errors` array fails the exchange, whatever the status said: the reply keeps its
                     // body and status on the exchange for a clause to read,
                     // and the failure carries the declared detail only,
                     // never the source's error text. Partial data fails with
@@ -3953,7 +3945,7 @@ impl Run<'_, '_> {
         }
     }
 
-    /// One synchronous in-process call (section 8.11.7): the target
+    /// One synchronous in-process call: the target
     /// route runs on this same exchange under its own clauses, an
     /// unhandled error propagates unchanged to the caller's clauses, and
     /// the call is never redelivered. The authoring checks hold the call
@@ -3981,15 +3973,14 @@ impl Run<'_, '_> {
         self.direct_depth -= 1;
         // A `stop` in the target ends the caller's route too, the way a
         // stop in any nested body does; a failure the target's own
-        // clause handled ends only the target, and the caller continues
-        // (section 8.11.7).
+        // clause handled ends only the target, and the caller continues.
         match outcome {
             Ok(Flow::Handled) => Ok(Flow::Continue),
             outcome => outcome,
         }
     }
 
-    /// One origin-pinned link (section 8.11.5): the expression must
+    /// One origin-pinned link: the expression must
     /// yield a string, the parsed link must stay inside the endpoint's
     /// origin and base path, and the parsed value is what the engine
     /// sends, never a reparse. Every pin refusal is the uncatchable
@@ -4067,7 +4058,7 @@ impl Run<'_, '_> {
 /// Validate the closed GraphQL response envelope and return its `data`
 /// member. A malformed `errors` member, a non-object response, or an object
 /// carrying neither `data` nor `errors` is a source protocol failure rather
-/// than a successful null result (section 8.8).
+/// than a successful null result.
 fn graphql_reply_body(body: &Value) -> Result<Value, RouteFailure> {
     let Some(object) = body.as_object() else {
         return Err(RouteFailure::of(ErrorClass::UpstreamMalformed));

@@ -4,8 +4,7 @@
 # (pack.yaml and scripts/ are copies, same digest), bound to the
 # FHIR-shaped experiment profile in profile.yaml beside this file. It tests
 # the rule that a pack knows a source system and a profile owns the outward
-# wire contract (CONCEPT section 7): one pack, a second target API, no pack
-# change.
+# wire contract: one pack, a second target API, no pack change.
 #
 # Upstream-call budgets as in rest-offset-mtls: search 11, read 2.
 #
@@ -25,7 +24,7 @@ profile:
 pack:
   id: jsonapi-households
   version: "1"
-  digest: sha256:3918f17516428ee0d81030ab84c13c2edd4710fa43968b50436fe48614a6fedd
+  digest: sha256:1ca68a8c71d19520c8a17119a3c1d81b171dac0d05be34e6c662d36d9444ed44
 recordTypes:
   - name: household
     fields:

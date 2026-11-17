@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The concrete RFC 7523 client-assertion signer of section 10.2: the
+//! The concrete RFC 7523 client-assertion signer: the
 //! platform's signing routine, not one of this crate's.
 //!
 //! [`ClientAssertionSigner`] is the seam the token machinery signs

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `setBody` processor: replace the message body with the value of
-//! its expression (`products/adapter/CONCEPT.md` section 8.6).
+//! its expression.
 //!
-//! The expression is one of the languages of section 8.5. An absent
+//! The expression is one of the expression languages. An absent
 //! JSONPath result raises the `validation` class where a value is
-//! required (section 8.11.8).
+//! required.
 
 use registry_adapter_core::Expression;
 

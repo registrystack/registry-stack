@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The exchange and message model, ported from Camel's `Exchange` and
-//! `Message` (`products/adapter/CONCEPT.md` section 8.2).
+//! `Message`.
 //!
 //! An exchange carries an exchange id, an `InOut` message pattern, one
 //! message of headers and body, exchange properties, and an exception
@@ -12,8 +12,7 @@
 //! one data format.
 //!
 //! What enters the exchange is declared: the `rest` consumer places only
-//! the bound operation's validated inputs on it, under the closed names
-//! of section 8.11.1, and credentials, base URLs, and secrets never
+//! the bound operation's validated inputs on it, under the closed names, and credentials, base URLs, and secrets never
 //! enter it, so no expression or header can carry them out.
 
 use std::collections::BTreeMap;
@@ -69,13 +68,12 @@ pub const PAGE_SIZE_HEADER: &str = "pageSize";
 /// while it prepares the source-native request body.
 pub const SOURCE_CONDITION_PROPERTY: &str = "AdapterSourceCondition";
 
-/// Headers the redelivery loop sets while an upstream send is retried
-/// (section 8.7).
+/// Headers the redelivery loop sets while an upstream send is retried.
 pub const REDELIVERED_HEADER: &str = "camelredelivered";
 pub const REDELIVERY_COUNTER_HEADER: &str = "camelredeliverycounter";
 pub const REDELIVERY_MAX_COUNTER_HEADER: &str = "camelredeliverymaxcounter";
 /// The header the engine sets to the caught class while a `doCatch`'s
-/// steps run (Camel's `CamelExceptionCaught`, section 8.7); it does not
+/// steps run (Camel's `CamelExceptionCaught`); it does not
 /// outlive the catch. Two recorded changes from Camel: the slot is a
 /// header here where Camel sets an exchange property, and the value is
 /// the closed error-class name where Camel carries the throwable
@@ -124,8 +122,7 @@ impl Message {
 /// The longest idempotency key the write custody seam accepts, the
 /// contract every custody implementation holds: the facade's store and
 /// the offline replay's simulation refuse the same length the engine
-/// refuses here, before any custody state is reached
-/// (`products/adapter/CONCEPT.md` section 9).
+/// refuses here, before any custody state is reached.
 pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 
 /// Host-owned inputs for exactly one source-backed write. The public caller
@@ -209,8 +206,7 @@ pub struct FinalSourceResult {
     pub data: serde_json::Map<String, Value>,
 }
 
-/// The write custody seam the engine owns and the facade installs
-/// (`products/adapter/CONCEPT.md` section 9): the engine
+/// The write custody seam the engine owns and the facade installs: the engine
 /// names no custody store, no idempotency type, and no client; the
 /// facade implements the seam over its journal transaction and
 /// idempotency store, and offline replay implements it over its
@@ -600,7 +596,7 @@ impl Exchange {
     /// Apply the retained-JSON ceiling the caller names: the facade's own
     /// budget for a served exchange, or the job profile's response bound
     /// for a job page run, which a source-route-only endpoint's raised
-    /// bound may exceed (section 17.2). The bound is never raised above
+    /// bound may exceed. The bound is never raised above
     /// what the caller passes, and a served exchange keeps the fixed
     /// budget.
     pub fn ensure_bounded_within(&self, maximum_bytes: usize) -> Result<(), ErrorClass> {
@@ -622,7 +618,7 @@ impl Exchange {
         )
     }
 
-    /// The `exchange` argument of a Rhai entrypoint (section 8.11.3):
+    /// The `exchange` argument of a Rhai entrypoint:
     /// `#{body, headers, properties}` with lowercased header names and a
     /// null body as `()`.
     #[must_use]
@@ -686,7 +682,7 @@ pub enum WriteClaim {
 /// Apply the caller's retained-JSON ceiling to a body or accumulator
 /// before it is installed on an exchange: the facade's fixed budget, or
 /// the job profile's response bound for a job page run, whose endpoints
-/// may declare a raised bound (section 17.2).
+/// may declare a raised bound.
 pub(crate) fn ensure_value_bounded(value: &Value, maximum_bytes: usize) -> Result<(), ErrorClass> {
     ensure_serialized_bounded(value, maximum_bytes)
 }

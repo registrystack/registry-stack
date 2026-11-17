@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The upstream authentication kinds of `products/adapter/CONCEPT.md`
-//! section 10.2, exercised over a real loopback HTTP double: each kind
+//! The upstream authentication kinds, exercised over a real loopback HTTP double: each kind
 //! compiles against its runtime binding and produces exactly the
-//! credential carriage the concept states, the token endpoint answers
+//! credential carriage the authentication kind declares
+//! (https://docs.registrystack.org/configure/adapter/#upstream-authentication), the token endpoint answers
 //! are read as Evidence reads them, and the marker-secret test proves a
 //! recognizable secret travels only in that carriage.
 //!
@@ -904,7 +904,8 @@ mod outbound_tls {
 /// The marker-secret absence test of the security rule: a recognizable
 /// secret, issued or resolved by every kind that carries one, appears in
 /// no exchange body, header, property, event, or error the layer
-/// produces, only in the credential carriage the concept declares.
+/// produces, only in the credential carriage the authentication kind declares
+/// (https://docs.registrystack.org/configure/adapter/#upstream-authentication).
 mod marker_secret_absence {
     use super::*;
 

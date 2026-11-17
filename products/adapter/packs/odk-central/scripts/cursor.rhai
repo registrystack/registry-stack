@@ -2,15 +2,14 @@
 // this run.
 //
 // The engine evaluates the route's setProperty expressions on the
-// exchange (CONCEPT 8.11.3). In job mode the exchange starts with the
-// job cursor under the closed property `AdapterJobCursor`, absent on
-// the first run (CONCEPT 17.2). The odk-submissions cursor is
-// `{submissionDate: <rendered date>, seen: [<__id>, ...]}`, the
-// submission date of the last row read and the ids already read at
-// exactly that date; the odk-repeats cursor is `{offset: <n>}`. One
-// file, two seeds: a cursor of the wrong shape throws rather than
-// silently restarting from the first row. Pure and deterministic; no
-// I/O.
+// exchange. In job mode the exchange starts with the job cursor under
+// the closed property `AdapterJobCursor`, absent on the first run.
+// The odk-submissions cursor is `{submissionDate: <rendered date>,
+// seen: [<__id>, ...]}`, the submission date of the last row read and
+// the ids already read at exactly that date; the odk-repeats cursor
+// is `{offset: <n>}`. One file, two seeds: a cursor of the wrong
+// shape throws rather than silently restarting from the first row.
+// Pure and deterministic; no I/O.
 
 // The `$filter` the odk-submissions route sends, absent on the first
 // run: `__system/submissionDate ge <submissionDate>` (the documented

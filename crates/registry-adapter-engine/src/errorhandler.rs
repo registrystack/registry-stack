@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The error handler: Camel's error handler, redelivery policy, and
-//! exception clauses over a closed hierarchy of error classes
-//! (`products/adapter/CONCEPT.md` section 8.7).
+//! exception clauses over a closed hierarchy of error classes.
 //!
 //! Matching is Camel's: the clause whose class is closest to the error
 //! or any of its causes wins, ties going to the most deeply nested
@@ -26,5 +25,4 @@
 //! `credential.rejected`, `disclosure.violation`, `egress.refused`,
 //! `script.budget-exceeded`) fire no clause at all, and the facade
 //! classes the `rest` consumer raises outside any route exist so the
-//! profile maps every response a caller receives into its shape
-//! (section 8.11.6).
+//! profile maps every response a caller receives into its shape.

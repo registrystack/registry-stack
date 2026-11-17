@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Integration tests for `adapterctl fixtures replay`: the offline replay
-//! of a project's fixture suites against its compiled contract
-//! (`products/adapter/CONCEPT.md` section 13.3).
+//! of a project's fixture suites against its compiled contract.
 
 use serde_json::{json, Value};
 use std::ffi::OsString;
@@ -132,7 +131,7 @@ fn codes(report: &Value) -> Vec<&str> {
 /// The minimal suite replays clean against its compiled contract: both
 /// entries, the ordered token and read exchanges, the response expectation
 /// with its headers, and the problem expectation by class and code
-/// (G-FIXTURES, CONCEPT 13.3). `drive: completed` is emitted only after the
+/// (G-FIXTURES). `drive: completed` is emitted only after the
 /// actual runtime interpreter consumes every recorded send.
 #[test]
 fn the_minimal_suite_replays_against_its_compiled_contract() {
@@ -256,7 +255,7 @@ fn replay_refuses_a_status_the_compiled_contract_does_not_declare() {
 
 /// A recorded exchange no declared intercept answers refuses at replay:
 /// the replay runs the same checks `check` does, so dropping the endpoint
-/// intercept strands the read exchange (CONCEPT 10.2, 13.3).
+/// intercept strands the read exchange.
 #[test]
 fn replay_refuses_an_exchange_no_intercept_answers() {
     let (_root, project) = edited_tree(|text| {

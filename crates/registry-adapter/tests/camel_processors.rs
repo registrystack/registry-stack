@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Engine conformance for the leaf processors of the port table
-//! (`products/adapter/CONCEPT.md` sections 8.5 and 8.6): `transform`,
+//! Engine conformance for the leaf processors of the port table: `transform`,
 //! `setHeader`, `removeHeader`, `removeProperty`, `script`, `choice`,
 //! `filter`, `validate`, and `stop`, with the `jsonpath` expression
-//! language wired into the interpreter (section 8.11.8's result rules).
+//! language wired into the interpreter (its result rules).
 
 use std::collections::BTreeMap;
 
@@ -102,7 +101,7 @@ async fn transform_replaces_the_body_from_its_expression() {
 /// A `jsonpath` expression yields its one value when singular and the
 /// matched nodes as a list otherwise; an absent singular result raises
 /// `validation` where a value is required, while a present null node is
-/// a value, exactly as section 8.11.8 fixes the shapes.
+/// a value, exactly as the result rules fix the shapes.
 #[tokio::test]
 async fn jsonpath_yields_its_singular_value_or_its_node_list() {
     let singular = run(
@@ -165,8 +164,7 @@ async fn set_header_sets_one_header_from_its_expression() {
 
 /// A route writes no read-only header: the facade inputs, the credential
 /// and hop-by-hop names, and the engine's `Camel` and `Adapter` prefixes
-/// refuse at load, for `setHeader` and `removeHeader` alike
-/// (sections 8.11.1 and 8.11.4).
+/// refuse at load, for `setHeader` and `removeHeader` alike.
 #[test]
 fn header_writes_refuse_the_read_only_targets_at_load() {
     for refused in [
@@ -215,7 +213,7 @@ async fn remove_header_removes_a_route_set_header() {
 
 /// `removeProperty` removes a route property; the read-only properties
 /// refuse, `AdapterNextContinuation` excepted, as for `setProperty`
-/// (manual/removeProperty-eip.html, section 8.11.1).
+/// (manual/removeProperty-eip.html).
 #[tokio::test]
 async fn remove_property_removes_a_route_property_and_refuses_facade_names() {
     let outcome = run(
@@ -243,7 +241,7 @@ async fn remove_property_removes_a_route_property_and_refuses_facade_names() {
 
 /// The `script` EIP runs one expression for effect on properties without
 /// changing the body: the entrypoint returns a map of property names to
-/// values (manual/script-eip.html, section 8.11.3's slot table).
+/// values (manual/script-eip.html, the slot table).
 #[tokio::test]
 async fn script_sets_properties_from_a_returned_map_and_leaves_the_body() {
     let set = property_script(r#""seen": true, "first": exchange.body.items[0].id"#);
@@ -263,7 +261,7 @@ async fn script_sets_properties_from_a_returned_map_and_leaves_the_body() {
 
 /// A script may set the one reserved property a search route hands back,
 /// and no other reserved property: the `Adapter` prefix belongs to the
-/// engine (section 8.11.2's set rule, one step down).
+/// engine (the set rule, one step down).
 #[tokio::test]
 async fn script_writes_the_next_continuation_and_no_other_reserved_property() {
     let set = property_script(r#""AdapterNextContinuation": 2"#);
@@ -292,7 +290,7 @@ async fn script_writes_the_next_continuation_and_no_other_reserved_property() {
 }
 
 /// A script that returns no map of properties fails the exchange with the
-/// `script` class (section 8.11.3: the slot returns a map).
+/// `script` class (the slot returns a map).
 #[tokio::test]
 async fn script_returning_no_map_fails_the_exchange() {
     let set = scripts(r#"fn apply(exchange) { 3 }"#);
@@ -345,8 +343,8 @@ async fn choice_runs_the_first_matching_when_and_otherwise_when_none_matches() {
 }
 
 /// A predicate that yields no boolean is an error, never a truthiness
-/// guess (section 8.5), and a non-singular `jsonpath` predicate is
-/// refused before the route is registered (section 8.11.8).
+/// guess, and a non-singular `jsonpath` predicate is
+/// refused before the route is registered.
 #[tokio::test]
 async fn a_non_boolean_predicate_fails_and_a_non_singular_one_never_loads() {
     let outcome = run(

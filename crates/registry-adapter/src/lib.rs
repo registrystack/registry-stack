@@ -4,7 +4,7 @@
 //!
 //! This crate serves the Adapter's governed facade around the listener-free
 //! engine in `registry-adapter-engine`, and owns its inbound security and audit
-//! journal (`products/adapter/CONCEPT.md` section 8.1). One execution per
+//! journal. One execution per
 //! facade call validates the request against the declared model, resolves
 //! the operation binding, interprets the bound plan step by step, and
 //! journals the exchange before answering: its creation before the source
@@ -26,14 +26,13 @@
 //! The facade keeps its historical `registry_adapter::engine` surface as a
 //! public re-export while hosts migrate to the engine crate directly.
 //!
-//! The `auth` module is the outbound authentication layer
-//! (`products/adapter/CONCEPT.md` section 10.2): one endpoint's
+//! The `auth` module is the outbound authentication layer: one endpoint's
 //! declared credential kind compiles against its runtime binding before
 //! any secret is resolved, secrets live only in zeroizing buffers from
 //! resolution through the outbound request, the OAuth2 kinds acquire and
 //! cache bearer credentials through the endpoint's fixed token endpoint
 //! under the exchange's token budget, and a late 401 refreshes only the
-//! issuance the refused send carried. Every fault maps to a section 8.7
+//! issuance the refused send carried. Every fault maps to an error
 //! class, and the journal keeps only value-free auth events.
 
 pub mod cli;

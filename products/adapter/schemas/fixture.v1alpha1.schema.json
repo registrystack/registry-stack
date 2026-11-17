@@ -1,7 +1,7 @@
 {
   "$defs": {
     "ErrorClass": {
-      "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+      "description": "A closed error class, the port of Camel's Java exception hierarchy (https://docs.registrystack.org/configure/adapter-routes/#error-classes).",
       "enum": [
         "aggregation.duplicate",
         "breaker.open",
@@ -114,7 +114,7 @@
     },
     "FixtureEntry": {
       "additionalProperties": false,
-      "description": "One fixture entry: the facade request, the upstream exchanges it\ndrives in the order the route makes them, and what the facade must\nanswer (G-FIXTURES, CONCEPT 13.3). At least one exchange is an\nauthoring invariant the checks refuse a suite without.",
+      "description": "One fixture entry: the facade request, the upstream exchanges it\ndrives in the order the route makes them, and what the facade must\nanswer (G-FIXTURES, https://docs.registrystack.org/configure/adapter/#fixture-replay). At least one exchange is an\nauthoring invariant the checks refuse a suite without.",
       "properties": {
         "expected": {
           "$ref": "#/$defs/ExpectedFacade",
@@ -140,7 +140,7 @@
       "type": "object"
     },
     "FixtureProvenance": {
-      "description": "Where a fixture's recording came from\n(`products/adapter/CONCEPT.md` section 13.3): captured from a live\nsystem, or documented as an authored reconstruction.",
+      "description": "Where a fixture's recording came from: captured from a live\nsystem, or documented as an authored reconstruction.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -183,7 +183,7 @@
       ]
     },
     "HttpMethod": {
-      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
+      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not.",
       "enum": [
         "GET",
         "POST",
@@ -216,7 +216,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Intercept the token requests of the named endpoint's OAuth2 kind\n(`products/adapter/CONCEPT.md` section 10.2). Replay runs without\na credential: the recorded token request carries no credential\nheader or body, and the recorded reply's token is a synthetic\nvalue a captured recording must replace before it is committed.",
+          "description": "Intercept the token requests of the named endpoint's OAuth2 kind. Replay runs without\na credential: the recorded token request carries no credential\nheader or body, and the recorded reply's token is a synthetic\nvalue a captured recording must replace before it is committed.",
           "properties": {
             "endpoint": {
               "$ref": "#/$defs/ExternalId",
@@ -326,7 +326,7 @@
           "type": "string"
         },
         "tokenRequest": {
-          "description": "Whether this request is the endpoint's token request (CONCEPT\n10.2); only a token intercept answers it.",
+          "description": "Whether this request is the endpoint's token request;\nonly a token intercept answers it.",
           "type": "boolean"
         }
       },

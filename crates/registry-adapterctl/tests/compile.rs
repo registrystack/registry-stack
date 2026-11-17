@@ -2,7 +2,7 @@
 
 //! Integration tests for `adapterctl compile`: the concrete OpenAPI 3.1
 //! document a deployment serves, written beside the project and held
-//! byte-identical by `--check` (`products/adapter/CONCEPT.md` section 7).
+//! byte-identical by `--check`.
 
 use registry_record::{
     RegistryRecord, RegistryRecordCollectionResponse, RegistryRecordMeta, RegistryRecordPageInfo,
@@ -189,7 +189,7 @@ fn the_minimal_fixture_project_compiles() {
     // One concrete authored operation for the one bound (operation, record
     // type) pair, beside the protected system contract route. The record
     // type is substituted into the authored path, so no template placeholder
-    // remains (CONCEPT section 7).
+    // remains.
     let paths = document["paths"].as_object().expect("paths");
     assert_eq!(paths.len(), 2, "{paths:?}");
     assert!(paths.contains_key(registry_adapter::engine::effective_contract::WELL_KNOWN_PATH));
@@ -220,7 +220,7 @@ fn the_minimal_fixture_project_compiles() {
 }
 
 /// The profile's problems list becomes the error responses of every
-/// operation (R7, CONCEPT section 8.11.6): one response per distinct
+/// operation: one response per distinct
 /// status, each answering the shared problem schema, described by the
 /// first problem carrying that status. Two problems sharing 502 prove the
 /// statuses, not the codes, key the responses.
@@ -370,7 +370,7 @@ fn a_refused_project_writes_nothing() {
 }
 
 /// A profile operation no binding binds emits no path (the contract
-/// holds only bound operations, CONCEPT section 7).
+/// holds only bound operations).
 #[test]
 fn an_unbound_profile_operation_emits_no_path() {
     let (root, project) = copied_tree(&minimal_dir());
@@ -498,7 +498,7 @@ fn the_maintained_example_compiles_under_breg_records() {
 /// The breg-records envelope matches the `registry-record` serialization
 /// goldens at the envelope level: a single response and a collection
 /// response serialize to exactly the members the compiled schemas
-/// declare, with the same scalar shapes (CONCEPT section 13.6).
+/// declare, with the same scalar shapes.
 #[test]
 fn breg_records_envelopes_match_registry_record_goldens() {
     let (root, project) = copied_tree(example_project().parent().unwrap());
@@ -595,7 +595,7 @@ fn breg_records_envelopes_match_registry_record_goldens() {
 
 /// The compiled document keeps the shape of BReg's generated per-package
 /// OpenAPI: the same version, the same bearer scheme, and likewise
-/// concrete per-record-type paths (CONCEPT section 13.6).
+/// concrete per-record-type paths.
 #[test]
 fn the_document_keeps_the_breg_generated_shape() {
     let breg_path = repo_root().join("products/breg/generated/minimal/generated/openapi.json");
@@ -630,7 +630,7 @@ fn the_document_keeps_the_breg_generated_shape() {
 
 /// A second profile over its own pack compiles with its own paths,
 /// envelope, and pagination names, proving the target API is
-/// configuration (CONCEPT section 13.6).
+/// configuration.
 #[test]
 fn the_case_api_corpus_base_compiles_with_foreign_names() {
     let corpus = repo_root().join("products/adapter/fixtures/corpus/base");

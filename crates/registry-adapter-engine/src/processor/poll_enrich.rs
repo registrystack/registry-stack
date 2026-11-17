@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `pollEnrich` processor, the bounded job-only read step
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 17.2).
+//! The `pollEnrich` processor, the bounded job-only read step.
 //!
 //! One step executes one bounded read: the static `file:<endpointId>`
 //! uri resolves against the compiled file source, the read runs inside

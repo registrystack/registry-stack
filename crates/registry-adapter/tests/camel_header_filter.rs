@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `http` component's two header allowlists, Camel's
-//! `HeaderFilterStrategy` in both directions
-//! (`products/adapter/CONCEPT.md` section 8.11.4).
+//! `HeaderFilterStrategy` in both directions.
 //!
 //! Camel filters by deny rules (`DefaultHeaderFilterStrategy`'s
 //! `Camel`/`camel` prefix and `HttpHeaderFilterStrategy`'s common
@@ -212,7 +211,7 @@ fn an_outbound_refusal_is_value_free() {
 
 // Construction.
 
-/// Every never-allowlistable name of section 8.11.4 is refused in either
+/// Every never-allowlistable name is refused in either
 /// list at construction, in any case, so a filter that exists can never
 /// emit one. The credential injected after the filter therefore cannot
 /// be shadowed or replaced by an exchange header. Camel's common request
@@ -343,8 +342,9 @@ fn a_camel_engine_header_is_refused_as_a_response_header() {
 }
 
 /// A facade input never stands in for a validated caller input: an
-/// upstream value under the closed rest-consumer names of 8.11.1 is
-/// refused in `responseHeaders` (section 8.11.4). The request side may
+/// upstream value under the closed rest-consumer facade input names
+/// (https://docs.registrystack.org/configure/adapter/#facade-inputs) is
+/// refused in `responseHeaders`. The request side may
 /// list the same name, which sends the caller's own value upstream.
 #[test]
 fn a_facade_input_is_refused_as_a_response_header() {
@@ -582,8 +582,7 @@ fn an_invalid_undeclared_response_header_is_ignored() {
 
 // Parity.
 
-/// The claim behind "a pack that passes check never fails at load"
-/// (`products/adapter/CONCEPT.md` section 8.11.4): for each refusal the
+/// The claim behind "a pack that passes check never fails at load": for each refusal the
 /// filter build can raise, core's `check_pack` finds a defect, and for
 /// each allowlist `check_pack` refuses, the filter build refuses too.
 /// Every refusal has a row; the last two rows prove the request-side

@@ -165,7 +165,7 @@
     },
     "JobProfile": {
       "additionalProperties": false,
-      "description": "The explicit, bounded profile of one job (`products/adapter/CONCEPT.md`\nsection 17.2). Every member is mandatory and checked; the engine\nenforces each bound again at the edge. The facade ceilings of section\n8.8 are unchanged: the per-attempt timeout stays at the platform-frozen\nceiling, and only a source-route-only endpoint's response bound may\nrise, to the platform cap.",
+      "description": "The explicit, bounded profile of one job. Every member is mandatory and checked; the engine\nenforces each bound again at the edge. The facade ceilings are\nunchanged: the per-attempt timeout stays at the platform-frozen\nceiling, and only a source-route-only endpoint's response bound may\nrise, to the platform cap.",
       "properties": {
         "maximumPageBytes": {
           "description": "The largest serialized item page, in bytes (1 to 16777216).",
@@ -237,7 +237,7 @@
     },
     "JobTrigger": {
       "additionalProperties": false,
-      "description": "One trigger of the job: the declaration of when a pass starts. A\ntrigger carries no data into the pass; a hook only starts a pass,\nwhich then re-reads the source from the saved position, and a hook\nbody is never trusted or stored (`products/adapter/CONCEPT.md`\nsection 17.2).\n\nThe interval options port the scheduled polling consumer options of\nCamel's scheduler component\n(camel-4.23.0:components/camel-scheduler/src/main/docs/scheduler-component.adoc);\nthe option names and their Camel defaults are read from the shared\n`ScheduledPollEndpoint` base the scheduler endpoint extends\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java),\nnot invented. Recorded divergences: Camel's `delay` default is that\nfile's `DEFAULT_DELAY` of 500 milliseconds and its `initialDelay`\ndefault is `DEFAULT_INITIAL_DELAY` of 1000 milliseconds, where the\njob pins 60000 and 0; and Camel's `backoffMultiplier` field defaults\nto 0, which turns backoff off, where the job's default of 1 skips no\npass and the checks bound the value. The skip semantics (once an idle\nor error threshold is met, a multiplier of M skips M - 1 polls before\nthe next attempt) are the consumer's own\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollConsumer.java#doRun).",
+      "description": "One trigger of the job: the declaration of when a pass starts. A\ntrigger carries no data into the pass; a hook only starts a pass,\nwhich then re-reads the source from the saved position, and a hook\nbody is never trusted or stored.\n\nThe interval options port the scheduled polling consumer options of\nCamel's scheduler component\n(camel-4.23.0:components/camel-scheduler/src/main/docs/scheduler-component.adoc);\nthe option names and their Camel defaults are read from the shared\n`ScheduledPollEndpoint` base the scheduler endpoint extends\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java),\nnot invented. Recorded divergences: Camel's `delay` default is that\nfile's `DEFAULT_DELAY` of 500 milliseconds and its `initialDelay`\ndefault is `DEFAULT_INITIAL_DELAY` of 1000 milliseconds, where the\njob pins 60000 and 0; and Camel's `backoffMultiplier` field defaults\nto 0, which turns backoff off, where the job's default of 1 skips no\npass and the checks bound the value. The skip semantics (once an idle\nor error threshold is met, a multiplier of M skips M - 1 polls before\nthe next attempt) are the consumer's own\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollConsumer.java#doRun).",
       "properties": {
         "backoffErrorThreshold": {
           "description": "The consecutive failed passes that put the trigger into backoff.\nPorts `backoffErrorThreshold`\n(camel-4.23.0:core/camel-support/src/main/java/org/apache/camel/support/ScheduledPollEndpoint.java#backoffErrorThreshold,\n\"The number of subsequent error polls (failed due some error)\nthat should happen before the backoffMultipler should kick-in\").\nDefault 0, off; the checks bound the value to\n[`MAXIMUM_TRIGGER_BACKOFF_THRESHOLD`].",
@@ -309,7 +309,7 @@
     },
     "PinnedRef": {
       "additionalProperties": false,
-      "description": "A pinned reference to a profile or pack: plain identifier plus the\nversion and digest `adapterctl check` verifies (CFG-ID-4,\n`products/adapter/CONCEPT.md` section 6).",
+      "description": "A pinned reference to a profile or pack: plain identifier plus the\nversion and digest `adapterctl check` verifies (CFG-ID-4).",
       "properties": {
         "digest": {
           "$ref": "#/$defs/Digest",
@@ -333,7 +333,7 @@
     },
     "ProjectionDecl": {
       "additionalProperties": false,
-      "description": "The projection of one source item the destination needs\n(`products/adapter/CONCEPT.md` sections 17.2 and 17.3): the dotted\npaths of the item `value` the destination receives, and what the\nitem row's Last digest covers.\n\nThe projection is the job's data-minimization declaration. The\nsource route shapes each item's `value` as a projection of the\ndestination's fields, not the captured source record (section 17.2),\nand the job host enforces the declared list at hand-off (section\n17.3): for each item it delivers, the pass builds an object with one\nmember per declared field, in declaration order, carrying the value\nat that path (or `null` where the path misses), and hands the\ndestination that object. A member the route shaped beyond the\ndeclared fields never leaves the job host. The item digest covers\nthe projected object, or under [`ProjectionDigestOf::Value`] the item\n`value` as the route shaped it together with the sorted declared\nfield list, so a field-list edit re-flags every item either way. The\npass also stores\n[`AdapterJob::projection_digest`] on the job's state row so status\nshows a projection edit; items re-flag only through their own item\ndigests.",
+      "description": "The projection of one source item the destination needs: the dotted\npaths of the item `value` the destination receives, and what the\nitem row's Last digest covers.\n\nThe projection is the job's data-minimization declaration. The\nsource route shapes each item's `value` as a projection of the\ndestination's fields, not the captured source record,\nand the job host enforces the declared list at hand-off: for each item it delivers, the pass builds an object with one\nmember per declared field, in declaration order, carrying the value\nat that path (or `null` where the path misses), and hands the\ndestination that object. A member the route shaped beyond the\ndeclared fields never leaves the job host. The item digest covers\nthe projected object, or under [`ProjectionDigestOf::Value`] the item\n`value` as the route shaped it together with the sorted declared\nfield list, so a field-list edit re-flags every item either way. The\npass also stores\n[`AdapterJob::projection_digest`] on the job's state row so status\nshows a projection edit; items re-flag only through their own item\ndigests.",
       "properties": {
         "digestOf": {
           "$ref": "#/$defs/ProjectionDigestOf",
@@ -366,7 +366,7 @@
     },
     "ReadBounds": {
       "additionalProperties": false,
-      "description": "The read bounds of one job profile: what one poll may take in and what\none decoded row may carry (`products/adapter/CONCEPT.md` section\n17.2). Every read has a count, byte, and deadline bound.",
+      "description": "The read bounds of one job profile: what one poll may take in and what\none decoded row may carry. Every read has a count, byte, and deadline bound.",
       "properties": {
         "maximumFieldBytes": {
           "description": "The largest one decoded field may take, in bytes (1 to 65536).",
@@ -433,7 +433,7 @@
   "$id": "https://id.registrystack.org/schemas/adapter/job/job.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The ingestion job definition (`AdapterJob`): an identity, the pinned\npack and its source route, the item projection and the pass triggers,\nand the bounded job profile (`products/adapter/CONCEPT.md` sections\n17.1 and 17.2). The `apiVersion` and `kind` envelope members are\ncarried and validated like every other Adapter artifact's, through the\nloader's format constants [`ADAPTER_JOB_API_VERSION`] and\n[`ADAPTER_JOB_KIND`].",
+  "description": "The ingestion job definition (`AdapterJob`): an identity, the pinned\npack and its source route, the item projection and the pass triggers,\nand the bounded job profile. The `apiVersion` and `kind` envelope members are\ncarried and validated like every other Adapter artifact's, through the\nloader's format constants [`ADAPTER_JOB_API_VERSION`] and\n[`ADAPTER_JOB_KIND`].",
   "properties": {
     "apiVersion": {
       "const": "id.registrystack.org/formats/adapter/job/v1alpha1",

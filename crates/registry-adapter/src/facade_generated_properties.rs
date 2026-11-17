@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Generated cross-layer properties for the facade boundary in
-//! `products/adapter/CONCEPT.md` section 13.5.
+//! Generated cross-layer properties for the facade boundary.
 
 use super::*;
 

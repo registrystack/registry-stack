@@ -1,13 +1,13 @@
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
 #
-# Documented fixture (hand-derived, NOT a captured exchange):
-# the source rejects the bearer token (401); after the single token refresh
-# of CONCEPT 10.2 the facade answers a credential problem.
-# No exchange was recorded to produce this file. The upstream shapes are derived from the reviewed Evidence
-# reference (products/evidence/reference/request-adapter/
-# opencrvs-event-search/, response-match.json and
-# expected-request-parts.json) and every value is a made-up stand-in. The
-# The expected problem carries no deployment-specific response envelope.
+# Documented fixture (hand-derived, NOT a captured exchange): the source
+# rejects the bearer token (401); after the single token refresh the facade
+# answers a credential problem. No exchange was recorded to produce this
+# file. The upstream request and response
+# envelope follow the reviewed Evidence source recipe
+# (products/evidence/source-recipes/opencrvs-event-search/), and every
+# value is a made-up stand-in. The
+# expected problem carries no deployment-specific response envelope.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: opencrvs-events-get-unauthorized
@@ -15,7 +15,7 @@ pack: opencrvs-events
 upstreamVersion: "unverified"
 provenance:
   type: documented
-  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+  reference: products/evidence/source-recipes/opencrvs-event-search/
 intercepts:
   - type: endpoint
     endpoint: events

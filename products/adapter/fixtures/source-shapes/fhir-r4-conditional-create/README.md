@@ -56,7 +56,7 @@ so that a retried create never makes a second Patient:
 ## Recorded gaps
 
 These were recorded against the authoring model when the shape was written;
-the pack's comments point here. `CONCEPT.md` holds the current contract for
+the pack's comments point here. The [Adapter configuration page](https://docs.registrystack.org/configure/adapter/) holds the current contract for
 each construct.
 
 1. **The retained transaction form.** The current endpoint model can

@@ -17,7 +17,7 @@ engine is a bounded port of Apache Camel's route model, so packs use Camel's
 EIP names and semantics. A new source system is a new pack, not a Rust
 change.
 
-The [GovStack facade specification](CONSULTATION.md) defines the built-in
+The [GovStack facade specification](https://docs.registrystack.org/configure/adapter-consultation/) defines the built-in
 Read and direct Write target, reusable source-pack boundary, project-owned
 input/output transformations and schemas, and caller capability discovery.
 The built-in target is mounted at `/govstack/registries`; its generated
@@ -37,57 +37,63 @@ input schemas and transformations. DHIS2 Write remains unavailable until
 its source can preserve those guarantees.
 
 An embedding host such as BReg can run a [reviewed projection
-operation](CONCEPT.md#18-external-projection-acquisition) for an exact read,
+operation](https://docs.registrystack.org/configure/adapter/#external-projection-acquisition) for an exact read,
 key batch or complete list for one parent. The host owns grants, disclosure
 and any retention. See the [synthetic licensing
 pack](examples/external-projections/README.md) for authoring and replay.
 
-The [product concept](CONCEPT.md) is the contract: artifact model, engine,
+The [Adapter configuration page](https://docs.registrystack.org/configure/adapter/) states the contract: artifact model,
 exchange contract, failure semantics, authorization, audit, configuration
 formats, and verification. The
-[effective operation contract](EFFECTIVE-CONTRACT.md) describes what one
+[effective operation contract](https://docs.registrystack.org/reference/adapter-effective-contract/) describes what one
 loaded Adapter process exposes to an external gateway.
 
 ## Status
 
 Released from Registry Stack 0.46.0, pre-1.0. The configuration formats are
-`v1alpha1` and may change without migration. `CONCEPT.md` section 8.10
-records each ported concept and its evidence. Section 17 owns the ingestion
-contract and its declared limits.
+`v1alpha1` and may change without migration. The
+[route language](https://docs.registrystack.org/configure/adapter-routes/) page describes the ported
+Camel concepts, and the [ingestion jobs](https://docs.registrystack.org/configure/adapter-jobs/) page owns the
+ingestion contract and its declared limits.
 
-## Install
+## Install and operate
 
-From 0.46.0, each Registry Stack release publishes the `adapter` runtime and
-the `adapterctl` author tool for Linux amd64, Linux arm64, and macOS arm64 on the
-[release page](https://github.com/registrystack/registry-stack/releases),
-checked against the release `SHA256SUMS`. Linux assets are executables named
-`<binary>-<tag>-linux-<arch>`; macOS assets are `.tar.gz` bundles with the
-executable, its AWS-LC-FIPS libraries, and notices. There is no Adapter
-container image; build one from this repository if you need it.
+The `adapter` runtime and the `adapterctl` author tool are published with each
+Registry Stack release. The install paths, the runtime database grants, and the
+operation of ingestion jobs, SFTP and RabbitMQ sources, and held items are on
+the docs site: [Operate the Adapter](https://docs.registrystack.org/operate/adapter/).
+The job source settings are in
+[Ingestion job sources](https://docs.registrystack.org/configure/adapter-ingestion-jobs/),
+and the maintained KoboToolbox and ODK Central packs are in
+[Adapter job packs](https://docs.registrystack.org/configure/adapter-packs/).
+`adapter-job`, the governed-ingestion job host, is built from this repository
+with `cargo build --release --locked -p registry-adapter-job --bin adapter-job`,
+adding the features for the sources (`job-file`, `job-postgres`, `job-sftp`,
+`job-rabbitmq`) and destinations (`direct-breg`, `signed-coordinator-event`) you
+need; a default build delivers nowhere.
+The [ingestion jobs](https://docs.registrystack.org/configure/adapter-jobs/) page records what the job host serves.
 
-Authenticate the checksum bundle as
-[`release/VERIFY.md`](../../release/VERIFY.md) describes, then install the
-binaries with the release-pinned installer or as an `rstack` component:
+## Credit and licensing
 
-```sh
-bash adapter-vX.Y.Z-install.sh
-adapterctl --version
+The exchange model, the route and route-template model, the YAML DSL shape, the
+enterprise integration pattern processors, the contract-first REST DSL, the error
+handler, redelivery, and exception-clause semantics, the event notifier, and the
+endpoint-interception testing idiom follow Apache Camel (Apache License 2.0), and
+the pattern vocabulary follows the Enterprise Integration Patterns book of Hohpe
+and Woolf. Circuit breaker semantics and defaults follow resilience4j (Apache
+License 2.0) as Camel uses it. The config-first facade over legacy health systems
+follows the OpenHIE interoperability layer tradition; connector manifest
+versioning follows the Airbyte and Singer practice. The Rust precedent consulted
+is rust-camel (Apache License 2.0, pre-release): its Tower-native rendering of EIP
+patterns, its retry policy shape, and its error dispositions informed the route
+engine. It is not a dependency: it is a general-purpose route framework with
+code-first components, where the Adapter is a bounded facade whose system
+knowledge is configuration.
 
-rstack install adapter
-rstack adapter check --help
-```
-
-The installer puts the two binaries in `~/.local/bin`; set
-`ADAPTER_INSTALL_DIR` to change that. `rstack install adapter` installs the
-same two binaries into an `rstack` generation, and `rstack adapter` runs
-`adapterctl`. Neither path needs a Rust toolchain.
-
-`adapter-job`, the governed-ingestion job host, is not yet released. Build it
-from this repository with `cargo build --release --locked -p
-registry-adapter-job --bin adapter-job`, adding the features for the sources
-(`job-file`, `job-postgres`) and destinations (`direct-breg`,
-`signed-coordinator-event`) you need; a default build delivers nowhere.
-[`CONCEPT.md`](CONCEPT.md) section 17 records what the job host serves.
+No Camel code is copied (Camel is Java). The route language documentation cites
+Camel's documentation rather than reproducing it. If documentation text or tables
+are ever lifted, the Camel LICENSE and NOTICE ship beside them, and the product
+documentation credits Camel and the EIP book regardless.
 
 ## Crates
 
@@ -104,7 +110,7 @@ registry-adapter-job --bin adapter-job`, adding the features for the sources
 
 | Path | Holds |
 |---|---|
-| `schemas/` | Generated JSON Schemas for eight formats (profile, pack, project, runtime, job, job runtime, fixture, effective contract) |
+| `schemas/` | Generated JSON Schemas for ten formats (profile, pack, project, runtime, job, job runtime, fixture, effective contract, mapping, preview expectations) |
 | `profiles/` | Facade profiles: `breg-records`, plus `case-api`, which proves the exposed API is configuration. The GovStack Consultation and Write protocol is built in and needs no profile file |
 | `packs/` | Maintained facade and ingestion packs: `dhis2-tracker`, `opencrvs-events`, `breg-records`, `kobotoolbox` and `odk-central` |
 | `examples/` | Example projects that bind the packs to profiles, and the registered format examples |
@@ -150,39 +156,6 @@ job examples use `adapterctl job check` instead; `kobotoolbox-job`,
 `odk-central-job` and `postgres-source` give the command in their README or
 `job.yaml` header.
 
-## Grant the runtime database role
-
-Serving needs TLS to PostgreSQL, even on loopback: `database.testOnlyPlaintext`
-is refused outside test builds. Without a configured root the system roots
-verify the server; when the certificate comes from a private CA, name that CA
-with `database.trustedRootCertificateRef`.
-
-`adapter serve` migrates through `database.migrationUrlRef` and serves through
-`database.runtimeUrlRef`. The migration role owns the tables. Give the runtime
-role only the grants its deployment uses; it is refused at startup, naming each
-missing grant and table, before it listens. With `adapter` standing for the
-schema on the runtime role's search path and `runtime` for that role:
-
-```sql
--- Every deployment: append journal events, run audit.retentionDays, report readiness.
-GRANT USAGE ON SCHEMA adapter TO runtime;
-GRANT INSERT, SELECT, DELETE ON adapter_journal_events TO runtime;
-GRANT SELECT ON adapter_schema_migrations TO runtime;
-
--- A deployment that serves any write: idempotent claims, response custody and the expiry sweep.
-GRANT SELECT, INSERT, UPDATE, DELETE
-  ON adapter_idempotency_entries, adapter_idempotency_resumes TO runtime;
-
--- A deployment that declares asyncCompletion or a resumable write: the artifact fence.
-GRANT SELECT, INSERT, UPDATE ON adapter_idempotency_async_artifacts TO runtime;
-
--- A deployment that declares a resumable write: its checkpointed identifiers.
-GRANT SELECT, INSERT ON adapter_idempotency_resume_bindings TO runtime;
-```
-
-The runtime role needs no grant on `adapter_idempotency_schema_migrations`;
-only the migration role reads it.
-
 ## Recover a multi-effect facade write
 
 Use the [facade recovery example](examples/facade-recovery/README.md) when a
@@ -194,48 +167,6 @@ reconstructible in this closed subset. Later reads from the digest-bound,
 resupplied caller record are not supported, though they would not inherently
 depend on stored payloads.
 
-## Change a source under asynchronous writes
-
-An asynchronous write is polled only at the source origin it was sent to
-(`CONCEPT.md` section 9). Rotating a source credential needs no care. Change
-the `baseUrl` of an endpoint that an asynchronous write, status or uncertainty
-route reaches only after that operation's writes have settled: an unfinished
-write is otherwise held and never polled. Its status link answers the stored
-202, a same-key retry answers 409 without `Retry-After`, and the facade logs a
-value-free warning for each held poll. Restore the original `baseUrl` to let
-held writes finish, or let them expire. Let async writes settle before
-upgrading; rows written by an earlier version are quarantined and expire.
-
-## Operate an SFTP job source
-
-The default-off `job-sftp` host is read-only. Give it a dedicated source
-account whose server-side authorization confines that account to the configured
-`baseDirectory`, using a chroot or an equivalent SFTP-server policy. SFTP v3
-has no portable atomic `open-beneath` or no-follow operation: client symlink and
-canonical-path checks are defense in depth, not the confinement boundary.
-
-Choose exactly one completed-file protocol:
-
-- `completed-name` means the producer writes under another name, closes it,
-  then atomically renames the complete bytes into the final candidate name.
-- `done-file` means the producer removes any stale marker before replacing a
-  same-name file, writes under another name, closes it, atomically renames the
-  complete bytes into place, then publishes the marker last. This read-only consumer
-  never removes markers. Leaving an old marker while overwriting in place is an
-  unsupported producer protocol and cannot be made safe by size, timestamp, or
-  marker rechecks.
-
-Pin one complete OpenSSH Ed25519 or P-256 public key and use only secret
-references for the password or private key. The maintained
-[`sftp-source` example](examples/sftp-source/README.md) shows the runtime shape
-and producer lifecycle.
-
-Each page downloads the whole file, up to `maximumFileBytes`, within the
-`pollEnrich` step's `timeoutMilliseconds`. Size that timeout to at least the file
-size divided by the link bandwidth, and keep the number of pages per file low
-(a larger `maximumRowsPerPage` means fewer pages). Otherwise the pass stops with
-`adapter.job.read-timeout` and the next pass starts the same page again.
-
 ## Read a PostgreSQL view
 
 A job can page a read-only query over a PostgreSQL view and register each row in
@@ -246,143 +177,6 @@ says how to adapt them to your own table.
 The [QField PostGIS example](examples/qfield-postgis/README.md) reads a completed
 offline submission from its original collection database and maps its point,
 polygon and repeated rows into a BReg Action or Proposal.
-
-## Operate a RabbitMQ job source
-
-The default-off `job-rabbitmq` host reads one message at a time with the
-explicit `rabbitmq-json` profile and manual source-owned settlement. Production
-builds require AMQPS with system roots or an operator-captured private CA.
-Plain AMQP exists only behind the named loopback fixture feature and is not a
-production runtime option.
-
-Publish immutable events with a unique, stable AMQP `message-id`. The job key
-combines the configured namespace with that identity. Its stored digest
-domain-separates the raw-message revision from the declared projection digest,
-so neither a changed body nor a reviewed normalization change can silently
-skip. Reuse of one identity for changed event bytes or projection is retained
-as `adapter.job.rabbitmq-event-changed` and held for an operator; it is not
-delivered or acknowledged automatically.
-
-Publishers must also set `delivery_mode=2` and wait for publisher confirms.
-The host rejects a delivery without mode 2 to the configured DLQ under
-`adapter.job.rabbitmq-delivery-mode`; it cannot tell whether the producer
-received a publisher confirm. The dedicated source principal needs only the
-resource-scoped configure/write/read regexes in the maintained example, not a
-broker administrative tag.
-
-An acknowledged destination outcome is written to PostgreSQL before the broker
-delivery is acknowledged. An item-scoped refusal is written before the
-delivery is rejected without requeue, so the configured durable DLX and DLQ
-receive it. Pending, stopped, crashed, and held deliveries remain unsettled and
-requeue when their channel closes. A held message can therefore remain at the
-head of a queue and delay later messages; use operational queue partitioning
-where head blocking is unacceptable. The job stores identity, digest, state,
-and destination references only, never message payloads or broker credentials.
-Settlement uses the poll operation's finite deadline. A timeout is uncertain,
-keeps source position safe, and reconnects on a later bounded read; the host
-does not leave Lapin's detached automatic-recovery loop running.
-
-This source uses AMQP `basic.get`, which is not governed by broker prefetch.
-`maximumOutstandingDeliveries` is a local semaphore bound over unsettled
-deliveries. Lapin has already assembled a body before the job can apply its
-retained-message ceiling, so every authenticated institutional broker must set
-RabbitMQ's hard `max_message_size` no higher than the deployment ceiling. This
-client does not claim to attest that broker setting. Queue `--dry-run` refuses
-before broker acquisition because AMQP 0-9-1 has no side-effect-free peek and
-even requeueing can consume a delivery attempt.
-
-The [`rabbitmq-source` example](examples/rabbitmq-source/README.md) shows the
-authored endpoint, strict decoder, runtime TLS and dead-letter bindings, and
-the broker-side requirement.
-
-## Resolve held job items
-
-`adapter-job status` reports aggregate `holdGuidance` by code. Use
-`adapter-job inspect` for the item-level `hold`, including the stored
-`destinationReference` when one exists, the `actionOwner`, and the static
-`nextAction`. These reports are observational: the Adapter has no generic
-unhold, retry, accept, or acknowledge mutation. A held row remains held, and
-an unchanged held item is skipped by ordinary passes and rescans. Resolve a
-BReg outcome in BReg, or a Coordinator Run and linked review in their owning
-products.
-
-`adapter.job.revised-item` holds an item the destination may already have
-admitted under its key: a source edit after a hand-off that was accepted or
-whose answer was lost, or a `rescan` of an item refused on the retry of a lost
-answer. A Coordinator job that names a receiver for revisions sends such an
-item there as a `revised` event instead of holding it. Once that revised event
-may have been admitted (its answer was lost and its retry refused), a `rescan`
-sends it only to the same receiver with the same body; a changed receiver or
-body stops the pass as `adapter.job.coordinator-receiver-changed` or
-`adapter.job.coordinator-body-changed` before any request. Removing that receiver
-holds every such item, including one whose revised event was sent and whose
-answer was lost; restoring the receiver does not resend a held item, so check
-Coordinator for that Run before you resolve the hold.
-
-This hold is conservative. A refusal of the retry cannot show that the first
-attempt had no effect, so an item whose first attempt never reached the
-destination is held the same way: for example, a BReg request that timed out
-before it arrived, then a retry refused for invalid data. On a direct BReg
-job, or a Coordinator job without a receiver for revisions, correcting that
-item's source record does not deliver it, and no Adapter command releases
-the hold. Confirm under the destination's own authority that the first
-attempt left no effect, then make the registration there, outside the job.
-
-A refusal the destination answered is stored as
-`adapter.job.breg.<word>` or `adapter.job.coordinator.<word>`, where `<word>`
-is the destination's own refusal word. The prefix says which product to ask;
-the word is the one its documentation uses.
-
-For `adapter.job.rabbitmq-event-changed`, first establish any possible
-destination outcome. The broker operator then resolves the old unsettled
-delivery under approved broker policy. Only after that does the source
-operator correct immutable-identity and version handling for legitimate
-later messages. Publishing a new message ID does not clear the old held row or
-acknowledge its delivery; that delivery can continue to block the queue head.
-
-A pass that stops as `adapter.job.projection-flat-dotted-name` read a row
-whose flat member is named like a dotted `projection.fields` entry, such as a
-CSV column headed `household.size`. A dotted field reads a nested object, so
-the projection would hand the destination a `null`; the pass stops before
-staging the page instead, and nothing on it is delivered. Group the columns
-into a nested object in the route (a `setBody` that builds
-`{"household": {"size": ...}}`), or read a source that delivers the nested
-object, then run the job again.
-
-A pass that stops as `adapter.job.identity-migration-required` found stored
-file or SFTP items that predate the job's item-identity binding (store
-schema 103), including a legacy raw decoder whose authored semantics did not
-change. This is a stop, not a held item. HTTP and PostgreSQL jobs do not
-receive it. Confirm the job definition is the one you intend to run, stop any
-running pass or loop, then run
-`adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>`
-once. It records the job's current identity and keeps the stored items and
-cursor, so the next pass reads source rows as new and may deliver them
-again. The rebind refuses only while a pass holds the job lease; it does not
-check for held items or items marked as possibly admitted (`admittedBefore`
-in `inspect`), so settle those under the destination's own authority before
-you rebind. The host never infers identity from stored keys, rewrites rows, or
-resets the cursor automatically. To keep the old identity instead, restore the
-previous job definition. `pass --dry-run` shows the same stop before reading a
-page. The [Kobo job operations guide](examples/kobotoolbox-job/OPERATIONS.md)
-describes the receipt and the audit line. The job store keeps no audit row for
-the rebind; the stderr line and the stdout receipt are the record, so keep both
-in your log pipeline.
-
-A pass that stops with `adapter.job.page-bytes-bound` built a page larger than
-`profile.maximumPageBytes`. The cursor does not move, so every later pass
-stops at the same place until you change the profile. Lower
-`profile.read.maximumRowsPerPage` (or the file source's `maxMessagesPerPoll`) so
-a page fits, or raise `profile.maximumPageBytes`, which cannot exceed
-`profile.maximumResponseBytes`. Then run the job again.
-
-`profile.maximumPageBytes` is checked after a page is built, not while it is
-built: a file or PostgreSQL source reads up to `maximumRowsPerPage` rows
-before the check runs, so a page can be larger than the bound in memory before
-the pass stops. The real memory ceiling is therefore
-`maximumRowsPerPage * maximumRowBytes`; size those two members, not only
-`maximumPageBytes`, to the memory you can spare. The stop report prints the
-same fix as its `next` step.
 
 ## Check the product
 
@@ -426,8 +220,8 @@ python3 products/adapter/scripts/test-connector-native.py --suite job-destinatio
 
 This is native fixture evidence for destination admission, recovery, and
 changed-item holds. It is not a controlled Kobo, review-provider, and
-application deployment drill; `CONCEPT.md` section 17.7 states that a named
-test is not a claim that a controlled deployment has passed.
+application deployment drill, and a named test is not a claim that a
+controlled deployment has passed.
 
 To check one project by hand:
 

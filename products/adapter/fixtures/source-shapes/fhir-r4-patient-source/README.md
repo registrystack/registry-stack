@@ -50,7 +50,7 @@ server's `GET /Patient?identifier=<system>|` searchset:
 ## Recorded gaps
 
 These were recorded against the authoring model when the shape was written;
-the pack's comments and scripts point here. `CONCEPT.md` holds the current
+the pack's comments and scripts point here. The [Adapter configuration page](https://docs.registrystack.org/configure/adapter/) holds the current
 contract for each construct.
 
 1. **Retained HAPI-specific continuation.** The current grammar can follow

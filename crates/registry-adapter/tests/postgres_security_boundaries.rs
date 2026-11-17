@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Served security negatives from `products/adapter/CONCEPT.md` section
-//! 13.7. Every case crosses the real facade router and a disposable
+//! Served security negatives. Every case crosses the real facade router and a disposable
 //! PostgreSQL journal; the source remains a loopback synthetic double.
 #![cfg(feature = "postgres-test")]
 

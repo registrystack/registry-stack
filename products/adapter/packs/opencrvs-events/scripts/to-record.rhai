@@ -2,8 +2,8 @@
 // facade's response envelope wraps.
 //
 // The engine evaluates the route's final setBody expression on the
-// exchange (CONCEPT 8.11.3), whose body is the search reply the route has
-// already proven to hold exactly one matching registered event
+// exchange, whose body is the search reply the route has already proven
+// to hold exactly one matching registered event
 // (scripts/get-outcome.rhai). The record maps `recordIdentifier` from the
 // tracking ID and `domainData` from the event index members the bound
 // project declares: event_id, tracking_id, status, event_type, and

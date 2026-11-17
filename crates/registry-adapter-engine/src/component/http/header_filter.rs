@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The endpoint's two header allowlists, Camel's `HeaderFilterStrategy`
-//! in both directions (`products/adapter/CONCEPT.md` section 8.11.4).
+//! in both directions.
 //!
 //! A [`HeaderFilter`] is built once per endpoint from its
 //! `requestHeaders` and `responseHeaders` and its authentication's
 //! api-key header name. Construction refuses every name that may never
 //! cross the boundary, so a filter that exists cannot emit one: the
-//! runtime never assumes `adapterctl check` ran (section 5.5) and
+//! runtime never assumes `adapterctl check` ran and
 //! repeats each rule `check` enforces.
 //!
 //! - [`HeaderFilter::outbound`] selects the exchange headers sent
@@ -24,10 +24,10 @@
 //!
 //! # Credentials
 //!
-//! Credentials are injected after this filter (section 10.2). The
+//! Credentials are injected after this filter. The
 //! filtered request set, [`OutboundHeaders`], carries only allowlisted
-//! names, and the allowlist structurally excludes every reserved name of
-//! section 8.11.4 (`Authorization`, `Proxy-*`, `Cookie`, `Host`, the
+//! names, and the allowlist structurally excludes every reserved name
+//! (`Authorization`, `Proxy-*`, `Cookie`, `Host`, the
 //! framing and hop-by-hop headers) and the endpoint's own api-key
 //! header. The type has no public constructor and no mutation, so the
 //! credential an injector appends is never already present and no
@@ -82,7 +82,7 @@ pub enum AllowlistError {
         /// The position in the list.
         index: usize,
     },
-    /// The name is never allowlistable (section 8.11.4).
+    /// The name is never allowlistable.
     Reserved {
         /// The list.
         side: HeaderSide,
@@ -111,7 +111,7 @@ pub enum AllowlistError {
         /// The position in `responseHeaders`.
         index: usize,
     },
-    /// A facade input name of section 8.11.1, refused in
+    /// A facade input name, refused in
     /// `responseHeaders`: an upstream value never stands in for a
     /// validated caller input. The request side may list a facade input,
     /// which sends the caller's own value upstream.
@@ -181,7 +181,7 @@ impl std::error::Error for AllowlistError {}
 ///
 /// A value that would split, truncate, or be reinterpreted on the wire
 /// is a breach of the egress boundary, not a condition a route recovers
-/// from, so no clause may handle it (section 8.7).
+/// from, so no clause may handle it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutboundHeaderError {
     /// The value of the listed header at `index` is not a strict field
@@ -325,7 +325,7 @@ impl HeaderFilter {
     /// # Errors
     ///
     /// In either list, a name that is not an RFC 9110 token, a reserved
-    /// name of section 8.11.4, the api-key header name, a repeat of an
+    /// name, the api-key header name, a repeat of an
     /// earlier entry compared without case, or more than
     /// `MAX_DESTINATION_REQUEST_HEADERS` entries; in `responseHeaders`,
     /// also a `Camel*` engine header name and a facade input name; and

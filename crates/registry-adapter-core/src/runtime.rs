@@ -2,8 +2,7 @@
 
 //! The operator runtime configuration (`AdapterRuntimeConfig`) and the
 //! endpoint bindings (`AdapterEndpointBindings`) every mode shares, the
-//! environment bindings of one deployment (`products/adapter/CONCEPT.md`
-//! sections 6, 10.2, 12, and 17): endpoint base URLs and TLS, credential
+//! environment bindings of one deployment: endpoint base URLs and TLS, credential
 //! secret references, and the private-CIDR allowlist. The facade's
 //! configuration carries those bindings beside its own members (secret
 //! providers, listener, database, OIDC issuer, admitted clients, audit,
@@ -95,7 +94,7 @@ impl schemars::JsonSchema for Cidr {
 
 /// The environment binding of one pack endpoint: its base URL, its
 /// credentials matching the endpoint's declared kind, and the optional TLS
-/// additions (`products/adapter/CONCEPT.md` section 10.2).
+/// additions.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -252,7 +251,7 @@ impl registry_platform_yaml::Identified for EndpointBinding {
 }
 
 /// The private certificate authorities endpoints may trust beside the
-/// system roots (`products/adapter/CONCEPT.md` section 10.2), in the shape
+/// system roots, in the shape
 /// Evidence ships: a named profile is a process-local PEM file. A CA
 /// bundle is not a secret, so the profile names a file, never a secret
 /// reference.
@@ -288,8 +287,7 @@ pub const ADAPTER_REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
                   caBundleFile is the absolute path of the bundle file.",
 }];
 
-/// The audit journal's retention (`products/adapter/CONCEPT.md` section
-/// 11), bounded by the platform access-log window.
+/// The audit journal's retention, bounded by the platform access-log window.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -298,8 +296,7 @@ pub struct AuditRetention {
     pub retention_days: registry_platform_yaml::BoundedU32<1, 3_650>,
 }
 
-/// Exact write-response custody in the idempotency store
-/// (`products/adapter/CONCEPT.md` section 9).
+/// Exact write-response custody in the idempotency store.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -310,7 +307,7 @@ pub struct IdempotencyRetention {
 }
 
 /// The endpoint bindings of one deployment: the runtime members every
-/// mode shares (`products/adapter/CONCEPT.md` sections 10.2 and 17).
+/// mode shares.
 /// The ingestion job's runtime document (`AdapterJobRuntimeConfig`)
 /// states these members beside its own `sources`, `store`,
 /// `destinations`, `secretProviders`, and `hookIngress` members; the
@@ -369,7 +366,7 @@ pub struct AdapterRuntimeConfig {
     /// The PostgreSQL connections, from the platform shared block.
     pub database: DatabaseConfig,
     /// The OIDC issuer that authenticates facade callers, from the
-    /// platform shared block (`products/adapter/CONCEPT.md` section 6).
+    /// platform shared block.
     pub oidc: OidcIssuerConfig,
     /// The OAuth clients whose access tokens the facade admits, matched
     /// against the token's client claim. At least one: a list that admits
@@ -915,8 +912,7 @@ mod tests {
 
     /// A runtime document with the endpoint bindings alone reads: no
     /// listener, database, OIDC issuer, admitted clients, audit,
-    /// idempotency, or cursor custody is stated (`products/adapter/`
-    /// `CONCEPT.md` section 17).
+    /// idempotency, or cursor custody is stated.
     #[test]
     fn endpoint_bindings_read_a_document_without_facade_members() {
         let json = format!(

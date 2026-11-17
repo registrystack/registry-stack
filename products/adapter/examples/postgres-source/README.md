@@ -29,8 +29,8 @@ and holds a changed projection for review after a possible or acknowledged effec
 `registered_on` column is selected but not in the job projection, so it never
 reaches BReg.
 
-Column types map as the type table in
-[`CAMEL-INGESTION-PORTS.md`](../../CAMEL-INGESTION-PORTS.md) says: text, the
+Column types map as
+[Ingestion job sources](https://docs.registrystack.org/configure/adapter-ingestion-jobs/#column-types) says: text, the
 integer and float types, `bool`, `numeric`, `date`, `timestamp`, `timestamptz`,
 `uuid`, bounded `jsonb` and `NULL`. Cast anything else in the view. This example
 exposes the key as text. Native `uuid` also works as a scalar key.

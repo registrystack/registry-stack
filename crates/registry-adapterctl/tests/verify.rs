@@ -2,8 +2,7 @@
 
 //! Integration tests for `adapterctl verify --live`: the command dials
 //! the loopback double with one constant-determined send per binding and
-//! judges the answer against the send's declared range
-//! (`products/adapter/CONCEPT.md` section 13.3).
+//! judges the answer against the send's declared range.
 //!
 //! The double is a real TCP server on `127.0.0.1:0` speaking HTTP/1.1
 //! with `Connection: close`, one request per connection, in the shape of

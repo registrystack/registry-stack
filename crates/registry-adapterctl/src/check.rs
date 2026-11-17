@@ -3,8 +3,7 @@
 //! `adapterctl check`: the offline authoring check over one adapter
 //! project, the profile and pack it pins, its fixture suites, and with
 //! `--runtime` the operator runtime configuration too, whose `${NAME}`
-//! expressions `--environment` fills from the process environment
-//! (`products/adapter/CONCEPT.md` sections 6, 8.1, and 13.3).
+//! expressions `--environment` fills from the process environment.
 //!
 //! The command reads every file, verifies the digest pins of the pack's
 //! script and query-file inventory and the project's script and schema
@@ -1108,7 +1107,7 @@ pub(crate) fn verify_entrypoints(
         ) {
             Ok(ast) => {
                 // The exchange slots pass one read-only exchange map, and
-                // the ABI names its parameter (CONCEPT 8.11.3); the
+                // the ABI names its parameter; the
                 // aggregation slots are positional and name nothing.
                 if site.role.arity() == 1
                     && entrypoint_parameters(&ast, &site.entrypoint) != ["exchange"]
@@ -1333,7 +1332,7 @@ fn entrypoint_parameter_finding(pack_path: &Path, site: &ScriptSite) -> Diagnost
         CheckCode::PackEntrypointParameter,
         &site.path,
         "the entrypoint's parameter is not the exchange the slot passes",
-        "Name the entrypoint's one parameter exchange: the slot passes one read-only exchange map carrying the body, the headers, and the properties (CONCEPT section 8.11.3).",
+        "Name the entrypoint's one parameter exchange: the slot passes one read-only exchange map carrying the body, the headers, and the properties.",
     );
     diagnostic.source = Some(registry_platform_yaml::Source {
         file: format!("{} ({})", pack_path.display(), site.file),
@@ -1397,7 +1396,7 @@ pub(crate) fn uses_built_in_govstack(project: &registry_adapter_core::AdapterPro
 /// Check every fixture entry's expected facade response body against the
 /// schema its expected status selects: the operation's derived result
 /// schema for a 2xx status, the profile's derived problem envelope for any
-/// other (CONCEPT 6). A problem expectation carries no body: its class and
+/// other. A problem expectation carries no body: its class and
 /// code resolve in the core fixture checks. Core owns the derivation and
 /// the check; a derivation fault is already reported by the workspace
 /// check, so an entry whose schema cannot derive checks no body here.

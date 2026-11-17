@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The destination seam (`products/adapter/CONCEPT.md` section 17.3):
+//! The destination seam:
 //! the one hand-off point
 //! every destination plugs into. A destination receives only the job
 //! identity and the item's deliverable, which carries the declared

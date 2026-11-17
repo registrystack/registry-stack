@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `doTry`, `doCatch`, and `doFinally` processors, a bounded port of
-//! Camel (`products/adapter/CONCEPT.md` section 8.7, `doTry-eip.adoc`,
+//! Camel (`doTry-eip.adoc`,
 //! `TryProcessor`). A `doCatch` narrows with `onWhen`, and no clause may
 //! name an uncatchable class: when an uncatchable class is in the
 //! error's cause chain, no clause fires at all, whatever the other
@@ -16,7 +16,7 @@ use crate::route::{Flow, RouteFailure, Run};
 pub(crate) async fn run(run: &mut Run<'_, '_>, step: &DoTryStep) -> Result<Flow, RouteFailure> {
     // The try body runs through run_steps, so the route's clauses and
     // redelivery never reach it: inside a doTry block the route error
-    // handler is not in use (section 8.7). A `to: direct:` inside keeps
+    // handler is not in use. A `to: direct:` inside keeps
     // its own handling, as in Camel.
     let (mut outcome, mut suppressed) = match run.run_steps(&step.steps).await {
         Ok(flow) => (Ok(flow), Vec::new()),
@@ -72,7 +72,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &DoTryStep) -> Result<Flow,
         }
     }
     // The failure record keeps a suppressed class beside the winning
-    // one; the exchange carries no cause chain (section 8.7).
+    // one; the exchange carries no cause chain.
     for failure in suppressed {
         run.record(
             "exchangeFailureSuppressed",
@@ -104,7 +104,7 @@ async fn catch(
             continue;
         }
         // An onWhen that raises fails the exchange with that error, the
-        // original kept as suppressed (section 8.7).
+        // original kept as suppressed.
         if let Some(condition) = &catch.on_when {
             if !run.predicate(condition)? {
                 continue;

@@ -1,4 +1,4 @@
--- The Adapter audit journal (products/adapter/CONCEPT.md section 11):
+-- The Adapter audit journal:
 -- Camel's event notifier as a synchronous, value-free PostgreSQL journal
 -- written before the response is sent. One row per event; it records no
 -- bodies: no request payloads, no response payloads, no field values, no

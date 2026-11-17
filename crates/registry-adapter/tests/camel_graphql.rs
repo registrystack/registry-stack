@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `graphql` conformance suite, port-table row 12
-//! (`products/adapter/CONCEPT.md` section 8.8): one endpoint carries one
+//! The `graphql` conformance suite, port-table row 12: one endpoint carries one
 //! digest-pinned query file, one operation name, and one variables
 //! expression; a send posts the query text with the operation name and
 //! the evaluated variables over the same transport as `http`, the
@@ -214,7 +213,7 @@ fn sending_method(outcome: &RouteOutcome) -> &str {
 #[tokio::test]
 async fn a_send_posts_the_pinned_query_with_its_operation_and_variables() {
     // The endpoint declares its own variables; the send's body member
-    // overrides them for that send (section 8.8).
+    // overrides them for that send.
     let lane = Lane::over(
         json!([{"to": {
             "uri": "graphql:cases",
@@ -279,7 +278,7 @@ async fn the_endpoints_variables_expression_answers_when_the_send_carries_no_bod
 async fn an_errors_array_fails_the_exchange_as_upstream_http() {
     // The failure carries the declared detail only, never the source's
     // error text; the raw reply keeps its body on the exchange for a
-    // clause to read (section 8.8).
+    // clause to read.
     let lane = Lane::over(
         json!([
             {"onException": {
@@ -324,7 +323,7 @@ async fn an_errors_array_fails_the_exchange_as_upstream_http() {
 #[tokio::test]
 async fn partial_data_with_errors_still_fails_the_exchange() {
     // Camel leaves the partial data in the body; here the exchange fails
-    // and the reply stays whole on the exchange (section 8.8).
+    // and the reply stays whole on the exchange.
     let lane = Lane::over(
         json!([
             {"onException": {
@@ -396,7 +395,7 @@ async fn a_graphql_send_naming_an_operation_outside_the_pinned_endpoint_is_refus
 
 /// The graphql shape carries `operation` and `body` only: no address
 /// members, no method of its own, no status range of its own, and no
-/// resume bindings this runtime serves (section 8.8).
+/// resume bindings this runtime serves.
 #[test]
 fn the_graphql_send_shape_carries_operation_and_body_only() {
     for member in [

@@ -10,7 +10,6 @@ cd "$repo_root"
 source "$repo_root/products/adapter/scripts/contract-lane-cache.sh"
 python3 -m unittest discover -s products/adapter/scripts -p 'test_contract_lane_cache.py'
 python3 -m unittest discover -s products/adapter/scripts -p 'test_effective_contract_example.py'
-node --test "$repo_root"/products/adapter/examples/govstack-wg-demo/test_*.mjs
 
 # The dependency-direction gate runs first, before any cargo build: its
 # unittest, then the check against the resolved graph and the engine
@@ -47,7 +46,7 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-connectors
 # default adapterctl binary used by the product checks remains the production
 # build; the PostgreSQL gate builds its own feature binary serially later.
 PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapterctl --locked --features tls-test --test verify
-# The governed-ingestion job sources (CONCEPT 17): each default-off
+# The governed-ingestion job sources (ingestion jobs): each default-off
 # feature gate holds its own clippy and test lane, so a gate can never
 # rot behind the default build. The first lane builds registry-adapter and
 # registry-adapter-engine on their own: the combined run above links
@@ -104,10 +103,12 @@ PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapterctl -- schem
 products/adapter/scripts/generate-effective-contract-example.sh --check
 uv run --no-project --with PyYAML==6.0.2 python products/platform/scripts/check-config-conventions.py
 
-# The Camel port table (CONCEPT.md 8.10) is held to the code: every
+# The Camel port table (camel-port-table.yaml) is held to the code: every
 # delivered row maps to named core tests and every accepted key has a row;
-# later-increment rows report pending and never fail.
-python3 products/adapter/scripts/check-port-table.py
+# later-increment rows report pending and never fail. The checker's own tests
+# run first so a broken checker cannot pass the table.
+uv run --no-project --with PyYAML==6.0.2 python -m unittest discover -s products/adapter/scripts -p 'test_check_port_table.py'
+uv run --no-project --with PyYAML==6.0.2 python products/adapter/scripts/check-port-table.py
 
 # The example and corpus checks run the real adapterctl binary. It comes
 # from, most explicit first:

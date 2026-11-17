@@ -5,8 +5,7 @@
 //! terminated loopback certificate acquires its bearer credential and
 //! sends its data through the same configured CA bundle, fail-closed,
 //! and a deployment trusting a different CA never completes a
-//! handshake on either path (`products/adapter/CONCEPT.md` section
-//! 10.2).
+//! handshake on either path.
 //!
 //! This suite needs the platform's pinned-loopback HTTPS test profile,
 //! which only the postgres-test feature enables; a plain cargo test run

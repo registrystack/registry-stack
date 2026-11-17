@@ -1,11 +1,12 @@
 // The item page the kobo-submissions route returns: the F5 item
-// contract of CONCEPT 17.2, `{items: [{key, revision, value}], next}`.
+// contract of governed ingestion, `{items: [{key, revision, value}],
+// next}`.
 //
 // The engine evaluates the route's final setBody expression on the
-// exchange (CONCEPT 8.11.3). By then the route's split has turned the
-// reply's `results` into the items of scripts/shape-item.rhai, in
-// reply order; the reply's own `next` URL was never read, so the
-// cursor stays the pack's own `{afterId}` object and paging remains
+// exchange. By then the route's split has turned the reply's
+// `results` into the items of scripts/shape-item.rhai, in reply
+// order; the reply's own `next` URL was never read, so the cursor
+// stays the pack's own `{afterId}` object and paging remains
 // origin-pinned by construction.
 //
 // Read order: the route asks for `sort={"_id":1}` and, past the first

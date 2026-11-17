@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Actual-HTTP fault and pagination transcripts from `CONCEPT.md` section
-//! 13.4. The loopback double speaks TCP, so these exercise the transport and
+//! Actual-HTTP fault and pagination transcripts. The loopback double speaks TCP, so these exercise the transport and
 //! route interpreter together rather than substituting a send function.
 
 #[path = "support/upstream/mod.rs"]

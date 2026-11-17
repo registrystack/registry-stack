@@ -34,5 +34,5 @@ routeTemplates:
             entrypoint: shape
 scripts:
   - path: scripts/case-api.rhai
-    digest: sha256:d80914a831d9ced4c58164fd35eeb47a759a1e5f95456657245949297149d316
+    digest: sha256:bf025ac15ddafa085f2974ed7eeb52680dcfed471e4d73719c262854c1aae130
 capabilities: {}

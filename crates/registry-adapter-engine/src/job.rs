@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The governed-ingestion job compiler and page entry
-//! (`products/adapter/CONCEPT.md` sections 17.1 and 17.2).
+//! The governed-ingestion job compiler and page entry.
 //!
 //! A job pairs one pack source route with an explicit, bounded profile.
 //! [`compile_job`] loads the pack, the `AdapterJob` definition, the

@@ -14,7 +14,7 @@ const STALE: &str = "sha256:0000000000000000000000000000000000000000000000000000
 const SHIPPED_MAPPING_PIN: &str =
     "sha256:6b7f1cbbccd57459e15f5ece6282b3ca96946f0525759adcf6acbcc925496da6";
 const SHIPPED_PACK_PIN: &str =
-    "sha256:77544faac4b11ba7d728d011ae243a49c01817eb9700337538b2a9ba54bd5a46";
+    "sha256:eac80ff68c6ae0f69e3c76175689250c957bef580c14d36546835de17a594fc8";
 
 fn products() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter")

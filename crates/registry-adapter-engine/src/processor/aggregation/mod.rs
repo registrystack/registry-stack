@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Aggregation strategies for `split` and `enrich`, compiled in and
-//! named after Camel's built-ins (`products/adapter/CONCEPT.md`
-//! section 8.6): `useLatest`, `useOriginal`, and `groupedBody`, plus
+//! named after Camel's built-ins: `useLatest`, `useOriginal`, and `groupedBody`, plus
 //! the two JSON-body additions marked as such: `jsonArrayAppend`
 //! (`from`, `into`, `uniqueBy`; a duplicate `uniqueBy` value raises
 //! `aggregation.duplicate`, so duplicate and shifting pages fail the
@@ -13,13 +12,12 @@
 //! Camel's custom `AggregationStrategy` bean in the port's form:
 //! `fn(old, new)` on `split`, with `old` as `()` on the first call, and
 //! `fn(original, resource)` on `enrich`, returning
-//! `#{ body, properties }` (section 8.11.3).
+//! `#{ body, properties }`.
 //!
 //! The strategies merge bodies; the JSON additions also carry the named
 //! `properties` out of the reply, each a singular `jsonpath` on the
 //! reply body, with an absent selection removing the property, which is
-//! how a pagination loop's cursor ends absent on the last page
-//! (section 8.11.7).
+//! how a pagination loop's cursor ends absent on the last page.
 
 use registry_adapter_core::{is_route_unwritable_property_name, AggregationStrategy, ErrorClass};
 use serde_json::{Map, Value};

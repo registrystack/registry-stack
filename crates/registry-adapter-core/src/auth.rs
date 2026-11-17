@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Upstream authentication: the six closed kinds of
-//! `products/adapter/CONCEPT.md` section 10.2.
+//! Upstream authentication: the six closed kinds.
 //!
 //! The kind and spelling are copied from `SourceAuthentication` in
 //! `crates/registry-evidence/src/config.rs`, so an operator who configured
@@ -32,8 +31,7 @@ pub enum CredentialPlacement {
     FormBody,
 }
 
-/// The authentication kind a pack endpoint declares
-/// (`products/adapter/CONCEPT.md` section 10.2): the kind tag itself, plus
+/// The authentication kind a pack endpoint declares: the kind tag itself, plus
 /// only the API-intrinsic parameters (`headerName` for `static-api-key`,
 /// `scheme` for `static-authorization`). Every credential value lives in
 /// the runtime config, in [`RuntimeCredential`].
@@ -106,8 +104,7 @@ impl EndpointAuthentication {
     }
 }
 
-/// The credential binding of one endpoint in the runtime config
-/// (`products/adapter/CONCEPT.md` section 10.2): Evidence's
+/// The credential binding of one endpoint in the runtime config: Evidence's
 /// `SourceAuthentication` variant field for field, minus the pack-side
 /// `headerName` and `scheme`. The kind must match the endpoint's declared
 /// kind; the checks refuse a mismatch.
@@ -299,7 +296,7 @@ impl RuntimeCredential {
 }
 
 /// The mTLS client identity of an endpoint, orthogonal to the
-/// authentication kind (`products/adapter/CONCEPT.md` section 10.2). It is
+/// authentication kind. It is
 /// one way a `none` endpoint reaches a non-loopback source. An operator may
 /// instead acknowledge a credential-free HTTPS source on its fixed runtime
 /// binding.
@@ -411,8 +408,7 @@ fn valid_port(value: &str) -> bool {
 
 /// Header names the engine owns; a `static-api-key` endpoint may not
 /// declare one of them as its `headerName`: the names never
-/// allowlistable on the wire (`products/adapter/CONCEPT.md` section
-/// 8.11.4), plus `expect` the engine writes itself. Sorted for the
+/// allowlistable on the wire, plus `expect` the engine writes itself. Sorted for the
 /// membership test; the hop-by-hop `Proxy-*` headers are matched by
 /// prefix.
 pub const RESERVED_HEADER_NAMES: &[&str] = &[

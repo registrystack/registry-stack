@@ -4,7 +4,7 @@
 //! authenticates the bearer token, resolves the caller to an access profile
 //! that admits the operation and record type, runs the binding's route over
 //! a fresh exchange, journals before answering, and renders the profile's
-//! envelope or problem (`products/adapter/CONCEPT.md` sections 6 to 8).
+//! envelope or problem.
 //!
 //! The caller's token never reaches the exchange: the route sees only the
 //! record type, the record id, the page cursor and the page size the call

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `file` source and the job `pollEnrich` read
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 17.2), over a real
+//! The `file` source and the job `pollEnrich` read, over a real
 //! scratch directory: selection, the done-file forms, the changed read
 //! lock, the noop divergence, security refusals, and paging across a
 //! multi-page file and across files. The ported cases adapt

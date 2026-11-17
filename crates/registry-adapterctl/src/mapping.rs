@@ -2,7 +2,7 @@
 
 //! `adapterctl mapping`: check an `AdapterMapping` model against the target
 //! schema it names, generate the Rhai script it describes, and preview that
-//! script over sample inputs, all offline (`products/adapter/VISUAL-MAPPING.md`).
+//! script over sample inputs, all offline (<https://docs.registrystack.org/configure/adapter/#field-mapping>).
 //!
 //! The model is the reviewed source of truth; the generated script is the
 //! pinned artifact the sandboxed engine runs. `generate` writes the script

@@ -148,7 +148,7 @@ async fn a_direct_call_inside_an_exception_clause_does_not_activate_callee_handl
 }
 
 /// A breaker fallback may consume an ordinary guarded failure, but it cannot
-/// turn an uncatchable boundary error into success (sections 5.5 and 8.7).
+/// turn an uncatchable boundary error into success.
 #[tokio::test]
 async fn a_breaker_fallback_propagates_an_uncatchable_failure() {
     let outcome = run_empty(
@@ -176,7 +176,7 @@ async fn a_breaker_fallback_propagates_an_uncatchable_failure() {
 }
 
 /// `aggregateOnException` admits ordinary resource failures to the strategy,
-/// never uncatchable boundary failures (sections 5.5 and 8.7).
+/// never uncatchable boundary failures.
 #[tokio::test]
 async fn enrich_cannot_aggregate_an_uncatchable_resource_failure() {
     let outcome = run_empty(

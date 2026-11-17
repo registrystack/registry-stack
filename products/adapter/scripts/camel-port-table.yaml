@@ -1,0 +1,238 @@
+# The Camel port table: one row per ported Camel concept (concept, reference, form, divergence, inc).
+# check-port-table.py holds this table to the code.
+rows:
+- concept: Exchange, MEP
+  reference: '`manual/exchange.html`, `manual/exchange-pattern.html`'
+  form: '`exchange` module; InOut only'
+  divergence: InOnly not ported
+  inc: 1
+- concept: Message
+  reference: '`manual/message.html`'
+  form: Bounded case-insensitive headers, JSON body
+  divergence: Components marshal JSON themselves
+  inc: 1
+- concept: HeaderFilterStrategy
+  reference: '`components/next/http-component.html` (its headerFilterStrategy option; the former manual page is gone)'
+  form: '`responseHeaders` and `requestHeaders` allowlists per endpoint'
+  divergence: Allowlists, not denylists; credential, cookie, host, and hop-by-hop headers can never be allowlisted
+  inc: 1
+- concept: Route, YAML DSL
+  reference: '`manual/routes.html`, `components/next/others/yaml-dsl.html`'
+  form: '`routes` in packs, externally tagged steps'
+  divergence: '`direct:` `from` only; acyclic; bounded depth'
+  inc: 0
+- concept: Route template, templatedRoute
+  reference: '`manual/route-template.html`'
+  form: '`routeTemplates` in packs, `templatedRoutes` in projects'
+  divergence: Typed parameters; no `from` in templates
+  inc: 0
+- concept: Kamelet catalog
+  reference: '`camel-kamelets/next/index.html`'
+  form: The pack as a reviewed catalog of templates
+  divergence: Not Kubernetes resources; digest-pinned
+  inc: 0
+- concept: Property placeholders
+  reference: '`manual/using-propertyplaceholder.html`'
+  form: '`{{name}}`, `{{?name}}` for template parameters only'
+  divergence: No environment placeholders in authored files
+  inc: 0
+- concept: REST DSL contract-first
+  reference: '`manual/rest-dsl-openapi.html`, `manual/rest-dsl.html`'
+  form: '`rest` consumer over the generated OpenAPI; facade inputs on the exchange under closed names'
+  divergence: Validation always on; `missingOperation` fail only; profile-neutral input names, not the caller's parameter names; caller headers never enter
+  inc: 1
+- concept: '`direct`'
+  reference: '`components/next/direct-component.html`'
+  form: '`direct:<routeId>`, sharing the exchange'
+  divergence: 'Depth bound; no redelivery of a `to: direct:` send'
+  inc: 1
+- concept: '`http`'
+  reference: '`components/next/http-component.html`'
+  form: '`http:<endpointId>` on `FixedDestinationPolicy`; `httpUri` for an origin-pinned link'
+  divergence: Structured, engine-encoded path and query; `httpUri` pinned to the endpoint origin and base path; no redirects
+  inc: 1
+- concept: HTTP authentication
+  reference: '`components/next/http-component.html` (authentication options)'
+  form: '`authentication` on the pack endpoint, credentials bound in the runtime config'
+  divergence: Closed kinds; secret references only; the token endpoint is a fixed destination too; `basic` is sent preemptively, with no challenge round trip; no NTLM, no Digest, no query-placed keys
+  inc: 1
+- concept: '`graphql`'
+  reference: '`components/next/graphql-component.html`'
+  form: '`graphql:<endpointId>`'
+  divergence: Query from a pinned file only; `errors` fail the exchange; a mutation is non-safe
+  inc: 3
+- concept: Languages
+  reference: '`components/next/languages/constant-language.html`, `header-language.html`, `exchangeProperty-language.html`, `jsonpath-language.html`'
+  form: '`constant`, `header`, `exchangeProperty`, `jsonpath`'
+  divergence: RFC 9535, not Jayway; singular-query result rule; header reads bounded to known headers
+  inc: 1
+- concept: Simple, bean, process
+  reference: '`components/next/languages/simple-language.html`'
+  form: '`rhai` files with the Rhai script ABI'
+  divergence: Not ported; Rhai replaces them; scripts see a read-only exchange view
+  inc: 1
+- concept: '`to`'
+  reference: '`components/next/eips/to-eip.html`'
+  form: '`to`'
+  divergence: No `toD`; `httpUri` is the only dynamic form
+  inc: 1
+- concept: '`setBody`, `transform`'
+  reference: '`components/next/eips/setBody-eip.html`, `transform-eip.html`'
+  form: Same
+  divergence: None
+  inc: 1
+- concept: '`setHeader`, `setProperty`, `removeHeader`, `removeProperty`'
+  reference: '`components/next/eips/setHeader-eip.html` and siblings'
+  form: Same
+  divergence: Header names bounded; `Camel`- and `Adapter`-prefixed engine headers and credential headers cannot be set or removed
+  inc: 1
+- concept: Throw Exception
+  reference: '`components/next/eips/throwException-eip.html`'
+  form: '`throwException` (`exceptionType` names a catchable class, `message` a constant)'
+  divergence: Closed classes, not Java types; no message expression; inside an exception clause it ends the exchange
+  inc: 1
+- concept: '`script`'
+  reference: '`components/next/eips/script-eip.html`'
+  form: Same
+  divergence: Rhai only
+  inc: 1
+- concept: Content-Based Router
+  reference: '`components/next/eips/choice-eip.html`'
+  form: '`choice`, `when`, `otherwise`'
+  divergence: Predicates must be boolean
+  inc: 1
+- concept: Message Filter
+  reference: '`components/next/eips/filter-eip.html`'
+  form: '`filter`, with `statusPropertyName`'
+  divergence: Predicates must be boolean
+  inc: 1
+- concept: '`validate`'
+  reference: '`components/next/eips/validate-eip.html`'
+  form: '`validate`'
+  divergence: None
+  inc: 1
+- concept: Provider schema validation
+  reference: None; an addition
+  form: '`validateSchema` with a reviewed, digest-pinned JSON Schema before extraction'
+  divergence: Bounded schema grammar and format validation; external resolution disabled; mismatch is an uncatchable source-protocol refusal
+  inc: 1
+- concept: SQLite extract producer
+  reference: None; an addition
+  form: '`sqlite-extract:<endpointId>` with pinned SQL, typed columns and named parameters over a host-captured extract'
+  divergence: Feature-gated, read-only and listener-free; no HTTP authority; host-owned clock and publication age; bounded rows, cells, steps, response bytes and concurrency
+  inc: 1
+- concept: '`stop`'
+  reference: '`components/next/eips/stop-eip.html`'
+  form: '`stop`'
+  divergence: None
+  inc: 1
+- concept: Splitter
+  reference: '`components/next/eips/split-eip.html`'
+  form: '`split`'
+  divergence: Mandatory `maximumItems`; no parallel or streaming; a piece whose failure the accounting counted is left out of the merged result where Camel folds it with its exception cleared; `CamelSplitResult` carries the three counts only, the per-item failures map dropped for the value-free contract
+  inc: 1
+- concept: Loop
+  reference: '`components/next/eips/loop-eip.html`'
+  form: '`loop`; `doWhile` tested before each iteration (`LoopProcessor`)'
+  divergence: Mandatory `maximumIterations`; under `copy` an error restores the exchange as it stood before the failed iteration, where Camel copies the failed iteration's own results back
+  inc: 1
+- concept: Content Enricher
+  reference: '`components/next/eips/enrich-eip.html`'
+  form: '`enrich`, the resource send on a copy of the exchange'
+  divergence: Static URI only; no `pollEnrich`; strategies merge bodies and named `properties` only
+  inc: 1
+- concept: Aggregation strategies
+  reference: '`components/next/eips/aggregate-eip.html` (strategies section)'
+  form: '`use-latest`, `use-original`, `grouped-body`, `rhai`'
+  divergence: 'Additions: `json-array-append`, `json-merge`'
+  inc: 1
+- concept: Default error handler
+  reference: '`manual/defaulterrorhandler.html`, `manual/error-handler.html`'
+  form: '`errorHandler: defaultErrorHandler`, `noErrorHandler`'
+  divergence: Dead letter is always the journal
+  inc: 1
+- concept: Redelivery policy
+  reference: '`manual/error-handler.html` (redelivery)'
+  form: The redelivery options of the error handler
+  divergence: CFG-NAME spelling; write-safety refusal; top-level `http` and `graphql` sends only, nested sends run once
+  inc: 1
+- concept: Exception clause
+  reference: '`manual/exception-clause.html` (hub) with `exception-redelivery.html`, `exception-handling-patterns.html`, `exception-advanced.html`'
+  form: '`onException`'
+  divergence: One raised class, no cause-chain walk; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile; `handled` and `continued` are booleans where Camel takes predicates
+  inc: 1
+- concept: Try, catch, finally
+  reference: '`manual/try-catch-finally.html`'
+  form: '`doTry`, `doCatch`, `doFinally`'
+  divergence: Uncatchable boundary errors bypass `doFinally`; ordinary pending failures execute it
+  inc: 1
+- concept: Circuit Breaker
+  reference: '`components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html`, `resilience4jConfiguration-eip.html`'
+  form: '`circuitBreaker`, `onFallback`, `recordException`, `ignoreException`'
+  divergence: Rejection always raises; fallback on recorded failure and rejection; ignored and non-recorded failures continue and are journaled as consumed; guarded steps and fallback run bare; options flattened, `slidingWindowCalls` for `slidingWindowSize` (CFG-NAME-4)
+  inc: 1
+- concept: Throttler
+  reference: '`components/next/eips/throttle-eip.html`'
+  form: '`throttle`'
+  divergence: Waits bounded by the deadline; its nested body runs bare from route redelivery
+  inc: 1
+- concept: Idempotent Consumer
+  reference: '`components/next/eips/idempotentConsumer-eip.html`'
+  form: '`idempotentConsumer` over the PostgreSQL store'
+  divergence: Duplicates replay the recorded response
+  inc: 2
+- concept: Type Converter
+  reference: '`manual/type-converter.html`, `components/next/eips/convertBodyTo-eip.html`, `convertHeaderTo-eip.html`'
+  form: '`convertBodyTo`, `convertHeaderTo`, `convertPropertyTo` (addition) with `type: codeMap:<id>`; Rhai `code_map`; `conversion.unmapped` on a miss'
+  divergence: Explicit tables of scalar values, no converter chains, no `charset`
+  inc: 1
+- concept: Event Notifier
+  reference: '`manual/event-notifier.html`'
+  form: The audit journal's event kinds
+  divergence: Synchronous, value-free, before the response
+  inc: 1
+- concept: '`file` (job source) `[ingestion]`'
+  reference: '`components/next/file-component.html`'
+  form: '`file:<endpointId>` read through the job-only `pollEnrich` step; `noop` strategy forced; `include`, fixed ascending filename order (no authored `sortBy` expression), `doneFileName`, `readLock` restricted to none or changed, `maxMessagesPerPoll` where they apply; each source declares completion through `doneFileName`, `readLock: changed`, or `producerAtomicHandover: true`, and one declaring none refuses'
+  divergence: 'Read-only always: `delete`, `move`, `rename`, `markerFile`, and the `fileLock` strategy are not ported (each writes or locks the source); base directory fixed in runtime configuration, traversal and symlink escape refused; a delivered file is identified by namespace plus content digest, never by name or modification time alone'
+  inc: 4
+- concept: '`sftp` (job source) `[ingestion]`'
+  reference: '`components/next/sftp-component.html`'
+  form: '`sftp:<endpointId>` through the same read step, sharing the `file` decoders'
+  divergence: Host key pinned, secret references only; complete files detected through a ready manifest or completed-name handover; interrupted transfers and replaced same-name files handled by digest identity; no source writes
+  inc: 4
+- concept: '`rabbitmq` (job source) `[ingestion]`'
+  reference: '`components/next/spring-rabbitmq-component.html`'
+  form: '`rabbitmq:<endpointId>` through the job-only read step, one manually settled message per page'
+  divergence: 'AMQPS only in production; fixed durable queue and a dead-letter exchange the host proves exist by passive declares (it declares the topology itself only under `declareTopology: true`); source acknowledgement follows the durable destination outcome, held items remain unsettled, and explicit refusals reject without requeue; local outstanding-delivery bounds because `basic.get` is not governed by consumer prefetch; broker `max_message_size` is an operator prerequisite because Lapin assembles the body before the retained-byte check'
+  inc: 4
+- concept: SQL (read-only job source) `[ingestion]`
+  reference: '`components/next/sql-component.html`'
+  form: '`postgres:<endpointId>` send with a digest-pinned `queryFile`, required stable `keyColumn`, and reviewed `parameterOrder` mapping names to native `$1`-onward positions; omit `parameterOrder` for a zero-argument query'
+  divergence: One fixed, read-only `SELECT` with root `ORDER BY` and no root `LIMIT` or `OFFSET`, paged by an engine-appended `OFFSET` bound from the cursor; exact named parameters only, bound as text, checked integers, double-precision numbers, or booleans; result columns of text, integer, float, boolean, `numeric`, `date`, `timestamp`, `timestamptz`, `uuid` and bounded `jsonb` types, or `NULL`, cross as JSON values, and any other type stops the page under `adapter.job.postgres-column-type` naming the column; read-only transaction with statement timeout, bounded fetch, and cancellation; each page uses its own read-committed statement snapshot, so ordering alone does not prevent offset drift across concurrent source edits; no user-supplied SQL; Camel's `onConsume` progress updates not ported because they write the source
+  inc: 4
+- concept: CSV data format `[ingestion]`
+  reference: '`components/next/dataformats/csv-dataformat.html`'
+  form: A decoder selected on a `file` or `sftp` endpoint, not an `unmarshal` step; option names and defaults from `CsvDataFormat`
+  divergence: 'No type inference: leading zeros, quoted multiline fields, empty versus null, oversized rows, and malformed rows are deterministic; text is UTF-8 only, with no declared encoding; a malformed or non-UTF-8 record fails the whole read closed, naming its zero-based record ordinal (header included), and the cursor does not advance, so the read stays blocked on that file until it is corrected or replaced; one read returns a bounded page whose `next` holds the file digest and position'
+  inc: 4
+- concept: JSONL decoder `[ingestion]`
+  reference: None; an addition
+  form: One bounded JSON value per line, selected on a `file` or `sftp` endpoint; the same paging contract as CSV; text is UTF-8 only
+  divergence: 'An addition, not a port: Camel has no JSONL data format; a malformed line is counted (`malformedLines` in the run report) and skipped, and the remaining lines continue; it yields no per-item outcome'
+  inc: 4
+- concept: RabbitMQ JSON decoder `[ingestion]`
+  reference: None; an addition
+  form: Exactly one bounded JSON value from one `rabbitmq` delivery, selected only by the explicit `rabbitmq-json` profile
+  divergence: No guessed payload syntax; malformed or over-field-bound JSON is rejected to the configured broker dead-letter path, and the payload never enters the item store
+  inc: 4
+- concept: '`pollEnrich` (job only) `[ingestion]`'
+  reference: '`components/next/eips/pollEnrich-eip.html`'
+  form: A job-only read step over a static URI (`file:<endpointId>`, `rabbitmq:<endpointId>`, `sftp:<endpointId>`) with a mandatory timeout
+  divergence: Refused by `check` in every facade route; no dynamic endpoint expression, no `consumerSendTo`; one bounded page per read under the job profile
+  inc: 4
+- concept: 'Testing: mock, intercept'
+  reference: '`components/next/mock-component.html`, `manual/advice-with.html`, `components/next/eips/intercept.html`'
+  form: Fixture replay intercepts `http` and `graphql` sends
+  divergence: Test harness only
+  inc: 0

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The pass, the only unit of work of the governed-ingestion job
-//! (`products/adapter/CONCEPT.md` section 17.3): one bounded page read from the saved position,
+//! The pass, the only unit of work of the governed-ingestion job: one bounded page read from the saved position,
 //! the per-item comparison against the item table, the hand-offs
 //! through the destination seam, and the saved position. The seven
 //! steps, in order:
@@ -44,8 +43,7 @@ use crate::store::{self, StagedClassification};
 use crate::trigger::JobState;
 
 /// How many consecutive item-scoped refusals with one code stop the
-/// pass, when the operator names no limit (the stop rule of
-/// `products/adapter/CONCEPT.md` section 17.3): a schema or policy change can refuse every item
+/// pass, when the operator names no limit (the stop rule): a schema or policy change can refuse every item
 /// alike, which would otherwise run the position to the end of the
 /// source.
 pub const DEFAULT_REFUSAL_LIMIT: u32 = 20;

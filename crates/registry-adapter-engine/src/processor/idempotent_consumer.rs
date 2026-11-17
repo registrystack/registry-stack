@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `idempotentConsumer` processor for served writes
-//! (`products/adapter/CONCEPT.md` section 9). The host reserves the caller,
+//! The `idempotentConsumer` processor for served writes. The host reserves the caller,
 //! operation, key, and request digest before guarded work so write-effect
 //! custody stays fail-closed. The EIP's `eager` option independently selects
 //! repository-membership timing, and `completionEager` selects block or whole

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The redelivery delay of `RedeliveryPolicy` at the pinned tag
-//! (`products/adapter/CONCEPT.md` section 8.7,
-//! `RedeliveryPolicy.calculateRedeliveryDelay`): the first delay is
+//! (`RedeliveryPolicy.calculateRedeliveryDelay`): the first delay is
 //! `retryDelaySeconds`, each later one the previous delay (times the
 //! multiplier when backing off), then the collision variance, then the
 //! `maximumRetryDelaySeconds` cap, so the cap bounds the varied delay.

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The conversion processors (`products/adapter/CONCEPT.md` section
-//! 8.6): `convertBodyTo`, `convertHeaderTo`, and `convertPropertyTo`
+//! The conversion processors: `convertBodyTo`, `convertHeaderTo`, and `convertPropertyTo`
 //! over one declared code map, Camel's type converter in the port's
 //! form. The lookup is exact and case-sensitive over a string input; a
 //! null or absent input passes through unchanged whatever `mandatory`

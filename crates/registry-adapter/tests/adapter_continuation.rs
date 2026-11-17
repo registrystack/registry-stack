@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The continuation cursor codec of `products/adapter/CONCEPT.md`
-//! section 8.11.2: a search route's `AdapterNextContinuation` value
+//! The continuation cursor codec: a search route's `AdapterNextContinuation` value
 //! sealed as the opaque `nextCursor` and opened back, bound to the
 //! concrete operation, the binding id, the caller's issuer, `sub` and
 //! acting client, the deployment, the filter digest, and an expiry. Every refusal is the one
 //! caller-facing `facade.invalid-cursor`; the reason stays
 //! distinguishable here and in the journal, and carries no cursor
-//! content (section 13.7).
+//! content.
 //!
 //! Camel has no counterpart: its REST DSL passes paging parameters
 //! through as plain headers, so no `camel-4.23.0:` rule decides a case

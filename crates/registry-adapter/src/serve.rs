@@ -734,7 +734,7 @@ pub async fn run(
         }
         if !lacking.is_empty() {
             return Err(ServeError::Configuration(format!(
-                "database: the runtime role lacks {}; grant them to the runtime role (\"Grant the runtime database role\" in the Adapter README lists every grant)",
+                "database: the runtime role lacks {}; grant them to the runtime role (https://docs.registrystack.org/operate/adapter/#grant-the-runtime-database-role lists every grant)",
                 lacking.join("; lacks "),
             )));
         }

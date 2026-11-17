@@ -2,16 +2,16 @@
 // facade's response envelope wraps.
 //
 // The engine evaluates the route's final setBody expression on the
-// exchange (CONCEPT 8.11.3), whose body is the fetched entity.
-// The record maps `recordIdentifier` from the DHIS2 UID,
-// `revisionIdentifier` from the entity's last-update stamp, and
-// `domainData` carrying the scalar tracker properties the bound project
-// declares. The `attribute_fields` route parameter is held in the
-// `dhis2AttributeMap` property as record field to DHIS2 attribute UID. Only
-// mapped attributes cross the source boundary. With the default empty map,
-// attributes stay out and the existing base record shape is unchanged.
-// An entity without its UID, or a malformed attribute row when a project
-// asks to read attributes, is refused. Pure and deterministic; no I/O.
+// exchange, whose body is the fetched entity. The record maps
+// `recordIdentifier` from the DHIS2 UID, `revisionIdentifier` from the
+// entity's last-update stamp, and `domainData` carrying the scalar tracker
+// properties the bound project declares. The `attribute_fields` route
+// parameter is held in the `dhis2AttributeMap` property as record field to
+// DHIS2 attribute UID. Only mapped attributes cross the source boundary.
+// With the default empty map, attributes stay out and the existing base
+// record shape is unchanged. An entity without its UID, or a malformed
+// attribute row when a project asks to read attributes, is refused. Pure
+// and deterministic; no I/O.
 fn to_record(exchange) {
     let entity = exchange.body;
     if entity.trackedEntity == () {

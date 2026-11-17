@@ -2,15 +2,15 @@
 
 This directory owns the Adapter product contract and the product-local
 verification scripts. Read the workspace `AGENTS.md`, this file,
-`README.md`, and `CONCEPT.md` before changing the product or any
-`registry-adapter*` crate.
+`README.md`, and the Adapter pages on the docs site before changing the
+product or any `registry-adapter*` crate.
 
-- `CONCEPT.md` is the product contract: the artifact model, the engine
-  (a bounded Rust port of Apache Camel, with its port table in section
-  8.10), writes and failure semantics, authorization,
-  audit, configuration formats, and the quality verification every gate
-  implements. On any conflict, `CONCEPT.md` wins over every other
-  document in this directory.
+- The Adapter pages on the docs site state the product contract: the artifact
+  model, the engine (a bounded Rust port of Apache Camel), writes and failure
+  semantics, authorization, audit, and configuration formats. The pages are
+  `docs/site/src/content/docs/configure/adapter.mdx`, `adapter-routes.mdx` and
+  `adapter-jobs.mdx`. The code and its tests decide where a page and the code
+  disagree; fix the page.
 
 ## Area ownership
 
@@ -20,18 +20,17 @@ verification scripts. Read the workspace `AGENTS.md`, this file,
 | `crates/registry-adapter-engine` | Bounded route engine, components, compilation and replay shared by facade, jobs and Evidence; no listener or PostgreSQL client |
 | `crates/registry-adapter` | Governed facade, caller security, audit journal and idempotency custody over the shared engine |
 | `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
-| `crates/registry-adapter-job` | The ingestion-job host and the `adapter-job` binary: the item table, the pass, interval and authenticated hook triggers, and the destination seam; it keeps identity and position only, never payloads (`CONCEPT.md` section 17) |
+| `crates/registry-adapter-job` | The ingestion-job host and the `adapter-job` binary: the item table, the pass, interval and authenticated hook triggers, and the destination seam; it keeps identity and position only, never payloads |
 | `crates/registry-adapter-connectors` | BReg connector over `registry-breg-client`, behind the job host's off-by-default `direct-breg` feature. Engine and facade cannot reach it; the dependency gate names the exact permitted path |
-| `products/adapter/` | `README.md`, `CONCEPT.md`, schemas, profiles, packs, examples, fixtures (including the source-shape fixtures and the bad-authoring corpus), and product scripts |
+| `products/adapter/` | `README.md`, schemas, profiles, packs, examples, fixtures (including the source-shape fixtures and the bad-authoring corpus), and product scripts |
 
-`CONCEPT.md` section 8.1 fixes the platform reuse: the runtime reaches
+The platform reuse is fixed: the runtime reaches
 `registry-platform-script`, `-oidc`, `-httputil`, `-ratelimit`,
 `-config`, `-yaml`, `-authcommon`, `-crypto`, and `-canonical-json`, and never another
 product's runtime, tooling, or protocol types. Product logic (routes, EIP
 processors, mapping, disclosure) never moves into a platform crate. The
 generic primitives under `throttle`, `circuitBreaker`, and redelivery live in
-`registry-platform-ratelimit` and `registry-platform-resilience`
-(`CONCEPT.md` section 8.1); the
+`registry-platform-ratelimit` and `registry-platform-resilience`; the
 processors and the redelivery loop stay in the Adapter engine. The engine is
 shared by facade, jobs and Evidence through named execution profiles. Evidence
 links only Adapter core and engine; its authorization, assertion meaning,
@@ -41,7 +40,7 @@ changes preserve each consuming product's policy and have consumer proof.
 types" is the connector crate above: it reaches `registry-breg-client`
 only, behind a feature, never a product runtime, CLI, or database crate, and
 `products/adapter/scripts/check_dependency_direction.py` enforces that
-boundary mechanically (`CONCEPT.md` section 17.5). No facade binary and
+boundary mechanically. No facade binary and
 neither engine crate links the connector crate or any product client.
 
 ## Gates
@@ -80,7 +79,7 @@ CARGO_TARGET_DIR=<target-dir> PATH="$HOME/.cargo/bin:$PATH" cargo test -p regist
 ```
 
 Every adapter diagnostic is value-free under an `adapter.*` code
-(CONCEPT.md section 11, CFG-SEC-3): a report names the artifact, the
+(CFG-SEC-3): a report names the artifact, the
 JSON Pointer, and the code, never a value that could carry secret or
 environment material. Configuration formats follow
 `products/platform/CONFIG-CONVENTIONS.md`; the `Adapter` envelope prefix

@@ -2,8 +2,7 @@
 
 //! The per-operation result schema: one derivation shared by `adapterctl
 //! check`, the fixture response check, and the runtime's final-exchange
-//! body validation, so the three never diverge (`products/adapter/CONCEPT.md`
-//! section 6). The schema vocabulary is closed: `object` with
+//! body validation, so the three never diverge. The schema vocabulary is closed: `object` with
 //! `properties`, `required`, and `additionalProperties: false`; `array`
 //! with `items`; and the scalars `string`, `integer`, `number`,
 //! `boolean`, and `null`.
@@ -23,8 +22,7 @@ use serde_json::{json, Map, Value};
 /// Maximum RFC 3339 timestamp bytes admitted in an asynchronous expiry slot.
 pub const MAX_ASYNC_STATUS_EXPIRY_BYTES: usize = 35;
 
-/// The derived schema of one facade operation's response body
-/// (`products/adapter/CONCEPT.md` section 6): the operation's response
+/// The derived schema of one facade operation's response body: the operation's response
 /// envelope with every slot replaced by the closed schema of what fills
 /// it, and the `record` and `records` slots expanded from the record type
 /// the deployment binds to the operation. An operation bound more than
@@ -98,7 +96,7 @@ fn expand_items(template: Value, item: &Value) -> Value {
 /// schema of what fills it, and the `record` and `records` slots expanded
 /// from the record type this binding names: the per-binding resolution
 /// the compiled contract needs, where one operation serves several bound
-/// record types (`products/adapter/CONCEPT.md` sections 6 and 7). A
+/// record types. A
 /// parameterized part derives as a plain string, never as its stand-in
 /// literal, because the contract cannot know the deployment's value.
 pub fn derive_binding_result_schema(
@@ -196,8 +194,7 @@ pub fn derive_operation_request_schema(
     )
 }
 
-/// The derived schema of the profile's problem envelope
-/// (`products/adapter/CONCEPT.md` section 7): the envelope template with
+/// The derived schema of the profile's problem envelope: the envelope template with
 /// every slot replaced by the closed schema of what fills it. The same
 /// single-source discipline as [`derive_operation_result_schema`]:
 /// `adapterctl check`, the fixture error-path check, and the runtime's
@@ -835,7 +832,7 @@ fn escape_token(token: &str) -> String {
 /// and a missing body, under `adapter.fixture.response-schema` at the
 /// fixture path it concerns. A 2xx expected status validates against the
 /// operation's result schema; any other expected status validates
-/// against the profile's problem envelope (CONCEPT section 6), so an
+/// against the profile's problem envelope, so an
 /// honest error-path suite is not refused as if it promised a record.
 /// A problem expectation carries no body to validate: the class-and-code
 /// resolution is the fixture checks' concern. Both schemas come
@@ -1057,7 +1054,7 @@ mod tests {
 
     /// An envelope literal derives as a const: a body carrying a
     /// different literal refuses at its pointer, the fixed literal
-    /// passes (`products/adapter/CONCEPT.md` section 7).
+    /// passes.
     #[test]
     fn envelope_literals_derive_as_const() {
         let profile = profile(r#"{"resourceType": "Bundle", "entry": {{records}}}"#);
@@ -1527,7 +1524,7 @@ mod tests {
     /// A case binding and a patient binding of one operation each expand
     /// their own record type: the per-binding derivation resolves the
     /// named binding, where the operation-level derivation keeps its
-    /// first-binding rule (`products/adapter/CONCEPT.md` section 7).
+    /// first-binding rule.
     #[test]
     fn the_per_binding_derivation_resolves_the_named_binding() {
         let envelope = r#"{"record": {{record}}}"#;
@@ -1631,7 +1628,7 @@ mod tests {
 
     /// A parameterized part derives as a plain string, never as the
     /// stand-in const literal: the contract cannot know the deployment's
-    /// value (CONCEPT section 7). A non-part literal keeps its const, the
+    /// value. A non-part literal keeps its const, the
     /// per-binding and request derivations unpin the same way, and the
     /// problem envelope unpins like an operation's envelope.
     #[test]

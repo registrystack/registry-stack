@@ -3,7 +3,7 @@
 //! The composed governed-ingestion journey over the source-neutral core:
 //! a pack with a source route, a job definition pinned to it, the job
 //! checks over both, and one produced page validated against the job's
-//! profile (`products/adapter/CONCEPT.md` sections 17.1 and 17.2).
+//! profile.
 
 use registry_adapter_core::{
     check_job, check_workspace, AdapterJob, AdapterPack, AdapterProfile, AdapterProject, ItemPage,

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `enrich` processor, Camel's Content Enricher
-//! (`products/adapter/CONCEPT.md` sections 8.6 and 8.11.7).
+//! The `enrich` processor, Camel's Content Enricher.
 //!
 //! The resource send runs on a copy of the exchange, and the reply
 //! merges back through the `aggregationStrategy`, which by default

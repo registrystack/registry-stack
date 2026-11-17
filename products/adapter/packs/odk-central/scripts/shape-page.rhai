@@ -1,9 +1,10 @@
 // The item page the odk-submissions route returns: the F5 item
-// contract of CONCEPT 17.2, `{items: [{key, revision, value}], next}`.
+// contract of governed ingestion, `{items: [{key, revision, value}],
+// next}`.
 //
 // The engine evaluates the route's final setBody expression on the
-// exchange (CONCEPT 8.11.3). The reply body is the OData page: the
-// entities under `value` (the OData page of
+// exchange. The reply body is the OData page: the entities under
+// `value` (the OData page of
 // https://docs.getodk.org/central-api-odata-endpoints/). The route
 // asks for `$orderby=__system/submissionDate asc` and, past the first
 // run, `$filter=__system/submissionDate ge <cursor date>`; the reply's
@@ -28,9 +29,9 @@
 // out no cursor, so an ongoing scan holds its place at the tail. A
 // reply out of submission-date order or reaching back before the
 // cursor date throws. More than 40 ids at one rendered date throws
-// too: the cursor would outgrow its 2 KiB bound (CONCEPT 17.2), and a
-// page of nothing but seen rows would never move on. Pure and
-// deterministic; no I/O.
+// too: the cursor would outgrow its 2 KiB bound, and a page of
+// nothing but seen rows would never move on. Pure and deterministic;
+// no I/O.
 fn shape_page(exchange) {
     let body = exchange.body;
     let rows = body["value"];

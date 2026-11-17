@@ -266,7 +266,7 @@ fn check_command(
     });
     if run.fixtures_checked > 0 {
         // The fixture pass checked the contracts only; the send-by-send
-        // replay activates with the route engine (CONCEPT 13.3). The
+        // replay activates with the route engine. The
         // field says so, so a green pass is not read as a route test.
         envelope["fixtures"] = json!("contracts only, replay not run");
     }

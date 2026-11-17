@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Listener-free bounded Camel core compiled by facade, ingestion, and
-//! Evidence hosts
-//! (`products/adapter/CONCEPT.md` sections 8.1 and 17.2).
+//! Evidence hosts.
 //!
 //! The crate has no listener, inbound OIDC, PostgreSQL client, product client,
 //! journal, or idempotency-store dependency. Hosts compile the same engine
@@ -49,7 +48,7 @@ pub use resume::ResumeValue;
 
 /// The named compile profiles the boundary serves: `facade`, the
 /// deployment assembly a live serving compiles, and `job`, the governed
-/// ingestion assembly the page run compiles (CONCEPT 17.2).
+/// ingestion assembly the page run compiles.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EngineProfileKind {
     Facade,

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `throttle` processor, Camel 4's Throttler
-//! (`products/adapter/CONCEPT.md` section 8.6): `mode` (`TotalRequests`
+//! The `throttle` processor, Camel 4's Throttler: `mode` (`TotalRequests`
 //! default, or `ConcurrentRequests`), a limit expression,
 //! `timePeriodMilliseconds` (default 1000), and `rejectExecution`
 //! (default false).
@@ -40,7 +39,7 @@ pub(crate) async fn run(
                         // A wait that cannot finish before the exchange's
                         // deadline refuses now with the throttler's own
                         // class, instead of letting the run's budget
-                        // expire it as `budget.exhausted` (section 8.6).
+                        // expire it as `budget.exhausted`.
                         if tokio::time::Instant::now() + retry_after > run.deadline {
                             return Err(refused(run, "deadline"));
                         }
@@ -64,7 +63,7 @@ pub(crate) async fn run(
 }
 
 /// The limit as Camel 4 reads it: a whole positive number, evaluated
-/// per exchange (section 8.6).
+/// per exchange.
 fn read_limit(run: &Run<'_, '_>, expression: &Expression) -> Result<u32, RouteFailure> {
     match run.eval(expression)? {
         Value::Number(number) => number

@@ -9,7 +9,7 @@ https://hl7.org/fhir/R4/operationoutcome.html); no server was contacted.
 
 The contract says a pack knows a source system and a profile owns the outward
 wire contract, so the same DHIS2 pack serves a `breg-records` deployment and a
-later GovStack deployment unchanged (CONCEPT section 7). This shape
+later GovStack deployment unchanged (the Adapter configuration page). This shape
 writes a third facade profile, `fhir-facade` (`profile.yaml`), and binds an
 existing pack to it without touching the pack:
 
@@ -44,7 +44,7 @@ existing pack to it without touching the pack:
 ## Recorded gaps
 
 These were recorded against the profile vocabulary when the shape was
-written; the profile, runtime config, and fixture point here. `CONCEPT.md`
+written; the profile, runtime config, and fixture point here. The [Adapter configuration page](https://docs.registrystack.org/configure/adapter/)
 holds the current contract for each construct.
 
 1. **Per-record wrapping.** FHIR wraps every Bundle entry as `{"resource":
@@ -77,7 +77,7 @@ holds the current contract for each construct.
    `problems` and the body is not an OperationOutcome, yet `check`
    passes, both for the copied pack and for the maintained `dhis2-tracker`
    pack. Either the runtime refuses every mapped error, or a FHIR caller
-   receives a breg-records problem. CONCEPT section 7 says the engine fills
+   receives a breg-records problem. The Adapter configuration page says the engine fills
    `problemCode`, `problemTitle`, `problemDetail`, and `status`, but no pack
    construct supplies those values: the pack writes the whole body. The
    one-pack, many-profiles rule does not hold for errors.

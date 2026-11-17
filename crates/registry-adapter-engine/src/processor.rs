@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The EIP processors, one submodule per ported Enterprise Integration
-//! Pattern from the port table (`products/adapter/CONCEPT.md` sections
-//! 8.6 and 8.10).
+//! Pattern from the Camel port table
+//! (products/adapter/scripts/camel-port-table.yaml).
 //!
 //! Message transformation: `set_body`, `transform`, `set_header`,
 //! `set_property`, `remove_header`, `remove_property`, `script`.
@@ -11,11 +11,11 @@
 //! `enrich`, and the `aggregation` strategies. Resilience:
 //! `circuit_breaker` and `throttle`. Error structure: `do_try`. The
 //! `idempotentConsumer` EIP holds the write custody seam's key bound
-//! (`engine::exchange`, section 9).
+//! (`engine::exchange`).
 //!
 //! Camel defaults hold unless the port table says otherwise. Pagination
 //! is not an EIP and gets none: the facade side is the continuation
-//! contract of section 8.11.2.
+//! contract.
 
 pub mod aggregation;
 pub mod choice;

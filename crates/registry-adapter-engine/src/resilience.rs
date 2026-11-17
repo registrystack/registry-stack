@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The process-local state behind the resilience steps: one circuit
-//! breaker per `circuitBreaker` node and one pacer per `throttle` node
-//! (`products/adapter/CONCEPT.md` sections 8.6 and 8.7), both built at
+//! breaker per `circuitBreaker` node and one pacer per `throttle` node, both built at
 //! load and keyed by the address of the step node in the served
 //! operation's step tree, which is owned for the process lifetime and
 //! never moved after `ResilienceRuntime::compile` walks it. The generic
@@ -238,8 +237,7 @@ fn walk(steps: &[Step], nodes: &mut HashMap<NodeKey, NodeState>) {
     }
 }
 
-/// The breaker of one node over the model's configuration (section
-/// 8.7): resilience4j semantics and defaults, per node.
+/// The breaker of one node over the model's configuration: resilience4j semantics and defaults, per node.
 fn breaker_state(breaker: &CircuitBreakerStep) -> CircuitBreaker {
     CircuitBreaker::new(BreakerConfig {
         failure_rate_threshold: f64::from(breaker.failure_rate_threshold.get()),
@@ -261,7 +259,7 @@ fn breaker_state(breaker: &CircuitBreakerStep) -> CircuitBreaker {
     .expect("the step passed its serving checks")
 }
 
-/// The pacer of one node over the model's configuration (section 8.6).
+/// The pacer of one node over the model's configuration.
 fn pacer(throttle: &ThrottleStep) -> ThrottlePacer {
     match throttle.mode {
         Some(ThrottleMode::ConcurrentRequests) => {

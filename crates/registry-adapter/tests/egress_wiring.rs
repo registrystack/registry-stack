@@ -7,8 +7,7 @@
 //! acquires its bearer credential through the endpoint's own frozen
 //! token transport over the same loopback, and every transport failure
 //! inside an admitted exchange lands on its reviewed catchable class
-//! while every boundary refusal stays the uncatchable `egress.refused`
-//! (`products/adapter/CONCEPT.md` sections 8.11 and 10.2).
+//! while every boundary refusal stays the uncatchable `egress.refused`.
 
 #[path = "support/upstream/mod.rs"]
 #[allow(dead_code)]
@@ -851,7 +850,7 @@ async fn the_pinned_origin_refuses_foreign_links_and_sends_the_target_unchanged(
 /// A token endpoint on plain HTTP over a host that is not loopback
 /// refuses the load: core's checks refuse it, and the runtime refuses
 /// the same origin, so a deployment that skips the checks cannot start
-/// with a client credential rendered in clear (CONCEPT 10.2).
+/// with a client credential rendered in clear.
 #[test]
 fn a_plain_http_non_loopback_token_endpoint_refuses_at_load() {
     std::env::set_var("EGR_C4B_CLEAR_ID", "clear-client");
@@ -997,8 +996,7 @@ async fn load_basic_and_authorize(
 /// An attempt above the platform's one-operation ceiling is refused,
 /// never shortened: exactly at the ceiling the send runs, one
 /// millisecond above it the send refuses before any byte leaves, so a
-/// declared timeout can never silently become another number
-/// (CONCEPT 8.8).
+/// declared timeout can never silently become another number.
 #[tokio::test]
 async fn an_attempt_above_the_maximum_is_refused_never_shortened() {
     let upstream = UpstreamDouble::start();
@@ -1052,7 +1050,7 @@ async fn an_attempt_above_the_maximum_is_refused_never_shortened() {
 // Reply bodies.
 
 /// An empty body is JSON null, a successful reply, not a decode
-/// failure (CONCEPT 8.11).
+/// failure.
 #[tokio::test]
 async fn an_empty_body_is_json_null() {
     let upstream = UpstreamDouble::start();
@@ -1087,7 +1085,7 @@ async fn an_empty_body_is_json_null() {
 /// A non-JSON body inside the range raises `upstream.malformed`, not a
 /// null body the route could read as "no record": an expired session
 /// answering its HTML sign-in page must fail the exchange, never
-/// masquerade as a successful empty answer (CONCEPT 8.11).
+/// masquerade as a successful empty answer.
 #[tokio::test]
 async fn a_non_json_body_raises_malformed_under_the_throw() {
     let upstream = UpstreamDouble::start();
@@ -1135,8 +1133,7 @@ async fn a_non_json_body_raises_malformed_under_the_throw() {
 }
 
 /// The same refusal without the throw option: a non-JSON body raises
-/// `upstream.malformed` also under `throwExceptionOnFailure: false`
-/// (CONCEPT 8.11), because a reply the engine cannot decode is never a
+/// `upstream.malformed` also under `throwExceptionOnFailure: false`, because a reply the engine cannot decode is never a
 /// reply the route can read.
 #[tokio::test]
 async fn a_non_json_body_raises_malformed_also_without_the_throw() {
@@ -1301,7 +1298,7 @@ async fn an_undecodable_out_of_range_body_raises_http_without_a_body_under_the_t
 
 /// Out of range and decodable under the throw flag: the failure
 /// carries the decoded body, so a clause can read the source's error
-/// detail, and its status (CONCEPT 8.11). Camel's failure object likewise
+/// detail, and its status. Camel's failure object likewise
 /// retains the response body and status
 /// (`camel-4.23.0:components/camel-http/src/main/java/org/apache/camel/component/http/HttpProducer.java#populateHttpOperationFailedException`,
 /// `camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpThrowExceptionOnFailureTest.java#httpGetWhichReturnsHttp501ShouldThrowAnException`;
@@ -1344,7 +1341,7 @@ async fn a_decodable_out_of_range_body_raises_http_with_the_body_under_the_throw
 
 /// Without the throw option an out-of-range status is not a failure:
 /// the reply returns as it is and the route reads the status itself
-/// (CONCEPT 8.11's `throwExceptionOnFailure: false`), matching
+/// (`throwExceptionOnFailure: false`), matching
 /// `camel-4.23.0:components/camel-http/src/test/java/org/apache/camel/component/http/HttpThrowExceptionOnFailureTest.java#httpGetWhichReturnsHttp501`
 /// (<https://camel.apache.org/components/4.23.x/http-component.html>).
 #[tokio::test]
@@ -1378,7 +1375,7 @@ async fn without_the_throw_an_out_of_range_status_returns_the_reply() {
 
 /// A plain-HTTP origin whose literal address sits inside a declared
 /// private CIDR loads: core's authoring check admits it by the same
-/// one rule (CONCEPT 13.7), the runtime's load agrees, and the send-time policy
+/// one rule, the runtime's load agrees, and the send-time policy
 /// still refuses a plain-HTTP origin outside the declared CIDRs
 /// (`a_refused_destination_surfaces_as_egress_refused`).
 #[test]

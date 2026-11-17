@@ -2,8 +2,7 @@
 
 //! The governed-ingestion job: the `AdapterJob` definition, its bounded
 //! profile, the projection and trigger declarations, the item contract,
-//! the CSV decoder options, and the job-side authoring checks
-//! (`products/adapter/CONCEPT.md` sections 17.1 and 17.2).
+//! the CSV decoder options, and the job-side authoring checks.
 //!
 //! A job pairs one pack source route with an explicit, bounded profile and
 //! runs beside the facade with no inbound record shape or facade ceiling
@@ -40,8 +39,7 @@ pub const ADAPTER_JOB_RUNTIME_KIND: &str = "AdapterJobRuntimeConfig";
 /// The job ceiling on one upstream send's response body, in bytes: the
 /// platform's own response-body cap
 /// (`registry-platform-httputil`'s `MAX_DESTINATION_RESPONSE_BODY_BYTES`).
-/// An endpoint only source routes reach may declare up to this bound
-/// (`products/adapter/CONCEPT.md` section 8.8); a facade-reachable
+/// An endpoint only source routes reach may declare up to this bound; a facade-reachable
 /// endpoint stays at the facade ceiling of
 /// `crate::checks::MAXIMUM_RESPONSE_BYTES`.
 pub const MAXIMUM_JOB_RESPONSE_BYTES: u64 = 16_777_216;
@@ -54,7 +52,7 @@ const _: () = assert!(
 /// platform-frozen facade ceiling on purpose:
 /// `registry-platform-httputil`'s `FixedDestinationPolicy::send` hard-caps
 /// every operation at 10 seconds, so a job profile cannot exceed it and a
-/// page must fit inside it (`products/adapter/CONCEPT.md` section 8.8).
+/// page must fit inside it.
 pub const MAXIMUM_JOB_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
 const _: () = assert!(
     MAXIMUM_JOB_ATTEMPT_TIMEOUT_MILLISECONDS
@@ -63,8 +61,7 @@ const _: () = assert!(
 );
 
 /// The longest one source-route run may take, in milliseconds: the page
-/// deadline one job profile declares
-/// (`products/adapter/CONCEPT.md` section 17.2).
+/// deadline one job profile declares.
 pub const MAXIMUM_JOB_PAGE_DEADLINE_MILLISECONDS: u64 = 600_000;
 
 /// The most items one produced page may carry.
@@ -88,7 +85,7 @@ pub const MAXIMUM_JOB_FIELD_BYTES: u64 = 65_536;
 pub const MAXIMUM_JOB_ROWS_PER_PAGE: u32 = 10_000;
 
 /// The most named parameters one `postgres:` send may carry
-/// (`products/adapter/CONCEPT.md` section 8.10, the SQL row).
+/// (the SQL row of the Camel port table, products/adapter/scripts/camel-port-table.yaml).
 pub const MAXIMUM_POSTGRES_QUERY_PARAMETERS: usize = 16;
 
 /// The longest one item key may be, in bytes.
@@ -438,10 +435,9 @@ pub struct JobSource {
     pub route: String,
 }
 
-/// The explicit, bounded profile of one job (`products/adapter/CONCEPT.md`
-/// section 17.2). Every member is mandatory and checked; the engine
-/// enforces each bound again at the edge. The facade ceilings of section
-/// 8.8 are unchanged: the per-attempt timeout stays at the platform-frozen
+/// The explicit, bounded profile of one job. Every member is mandatory and checked; the engine
+/// enforces each bound again at the edge. The facade ceilings are
+/// unchanged: the per-attempt timeout stays at the platform-frozen
 /// ceiling, and only a source-route-only endpoint's response bound may
 /// rise, to the platform cap.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -477,8 +473,7 @@ pub struct JobProfile {
 }
 
 /// The read bounds of one job profile: what one poll may take in and what
-/// one decoded row may carry (`products/adapter/CONCEPT.md` section
-/// 17.2). Every read has a count, byte, and deadline bound.
+/// one decoded row may carry. Every read has a count, byte, and deadline bound.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -498,8 +493,7 @@ pub struct ReadBounds {
 
 /// The ingestion job definition (`AdapterJob`): an identity, the pinned
 /// pack and its source route, the item projection and the pass triggers,
-/// and the bounded job profile (`products/adapter/CONCEPT.md` sections
-/// 17.1 and 17.2). The `apiVersion` and `kind` envelope members are
+/// and the bounded job profile. The `apiVersion` and `kind` envelope members are
 /// carried and validated like every other Adapter artifact's, through the
 /// loader's format constants [`ADAPTER_JOB_API_VERSION`] and
 /// [`ADAPTER_JOB_KIND`].
@@ -661,16 +655,14 @@ impl AdapterJob {
     }
 }
 
-/// The projection of one source item the destination needs
-/// (`products/adapter/CONCEPT.md` sections 17.2 and 17.3): the dotted
+/// The projection of one source item the destination needs: the dotted
 /// paths of the item `value` the destination receives, and what the
 /// item row's Last digest covers.
 ///
 /// The projection is the job's data-minimization declaration. The
 /// source route shapes each item's `value` as a projection of the
-/// destination's fields, not the captured source record (section 17.2),
-/// and the job host enforces the declared list at hand-off (section
-/// 17.3): for each item it delivers, the pass builds an object with one
+/// destination's fields, not the captured source record,
+/// and the job host enforces the declared list at hand-off: for each item it delivers, the pass builds an object with one
 /// member per declared field, in declaration order, carrying the value
 /// at that path (or `null` where the path misses), and hands the
 /// destination that object. A member the route shaped beyond the
@@ -747,8 +739,7 @@ fn is_default_digest_of(digest_of: &ProjectionDigestOf) -> bool {
 /// One trigger of the job: the declaration of when a pass starts. A
 /// trigger carries no data into the pass; a hook only starts a pass,
 /// which then re-reads the source from the saved position, and a hook
-/// body is never trusted or stored (`products/adapter/CONCEPT.md`
-/// section 17.2).
+/// body is never trusted or stored.
 ///
 /// The interval options port the scheduled polling consumer options of
 /// Camel's scheduler component
@@ -923,13 +914,12 @@ pub struct RecordLocator {
     pub column: Option<u32>,
 }
 
-/// One source item of the item contract
-/// (`products/adapter/CONCEPT.md` section 17.2): the source-native key
+/// One source item of the item contract: the source-native key
 /// inside the job's configured namespace, the observed source revision
 /// when reliable, and the item value the source route shaped: a
 /// projection of the destination's fields, not the captured source
 /// record. The pass hands the destination only the declared projection
-/// fields of it (section 17.3).
+/// fields of it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -945,8 +935,7 @@ pub struct SourceItem {
     pub value: serde_json::Value,
 }
 
-/// One page of the item contract (`products/adapter/CONCEPT.md` section
-/// 17.2): the items one source-route run produced and the resumption
+/// One page of the item contract: the items one source-route run produced and the resumption
 /// cursor, absent at the end of a finite scan. The job entry validates
 /// every produced page against the job profile with
 /// [`ItemPage::from_value`] before it is returned.
@@ -1120,8 +1109,7 @@ fn serialized_length(value: &serde_json::Value) -> usize {
 
 /// The character encoding a decoder reads. UTF-8 only: Camel carries a
 /// charset per exchange where its CSV data format has no encoding option
-/// of its own; the bounded decoder pins one encoding instead
-/// (`products/adapter/CONCEPT.md` section 17.2).
+/// of its own; the bounded decoder pins one encoding instead.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DecoderEncoding {
@@ -1132,12 +1120,11 @@ pub enum DecoderEncoding {
 
 /// The CSV decoder options, the port of Camel's `CsvDataFormat` at
 /// camel-4.23.0 restricted to a bounded row decoder
-/// (`products/adapter/CONCEPT.md` section 8.10, the CSV row). Every kept
+/// (the CSV row of the Camel port table, products/adapter/scripts/camel-port-table.yaml). Every kept
 /// option cites the Java field it ports, and every default is that
 /// field's effective default: the reference `DEFAULT` format's comma
 /// delimiter, double quote, no comment marker, header record on, and no
-/// trimming. The dropped options and the reason each is dropped are
-/// recorded in `products/adapter/scratch/core/port-record.md`. Our rows
+/// trimming. Our rows
 /// are maps keyed by the header record, so `useMaps` has no false form
 /// here; type inference is refused, so a field decodes as the text the
 /// file carries.
@@ -1268,8 +1255,7 @@ fn is_default_csv_trim(value: &bool) -> bool {
     !*value
 }
 
-/// The job-side checks over one parsed job and its pinned pack
-/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): the source
+/// The job-side checks over one parsed job and its pinned pack: the source
 /// route resolves, the profile bounds hold and agree, the profile is
 /// never tighter than an endpoint the source route reaches, the
 /// projection declares a bounded field list, the triggers name a served

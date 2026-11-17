@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The idempotency store behind the `idempotentConsumer` EIP
-//! (`products/adapter/CONCEPT.md` section 9).
+//! The idempotency store behind the `idempotentConsumer` EIP.
 //!
 //! Every route bound to a write operation runs inside
 //! `idempotentConsumer` with Camel's `expression`, `eager` (default

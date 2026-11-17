@@ -2,7 +2,7 @@
 #
 # Bad-corpus member adapter.fixture.credential-recorded: this artifact set must be refused with
 # exactly adapter.fixture.credential-recorded. The recorded fixture's read request carries the
-# reserved header `authorization`, and a fixture never sees credentials (CONCEPT 10.2).
+# reserved header `authorization`, and a fixture never sees credentials.
 #
 # Refuse with:
 #   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.credential-recorded/project.yaml

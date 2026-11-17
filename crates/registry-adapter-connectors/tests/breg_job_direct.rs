@@ -2,8 +2,7 @@
 #![cfg(feature = "breg")]
 //! The direct destination's admission rule: an ingestion job sends an
 //! item straight to BReg only through an immediate Action or a Proposal
-//! start and submit (`products/adapter/CONCEPT.md` sections 17.1 and
-//! 17.3). Every other operation the connector implements stays out of a
+//! start and submit. Every other operation the connector implements stays out of a
 //! job's direct path.
 
 use registry_adapter_connectors::breg::{

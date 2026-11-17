@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `file` source of the governed-ingestion read step, the bounded
-//! read-only port of camel-file
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 17.2).
+//! read-only port of camel-file.
 //!
 //! One read considers the candidates of one base directory: the files
 //! directly under it (non-recursive; Camel's `recursive` is not

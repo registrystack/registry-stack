@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The engine-side sources block of the operator runtime config
-//! (`products/adapter/CONCEPT.md` sections 10.2 and 17.2) over the
+//! The engine-side sources block of the operator runtime config over the
 //! endpoint bindings core owns
 //! (`registry_adapter_core::AdapterEndpointBindings`): the environment
 //! state of the governed-ingestion sources, which no endpoint binding
@@ -721,8 +720,7 @@ where
         .collect())
 }
 
-/// The runtime binding of one read-only `postgres` source endpoint
-/// (`products/adapter/CONCEPT.md` sections 10.2 and 17.2): its own pool,
+/// The runtime binding of one read-only `postgres` source endpoint: its own pool,
 /// never the journal's, with its own credential and TLS posture. The
 /// engine's compile reads only the namespace; the host client reads the
 /// connection members from this same block.
@@ -1112,8 +1110,7 @@ impl Default for SourceTls {
     }
 }
 
-/// The runtime binding of one `file` source endpoint
-/// (`products/adapter/CONCEPT.md` sections 10.2 and 17.2): the absolute
+/// The runtime binding of one `file` source endpoint: the absolute
 /// base directory the read never leaves, the namespace the item keys
 /// carry, and the read behavior the port of camel-file selects. The
 /// members are read by the file source runtime, so a build without that
