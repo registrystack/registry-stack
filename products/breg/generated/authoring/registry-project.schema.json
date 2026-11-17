@@ -5368,7 +5368,7 @@
       "additionalProperties": false,
       "properties": {
         "dimensions": {
-          "description": "Unit Record fields used to group counts. Each field must be boolean or\nvocabulary-code, and each may appear once. `period`, `value`, and `status`\nare reserved output columns and cannot be dimension field names.",
+          "description": "Unit Record fields used to group counts. Each field must be boolean or\nvocabulary-code, and each may appear once. `period`, `measure`, `value`,\nand `status` are reserved output columns and cannot be dimension field\nnames.",
           "items": {
             "type": "string"
           },
@@ -5383,6 +5383,19 @@
         },
         "id": {
           "$ref": "#/$defs/LocalId"
+        },
+        "measures": {
+          "default": [
+            {
+              "id": "count",
+              "type": "count"
+            }
+          ],
+          "description": "The values the dataset publishes, one cell per period, dimension\ncombination, and measure. Each id is unique, and at most one measure has\ntype `count`. Omitting the member publishes one `count` measure named\n`count`; an empty list is refused.",
+          "items": {
+            "$ref": "#/$defs/StatisticalMeasureSource"
+          },
+          "type": "array"
         },
         "period": {
           "$ref": "#/$defs/StatisticalPeriodSource"
@@ -5424,6 +5437,30 @@
         "roundingBase"
       ],
       "type": "object"
+    },
+    "StatisticalMeasureSource": {
+      "additionalProperties": false,
+      "description": "One value a statistical dataset publishes.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Names the measure on every cell that reports it."
+        },
+        "type": {
+          "$ref": "#/$defs/StatisticalMeasureTypeSource",
+          "description": "How the value is computed."
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    },
+    "StatisticalMeasureTypeSource": {
+      "const": "count",
+      "description": "The number of unit Records in the population.",
+      "type": "string"
     },
     "StatisticalPeriodGranularitySource": {
       "enum": [

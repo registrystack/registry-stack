@@ -29,7 +29,7 @@ use crate::mutation::BoundValue;
 use crate::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
     period_for_code, period_range, Cell, DatasetDocument, DimensionDomain, DisclosureDocument,
-    GroupedCell, LiveDocument, Measure, Period, PeriodDocument, PeriodGranularity, PeriodKind,
+    GroupedCell, LiveDocument, Period, PeriodDocument, PeriodGranularity, PeriodKind,
     PeriodVersionHeader, ReleaseDocument, ReleaseStatus, ReleaseVersionHeader, StatisticsDocument,
     StatisticsError, WithdrawalDocument, WithdrawalReason, MAX_CELLS_PER_RESPONSE,
 };
@@ -677,8 +677,14 @@ impl PostgresStatisticsService {
             return Err(StatisticsServiceError::Unavailable);
         }
         transaction.commit().await.map_err(unavailable)?;
-        let cells = build_exact_cells(&dataset.id, periods, &dimensions(dataset), &grouped)
-            .map_err(map_statistics_error)?;
+        let cells = build_exact_cells(
+            &dataset.id,
+            periods,
+            &dimensions(dataset),
+            &dataset.measures,
+            &grouped,
+        )
+        .map_err(map_statistics_error)?;
         Ok(Computation {
             cells,
             history_head,
@@ -1791,7 +1797,7 @@ fn published_cell_count(
     dataset
         .dimensions
         .iter()
-        .try_fold(1_usize, |count, dimension| {
+        .try_fold(dataset.measures.len(), |count, dimension| {
             let codes = dimension
                 .codes
                 .len()
@@ -1991,7 +1997,7 @@ fn document_for(
         dataset: DatasetDocument {
             id: dataset.id.clone(),
             unit: dataset.unit_entity_id.clone(),
-            measure: Measure::Count,
+            measures: dataset.measures.clone(),
             period_kind: period_kind(dataset),
             granularity: granularity(dataset),
             population: dataset.population.clone(),

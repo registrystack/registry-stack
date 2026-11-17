@@ -82,7 +82,7 @@ class StatisticsTests(unittest.TestCase):
                     self.wfile.write(body)
                     return
                 body = (
-                    b"period,periodStart,periodEnd,value,status\r\n"
+                    b"period,periodStart,periodEnd,measure,value,status\r\n"
                     if self.headers.get("accept") == "text/csv"
                     else b'{"ok":true}'
                 )

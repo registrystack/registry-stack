@@ -55,6 +55,26 @@
   `requiresPostgis`. A consumer that pins the earlier versions must accept the
   new `apiVersion` values. See the [explain contract
   policy](https://docs.registrystack.org/reference/bregctl-explain/#schemas-and-compatibility).
+- BREAKING: A statistical dataset may declare `measures`, a list of `id` and
+  `type` pairs, and every cell names its measure. `count` is the only type. A
+  dataset that declares none has one count measure with the id `count`, so no
+  registry configuration change is required. In the JSON document,
+  `dataset.measure` (the string `"count"`) is gone and `dataset.measures` is an
+  array of `{"id", "type"}` in declared order; every cell carries
+  `"measure"`, with one cell per period, dimension combination and measure,
+  and the 10,000 cell limit counts cells as served. The CSV gains a `measure`
+  column before `value`: `period,periodStart,periodEnd,<dimension field
+  IDs...>,measure,value,status`. Readers of statistics JSON must read
+  `dataset.measures` and each cell's `measure`, and CSV readers must expect
+  the extra column. `measure` is a reserved column name, so a dimension with
+  that id is refused. The compiler refuses an empty `measures` list
+  (`breg.statistical-dataset.measures-empty`), two measures with one id
+  (`breg.statistical-dataset.measure-duplicate`) and more than one `count`
+  measure (`breg.statistical-dataset.measure-count-duplicate`). The definition
+  digest covers the measures, so every dataset's digest changes once on
+  upgrade. Releases published before the upgrade belong to an earlier series
+  that stays in storage and is no longer served; republish the periods you
+  still need.
 - A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
   WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and
   an optional `bbox`, and the compiler validates it with PostGIS and generates

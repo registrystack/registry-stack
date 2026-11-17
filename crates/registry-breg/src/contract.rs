@@ -797,11 +797,56 @@ pub struct StatisticalDatasetSource {
     pub population: String,
     pub period: StatisticalPeriodSource,
     /// Unit Record fields used to group counts. Each field must be boolean or
-    /// vocabulary-code, and each may appear once. `period`, `value`, and `status`
-    /// are reserved output columns and cannot be dimension field names.
+    /// vocabulary-code, and each may appear once. `period`, `measure`, `value`,
+    /// and `status` are reserved output columns and cannot be dimension field
+    /// names.
     pub dimensions: Vec<String>,
+    /// The values the dataset publishes, one cell per period, dimension
+    /// combination, and measure. Each id is unique, and at most one measure has
+    /// type `count`. Omitting the member publishes one `count` measure named
+    /// `count`; an empty list is refused.
+    #[serde(
+        default = "default_statistical_measures",
+        skip_serializing_if = "is_default_statistical_measures"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("default" = [{"id": "count", "type": "count"}]))
+    )]
+    pub measures: Vec<StatisticalMeasureSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<StatisticalDisclosureSource>,
+}
+
+/// One value a statistical dataset publishes.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalMeasureSource {
+    /// Names the measure on every cell that reports it.
+    pub id: LocalId,
+    /// How the value is computed.
+    #[serde(rename = "type")]
+    pub measure_type: StatisticalMeasureTypeSource,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatisticalMeasureTypeSource {
+    /// The number of unit Records in the population.
+    Count,
+}
+
+fn default_statistical_measures() -> Vec<StatisticalMeasureSource> {
+    vec![StatisticalMeasureSource {
+        id: LocalId::new("count").expect("`count` is a local id"),
+        measure_type: StatisticalMeasureTypeSource::Count,
+    }]
+}
+
+fn is_default_statistical_measures(measures: &[StatisticalMeasureSource]) -> bool {
+    measures == default_statistical_measures()
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

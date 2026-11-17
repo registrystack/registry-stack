@@ -169,6 +169,8 @@ pub struct CompiledStatisticalDataset {
     pub population: String,
     pub period: CompiledStatisticalPeriod,
     pub dimensions: Vec<CompiledStatisticalDimension>,
+    /// The declared measures, or the one `count` measure when none is declared.
+    pub measures: Vec<crate::statistics::Measure>,
     pub disclosure: crate::statistics::DisclosureParameters,
     /// Authentication requirements for every dataset grant, including
     /// release readers which need no entity permission.

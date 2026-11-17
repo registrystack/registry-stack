@@ -32,9 +32,10 @@ The facility template declares none; add one under the root `statisticalDatasets
 - `period`, either `type: flow` with a date `field` that places each record in one period, or `type: stock` with a `validity` (`temporal`, or `from` and an optional `until` date field) that counts the records valid on the period's reference date
 - `granularity` (`day`, `month`, `quarter`, or `year`) and `firstPeriod`, both inside `period`
 - `dimensions`, boolean or vocabulary-code fields of the unit Record type
+- `measures`, optional, a list of `id` and `type` pairs; `count` is the only type, and omitting the list gives one count measure with the id `count`
 - `disclosure`, with `minimumCount` and `roundingBase`, each at least 2
 
-One period, with every dimension code and every total, must fit in 10,000 cells. The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and the refusals `bregctl check` reports.
+One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dimension cannot be named `measure`, which is a reserved column name. The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and the refusals `bregctl check` reports.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, StatisticalDatasetSource,
     StatisticalPeriodSource, StatisticalDisclosureSource;
@@ -76,7 +77,7 @@ and CSV representation, so a dimension cannot use one of them.
 
 A live count is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live cell is a count the profile could already obtain by listing records.
 
-A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, and disclosure parameters. Changing who may read a dataset keeps the series; changing what it counts starts another one.
+A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, measures, and disclosure parameters. Changing who may read a dataset keeps the series; changing what it counts starts another one.
 
 {/* Evidence: crates/registry-breg/src/postgres/statistics.rs;
     crates/registry-breg/src/compiler/statistics.rs, definition_digest. */}
@@ -347,7 +348,7 @@ Binding the key to a different request returns `409 idempotency.key-reused`.
 
 ## Read a series
 
-A reader names its profile with `accessProfile` and a period range. Ask for `text/csv` to receive `period`, `periodStart`, `periodEnd`, one column per dimension, `value`, and `status`:
+A reader names its profile with `accessProfile` and a period range. Ask for `text/csv` to receive `period`, `periodStart`, `periodEnd`, one column per dimension, `measure`, `value`, and `status`:
 
 ```sh test-skip="needs a live registry"
 bregctl api \
@@ -357,7 +358,7 @@ bregctl api \
   --accept text/csv
 ```
 
-A suppressed value is blank, not zero; a period without a release has no cells.
+A suppressed value is blank, not zero; a period without a release has no cells. A JSON document lists the declared measures in `dataset.measures`, and each cell names its measure in `measure`, with one cell per period, dimension combination, and measure.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs, routes;
     crates/registry-breg/src/statistics.rs. */}

@@ -366,7 +366,7 @@
   ],
   "registryId": "labelled-directory",
   "reviewAuthorities": [],
-  "revision": "sha256:c60c252a8dc343caf48c6826c7111669fe1c15d323c807060eebb61143f6e186",
+  "revision": "sha256:51e1c3babc848185ace66a2af40004af77f9b0f99698cbac0a1e1cb13d31271a",
   "statisticalDatasets": [
     {
       "accessProfiles": {
@@ -392,7 +392,7 @@
           "writableFields": []
         }
       },
-      "definitionDigest": "sha256:3230b4c026ee0f84cd547c4b3bfdc0eaa46e0bf38fc4a65d30a77e44705bf54c",
+      "definitionDigest": "sha256:a8b74357a48922ab6a5f4bc2e690d6629248c0e93c59ff6981c880ce48428052",
       "dependencyEntities": [
         "entry"
       ],
@@ -419,6 +419,12 @@
       },
       "evaluationDateDependent": false,
       "id": "entry-counts",
+      "measures": [
+        {
+          "id": "count",
+          "type": "count"
+        }
+      ],
       "period": {
         "field": "recorded-on",
         "firstPeriod": "2025-01",

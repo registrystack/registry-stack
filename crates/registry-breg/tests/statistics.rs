@@ -7,7 +7,7 @@ use registry_breg::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
     document_csv, period_for_code, period_range, Cell, CellStatus, DatasetDocument,
     DimensionDomain, DisclosureDocument, DisclosureParameters, GroupedCell, LiveDocument, Measure,
-    PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument, ReleaseStatus,
+    MeasureType, PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument, ReleaseStatus,
     StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
 };
 
@@ -213,7 +213,14 @@ fn grouped_rows_are_zero_filled_and_margins_are_exact_sums() {
             value: 4,
         },
     ];
-    let cells = build_exact_cells("enrolments", &periods, &dimensions, &grouped).unwrap();
+    let cells = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &count_measures(),
+        &grouped,
+    )
+    .unwrap();
     assert_eq!(cells.len(), 12);
     assert_eq!(cell_value(&cells, &[TOTAL_CODE, TOTAL_CODE]), Some(9));
     assert_eq!(cell_value(&cells, &["A", TOTAL_CODE]), Some(5));
@@ -239,6 +246,7 @@ fn unknown_code_error_names_dataset_and_dimension_but_not_value() {
         "enrolments",
         &periods,
         &dimensions,
+        &count_measures(),
         &[GroupedCell {
             period: "2025".to_owned(),
             codes: vec!["secret-new-code".to_owned()],
@@ -269,6 +277,7 @@ fn margins_use_checked_integer_arithmetic() {
         "enrolments",
         &periods,
         &dimensions,
+        &count_measures(),
         &[
             GroupedCell {
                 period: "2025".to_owned(),
@@ -443,10 +452,10 @@ fn csv_is_rfc4180_and_carries_period_bounds_on_every_row() {
         .dimensions
         .insert("region".to_owned(), "north,\"one".to_owned());
     let csv = String::from_utf8(document_csv(&document).unwrap()).unwrap();
-    assert!(csv.starts_with("period,periodStart,periodEnd,region,value,status\r\n"));
+    assert!(csv.starts_with("period,periodStart,periodEnd,region,measure,value,status\r\n"));
     assert_eq!(csv.lines().count(), 2);
     assert!(csv.contains("2025-01,2025-01-01,2025-02-01,\"north,\"\"one\""));
-    assert!(csv.ends_with(",5,rounded\r\n"));
+    assert!(csv.ends_with(",count,5,rounded\r\n"));
 }
 
 #[test]
@@ -465,8 +474,8 @@ fn release_without_history_snapshot_is_canonical_and_csv_readable() {
     assert_eq!(decoded.release.unwrap().snapshot, None);
 
     let csv = String::from_utf8(document_csv(&document).unwrap()).unwrap();
-    assert!(csv.starts_with("period,periodStart,periodEnd,region,value,status\r\n"));
-    assert!(csv.ends_with(",5,rounded\r\n"));
+    assert!(csv.starts_with("period,periodStart,periodEnd,region,measure,value,status\r\n"));
+    assert!(csv.ends_with(",count,5,rounded\r\n"));
 }
 
 #[test]
@@ -479,6 +488,7 @@ fn live_document_uses_the_same_wire_shape_without_disclosure() {
         cells: vec![Cell {
             period: "2025-01".to_owned(),
             dimensions: BTreeMap::new(),
+            measure: "count".to_owned(),
             value: Some(3),
             status: CellStatus::Exact,
         }],
@@ -512,6 +522,7 @@ fn cells_with_values(values: &[u64]) -> Vec<Cell> {
         .map(|value| Cell {
             period: "2025".to_owned(),
             dimensions: BTreeMap::new(),
+            measure: "count".to_owned(),
             value: Some(*value),
             status: CellStatus::Exact,
         })
@@ -560,7 +571,7 @@ fn dataset_document() -> DatasetDocument {
     DatasetDocument {
         id: "enrolments".to_owned(),
         unit: "household".to_owned(),
-        measure: Measure::Count,
+        measures: count_measures(),
         period_kind: PeriodKind::Flow,
         granularity: PeriodGranularity::Month,
         population: "programme eq 'cash-transfer'".to_owned(),
@@ -581,6 +592,7 @@ fn release_document() -> StatisticsDocument {
         cells: vec![Cell {
             period: "2025-01".to_owned(),
             dimensions: BTreeMap::from([("region".to_owned(), "north".to_owned())]),
+            measure: "count".to_owned(),
             value: Some(5),
             status: CellStatus::Rounded,
         }],
@@ -598,4 +610,223 @@ fn release_document() -> StatisticsDocument {
             rounding_base: 5,
         })),
     }
+}
+
+fn count_measures() -> Vec<Measure> {
+    vec![Measure {
+        id: "count".to_owned(),
+        measure_type: MeasureType::Count,
+    }]
+}
+
+fn two_measures() -> Vec<Measure> {
+    ["parcels", "holdings"]
+        .into_iter()
+        .map(|id| Measure {
+            id: id.to_owned(),
+            measure_type: MeasureType::Count,
+        })
+        .collect()
+}
+
+fn one_year_one_region() -> (Vec<registry_breg::statistics::Period>, Vec<DimensionDomain>) {
+    (
+        vec![current_period(PeriodGranularity::Year, date(2025, 1, 1)).unwrap()],
+        vec![DimensionDomain {
+            field: "region".to_owned(),
+            vocabulary: "regions".to_owned(),
+            codes: vec!["A".to_owned(), "B".to_owned()],
+            include_unknown: false,
+        }],
+    )
+}
+
+#[test]
+fn every_cell_carries_the_measure_it_reports() {
+    let (periods, dimensions) = one_year_one_region();
+    let cells = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &count_measures(),
+        &[GroupedCell {
+            period: "2025".to_owned(),
+            codes: vec!["A".to_owned()],
+            value: 2,
+        }],
+    )
+    .unwrap();
+    assert_eq!(cells.len(), 3);
+    assert!(cells.iter().all(|cell| cell.measure == "count"));
+    let value = serde_json::to_value(&cells[0]).unwrap();
+    assert_eq!(value["measure"], "count");
+}
+
+#[test]
+fn two_declared_measures_produce_two_cells_per_combination_in_declared_order() {
+    let (periods, dimensions) = one_year_one_region();
+    let cells = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &two_measures(),
+        &[GroupedCell {
+            period: "2025".to_owned(),
+            codes: vec!["A".to_owned()],
+            value: 2,
+        }],
+    )
+    .unwrap();
+    let order = cells
+        .iter()
+        .map(|cell| {
+            (
+                cell.dimensions["region"].as_str(),
+                cell.measure.as_str(),
+                cell.value,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        [
+            ("A", "parcels", Some(2)),
+            ("A", "holdings", Some(2)),
+            ("B", "parcels", Some(0)),
+            ("B", "holdings", Some(0)),
+            (TOTAL_CODE, "parcels", Some(2)),
+            (TOTAL_CODE, "holdings", Some(2)),
+        ]
+    );
+}
+
+#[test]
+fn the_cell_limit_counts_cells_as_served_including_measures() {
+    let periods = period_range(
+        PeriodGranularity::Month,
+        "2025-01",
+        "2025-12",
+        date(2026, 1, 1),
+    )
+    .unwrap();
+    // 12 periods x (832 + 1 total) codes = 9,996 cells for one measure.
+    let dimensions = vec![DimensionDomain {
+        field: "region".to_owned(),
+        vocabulary: "regions".to_owned(),
+        codes: (0..832).map(|index| format!("r{index}")).collect(),
+        include_unknown: false,
+    }];
+    let one = build_exact_cells("enrolments", &periods, &dimensions, &count_measures(), &[]);
+    assert_eq!(one.unwrap().len(), 9_996);
+    let two = build_exact_cells("enrolments", &periods, &dimensions, &two_measures(), &[]);
+    assert_eq!(two.unwrap_err(), StatisticsError::TooManyCells);
+}
+
+#[test]
+fn csv_places_the_measure_column_after_the_dimensions() {
+    let mut document = release_document();
+    document.dataset.measures = two_measures();
+    let first = document.cells[0].clone();
+    document.cells[0].measure = "parcels".to_owned();
+    document.cells.push(Cell {
+        measure: "holdings".to_owned(),
+        ..first
+    });
+    let csv = String::from_utf8(document_csv(&document).unwrap()).unwrap();
+    let lines = csv.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines[0],
+        "period,periodStart,periodEnd,region,measure,value,status"
+    );
+    assert_eq!(
+        lines[1],
+        "2025-01,2025-01-01,2025-02-01,north,parcels,5,rounded"
+    );
+    assert_eq!(
+        lines[2],
+        "2025-01,2025-01-01,2025-02-01,north,holdings,5,rounded"
+    );
+}
+
+#[test]
+fn a_cell_for_an_undeclared_measure_is_refused() {
+    let mut document = release_document();
+    document.cells[0].measure = "undeclared".to_owned();
+    assert!(matches!(
+        canonical_document_and_digest(&document),
+        Err(StatisticsError::InvalidDocument(message)) if message.contains("measure")
+    ));
+    assert!(matches!(
+        document_csv(&document),
+        Err(StatisticsError::InvalidDocument(message)) if message.contains("measure")
+    ));
+}
+
+#[test]
+fn a_repeated_period_dimensions_and_measure_cell_is_refused() {
+    let mut document = release_document();
+    let duplicate = document.cells[0].clone();
+    document.cells.push(duplicate);
+    assert!(matches!(
+        canonical_document_and_digest(&document),
+        Err(StatisticsError::InvalidDocument(message)) if message.contains("more than once")
+    ));
+}
+
+#[test]
+fn the_same_period_and_dimensions_under_two_measures_are_distinct_cells() {
+    let mut document = release_document();
+    document.dataset.measures = two_measures();
+    let first = document.cells[0].clone();
+    document.cells[0].measure = "parcels".to_owned();
+    document.cells.push(Cell {
+        measure: "holdings".to_owned(),
+        ..first
+    });
+    canonical_document_and_digest(&document).expect("distinct measures are distinct cells");
+}
+
+#[test]
+fn the_document_states_its_measures_in_declared_order_and_no_singular_measure() {
+    let mut document = release_document();
+    document.dataset.measures = two_measures();
+    document.cells[0].measure = "parcels".to_owned();
+    let canonical = canonical_document_and_digest(&document).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&canonical.bytes).unwrap();
+    assert_eq!(
+        value["dataset"]["measures"],
+        serde_json::json!([
+            {"id": "parcels", "type": "count"},
+            {"id": "holdings", "type": "count"},
+        ])
+    );
+    assert!(value["dataset"].get("measure").is_none());
+}
+
+#[test]
+fn a_document_without_measures_or_with_repeated_measure_ids_is_refused() {
+    let mut empty = release_document();
+    empty.dataset.measures.clear();
+    assert!(matches!(
+        canonical_document_and_digest(&empty),
+        Err(StatisticsError::InvalidDocument(message)) if message.contains("measures")
+    ));
+    let mut repeated = release_document();
+    repeated.dataset.measures = vec![count_measures()[0].clone(), count_measures()[0].clone()];
+    assert!(matches!(
+        canonical_document_and_digest(&repeated),
+        Err(StatisticsError::InvalidDocument(message)) if message.contains("measures")
+    ));
+}
+
+#[test]
+fn the_superseded_singular_measure_shape_does_not_parse() {
+    let canonical = canonical_document_and_digest(&release_document()).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&canonical.bytes).unwrap();
+    value["dataset"]["measure"] = serde_json::json!("count");
+    value["dataset"].as_object_mut().unwrap().remove("measures");
+    for cell in value["cells"].as_array_mut().unwrap() {
+        cell.as_object_mut().unwrap().remove("measure");
+    }
+    assert!(serde_json::from_value::<StatisticsDocument>(value).is_err());
 }
