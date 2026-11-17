@@ -67,6 +67,57 @@
   apply, because the capture uses the same decoder. Writes and shorter values
   were unaffected. The fault was in the read path since v0.33.0, through
   v0.46.0; no stored data changes and nothing needs migrating.
+- Add read-only external views. A registry can show a person or business held
+  in another registry beside its own Record, without copying the other
+  registry's data into the Record. Declare `externalRecordTypes`,
+  `externalProjections` (`mode: live` or `indexed`) and `externalViews` in the
+  project, bind each source under `externalSources` and `externalRefresh` in the
+  runtime file, and grant `externalViews` and `refreshExternalProjections` in an
+  access profile. Readers use
+  `GET /v1/external-views/{view}/{link}/records` and `.../records/{root}`; a
+  refresh profile uses `/refresh` and `/refresh-labels`, and a refresh plan
+  uses `/v1/external-refresh-plans/{plan}/step` and `/hints`. A view that
+  cannot be answered completely returns the problem
+  `registry-breg/external_view/incomplete`. `bregctl external-projection
+  inspect|withdraw|rotate|refresh` operates the cached values, and `bregctl
+  generate external-source-facts` writes the source facts. An indexed
+  projection keeps its cache in seven derived tables in `registry_internal`
+  (see [external-projection-storage.md](external-projection-storage.md)) and
+  needs separate migration and runtime database roles. Exclude those tables'
+  data from backups; see the back-up and restore page. The
+  [synthetic licensing example](examples/external-views/README.md) shows live
+  and indexed views.
+- A Rhai Action plan can call `today()`, `add_days(date, days)` and
+  `add_months(date, months)`. `today()` returns the registry-local date captured
+  once for the evaluation, and a registry that calls it must set
+  `project.timezone`. A date guard in `commitGuards` accepts
+  `currentDateOffsetDays` (a signed whole-day offset; absent or zero keeps the
+  earlier comparison with today). `bregctl project action-test` takes
+  `--evaluation-date YYYY-MM-DD`, which a handler that calls `today()`
+  requires; the command never reads the workstation clock. A Proposal plan
+  evaluates `today()` when the Proposal starts and its guards compare again at
+  Apply, so write the offset with that gap in mind. See
+  [immediate-actions.md](immediate-actions.md).
+- Request audit records include a keyed `clientReference` when the bearer
+  verifier matches an allowed OAuth client. It uses the same pseudonym as
+  `authorization.clientPseudonym` and tells apart two clients acting for the
+  same principal. Client identifiers and tokens stay out of the journal.
+- An applicant can see where a submission is in review. Set
+  `readableReviewProgress: true` on the caller-owned Proposal grant that
+  includes `get-review-status`, then read the Proposal's `reviewStatus` link
+  with `include=progress`. A response can add a `progressCode` from the
+  review provider; it is omitted when the stage has no code or the provider
+  cannot answer. The opt-in response omits the Proposal ETag. The Rust,
+  Node.js and Python clients expose `read_proposal_review_status_with_progress`
+  and `readProposalReviewStatusWithProgress`. See
+  [proposals.md](proposals.md).
+- The Node.js client's record, record-list and continuation reads, and the
+  metadata, contract, schema, revision and lookup reads, accept a final
+  `{ signal: AbortSignal }` argument. Aborting rejects with
+  `BaseRegistryClientError` of kind `cancelled` and drops that call's queued
+  credential acquisition, token or request exchange, or response read. An
+  already-aborted signal starts no request, and no read is retried. See the
+  client README.
 
 ## 0.46.0 - 2026-11-08
 

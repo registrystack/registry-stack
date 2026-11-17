@@ -32,6 +32,23 @@
   without `--assertion-audience` is refused. Migration: set the audience
   member to the authorization server's issuer identifier, exactly as its
   metadata publishes it.
+- `rstack dev` runs an authored scenario pack. Name it with the required
+  `scenarioFile` key in `dev.yaml`, for example
+  `scenarioFile: tests/scenarios.yaml`; a plan with an inline `journey` key is
+  refused with the fix to move its steps into the scenario file. The file is `RStackScenarios` v1alpha1 with 1 to 16 uniquely named scenarios, each
+  of 1 to 32 steps and no more than 64 in total; the path must stay inside the
+  project. The run report lists each result under `scenarios` with the file's
+  hash. See [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
+- BREAKING: Studio is the only supported editor for Registry Stack projects.
+  `evidencectl tooling language-server` and the VS Code and Zed extensions are
+  removed, and no replacement desktop-editor integration or setup guide is
+  provided. Use Studio. To check a project outside Studio, run the product's
+  `check` command.
+- `registry-language-server` is now a standalone binary and a release asset of
+  its own: a plain two-file archive with the release's checksums, first shipped
+  with v0.47.0. It runs on stdio by default, with `--workspace-analysis` and
+  `--workspace-lsp` for Studio. See its
+  [README](../../crates/registry-language-server/README.md).
 
 ## 0.46.0 - 2026-11-08
 

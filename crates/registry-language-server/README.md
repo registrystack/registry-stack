@@ -1,7 +1,10 @@
 # Registry Stack language server
 
-`registry-language-server` adds Registry Stack project semantics to YAML and JSON editors through the
-Language Server Protocol. It provides go to definition, find references, workspace symbols, document
+`registry-language-server` adds Registry Stack project semantics to YAML and JSON documents through the
+Language Server Protocol. Registry Studio is the supported editor and uses this server for navigation.
+Registry Stack provides no VS Code, Zed or other standalone editor integration, and no guide for
+connecting a desktop editor to it; the default stdio mode described under Run is the protocol the
+server speaks, not a supported desktop setup. It provides go to definition, find references, workspace symbols, document
 symbols, completion and hover on the names one document writes and another spells back, and errors
 for missing, duplicate, or ambiguous references. It deliberately leaves syntax, schemas, mapping-key
 completion, and formatting to the editor's existing language servers. Product
@@ -83,7 +86,7 @@ For arbitrary Manifest, OID4VCI, and OID4VP configuration filenames, create
 `.registry-stack-editor/project.json` containing `{"product":"manifest","document":"config/metadata.yaml"}`
 or the products `evidence-oid4vci` or `evidence-oid4vp`. The document must be an existing regular `.yaml` or `.yml` file
 inside the project, using a relative path without traversal or symbolic links.
-An editor integration may write this marker when configuring a project.
+A tool that opens a project with this server may write the marker.
 
 Name scopes follow the owning document contract. A BReg Record field does not complete fields from a
 different Record type, and Manifest fields also retain their dataset and entity scope. References to separately
