@@ -362,12 +362,3 @@ mutation recovery and same-key retries are unchanged. Errors never include the
 signal's arbitrary reason. The native token is internal binding glue, not a
 shared client cancellation switch. Rust callers continue to cancel by dropping
 their read future; this Node option adds no Python or server API.
-
-## Observed status for selected reads
-
-Only `getRecord` and `listRecords` return a readonly
-`responseStatus` captured from that same HTTP response after all existing
-validation succeeds. This is not a body/page status, inferred200, generic header
-map, or later read. These operations still require HTTP200. Older SDKs without
-this observation cannot supply positive status evidence. Other methods, writes
-and continuations keep their existing results.

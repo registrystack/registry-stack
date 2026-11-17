@@ -195,27 +195,6 @@ pub struct PageOutcome {
 }
 
 #[napi(object)]
-pub struct ObservedCompleteOutcome {
-    pub kind: String,
-    pub value: Value,
-    pub trace_id: String,
-    pub etag: Option<String>,
-    pub location: Option<String>,
-    pub response_status: u16,
-}
-#[napi(object)]
-pub struct ObservedPageOutcome {
-    pub kind: String,
-    pub value: Value,
-    pub continuation: Option<Value>,
-    pub trace_id: String,
-    pub etag: Option<String>,
-    pub snapshot: Option<String>,
-    pub valid_at: Option<String>,
-    pub response_status: u16,
-}
-
-#[napi(object)]
 pub struct RawOutcome {
     pub kind: String,
     pub body: Buffer,
@@ -3015,28 +2994,19 @@ impl BaseRegistryClient {
         record_identifier: String,
         options: Option<Value>,
         cancellation: Option<&ReadCancellation>,
-    ) -> Result<ObservedCompleteOutcome> {
+    ) -> Result<CompleteOutcome> {
         read_cancellation::read(cancellation, async {
             let options = options_object(options, "record options must be an object")?;
-            let observed = self
+            let BRegComplete { value, metadata } = self
                 .inner
-                .get_record_with_response_status(
+                .get_record(
                     &record_route,
                     &record_identifier,
                     &record_options(options.as_ref())?,
                 )
                 .await
                 .map_err(client_error)?;
-            let (BRegComplete { value, metadata }, response_status) = observed.into_parts();
-            let value = complete_value(value, metadata)?;
-            Ok(ObservedCompleteOutcome {
-                kind: value.kind,
-                value: value.value,
-                trace_id: value.trace_id,
-                etag: value.etag,
-                location: value.location,
-                response_status,
-            })
+            complete_value(value, metadata)
         })
         .await
     }
@@ -3047,26 +3017,13 @@ impl BaseRegistryClient {
         record_route: String,
         options: Option<Value>,
         cancellation: Option<&ReadCancellation>,
-    ) -> Result<ObservedPageOutcome> {
+    ) -> Result<PageOutcome> {
         read_cancellation::read(cancellation, async {
             self.inner
-                .list_records_with_response_status(&record_route, &list_request(options)?)
+                .list_records(&record_route, &list_request(options)?)
                 .await
                 .map_err(client_error)
-                .and_then(|observed| {
-                    let (value, response_status) = observed.into_parts();
-                    let value = page_value(value)?;
-                    Ok(ObservedPageOutcome {
-                        kind: value.kind,
-                        value: value.value,
-                        continuation: value.continuation,
-                        trace_id: value.trace_id,
-                        etag: value.etag,
-                        snapshot: value.snapshot,
-                        valid_at: value.valid_at,
-                        response_status,
-                    })
-                })
+                .and_then(page_value)
         })
         .await
     }

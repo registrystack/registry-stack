@@ -191,19 +191,6 @@ impl BaseRegistryClient {
         record_identifier: &str,
         options: &BRegRecordOptions,
     ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
-        self.get_record_with_response_status(record_route, record_identifier, options)
-            .await
-            .map(BRegObservedRead::into_outcome)
-    }
-
-    /// Retain actual response status after the same canonical read validation.
-    pub async fn get_record_with_response_status(
-        &self,
-        record_route: &str,
-        record_identifier: &str,
-        options: &BRegRecordOptions,
-    ) -> Result<BRegObservedRead<BRegComplete<RegistryRecordSingleResponse>>, BaseRegistryClientError>
-    {
         validate_record_route(record_route)?;
         validate_record_uuid(record_identifier)?;
         let mut pairs = Vec::new();
@@ -220,7 +207,7 @@ impl BaseRegistryClient {
                 EntityTagExpectation::Required,
             )
             .await?;
-        decode_breg_single_with_response_status(wire, format, self.deployment_prefix())
+        decode_breg_single(wire, format, self.deployment_prefix())
     }
 
     /// Retrieve the first page of one Base Registry Engine record collection.
@@ -230,25 +217,11 @@ impl BaseRegistryClient {
         request: &BRegListRequest,
     ) -> Result<BRegComplete<BRegPage<RegistryRecordCollectionResponse>>, BaseRegistryClientError>
     {
-        self.list_records_with_response_status(record_route, request)
-            .await
-            .map(BRegObservedRead::into_outcome)
-    }
-
-    /// Retain actual response status after the same canonical read validation.
-    pub async fn list_records_with_response_status(
-        &self,
-        record_route: &str,
-        request: &BRegListRequest,
-    ) -> Result<
-        BRegObservedRead<BRegComplete<BRegPage<RegistryRecordCollectionResponse>>>,
-        BaseRegistryClientError,
-    > {
         validate_record_route(record_route)?;
         let pairs = request
             .query_pairs()
             .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
-        self.collection_page_with_response_status(
+        self.collection_page(
             record_route,
             &pairs,
             request.record_options().format_value(),
@@ -1163,28 +1136,6 @@ impl BaseRegistryClient {
         expected: Option<&BRegContinuation>,
     ) -> Result<BRegComplete<BRegPage<RegistryRecordCollectionResponse>>, BaseRegistryClientError>
     {
-        self.collection_page_with_response_status(
-            record_route,
-            pairs,
-            format,
-            access_profile,
-            expected,
-        )
-        .await
-        .map(BRegObservedRead::into_outcome)
-    }
-
-    async fn collection_page_with_response_status(
-        &self,
-        record_route: &str,
-        pairs: &[(String, String)],
-        format: BRegRecordFormat,
-        access_profile: Option<&str>,
-        expected: Option<&BRegContinuation>,
-    ) -> Result<
-        BRegObservedRead<BRegComplete<BRegPage<RegistryRecordCollectionResponse>>>,
-        BaseRegistryClientError,
-    > {
         validate_record_route(record_route)?;
         let wire = self
             .get(
@@ -1195,7 +1146,6 @@ impl BaseRegistryClient {
                 EntityTagExpectation::Forbidden,
             )
             .await?;
-        let status = wire.status;
         let complete = decode_breg_collection(wire, format, self.deployment_prefix())?;
         if expected.is_some_and(|expected| !expected.matches_meta(&complete.value.meta)) {
             return Err(body_failure(
@@ -1225,16 +1175,13 @@ impl BaseRegistryClient {
                     Some(complete.metadata.trace_id().clone()),
                 )
             })?;
-        Ok(BRegObservedRead::new(
-            BRegComplete {
-                value: BRegPage {
-                    value: complete.value,
-                    continuation,
-                },
-                metadata: complete.metadata,
+        Ok(BRegComplete {
+            value: BRegPage {
+                value: complete.value,
+                continuation,
             },
-            status,
-        ))
+            metadata: complete.metadata,
+        })
     }
 
     async fn record_collection(
@@ -2290,16 +2237,6 @@ fn body_error<T>(complete: &BRegComplete<T>) -> BaseRegistryClientError {
     )
 }
 
-fn decode_breg_single_with_response_status(
-    wire: BRegWire,
-    format: BRegRecordFormat,
-    deployment_prefix: &str,
-) -> Result<BRegObservedRead<BRegComplete<RegistryRecordSingleResponse>>, BaseRegistryClientError> {
-    let status = wire.status;
-    decode_breg_single(wire, format, deployment_prefix)
-        .map(|outcome| BRegObservedRead::new(outcome, status))
-}
-
 fn decode_breg_single(
     wire: BRegWire,
     format: BRegRecordFormat,
@@ -3287,29 +3224,4 @@ fn problem_failure(status: StatusCode, trace_id: TraceId) -> BaseRegistryClientE
         BRegProtocolFailure::Problem,
         Some(trace_id),
     )
-}
-
-#[cfg(test)]
-mod observed_read_status_tests {
-    use super::*;
-    #[tokio::test]
-    async fn observed_decoder_preserves_actual_distinct_response_statuses() {
-        // Lower decoder control only: public reads still reject non200 before here.
-        for status in [200, 201] {
-            let response: reqwest::Response = axum::http::Response::builder().status(status)
-                .header("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
-                .body(serde_json::json!({"data":{"recordIdentifier":"00000000-0000-4000-8000-000000000001","revisionIdentifier":"1","domainData":{}},"meta":{"registryIdentifier":"registry","datasetIdentifier":"dataset","recordTypeIdentifier":"company"}}).to_string()).unwrap().into();
-            let actual = response.status().as_u16();
-            let trace = breg_trace_id(response.status(), response.headers()).unwrap();
-            let body = response.bytes().await.unwrap().to_vec();
-            let wire = BRegWire { body, status: actual, metadata: BRegResponseMetadata::new(trace, Some(BRegEtag::parse("\"breg-record\"").unwrap())), media_type: APPLICATION_JSON.to_owned(), link: Some("<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/company>; rel=\"describedby\"".to_owned()) };
-            let observed = decode_breg_single_with_response_status(
-                wire,
-                BRegRecordOptions::default().format_value(),
-                "",
-            )
-            .unwrap();
-            assert_eq!(observed.response_status(), status);
-        }
-    }
 }

@@ -72,14 +72,6 @@ pub struct CaseworkOutcome {
     pub trace_id: String,
 }
 
-#[napi(object)]
-pub struct ObservedCaseworkOutcome {
-    pub kind: String,
-    pub value: Value,
-    pub trace_id: String,
-    pub response_status: u16,
-}
-
 #[napi(js_name = "CaseworkClient")]
 pub struct CaseworkClient {
     inner: CoreClient,
@@ -265,16 +257,16 @@ impl CaseworkClient {
         query: Option<Value>,
         source_profile: Option<String>,
         source_credential: Option<HumanSourceCredential>,
-    ) -> Result<ObservedCaseworkOutcome> {
+    ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
         let source_token = source_credential
             .as_ref()
             .map(|source| bearer(source.token.clone()))
             .transpose()?;
         let query: ReviewStaffingQuery = query.map(input).transpose()?.unwrap_or_default();
-        observed_outcome(
+        outcome(
             self.inner
-                .review_tasks_with_response_status(
+                .review_tasks(
                     optional_source_auth(
                         &token,
                         &profile,
@@ -358,15 +350,15 @@ impl CaseworkClient {
         task_id: String,
         source_profile: Option<String>,
         source_credential: Option<HumanSourceCredential>,
-    ) -> Result<ObservedCaseworkOutcome> {
+    ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
         let source_token = source_credential
             .as_ref()
             .map(|source| bearer(source.token.clone()))
             .transpose()?;
-        observed_outcome(
+        outcome(
             self.inner
-                .review_task_with_response_status(
+                .review_task(
                     optional_source_auth(
                         &token,
                         &profile,
@@ -1405,24 +1397,6 @@ fn input<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     }
     serde_json::from_value(value)
         .map_err(|_| binding_error("invalid-request", "Casework client arguments are invalid"))
-}
-
-fn observed_outcome<T: Serialize>(
-    value: std::result::Result<
-        registry_casework_client::CaseworkObservedRead<
-            registry_casework_client::CaseworkComplete<T>,
-        >,
-        CaseworkClientError,
-    >,
-) -> Result<ObservedCaseworkOutcome> {
-    let (value, response_status) = value.map_err(client_error)?.into_parts();
-    let value = outcome(Ok(value))?;
-    Ok(ObservedCaseworkOutcome {
-        kind: value.kind,
-        value: value.value,
-        trace_id: value.trace_id,
-        response_status,
-    })
 }
 
 fn outcome<T: Serialize>(

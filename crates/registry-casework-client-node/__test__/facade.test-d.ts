@@ -120,18 +120,3 @@ void client.previewReviewTaskTemplates(token, profile, { taskId: id, sourceCrede
 void client.reviewTasks(token, profile, undefined, undefined, { token: 'source' })
 // @ts-expect-error credentials are opaque strings, not decoded claim objects
 void client.reviewTasks(token, profile, undefined, undefined, { sourceProfile: 'source-reader', token: { sub: 'person' } })
-
-async function observedReadTypes(c: CaseworkClient) {
-  const result = await c.reviewTask('token','staff','id');
-  const status:number = result.responseStatus;
-  // @ts-expect-error response status is readonly
-  result.responseStatus=201;
-  const page = await c.reviewTasks('token','staff');
-  const pageStatus:number=page.responseStatus;
-  // @ts-expect-error unrelated reads do not acquire status
-  (await c.description('token','staff')).responseStatus;
-  // @ts-expect-error mutations keep the legacy outcome type
-  (await c.claimReviewTask("token", "staff", "id", 1, "synthetic-key")).responseStatus;
-  void status; void pageStatus;
-}
-void observedReadTypes;
