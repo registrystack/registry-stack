@@ -1795,7 +1795,7 @@ impl CaseworkClient {
             Err(error) => {
                 return CaseworkClientError::Transport {
                     kind: read_failure_kind(&error),
-                };
+                }
             }
         };
         let document = match ProblemDocument::parse_exact(&body, MAXIMUM_PROBLEM_BYTES as usize) {
@@ -1843,7 +1843,7 @@ impl CaseworkClient {
                     [allowed] => match allowed.to_str().ok().and_then(validation_allowed) {
                         Some(allowed) => allowed,
                         None => {
-                            return protocol(status, CaseworkProtocolFailure::Problem, trace_id);
+                            return protocol(status, CaseworkProtocolFailure::Problem, trace_id)
                         }
                     },
                     _ => return protocol(status, CaseworkProtocolFailure::Problem, trace_id),
