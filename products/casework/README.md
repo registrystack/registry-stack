@@ -10,8 +10,8 @@ newer is required for activation and runtime startup.
 Start with the [standalone decision project](examples/standalone-decision/casework.yaml)
 for a submitted snapshot. The [canonical review project](examples/canonical-review/README.md)
 adds a BReg Proposal with current-source context. The [runtime configuration
-guide](RUNTIME-CONFIG.md) and [current-source development guide](DEV-SOURCES.md)
-cover deployment bindings. The [task grant guide](TASK_GRANTS.md) covers bounded
+reference](https://docs.registrystack.org/reference/casework-configuration/) and [current-source pairing guide](https://docs.registrystack.org/configure/casework/#pair-a-current-source-provider)
+cover deployment bindings. The [task grant reference](https://docs.registrystack.org/reference/casework-task-grants/) covers bounded
 institutional agents. The generated [OpenAPI contract](generated/registry-casework.openapi.json)
 and [CLI report contract](contracts/cli/README.md) own exact wire shapes.
 The [stage outcomes example](examples/stage-outcomes/README.md) keeps one review
@@ -168,31 +168,10 @@ submission digest and carries a terminal status such as `approved`,
 `rejected`, `answered`, `cancelled`, or `superseded`. A decided result names
 its `outcome` and any `publicReason`; a cancelled or superseded one carries
 neither. A completion destination,
-when configured, receives an authenticated [completion wake](COMPLETION-RECEIVERS.md)
+when configured, receives an authenticated [completion wake](https://docs.registrystack.org/configure/casework-completion-receivers/)
 with event, request and result identifiers. Delivery is at-least-once. A wake carries
 no decision payload; the producer fetches the result and authorizes any later
 mutation independently.
-
-## Refused older spellings
-
-`caseworkctl check` and the runtime refuse the older project spellings below
-at their path, name the replacement, and point at the row of the format table
-in [CHANGELOG.md](CHANGELOG.md). Rewrite the project by hand; there is no
-migration command. The identifier-keyed maps of row F4 are a configuration
-shape only: the served policy lists those items as arrays in identifier order,
-so reordering a map changes neither the served policy nor its digest.
-
-| Row | Before | After |
-| --- | --- | --- |
-| F1 | subject clock `after: {elapsed: PT48H}` | `after: {hours: 48}`; exactly one of `minutes`, `hours` or `days` (24 hours) |
-| F2 | `retention: {terminalDays, accountabilityDays}` on a review policy | `retention: {terminalRetentionDays, accountabilityRetentionDays}` |
-| F3 | trusted producer `recoveryDays: N` | `retention: {receiptRetentionDays: N}`, at most 365 |
-| F4 | `accessProfiles`, `queues`, `teams`, `trustedProducers`, `calendars`, `clocks`, `reviewPolicies`, `contextProviders`, `taskTemplates`, a policy's `outcomes` and a clock's `reminders` as lists of `{id: ..., ...}` | mappings from each id to the rest of its entry, `queues: {QUEUE_ID: {label: ...}}` |
-| F5 | `type: activity` | `type: stage` |
-| F6 | `anchor: request-accepted-at`, `anchor: stage-entered-at` | `anchor: {type: request-accepted}`, `anchor: {type: stage-entered}` |
-| F7 | subject clock `completeOn: result-terminal` | removed; a subject clock completes when the result is terminal |
-| F8 | `atRisk: {workingDaysBefore: N}`, reminder `workingDaysBefore: N` | `atRisk: {before: {workingDays: N}}`, `reminders: {REMINDER_ID: {before: {workingDays: N}}}` |
-| F9 | routing `when: {activity: review}` | removed; a rule applies whenever a task is created, and one naming a `stage` matches only that stage's tasks |
 
 ## Distinct approvals and source versions
 
@@ -339,7 +318,7 @@ source profiles. Ordinary staff and producer routes retain their own
 authentication. Current-source context additionally requires
 `delegatedDisplayExchange` and an institution-approved source agent profile;
 the Casework bearer is never forwarded to BReg. See
-[the composition design](../platform/MCP-GATEWAY.md) and
+[the MCP gateway configuration](https://docs.registrystack.org/configure/breg-mcp/) and
 [the staff runtime example](../platform/examples/mcp-runtime/casework.example.yaml).
 
 Pairing refusals retain `casework.provider-pair.contract-mismatch`,
@@ -382,87 +361,10 @@ For local development, configure `dev-clients.yaml` `integrations` explicitly
 and start the BReg dev session separately. Running `caseworkctl dev start`
 with `--issuer-project ./breg-project` borrows a ready BReg issuer only after the
 Casework clients and their precise grants have been registered there. See
-[DEV-SOURCES.md](DEV-SOURCES.md) for provider and secret-file configuration.
+[the pairing guide](https://docs.registrystack.org/configure/casework/#pair-a-current-source-provider) for provider and secret-file configuration.
 The BReg producer owns Proposal submission, cancellation, and result
 consumption. Applying the Proposal uses a separate BReg principal and BReg's
 own fresh authority check.
-
-## Staffing and accountability
-
-All staffing operates on `ReviewTask`. Six supported outcomes share the same
-current Directory, policy, task, and source-disclosure checks:
-
-1. `GET /v1/review-tasks/next` returns the earliest due visible eligible task;
-   it ignores `sort`, `limit`, and `cursor`.
-2. `GET /v1/review-tasks/holdings` returns the caller's claimed or assigned tasks.
-3. `POST /v1/directory/caseload/preview` and `/apply` move an exact,
-   revision-fenced set atomically.
-4. `GET /v1/review-tasks` filters by an exact five-part SubjectBinding or a
-   visible reference and sorts by due date, subject, or reference. Selection
-   never discovers arbitrary source records. Follow `nextCursor` unchanged;
-   restart the walk when a live source change makes a cursor stale. The
-   reference filter and sort match the exact reference the producer or
-   provider supplies. A BReg producer supplies its machine string
-   `breg:{registry}:{action}:{proposal}:{version}`, so staff cannot find a
-   BReg review by a business number such as a licence number.
-5. `POST /v1/directory/clocks/recompute/preview` and `/apply` recompute
-   deadlines against the request's pinned policy closure. A subject clock
-   covers one request, and a resubmission starts a new budget.
-6. Authored routing evaluates only declared fields at task or stage creation.
-   Submitted routing reads the admitted snapshot; current-source routing uses
-   the provider's minimized routing capability and retains derived metadata.
-
-`GET /v1/review-tasks/own-decisions` lets an eligible reviewer recover their
-own retained decision receipts. Supervisors can inspect their serving queues
-through `/v1/review-tasks/supervision` and independently authorized, audited
-`/v1/review-accountability/{eventId}`. Own receipts omit private reasons and
-producer results; accountability does not release review context. Directory
-teams, absence cover, membership, and queue service remain current authority.
-An opaque task reference or cursor grants no access. A decided row in either
-list still asks the current source whether the caller can see the subject, with
-the caller's bearer and source profile; a concealed subject is omitted and any
-source error fails closed. A decided task read and the history, including notes,
-of a settled request instead release retained Casework-owned records under
-current Casework authority until terminal retention expires. They do not
-release source context: `/v1/review-tasks/{taskId}/context` still asks the source
-and answers not found when the source conceals the subject. Adding a new note
-also retains the current source-visibility check.
-
-List, next-task and holdings reads ordered by due date or subject select a
-bounded SQL page before current-source reads. Their opaque continuation binds
-the caller, profiles and query, and rechecks the anchor's current authority.
-Live-reference filtering or sorting still completes a bounded scan before
-returning globally ordered results; a smaller page cannot reduce that scan.
-`inbox.maximumCandidateScan` defaults to 100, `maximumSourceReads` to 25 and
-`pageDeadlineMilliseconds` to 2000. Source observations are shared by task
-slots belonging to the same request for this invocation only. Continuation
-anchor validation consumes the same source-observation budget as candidates.
-Exceeding a scan or source-observation budget refuses the whole ordinary read
-with `review.query-too-broad`; a provider timeout reports source unavailability.
-Narrow the queue or exact subject, reduce an ordinary page size, or size the
-budgets for the candidate page and measured source latency. These three reads
-do not return partial budget-exhausted pages.
-
-Caseload preview deliberately selects all of the source officer's claimed
-tasks, optionally restricted to one queue, with a maximum of 100 tasks. It
-has no subset, limit or continuation parameter. Apply moves that exact
-revision-fenced set atomically. Use individual authorized task assignments
-for a selected subset; those assignments are independent transactions.
-Apply a caseload or clock recompute preview within 15 minutes. Once applied,
-a retry with the same preview answers the same result for 24 hours, even if
-the Directory changed since, so a lost response can be recovered.
-
-Supervisory discovery deliberately omits holder identities and due dates.
-It is an accountability view, not a team holdings board. Use the Directory
-to choose the source officer and an authorized caseload preview to inspect
-the proposed move. Reviewer eligibility is not a substitute for supervisor
-authority.
-
-An authorized ReviewTask read or supervisory row can include
-`staffingDiagnostic: no-cover-available` when assignment or absence recompute
-finds no eligible cover. This notice reveals no holder or source context.
-Successful assignment, claim, caseload transfer, release or task closure clears
-it; a closed task does not display an old staffing notice.
 
 ## Package, activate, and recover
 
@@ -528,7 +430,7 @@ backup-point activation and holding, fresh readiness, and append-only audit
 after a restore. A logical database restore does not rewind the external audit
 journal or inherit authority from a later result.
 
-The runtime's [configuration reference](RUNTIME-CONFIG.md) owns every field and
+The runtime's [configuration reference](https://docs.registrystack.org/reference/casework-configuration/) owns every field and
 recovery diagnostic. JSON CLI reports use one versioned typed envelope with
 machine-readable codes and suggested actions. A domain refusal exits 1,
 invalid usage 2, and unavailable local or remote resources 3.
@@ -582,7 +484,7 @@ provider pairing, check, package, apply and doctor on the prepared source.
 Missing provider descriptions remain missing until normal pairing, and ordinary
 production packaging still refuses an incomplete closure.
 
-`rstack dev` owns the corresponding [run declaration](../platform/PROJECT-DEV.md).
+`rstack dev` owns the corresponding [run declaration](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
 Subjects and grants never change. Initiator opt-in acknowledges issuer trust
 under the existing producer, not an enforced subject allowlist. Original and
 transformed hashes and the exact permitted pointers are reported without

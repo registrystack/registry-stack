@@ -92,7 +92,7 @@ template; omission means the existing immediate mode. Approval still selects
 only the governed template ID and version. Keep the grant ID, original deadline,
 and business operation's idempotency key across a delay or restart. Acquire a
 fresh assertion when executing; its short credential lifetime does not extend
-the approved deadline. See the [task-grant lifecycle](../../products/casework/TASK_GRANTS.md)
+the approved deadline. See the [task-grant lifecycle](https://docs.registrystack.org/reference/casework-task-grants/)
 for expiry, revocation, and changes that require another approval.
 
 `review_policies` and `review_policy` return compiled policy closures. Admission

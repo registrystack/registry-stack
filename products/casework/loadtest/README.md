@@ -181,86 +181,28 @@ to `casework_review_history` inside the mutating transaction. Audit entries go
 to the runtime's audit destination, which `caseworkctl dev` places in the
 project's private state, so no database table carries them.
 
-## Interpreting results
+## Reading results
 
-- The runtime's PostgreSQL pool is fixed at 32 connections with a 5-second
-  checkout wait (`crates/registry-casework/src/store.rs`). Neither
-  `caseworkctl dev` nor runtime configuration can change it, so the manifest
-  records the constant, and tuning it is out of scope for this harness.
-- The inbox list is the expected hot spot. One page of 25 loads up to 100
-  candidate tasks, reads each candidate's request, then checks each returned
-  task again, each on its own pool checkout. Expect `list_tasks` to dominate
-  p99 and to be the first operation to degrade as the pool saturates.
-- A cursor anchored on a task that has since left the caller's inbox (claimed
-  by another reviewer or decided) is refused with 410. Profiles anchor
-  continuations inside the never-mutated read pool, so 410s in a result are a
-  finding, not expected churn.
-- The `steady` p99 bounds are roughly twice the worst p99 of two 1-minute
-  release-build runs on 2026-09-25 (Apple Silicon laptop, PostgreSQL under
-  OrbStack, 1,000 seeded requests). Both runs held their rate with no drops or
-  failures:
-
-  | Operation | p99 at 10 ops/s | p99 at 20 ops/s | Bound |
-  |---|---|---|---|
-  | `get_task` | 46 ms | 20 ms | 100 ms |
-  | `get_request` | 76 ms | 14 ms | 150 ms |
-  | `list_tasks` | 371 ms | 309 ms | 750 ms |
-  | `decide_task` | 225 ms | 190 ms | 500 ms |
-  | all requests | 361 ms | 268 ms | 750 ms |
-
-  The 10 ops/s run overlapped heavier host load than the 20 ops/s run, which
-  is why some of its tails are longer. Re-derive the bounds before tightening
-  them; they catch regressions and are not an SLO.
-- Do not measure while the host is compiling. An earlier 20 ops/s run taken
-  while parallel release builds held the load average above 60 dropped
-  arrivals and pushed `list_tasks` p99 past 3 seconds.
+- The runtime's PostgreSQL pool is fixed at 32 connections with a 5 second checkout wait, and
+  neither `caseworkctl dev` nor runtime configuration changes it. The manifest
+  records the constant.
+- The inbox list is the expected hot spot: one page loads a bounded set of
+  candidate tasks and checks each on its own pool checkout. Expect `list_tasks`
+  to dominate p99 and to degrade first as the pool saturates.
+- A cursor anchored on a task that has left the caller's inbox is refused with
+  410. Profiles anchor continuations inside the never-mutated read pool, so a
+  410 in a result is a finding.
+- The `steady` p99 bounds catch regressions; they are not an SLO. Re-derive them
+  on your own hardware before tightening them, and do not measure while the host
+  is compiling.
 - Casework has no request-timeout layer. Saturation shows first as rising
-  latency, then as 503 `service-unavailable` once a request waits more than 5
-  seconds for a pool connection (`crates/registry-casework/src/store.rs`).
-  The shared `timeouts504` field therefore stays zero; read the 503 count in
-  `httpStatuses` instead.
-- Recovery is a separate burst scenario. Do not average it together with the
-  overloaded phase.
-- macOS Docker figures are directional. Re-run candidate capacity claims on a
-  representative Linux host before citing them.
-
-## Known gaps
-
-- Only submitted-context reviews are measured. Current-source reads through a
-  purpose-bound BReg provider, including human disclosure and service status,
-  need a configured BReg package and are not covered.
-- The scenario exercises ReviewTask claim and decision traffic, but does not
-  measure due-ordered next-task selection, member holdings, caseload movement,
-  or clock recomputation after staffing changes.
-- Staff traffic comes from one principal, so per-member inbox fan-out across a
-  large team is not modeled.
-
-## Verification
-
-```bash
-python3 -m unittest scripts/loadtest/test_evidence.py products/casework/loadtest/support/test_harness.py -v
-for script in products/casework/loadtest/{up,down,run,dbstats}.sh; do bash -n "$script"; done
-shellcheck -x products/casework/loadtest/*.sh
-run="$PWD/products/casework/loadtest/.run"
-secrets="$run/project/.casework/dev/secrets"
-for client in loadtest-staff loadtest-producer; do
-  DYLD_FALLBACK_LIBRARY_PATH="$(jq -r .runtime_library_path "$run/env.json")" \
-    python3 products/casework/loadtest/support/loadenv.py header \
-    --caseworkctl "$(jq -r .caseworkctl "$run/env.json")" --project "$run/project" --client "$client" >/dev/null
-done
-for profile in products/casework/loadtest/profiles/*.js; do
-  k6 inspect \
-    -e READ_TASKS_FILE="$run/seed/read-tasks.txt" \
-    -e STAFF_HEADER_FILE="$secrets/loadtest-staff.header" \
-    -e PRODUCER_HEADER_FILE="$secrets/loadtest-producer.header" \
-    -e RUN_NONCE=inspect \
-    "$profile" >/dev/null
-done
-```
-
-The inspect loop uses the synthetic seed pool and fresh headers from a running
-environment because the profiles load them during k6 initialization. The paths
-are absolute because k6 resolves a relative `open()` path against the module
-that calls it, not the working directory. The unit
-tests include a k6 run of `smoke` against a loopback stub when k6 is
-installed; the live `smoke` is the end-to-end proof against the runtime.
+  latency, then as 503 `service-unavailable` once a request waits too long for a
+  pool connection. The shared `timeouts504` field stays zero; read the 503 count
+  in `httpStatuses`.
+- Recovery is a separate burst scenario; do not average it with the overloaded
+  phase.
+- Figures from a development container host are directional. Re-run capacity
+  claims on a representative Linux host before citing them.
+- Only submitted-context reviews are measured. Current-source reads, due-ordered
+  next-task selection, member holdings, caseload movement, clock recomputation
+  and per-member inbox fan-out across a large team are not covered.
