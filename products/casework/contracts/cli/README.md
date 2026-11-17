@@ -48,12 +48,6 @@ project clock, calendar, and trusted producer at project level. The policy's
 `dependencies` retain the whole-project access-profile, queue, team, and inbox
 closure; the narrower usage lists do not change binding scope.
 
-`v1alpha2` makes `usedQueues`, `decidingProfiles`,
-`eligibleDecidingProfiles`, and `dependencyScope` required on every explained
-policy, and makes project-level `clocks`, `calendars`, and `trustedProducers`
-required on every successful `explain` report. Consumers of `v1alpha1` must
-accept the `v1alpha2` namespace and these required members together.
-
 Regenerate or verify the contract from the repository root:
 
 ```sh

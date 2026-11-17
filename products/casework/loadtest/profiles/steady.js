@@ -54,7 +54,7 @@ export const options = {
     decision_flows_completed: ['count>0'],
     // Roughly twice the worst p99 of two 1-minute release-build runs at 10 and
     // 20 operations/s on an Apple Silicon laptop with PostgreSQL under
-    // OrbStack; see README.md, "Interpreting results". They catch a
+    // OrbStack; see README.md, "Reading results". They catch a
     // regression, not an SLO.
     'http_req_duration{name:get_task}': ['p(99)<100'],
     'http_req_duration{name:get_request}': ['p(99)<150'],
