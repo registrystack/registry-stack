@@ -42,7 +42,7 @@ named operators it serves; Coordinator refuses a token for any other subject and
 carrying `act`. The calling backend must already have authorized the review subject and
 requester reference for the person concerned, because Coordinator does not compare them with
 the caller's subject. The template contains synthetic HTTPS endpoints and secret references.
-Adapt it outside the package and follow the [deployment runbook](../../DEPLOYMENT.md).
+Adapt it outside the package and follow the [deployment runbook](https://docs.registrystack.org/operate/coordinator/).
 
 Offline scenarios check results, timeout, cancellation, and races with synthetic replies.
 Maintained Casework-client HTTP checks and Coordinator PostgreSQL checks cover the independent

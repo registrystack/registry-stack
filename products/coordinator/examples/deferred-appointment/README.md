@@ -14,7 +14,7 @@ coordinatorctl test --project products/coordinator/examples/deferred-appointment
 The runtime template uses HTTPS reference endpoints and secret references only.
 Copy it outside the package and adapt its absolute paths, PostgreSQL identity and
 roles, OIDC issuer/audience, exact clients/scopes, task authority and package pin.
-Follow [the deployment runbook](../../DEPLOYMENT.md) for installation and apply.
+Follow [the deployment runbook](https://docs.registrystack.org/operate/coordinator/) for installation and apply.
 The institution must supply these prerequisites:
 
 - Base Registry Engine (BReg) exposes the reviewed `follow-up-reader` profile

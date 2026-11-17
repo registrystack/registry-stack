@@ -62,7 +62,7 @@ receives the call, which decides it under its own authorization.
   retention, or recovery are security-sensitive and need explicit review
   notes in the pull request description. When such a change moves a trust
   boundary, an operator obligation, or an accepted residual, update
-  `SECURITY-MODEL.md` in the same change.
+  the security model page (`docs/site/src/content/docs/security/coordinator.mdx`) in the same change.
 - PostgreSQL verification requires disposable databases and the
   `postgres-test` feature. A test binary that skips because its database URL
   is absent is not database verification.

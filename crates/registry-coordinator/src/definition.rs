@@ -36,10 +36,10 @@ pub const DEFINITION_REFUSED: &str = "definition-refused";
 
 /// Operator advice for a run held because its retained definition does not
 /// restore.
-pub const HELD_RUN_ADVICE: &str = "This run's retained definition no longer restores, so nothing will run for it. Only a release that accepts that definition can end the run. See \"Apply and start\" in products/coordinator/DEPLOYMENT.md.";
+pub const HELD_RUN_ADVICE: &str = "This run's retained definition no longer restores, so nothing will run for it. Only a release that accepts that definition can end the run. See https://docs.registrystack.org/operate/coordinator/#apply-and-start.";
 
 /// Operator advice for a pinned package this version does not restore.
-const PACKAGE_REFUSED_ADVICE: &str = "The service does not start on this package. Correct the workflow project until coordinatorctl check accepts it, then package and apply it. See \"Apply and start\" in products/coordinator/DEPLOYMENT.md.";
+const PACKAGE_REFUSED_ADVICE: &str = "The service does not start on this package. Correct the workflow project until coordinatorctl check accepts it, then package and apply it. See https://docs.registrystack.org/operate/coordinator/#apply-and-start.";
 
 const ADAPTER_ABI: &str = "coordinator/product-operations/v1";
 const SCHEMA_ABI: &str =

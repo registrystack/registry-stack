@@ -5425,7 +5425,7 @@ fn assert_held_run(entry: &Value, run: Uuid, revision: &str) {
     assert_eq!(entry["findingCode"], refused_snapshot::FINDING, "{entry}");
     let advice = entry["advice"].as_str().unwrap();
     assert!(
-        advice.contains("\"Apply and start\"") && advice.contains("DEPLOYMENT.md"),
+        advice.contains("https://docs.registrystack.org/operate/coordinator/#apply-and-start"),
         "{advice}"
     );
     assert!(!advice.contains("Map request"), "{advice}");

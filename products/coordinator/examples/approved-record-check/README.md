@@ -45,7 +45,7 @@ with `credential-refused`, a record the profile no longer shows
 (`product-not-found`), and an unavailable credential service
 (`credential-unavailable`). In the service, the Coordinator retries
 `credential-unavailable` on its own within the deadline, as
-[Recover safely](../../DEPLOYMENT.md#recover-safely) describes; the scenario
+[Recover safely](https://docs.registrystack.org/operate/coordinator/#recover-a-run) describes; the scenario
 stops at the first such answer. The scenarios use synthetic replies only, so
 they do not prove Casework approval, task-grant exchange or BReg access policy.
 
@@ -83,5 +83,5 @@ identifier, exactly as its metadata publishes it, which the client's signed
 assertion carries as its only audience (RFC 10070 section 4). Copy it outside
 the package and
 adapt its endpoints, PostgreSQL identity and roles, client, task authority and
-package pin. Follow [the deployment runbook](../../DEPLOYMENT.md) for
+package pin. Follow [the deployment runbook](https://docs.registrystack.org/operate/coordinator/) for
 installation and apply.
