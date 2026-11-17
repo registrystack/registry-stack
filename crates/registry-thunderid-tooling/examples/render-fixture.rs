@@ -1,6 +1,6 @@
-//! Regenerate the stored synthetic session fixture. Output is deterministic
-//! for a pinned release and a fixed description; committed copies under
-//! `products/identity/thunderid/fixtures/` must come from this command.
+//! Render the synthetic ThunderID description into `OUTPUT_DIR` and print the
+//! resource and schema directories with the agent-type schema digest. Output is
+//! deterministic for a pinned release and a fixed description.
 use std::path::PathBuf;
 
 fn main() {

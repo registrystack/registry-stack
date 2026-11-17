@@ -847,8 +847,8 @@ pub fn check_script_coverage(bundle: &Bundle) -> Vec<Diagnostic> {
 /// Every locale of a document must define the same label key set: a key
 /// missing from one locale fails only that locale's render, at template
 /// runtime — the worst place to discover it. `check` (and serve startup)
-/// name the divergence up front, so PAYLOAD.md's "a missing label key is a
-/// `registry-render check` error, not a runtime surprise" holds.
+/// name the divergence up front, so a missing label key is a
+/// `registry-render check` error, not a runtime surprise.
 pub fn check_label_key_sets(bundle: &Bundle) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     for document in bundle.documents.values() {

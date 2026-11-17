@@ -85,7 +85,7 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
     );
 }
 
-/// The scaffold prints the seal block PAYLOAD.md shows: a sealed render
+/// The scaffold prints the seal block the payload reference shows: a sealed render
 /// differs from a plain one, and a test seal adds its test line. Strict
 /// rendering keeps each one warning-free.
 #[test]

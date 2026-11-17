@@ -3,10 +3,8 @@
 //! [`synthetic_description`] is the closed, product-neutral description the
 //! integration tests render and load on the pinned upstream container. It
 //! names no product, institution, person, or purpose — the neutral
-//! vocabulary of the description type is the whole of what it exercises. A
-//! stored copy of the fully rendered fixture lives under
-//! `products/identity/thunderid/fixtures/` and must be regenerable from this
-//! description alone.
+//! vocabulary of the description type is the whole of what it exercises. The
+//! fully rendered fixture must be regenerable from this description alone.
 
 use std::collections::BTreeMap;
 

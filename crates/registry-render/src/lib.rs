@@ -62,7 +62,7 @@ pub use render::{render, render_with_limits, RenderRequest, Rendered};
 pub const TYPST_PIN: &str = "0.15.1";
 
 /// The fixed, version-free `/Creator` string written into every PDF. The
-/// renderer version must appear nowhere in the PDF bytes (PAYLOAD.md), so
+/// renderer version must appear nowhere in the envelope or the PDF bytes, so
 /// this string never carries one; `tests/golden.rs` pins its presence.
 pub const PDF_CREATOR: &str = "registry-render";
 

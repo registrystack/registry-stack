@@ -336,8 +336,8 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
 
 /// A sealed document type checks clean, from the bundle alone, under every
 /// PDF/A level `pdfStandard` accepts, under PDF/UA-1 and under a plain PDF
-/// version: veraPDF has passed each level rendered and sealed (`EVIDENCE.md`),
-/// so no level is warned about.
+/// version: veraPDF has passed each level rendered and sealed, so no level is
+/// warned about.
 #[test]
 fn check_accepts_a_seal_under_every_pdf_standard() {
     let temporary = tempfile::tempdir().unwrap();
