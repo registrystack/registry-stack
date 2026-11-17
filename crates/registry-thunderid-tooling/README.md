@@ -26,15 +26,17 @@ or OID4VCI runtime crate may depend on it.
    (`issuer::IssuerEndpoints`). No secret, key, or token is ever returned,
    logged, or placed in an argv element.
 
-## Regenerating the stored fixture
+## Rendering the synthetic session fixture
 
 ```bash
-cargo run -p registry-thunderid-tooling --example render-fixture -- \
-  products/identity/thunderid/fixtures/synthetic-session
+cargo run -p registry-thunderid-tooling --example render-fixture -- OUTPUT_DIR
 ```
 
-The committed fixture under `products/identity/thunderid/fixtures/` must come
-from this command, never from hand editing.
+The command writes the synthetic session resources, registry schema and a
+placeholder client secret under `OUTPUT_DIR`. Output is deterministic for a
+pinned release and a fixed description. It replaces any existing `resources/`
+and `registry-schema/` under `OUTPUT_DIR`, so point it at an empty or scratch
+directory.
 
 ## Institutional token exchange
 

@@ -31,8 +31,8 @@ labels:
 const TEMPLATE_HEAD: &str = r#"// Starter document. It compiles offline: the binary embeds baseline
 // Latin fonts, and the data contract below is checked before rendering.
 //
-// Everything the renderer gives you is in one value (see PAYLOAD.md in the
-// product docs):
+// Everything the renderer gives you is in one value (see
+// https://docs.registrystack.org/reference/render-payload/):
 #let payload = json(bytes(sys.inputs.data))
 #let d = payload.data
 #let L = payload.labels.{LOCALE}
@@ -59,8 +59,9 @@ const TEMPLATE_HEAD: &str = r#"// Starter document. It compiles offline: the bin
 #d.body
 
 #v(1fr)
-// The seal route adds `signing` (see PAYLOAD.md); the render route never
-// does. A test seal is not an official document: keep its line visible.
+// The seal route adds `signing` (see
+// https://docs.registrystack.org/reference/render-payload/#the-signing-member);
+// the render route never does. A test seal is not an official document: keep its line visible.
 #let signing = payload.at("signing", default: none)
 #if signing != none [
   #L.sealed-by #signing.at("signerName", default: L.seal-authority).

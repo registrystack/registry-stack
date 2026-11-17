@@ -260,7 +260,8 @@ fn the_sealed_variant_golden_matches() {
 fn rendering_is_deterministic_across_fresh_worlds_and_processes() {
     // Twice in-process (fresh world and library per render by construction),
     // plus the hash equality across separate CLI processes is enforced by
-    // the merge-gate evidence in products/render/EVIDENCE.md.
+    // the pinned golden hashes, which the render-golden workflow compares on
+    // two operating systems.
     for case in cases() {
         let first = render_case(&case);
         let second = render_case(&case);
@@ -302,7 +303,7 @@ fn injected_bytes_are_the_hashed_canonical_bytes() {
 
 #[test]
 fn pdf_bytes_carry_no_renderer_version() {
-    // PAYLOAD.md: the renderer version appears nowhere in the envelope or
+    // The renderer version appears nowhere in the envelope or
     // the PDF bytes. The /Creator and XMP CreatorTool strings are fixed and
     // version-free, so a Typst pin bump changes bytes only when layout
     // changes.
