@@ -5237,7 +5237,7 @@ fn record_event_trigger<'de, D: Deserializer<'de>>(
     if trigger == "request-lifecycle" {
         return Err(Invalid::expected(
             "a committed Record event trigger",
-            "Move this observer to the Action's `execution.proposal.hooks`, with optional `transitions` selecting the Proposal lifecycle events and the existing governed `handler`. Record hooks use `created`, `patched`, or `tombstoned`. See products/breg/proposals.md.",
+            "Move this observer to the Action's `execution.proposal.hooks`, with optional `transitions` selecting the Proposal lifecycle events and the existing governed `handler`. Record hooks use `created`, `patched`, or `tombstoned`. See https://docs.registrystack.org/configure/breg-proposals/.",
         )
         .into_error());
     }
@@ -5294,10 +5294,10 @@ pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 const HANDLER_TYPE_REPLACEMENT: &str =
     "Rename `kind` to `type`, keeping its value: `type: rhai`, `type: wasm`, or `type: url`.";
 
-const CHANGE_REQUEST_REPLACEMENT: &str = "Declare one Action with `execution.mode: proposal` and its `execution.proposal` review, application and retention policy. Proposal state is owned by the Action, not a Record type. See products/breg/proposals.md.";
-const CHANGE_CONTROL_REPLACEMENT: &str = "Replace `changeControl.requiredFor` with `mutationPolicy`, setting each governed operation (`create`, `patch`, or `tombstone`) to `proposal-required`. Declare Actions with `execution.mode: proposal` for those writes; keep their review and application policy under `execution.proposal`. See products/breg/proposals.md.";
-const REQUEST_VISIBILITY_REPLACEMENT: &str = "Move Proposal authority into the profile's `permissions.proposals` entry for the Action. Use `ownership: caller` for owner-only access, and explicitly retain the required `operations` and target `rowBoundaries`. See products/breg/proposals.md.";
-const READABLE_REQUEST_FIELDS_REPLACEMENT: &str = "Declare the profile's `permissions.proposals` entry for the Action with explicit `readableInputs`, `readableAttachments`, and `readableContextFields` for the disclosure it needs. Review status uses the separate `get-review-status` operation; do not widen Record or Proposal grants. See products/breg/proposals.md.";
+const CHANGE_REQUEST_REPLACEMENT: &str = "Declare one Action with `execution.mode: proposal` and its `execution.proposal` review, application and retention policy. Proposal state is owned by the Action, not a Record type. See https://docs.registrystack.org/configure/breg-proposals/.";
+const CHANGE_CONTROL_REPLACEMENT: &str = "Replace `changeControl.requiredFor` with `mutationPolicy`, setting each governed operation (`create`, `patch`, or `tombstone`) to `proposal-required`. Declare Actions with `execution.mode: proposal` for those writes; keep their review and application policy under `execution.proposal`. See https://docs.registrystack.org/configure/breg-proposals/.";
+const REQUEST_VISIBILITY_REPLACEMENT: &str = "Move Proposal authority into the profile's `permissions.proposals` entry for the Action. Use `ownership: caller` for owner-only access, and explicitly retain the required `operations` and target `rowBoundaries`. See https://docs.registrystack.org/configure/breg-proposals/.";
+const READABLE_REQUEST_FIELDS_REPLACEMENT: &str = "Declare the profile's `permissions.proposals` entry for the Action with explicit `readableInputs`, `readableAttachments`, and `readableContextFields` for the disclosure it needs. Review status uses the separate `get-review-status` operation; do not widen Record or Proposal grants. See https://docs.registrystack.org/configure/breg-proposals/.";
 const EQUALS_INPUT_REPLACEMENT: &str =
     "Rename `equalsInput` to `equalsFromInput`, keeping the same input reference.";
 const FROM_FIELD_REPLACEMENT: &str =

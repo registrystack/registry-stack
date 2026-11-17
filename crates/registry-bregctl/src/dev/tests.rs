@@ -3001,7 +3001,8 @@ fn generated_postgres_leaf_verifies_against_its_distinct_ca() {
 #[test]
 fn the_documented_image_and_deadlines_are_the_supervisors_own() {
     let document = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/DEV.md"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/site/src/content/docs/reference/bregctl-dev.mdx"),
     )
     .expect("the owning lifecycle document");
     // Read the tree the binary publishes. A long description set on DevArgs
@@ -3030,7 +3031,7 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
     ] {
         assert!(
             document.contains(&fact),
-            "products/breg/DEV.md omits {fact}"
+            "the bregctl dev reference page omits {fact}"
         );
         assert!(help.contains(&fact), "bregctl dev start help omits {fact}");
     }
@@ -3042,12 +3043,13 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
 #[test]
 fn dev_start_help_carries_the_outside_kill_fact_and_the_document_sections() {
     let document = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/DEV.md"),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/site/src/content/docs/reference/bregctl-dev.mdx"),
     )
     .expect("the owning lifecycle document");
     assert!(
         document.contains("require inspection of surviving service owners before restart"),
-        "products/breg/DEV.md omits the outside-kill fact"
+        "the bregctl dev reference page omits the outside-kill fact"
     );
     let cli = <crate::Cli as clap::CommandFactory>::command();
     let dev = cli
@@ -3063,11 +3065,17 @@ fn dev_start_help_carries_the_outside_kill_fact_and_the_document_sections() {
     for fact in [
         "uncatchable",
         "surviving service owners",
-        "products/breg/DEV.md",
-        "'Native local BReg lifecycle'",
+        "https://docs.registrystack.org/reference/bregctl-dev/",
         "'Retained state and recovery'",
     ] {
         assert!(help.contains(fact), "bregctl dev start help omits {fact}");
+    }
+    for cited in help.split(" '").skip(1) {
+        let section = cited.split('\'').next().unwrap_or_default();
+        assert!(
+            document.contains(&format!("\n## {section}\n")),
+            "dev start help cites '{section}', which the bregctl dev reference page has no section for"
+        );
     }
 }
 
@@ -3290,7 +3298,7 @@ fn a_failed_issuer_setup_names_the_phase_logs_and_both_recoveries() {
         let reported = format!("{failure:#}");
         assert!(reported.contains("local start failed"), "{reported}");
         // The one private path the refusal may name is the retained logs
-        // directory DEV.md documents; every other `.breg/dev` path stays out.
+        // directory the bregctl dev reference page documents; every other `.breg/dev` path stays out.
         let logs = root.join("logs").display().to_string();
         assert!(reported.contains(&logs), "{reported}");
         let mut rest = reported.as_str();

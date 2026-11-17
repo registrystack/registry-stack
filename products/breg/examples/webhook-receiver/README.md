@@ -1,7 +1,7 @@
 # Durable webhook acceptance example
 
 This receiver uses the Python standard library, the public
-[BReg webhook contract](../../EVENTS-AND-WEBHOOKS.md), and
+[BReg webhook contract](https://docs.registrystack.org/operate/breg-webhooks/), and
 `registry_client.breg.verify_hook_delivery` from the `registry-stack-client`
 package. That function authenticates the signed CloudEvents with the shared
 Rust verifier. The receiver then checks the expected registry/instance/event

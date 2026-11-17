@@ -32,20 +32,17 @@ class BRegProductCatalogTests(unittest.TestCase):
         self.assertNotIn("DEFINITION-OF-DONE.md", paths)
         self.assertIn("contracts/definition-of-done.yaml", paths)
 
-    def test_rls_assurance_and_operator_credential_posture_are_exact(self) -> None:
-        decisions = (VALIDATOR.PRODUCT_ROOT / "DESIGN-CONSTRAINTS.md").read_text(
-            encoding="utf-8"
-        )
-        assurance = (
-            "Generated RLS policies defend against application mistakes and pooled-context\n"
-            "  leakage. They do not constrain a party holding the runtime database\n"
-            "  credential, which can set the same custom transaction context; credential\n"
-            "  posture and rotation remain operator controls."
-        )
-        self.assertIn(assurance, decisions)
-        self.assertNotIn("RLS protects the runtime database credential", decisions)
+    def test_inventory_lists_only_machine_consumed_artifacts(self) -> None:
+        inventory = VALIDATOR.load_yaml(VALIDATOR.CONTRACTS / "artifact-inventory.yaml")
+        prose = [
+            item["path"]
+            for item in inventory["artifacts"]
+            if item["path"].endswith(".md")
+        ]
+        self.assertEqual([], prose)
         self.assertNotIn(
-            "Base Registry Engine rotates the runtime database credential", decisions
+            "contracts/implementation-schedule.yaml",
+            {item["path"] for item in inventory["artifacts"]},
         )
 
     def test_every_pre_w5_security_invariant_is_enforced_with_an_executable_negative(
@@ -569,9 +566,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         with mock.patch.object(
             VALIDATOR, "load_yaml", side_effect=load_without_requirement
         ):
-            VALIDATOR.validate_definition_of_done(
-                {f"W{index}" for index in range(6)}, errors
-            )
+            VALIDATOR.validate_definition_of_done(errors)
         self.assertIn(
             "definition of done: must contain BREG-V1-01 through BREG-V1-44 exactly once in order",
             errors,
@@ -594,9 +589,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         with mock.patch.object(
             VALIDATOR, "load_yaml", side_effect=load_with_duplicate_requirement
         ):
-            VALIDATOR.validate_definition_of_done(
-                {f"W{index}" for index in range(6)}, errors
-            )
+            VALIDATOR.validate_definition_of_done(errors)
         self.assertTrue(
             any("duplicate identifier BREG-V1-01" in error for error in errors), errors
         )
@@ -617,9 +610,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         with mock.patch.object(
             VALIDATOR, "load_yaml", side_effect=load_with_nonexistent_test
         ):
-            VALIDATOR.validate_definition_of_done(
-                {f"W{index}" for index in range(6)}, errors
-            )
+            VALIDATOR.validate_definition_of_done(errors)
         self.assertTrue(
             any("exact executable test does not resolve" in error for error in errors),
             errors,
@@ -639,9 +630,7 @@ class BRegProductCatalogTests(unittest.TestCase):
 
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_stale_gap):
-            VALIDATOR.validate_definition_of_done(
-                {f"W{index}" for index in range(6)}, errors
-            )
+            VALIDATOR.validate_definition_of_done(errors)
         self.assertTrue(any("unknown keys gap" in error for error in errors), errors)
 
     def test_acceptance_matrix_cannot_omit_a_required_journey(self) -> None:
@@ -695,23 +684,6 @@ class BRegProductCatalogTests(unittest.TestCase):
         self.assertTrue(
             any("exact executable test does not resolve" in error for error in errors),
             errors,
-        )
-
-    def test_schedule_exit_criterion_must_resolve(self) -> None:
-        original = VALIDATOR.load_yaml
-
-        def load_unknown_criterion(path: Path):
-            value = copy.deepcopy(original(path))
-            if path.name == "implementation-schedule.yaml":
-                value["waves"][0]["exitCriteria"] = ["BREG-NOT-DECLARED"]
-            return value
-
-        with mock.patch.object(
-            VALIDATOR, "load_yaml", side_effect=load_unknown_criterion
-        ):
-            errors = VALIDATOR.validate_all()
-        self.assertTrue(
-            any("exit criterion does not resolve" in error for error in errors), errors
         )
 
     def test_asset_fixture_cannot_gain_a_business_entity(self) -> None:

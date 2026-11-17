@@ -4,7 +4,7 @@
 # and sha256 to artifacts/module-sizes.tsv, and enforce the module-size
 # ceilings: the build fails, exit 1, when a module exceeds its ceiling.
 #
-# Module-size ceilings (recorded product requirement, Jeremi, 2026-09-18: the
+# Module-size ceilings (product requirement: the
 # build records the produced module's size as a build artifact and fails over
 # the configured ceiling, complementing admission-time enforcement): 2 MiB for
 # ordinary modules, 5 MiB for pre-initialized library modules. Both sit under

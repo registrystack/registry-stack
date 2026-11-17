@@ -36,7 +36,7 @@ Use the adopter guides for authoring, local evaluation, and operation.
 - [Build a registry with Base Registry Engine](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
 - [Create and query your first registry](../../docs/site/src/content/docs/tutorials/first-breg.mdx)
 - [Change a registry with an Action](../../docs/site/src/content/docs/tutorials/change-a-registry-with-an-action.mdx)
-- [Query a spatial registry from QGIS](../../docs/site/src/content/docs/tutorials/query-a-spatial-registry-from-qgis.mdx)
+- [Query a spatial registry from QGIS](https://docs.registrystack.org/configure/breg-spatial-queries/)
 - [Author a registry project](../../docs/site/src/content/docs/configure/breg.mdx)
 - [Deploy and operate a registry](../../docs/site/src/content/docs/operate/breg.mdx)
 - [Modeling patterns for registries](../../docs/site/src/content/docs/explanation/registry-modeling-patterns.mdx)
@@ -88,7 +88,7 @@ It is the first-hour learning path, not a shortcut around production package
 review, operated database roles, TLS, migration review, or secret custody.
 
 For a retained local loop that needs no checkout, Python launcher, or shell
-script, [Native local BReg lifecycle](DEV.md) documents `bregctl dev` against
+script, [Native local BReg lifecycle](https://docs.registrystack.org/reference/bregctl-dev/) documents `bregctl dev` against
 installed binaries and Docker PostgreSQL.
 
 `bregctl init <destination>` writes the complete [minimal directory](examples/minimal/README.md).
@@ -101,302 +101,84 @@ a new project from the PublicSchema reference model snapshot pinned in
 `crates/registry-linkml`, either from the shipped `household` starter
 selection (`--starter household`) or from an authored selection document
 (`--selection <file>`); without either flag the command asks which concepts
-and properties to select at the terminal. [Governed facility registration and
-transfer](registry-extensibility.md), [Native persisted field
-patterns](native-patterns.md), and [Current membership
-access](membership-access.md) describe modeling patterns a derived or starter
+and properties to select at the terminal. [Register and transfer a
+facility](https://docs.registrystack.org/configure/breg/#register-and-transfer-a-facility), [Native persisted field
+patterns](https://docs.registrystack.org/configure/breg-native-patterns/), and [Current membership
+access](https://docs.registrystack.org/configure/breg-access/) describe modeling patterns a derived or starter
 project can build on. An action handler can also be a WebAssembly module:
-[WASM action handlers](wasm-action-handlers.md) covers what ships, the
+[WASM action handlers](https://docs.registrystack.org/configure/breg-wasm-action-handlers/) covers what ships, the
 server-compatibility contract, operator configuration, and the upgrade and
 rollback paths.
 For institution-facing record numbers and codes, [Generated business
-identifiers](generated-identifiers.md) explains sequences, random codes,
+identifiers](https://docs.registrystack.org/configure/breg/#generate-business-identifiers) explains sequences, random codes,
 uniqueness scopes, and migration from retained values.
 
-## Pilot operator lifecycle
+## Build, run, and test
 
-Inspect the canonical projects' explicit access profiles and synthetic journey callers. `explain access` shows effective field
-permissions; `check --deny-warnings` makes its access warnings blocking for automation.
-Record type `accessRequirements` are mandatory compiler checks, not additional grants.
-
-For configured atomic writes across records, see [Immediate actions](immediate-actions.md).
-[Record timers](record-timers.md) describe root-granted, Record-controlled
-future execution of one bounded immediate Action and the milestone's explicit
-operational limits. The maintained
-[future-activation example](examples/future-activation/README.md) separates
-compiler inspection from its opt-in native PostgreSQL journey.
-
-The [facility registration and transfer example](registry-extensibility.md)
-combines those actions with a related-record acceptance condition, current
-ownership and committed events. [Membership access](membership-access.md)
-describes read permissions based on current governed membership records.
-[Consent-gated reads](consent.md) describes read permissions that disclose a
-row to a named recipient only while the subject's recorded consent is in
-force.
-The create-only asset example introduces typed inputs, fixed effects and an
-action-only grant. The household example adds narrow target conditions and
-recovery from stale input or a lost response. Mandatory reviewed change control
-still applies to every targeted operation.
-
-The pilot lifecycle uses matching `bregctl` and `breg` executables from the
-same build, whether built from source or installed from a release. It does not
-require a Rust change for a new
-configured domain or a compatible additive schema change.
-
-1. An author runs `bregctl check <project> --production`, generates
-   review artifacts as needed, and uses `diff` against the active runtime
-   configuration for a successor.
-2. `bregctl test` executes the declared journeys against a separate
-   schema-test database. Its result binds the candidate source, reviewed
-   migrations, exact catalog fingerprint, and test receipt.
-3. `bregctl package` reproduces that tested candidate and publishes the
-   package with `SHA256SUMS` in one step, reporting its shared package digest.
-   `--revision <text>` optionally records a source label in the hash-covered
-   `REVISION` file.
-4. An operator with the migration database credential runs
-   `bregctl plan --runtime-config <file> --package <directory>`, which
-   runs the activation's pre-maintenance checks in rolled-back transactions, then
-   `bregctl apply --runtime-config <file> --package <directory>` and
-   `bregctl status --runtime-config <file>`. Initial activation
-   also requires `--initial`.
-5. `breg --runtime-config <file>` verifies `SHA256SUMS`, the optional
-   `package.expectedDigest` pin, the package closure, and the physical instance
-   claim, then serves only when `identity.databaseId` and the package digest
-   equal what the database's activation ledger records. Authorized
-   bulk operations use `bregctl data validate`, `data import`, and
-   `data export`, which reuse the packaged plans and normal authenticated API
-   paths. `bregctl data runs list` and `data runs cancel` expose the maintained
-   client's creator-scoped recovery operations for a Record type API route.
-
-One package is the unit an operator promotes: the same package directory, with
-the same package digest and `registryRevision`, is planned and applied in each
-environment, and only the runtime file's `identity` and database values differ.
-
-For a compatible successor, repeat test, package, and apply with the active
-package directory as `--baseline-package`, then restart the same
-server executable on the successor package.
-
-Each database records its activations in the activation ledger,
-`registry_internal.registry_migrations`: one row per activation, the initial
-one included, keyed by a UUID activation id and ordered by apply order. A row
-names the package digest, the predecessor package digest, the
-`registryRevision`, the plan kind (`initial` or `successor`), the role mode,
-any backups a destructive migration was bound to, and the keyed hash of
-`--operator-reference`. `apply` accepts a successor only when its
-predecessor digest is the active package, and refuses the active package again
-and any older package. The migration credential authorizes an activation, and
-every activation is audited as `breg-activation-audit/v1`. With separate
-migration and runtime roles, the runtime role cannot write the ledger, so it
-cannot change which package the runtime serves; with one role for both, the
-ledger check catches mistakes but not someone holding that credential. Removing or narrowing an access
-profile removes its obsolete compiled row-security policies during apply;
-activation still requires the exact candidate catalog. Unexpected policies
-remain catalog drift and are not silently deleted. A compiled policy whose
-expression was altered in place while it kept its definition comment is also
-refused as drift, and the activation fails: apply keeps a policy whose
-comment matches, so it does not repair one. A database administrator recovers
-by clearing that policy's comment (`COMMENT ON POLICY name ON table IS NULL`)
-and applying the exact target package again, which replaces the policy with
-its compiled definition. A migration failure after maintenance begins leaves
-the database durably in maintenance and readiness fails. Inspect it with
-`bregctl status --runtime-config <absolute-file>`. Retry
-`bregctl apply --runtime-config <absolute-file> --package <absolute-target-directory>`
-only with the exact pinned target package and its required `--backup` bindings;
-a reviewed apply resumes its durable checkpoints rather than undoing them.
-Assess a stuck activation without changing it with:
+BReg is part of the Registry Stack Cargo workspace. Build both executables
+from the repository root:
 
 ```bash
-bregctl migration reconcile \
-  --runtime-config <absolute-file> \
-  --package <absolute-target-directory> \
-  --operator-reference <reference>
+cargo build --locked -p registry-breg -p registry-bregctl --bins
 ```
 
-When that assessment reports `completable` or `revertible`, repeat it with
-`--execute` to perform the named safe transition. An `unresolvable` result
-requires restoring the operator's own pre-activation backup and starting again
-from the restored active package. Operators must not edit managed tables to make
-a retry pass.
+Run the deterministic contract checks and the Rust tests:
 
-The first successor on a database with the legacy 1,024-statement ledger bound
-widens that constraint when maintenance begins. This engine catalog change
-remains if a later precondition or migration step fails. Correct the cause and
-retry the exact pinned target; if it cannot complete and reconciliation reports
-`unresolvable`, restore the pre-activation backup. A role change re-applies the
-active package and leaves the ledger bound as that package declares it.
-
-Authoring and migration authority are deliberately separate. An author or
-coding agent can edit configuration, inspect a diff, and run checks. Those
-commands cannot obtain the production migration credential. A runtime configuration without that credential is
-refused before initial production control-plane state or DDL is created.
-
-OIDC key resolution is deployment configuration, not governed package content.
-If `authentication.oidc.jwksSource` is omitted, discovery is used. An operator
-can name the key set location directly with `type: uri` and an `https` `uri`
-(plain `http` only on an IPv4 loopback host), which the verifier fetches and
-refreshes the same way it does a discovered key set, or pin a static document
-through a protected secret reference:
-
-```yaml
-authentication:
-  oidc:
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
+```bash
+products/breg/scripts/check-contracts.sh
+cargo test --locked -p registry-breg -p registry-bregctl
 ```
 
-The static document must be a bounded, duplicate-free set of public keys that
-matches the configured algorithm, signature use, verification operation, key
-identifier policy, and key shape. It is resolved once when the verifier is
-constructed, so rotation requires a reviewed configuration change and process
-restart.
-
-Runtime files set `apiVersion` to
-`id.registrystack.org/formats/breg/runtime/v1alpha1` and `kind` to
-`BRegRuntimeConfig`. The generated JSON Schema at
-`generated/runtime/runtime.schema.json` is suitable for editor validation. It
-documents bounded defaults for operational tuning while keeping package,
-database, authority, role, and secret-reference fields explicit.
-
-The top-level `logLevel` accepts `error`, `warn`, or `info` and defaults to
-`info`. `BREG_LOG` overrides the authored value for process-local operation.
-An unknown value in either source refuses startup; neither source accepts
-filter directives or enables dependency logging.
-
-## Scope
-
-### Record response contract
-
-Authorized get, list, lookup, create, patch, tombstone, relationship, snapshot,
-and revision routes use the shared Registry Record v1 single-record or
-collection envelope. The envelope keeps opaque record and revision identifiers
-separate from `domainData` and publishes the compiled registry, primary dataset,
-and entity type in `meta`. Use `Accept: application/ld+json` for the scalar
-shared context; ordinary `application/json` has no JSON-LD control members.
-Successful profiled responses include profile and relative schema Link values.
-See [History](HISTORY.md) for the breaking before-and-after shape and the exact
-route mapping.
-
-For atomic interval corrections, saved historical queries and their access and
-retention boundaries, see [Corrections and historical queries](HISTORY.md).
-For the opt-in log that lets a record subject see named reads of that record,
-including retention, intermediary attribution, and delayed disclosure, see
-[Subject-facing access logs](ACCESS-LOG.md).
-See [Events and hooks](EVENTS-AND-WEBHOOKS.md) for committed record and Proposal events.
-
-[Point queries and QGIS](SPATIAL-QUERIES.md) describes GeoJSON output and
-explicitly granted PostGIS-backed bbox queries. The spatial quickstart uses
-the same BReg, stock ThunderID issuer, and package lifecycle; ordinary
-registries do not need PostGIS.
+Tests that reach SQL, migrations, revisions, or authorization need a real
+PostgreSQL database; `AGENTS.md` lists the commands for each kind of change.
+The operator lifecycle (check, test, package, plan, apply, serve) is documented
+in [Deploy and operate a registry](https://docs.registrystack.org/operate/breg/), and the
+authoring side in [Author a registry project](https://docs.registrystack.org/configure/breg/).
 
 Base Registry Engine owns typed configured storage, generated REST contracts,
 authorization, record revisions, audit ordering, idempotency, outbox creation,
 and governed migrations. It does not provide a UI, GraphQL, workflow,
 eligibility, payment, identity matching, SQLite support, a multi-registry
-control plane, or runtime code plugins.
+control plane, or runtime code plugins. PostgreSQL is the sole Version 1
+database, and the administrator installs `btree_gist`.
 
-The focused direction for hooks is documented in
-[`EVENTS-AND-WEBHOOKS.md`](EVENTS-AND-WEBHOOKS.md). Version 1 uses explicit
-transactional events and after-commit handlers behind the same governed
-extension boundary: authenticated webhooks (`type: url`) and reviewed local
-Rhai or Wasm programs (`type: rhai`, `type: wasm`).
+## Directory map
 
-PostgreSQL is the sole Version 1 database. The administrator installs
-`btree_gist`; neither the runtime nor migration role installs extensions.
+- `acceptance/`: authored projects that exercise the compiler and binary
+  against real PostgreSQL.
+- `contracts/`: the machine-readable delivery catalog.
+- `evidence/`: the reviewed registry, starter project, and proof for the
+  Evidence lookup export.
+- `examples/`: the canonical standalone projects, `bregctl init` starters, and
+  the webhook receiver.
+- `fixtures/`: compiler and runtime test fixtures.
+- `generated/`: committed generated schemas and fixture outputs; regenerate,
+  never hand-edit.
+- `loadtest/`: load-test projects and scale notes.
+- `quickstart/`: the scripted first-hour local path.
+- `scripts/`: contract, generation, and PostgreSQL test scripts.
+- `wasm-handler-sdk/`: the SDK for WebAssembly Action handlers.
 
-The compiler gives every reference column a btree index unless an authored
-index or unique constraint already leads with it, and an authoring compile
-reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
-granted list filter or sort that no index leads with. The compiler appends the
-record id as the last column of every authored index: every list orders by
-the record id last, so an index that ends with it returns a filtered, sorted
-page in order and resumes a later page at its cursor. An authored index
-declares the fields a list compares with `eq` first, then the field it sorts
-by; the record id is never declared. A leading field filtered any other way,
-such as by a range or `in`, still narrows the read, but the filtered set is
-then ordered for each page. A database activated by
-an engine that predates reference indexes gains them through an ordinary
-successor package: `bregctl package` classifies each one as a compatible
-additive index and the migration transaction creates it with a plain
-`CREATE INDEX`, which blocks writes to that table until it commits.
+## Guides on the docs site
 
-## Reference lifecycle
-
-An active Record can reference only an active target Record. Create and patch,
-including batch and import writes, refuse a missing or tombstoned target.
-Tombstoning a target refuses while another active Record references it, even
-when that referencing Record is outside the caller's read permissions.
-These refusals use the generic `409 mutation.conflict` response and disclose
-no referencing Record IDs or values. Action and Proposal target admission
-continues to require its independently granted current authority. A writer
-authorized to submit a known target ID can still infer whether that target is
-lifecycle-eligible from success versus conflict even without target read
-authority. The conflict does not distinguish a missing target from a tombstoned
-one or disclose target fields.
-
-Clear an optional reference, point it at an active replacement, or tombstone
-the referencing Record before tombstoning its target. Tombstoned Records and
-retained history keep their original reference IDs. A self-reference does not
-prevent tombstoning that same Record; active references from other Records do.
-There is no automatic cascade or clearing of references.
-
-Registries activated by an earlier compiler receive the lifecycle constraints
-through a successor package built with the deployed package as
-`--baseline-package`. Use `bregctl plan` to check the activation prerequisites.
-Before live maintenance, apply the successor to a representative restored-data
-copy to validate existing links. If that apply finds an active Record that
-references a tombstoned target, repair its reference or tombstone that Record
-through the current package, refresh the restored-data copy, and repeat the
-validation before activating the successor in production.
-
-Plan a maintenance window for this upgrade. Adding the stored generated
-lifecycle column rewrites each reference source table. Adding the target's
-unique lifecycle key and temporarily changing FORCE RLS on the source and target
-take ACCESS EXCLUSIVE locks. The source and target locks acquired by the FORCE
-changes are held while PostgreSQL validates existing links.
-An additive activation runs its compiler DDL, runtime grants, and exact target
-catalog verification in one transaction, so a validation or fingerprint refusal
-rolls that DDL back. Maintenance still pins the exact target for recovery; this
-check is performed during apply, not by a successor plan before maintenance.
-A reviewed activation commits compiler and authored steps at durable checkpoints; a later reference validation refusal leaves those
-earlier checkpoints in place and pins maintenance as failed. Follow the exact
-target retry, reconciliation, or backup-restore procedure above.
-
-## Live derived fields
-
-A derived relation is a reviewed SQL asset, compiled into a read-only,
-`security_invoker` view over the caller's `registry_source` rows. Its SQL must
-be one `SELECT` with the declared key and field aliases. The compiler accepts
-an explicit set of raw PostgreSQL grammar nodes, the aggregate functions
-`count`, `bool_and`, and `every`, and `registry_context.evaluation_date()`.
-`JSON_VALUE` and `JSON_EXISTS` may read scalars inside a structured field.
-An explicit `RETURNING` type must be a supported built-in scalar type.
-Ordinary casts are limited separately to reviewed built-in scalar targets;
-arrays, catalog reference types, XML, money, and timestamp-with-time-zone casts
-are refused. Column references resolve against the columns exposed by each
-range in its own SELECT scope, so a range name cannot capture its whole row and
-attribute notation cannot invoke an unlisted function.
-`JSON_QUERY`, table functions, SQL/JSON aggregates and constructors, and XML
-constructs are refused. Additions to this grammar require a concrete use case
-and review; a parser upgrade does not automatically admit new syntax.
-Joins use explicit `ON` conditions; source and join aliases cannot rename
-columns through alias lists.
-
-The generated view checks derived values before casting them to their declared
-types. String length bounds, text maximum length, exact decimal scale and
-precision, integer integrality and range, and vocabulary membership are
-enforced without truncation or rounding. Null values retain their existing
-nullable behavior. A violating value raises a stable database error identifying
-the field without including its value; an API read fails through the ordinary
-value-free source-unavailable response. Only derived relations reached by a
-read are evaluated.
-
-View definitions belong to the managed catalog fingerprint. When a compiler
-release changes these wrappers, follow the package upgrade instructions in
-[CHANGELOG.md](CHANGELOG.md), rebuilding from the authored project with the
-deployed package as the baseline and applying the successor before switching
-the runtime. An upgrade never rewrites the active catalog merely by starting
-the runtime.
+- [Corrections and historical queries](https://docs.registrystack.org/configure/breg-history/)
+- [Subject-facing access logs](https://docs.registrystack.org/operate/breg-access-log/)
+- [Events and hooks](https://docs.registrystack.org/operate/breg-webhooks/)
+- [Point queries and QGIS](https://docs.registrystack.org/configure/breg-spatial-queries/)
+- [Immediate Actions](https://docs.registrystack.org/configure/breg-actions/)
+- [Record timers](https://docs.registrystack.org/configure/breg-record-timers/)
+- [Proposal configuration](https://docs.registrystack.org/configure/breg-proposals/)
+- [Consent-gated reads](https://docs.registrystack.org/configure/breg-consent/)
+- [Membership access](https://docs.registrystack.org/configure/breg-access/)
+- [Statistical datasets](https://docs.registrystack.org/configure/breg-statistics/)
+- [Task grants for governed writes](https://docs.registrystack.org/reference/breg-task-grants/)
+- [Citizen MCP gateway](https://docs.registrystack.org/configure/breg-mcp/)
+- [Event records](https://docs.registrystack.org/configure/breg-event-records/)
+- [Portable metadata contract](https://docs.registrystack.org/reference/breg-api/)
+- [Evidence lookup exporter](https://docs.registrystack.org/configure/breg-evidence/)
+- [ODRL export](https://docs.registrystack.org/reference/breg-odrl-export/)
+- [Security model](https://docs.registrystack.org/security/breg/)
+- [Record timers and the future-activation example](examples/future-activation/README.md)
 
 ## Product contracts
 
@@ -414,21 +196,22 @@ CRUD, immediate multi-record Actions, and reviewed or no-review Proposals. These
 runtime models. The real-PostgreSQL pilot test executes the baseline fixtures,
 while the public-binary adopter workflow proves activation, authenticated
 data access, an additive upgrade, failure recovery, and unchanged server bytes
-for the asset project. See [Proposal configuration](proposals.md)
+for the asset project. See [Proposal configuration](https://docs.registrystack.org/configure/breg-proposals/)
 for the approval workflows.
 For bounded institutional-agent authority and current-status checks, see
-[task grants for governed writes](TASK_GRANTS.md).
+[task grants for governed writes](https://docs.registrystack.org/reference/breg-task-grants/).
 For a chat assistant that reads a citizen's own data and prepares a
 Proposal draft the citizen submits themselves, see the
-[citizen MCP gateway](MCP-GATEWAY.md).
+[citizen MCP gateway](https://docs.registrystack.org/configure/breg-mcp/).
 The separate `household-history` fixture proves correction batches and retained
 snapshot answers through the same compiler and runtime.
 The additional `spatial-service-sites` project covers governed Point queries
-and the QGIS installation-client path.
+and the QGIS installation-client path described in
+[Point queries and QGIS](https://docs.registrystack.org/configure/breg-spatial-queries/).
 The [person-registration-rhai project](acceptance/person-registration-rhai/README.md)
 combines a persisted native identifier pattern with an input-only immediate Rhai
 handler, declared business refusal, coordinated creates and an optional patch.
-See [native string patterns](native-patterns.md) for stored integrity rules.
+See [native string patterns](https://docs.registrystack.org/configure/breg-native-patterns/) for stored integrity rules.
 Its synthetic CLI cases assert computed effects and its PostgreSQL journeys
 verify stored values and existing action authority and concurrency contracts.
 For current native Proposal context pairing and independent application authority,
@@ -453,120 +236,3 @@ python3 products/breg/examples/webhook-receiver/test_receiver.py -v
 The [receiver example](examples/webhook-receiver/README.md) provisions no registry
 or issuer. It demonstrates durable acceptance independently of BReg deployment.
 
-## Portable metadata and composition
-
-Use [the Evidence lookup exporter](EVIDENCE.md) to select a compiled lookup,
-its exact selector alternatives and readable facts for an Evidence project.
-The generated files use Evidence's ordinary source contracts; connection
-credentials and question authority remain separately configured.
-
-Application clients consume the [caller-filtered metadata contract](metadata.md)
-from `/v1/registry`, including exact route/profile fields, schemas, selectors,
-reference bindings, and query capabilities.
-
-A record type may also declare an [event record](event-records.md)
-descriptor: subjects, occurred and effective time, sources, correction links
-and source event identity over fields it already stores, plus optional display
-purpose and grouping for Records and Actions. It adds no storage or authority.
-
-For offline inspection, `bregctl generate odrl PROJECT --output DIRECTORY`
-exports a [partial ODRL view of configured read permissions](odrl-export.md)
-and a coverage report. These operator-review artifacts include configuration
-details and do not establish caller authority or public publication safety.
-
-Domain-semantic entries in `manifestProjection` are optional overlays on the
-configured data model. One project declares one catalogue with its publisher,
-one or more identified `authorities`, one public service, one or more datasets,
-one or more data services, and optional distributions. The public service names
-the authority legally competent for it with `competentAuthority`, an id from
-`authorities`; the generated Manifest carries the authorities in `authorities[]`
-and the reference in the service's `competent_authority`, which CPSV-AP renders
-as `hasCompetentAuthority`. Every entity names exactly one `primaryDataset`,
-while each data service explicitly lists its nonempty `servesDatasets`.
-Project-level `accessProfile` and `classificationCeiling` values are defaults
-that a dataset may narrow or replace. The compiler resolves every membership and
-reference before generation, and refuses duplicates, missing memberships, and
-dangling authority, dataset, service, or distribution references.
-
-Generated Manifest and DCAT bytes are one classified publication slice. A
-dataset appears only when its effective access profile matches the governed
-project publication profile and its effective classification ceiling does not
-exceed the governed project ceiling. Services, distributions, public-service
-references, entities, fields, and relationship edges are pruned with that
-slice, so a public artifact cannot disclose a protected dataset by reference.
-
-The projection can also declare localized catalogue and resource text, entity
-concept URIs, identifiers, field concepts, relationship roles, and codelist
-schemes. Registry Manifest remains the only portable metadata compiler and DCAT
-renderer. Base Registry Engine does not infer or hardcode a domain model.
-Operational references may cross datasets, but Registry Manifest v1 accepts
-portable relationship targets only within the same dataset. Base Registry Engine
-therefore keeps the operational reference valid while omitting that edge from
-the lossy portable projection until Registry Manifest defines cross-dataset
-relationship semantics.
-
-When the source dataset, source Record type, reference field, target dataset,
-and target Record type are all visible in this publication slice, authoring
-commands report `breg.manifest-projection.cross-dataset-reference-omitted` at
-the reference field. The warning does not invalidate the runtime reference.
-Keep the dataset split and account for the missing metadata relationship in
-consumers, or place the Record types in the same projected dataset if that
-fits the intended model. The warning is omitted when any of those members
-is concealed; it does not reveal hidden relationships. `bregctl check
---deny-warnings` treats it as a failed check.
-
-The business-establishments fixture defines two datasets, one data service that
-serves both, one distribution attached to the registered-businesses dataset,
-and entities with explicit primary-dataset membership. Its local example concept URIs demonstrate semantic metadata
-without claiming conformance to an external domain model. It also declares exact
-selectors, a business-to-establishments read path, and a reviewed SQL module that
-counts head offices, branches, production sites, and suspended establishments.
-Two boolean fields indicate whether a business has a head office or production site.
-The summary includes only assignments effective on the evaluation date.
-
-Every emitted derived row must have a non-null canonical `id`, and one derived
-relation may emit at most one row for that `id`. Base Registry Engine refuses the
-query atomically when reviewed SQL violates either rule.
-
-```bash
-bregctl generate manifest \
-  products/breg/acceptance/business-establishments \
-  --output ./business-metadata
-```
-
-This produces the canonical Registry Manifest source and a DCAT JSON-LD
-catalogue. Registry Manifest owns the standards rendering, so Base Registry Engine
-does not carry a second DCAT implementation.
-
-The REST query profile uses the native `$select`, `$filter`, `$orderby`,
-`$top`, `$count`, and `$skiptoken` keys. Selector values are exact lookup
-inputs only; they do not create authority. Relationship read paths are
-configured routes such as `/v1/records/businesses/{record_id}/establishments`, and the
-path grant explicitly limits the target fields, filters, ordering, and count
-support available through that traversal.
-
-Evidence can consume an authenticated Base Registry Engine REST route through its
-existing bounded `http-json` source and an explicitly reviewed adapter.
-Evidence keeps its own authorization and disclosure boundary; the integration
-does not couple either runtime to the other's internals.
-
-## Relationship to Registry Stack
-
-Base Registry Engine is a writable source-of-truth product. Evidence remains the
-minimum-disclosure assertion product; Manifest receives a safe one-way
-metadata projection; an operated OIDC issuer supplies configured tokens; and
-PublicSchema is an authoring input rather than a runtime dependency.
-
-Registry Relay is retired from maintained Registry Stack. Base Registry Engine
-does not replace Relay's publication of an institution's existing SQLite data.
-
-## Statistical datasets
-
-Declare bounded count datasets for live analysis under ordinary read profiles
-and immutable, disclosure-controlled releases for separate dashboard readers.
-See [Statistical datasets](STATISTICS.md) for the model, HTTP contract,
-publication lifecycle, and accepted disclosure risks.
-
-See the shared [per-resource access-token profile](../platform/ACCESS-TOKENS.md)
-for OIDC interoperability. `registry_actor_kind` is profile-specific, including
-when one OAuth client registration requests separate product tokens.

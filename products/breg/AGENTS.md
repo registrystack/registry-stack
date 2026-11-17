@@ -18,7 +18,8 @@ Its read routes are governed configuration as well: a route, its selectors, its
 readable fields, and its query capabilities all come from the compiled package,
 and a caller value never creates authority.
 
-The Evidence export described in `products/breg/EVIDENCE.md` is a governed
+The Evidence export described at
+https://docs.registrystack.org/configure/breg-evidence/ is a governed
 lookup export, never Evidence authority. `bregctl generate evidence-source`
 writes ordinary Evidence source, selector, schema, and adapter files from a
 compiled registry, changing no registry and creating no access grant. Evidence
@@ -44,7 +45,7 @@ a generic, configured read-boundary mechanism, a one-hop join predicate over a
 configured entity, key field, principal field, and active flag, restricted to
 `get`, `lookup`, `list`, `revisions`, and `snapshot`, with at most eight
 boundaries per access profile (`crates/registry-breg/src/membership.rs`,
-`crates/registry-breg/src/contract.rs`, `products/breg/membership-access.md`).
+`crates/registry-breg/src/contract.rs`).
 Domain-specific compounds such as `group-membership` remain forbidden.
 Changing the blocklist is a boundary decision: record it in this file.
 
@@ -54,31 +55,47 @@ Changing the blocklist is a boundary decision: record it in this file.
   `definition-of-done.yaml`, `security-invariant-matrix.yaml`, and
   `security-test-traceability.yaml`. A `planned` row records a threat and a
   future refusal; the change that enforces it adds the resolving negative test
-  in the same patch.
-- Design and behavior: `products/breg/IMPLEMENTATION.md` first, then
-  `products/breg/DESIGN-CONSTRAINTS.md` for the standing constraints, then the
-  focused document beside it that owns the changed area, among
-  `products/breg/HISTORY.md`, `products/breg/SPATIAL-QUERIES.md`,
-  `products/breg/EVENTS-AND-WEBHOOKS.md`, `products/breg/metadata.md`,
-  `products/breg/immediate-actions.md`, `products/breg/registry-extensibility.md`,
-  `products/breg/native-patterns.md`, `products/breg/membership-access.md`,
-  `products/breg/INGESTION-RUNS.md`,
-  and `products/breg/wasm-action-handlers.md`.
-- Local loops: `products/breg/DEV.md` for the native `bregctl dev` lifecycle,
-  `products/breg/quickstart/` for the scripted first hour, and
+  in the same patch. Read the exact row and resolving tests before making an
+  enforcement claim; a schedule or an offline compiler result does not
+  establish runtime behavior.
+- Behavior guides: the docs site owns them, under `docs/site/src/content/docs/`.
+  The adopter guides are `configure/breg.mdx` and `operate/breg.mdx`, and the
+  published references are `reference/breg-configuration.mdx` and
+  `reference/breg-api.mdx`. Focused guides sit beside them as `configure/breg-*.mdx`,
+  `operate/breg-*.mdx`, and `reference/breg-*.mdx`.
+- Local loops: `reference/bregctl-dev.mdx` for the native `bregctl dev`
+  lifecycle, `products/breg/quickstart/` for the scripted first hour, and
   `products/breg/examples/` for the canonical projects and resumable
   scenarios `bregctl examples` lists and runs.
+- Canonical projects: `products/breg/examples/`, `products/breg/acceptance/`,
+  and `products/breg/fixtures/`. `products/breg/examples/README.md` indexes the
+  examples; acceptance and fixture projects carry a README where one exists.
 - Model-derived projects: the embedded PublicSchema snapshot in
   `crates/registry-linkml`, the reference model behind `bregctl init --from
   publicschema`.
-- Composition: `products/breg/EVIDENCE.md` for the lookup export, and
+- Composition: `configure/breg-evidence.mdx` for the lookup export, and
   `products/breg/evidence/` for the reviewed registry, starter project, and
   proof it is tested with.
-- Published configuration references:
-  `docs/site/src/content/docs/reference/breg-configuration.mdx` and
-  `docs/site/src/content/docs/reference/breg-api.mdx`; the adopter guides are
-  `docs/site/src/content/docs/configure/breg.mdx` and
-  `docs/site/src/content/docs/operate/breg.mdx`.
+
+## Where code lives
+
+All paths are under `crates/registry-breg/src/` unless named otherwise.
+
+| Surface | Owning source |
+| --- | --- |
+| Authoring, normalized model, diagnostics | `contract.rs`, `compiler.rs`, and `schema.rs` |
+| Generated CRUD, Record reads and mutations | `api/`, `postgres/`, and `mutation/` |
+| Immediate atomic plans | `immediate_actions.rs` and `action_handler.rs` |
+| Durable plans and application | `proposal_prepare.rs`, `proposal_store.rs`, `proposal_workflow.rs`, and `api/proposals.rs` |
+| Review integration and deployment trust | `review_store.rs`, `review_integration.rs`, and `runtime_config.rs` |
+| Restricted automatic application | Compiled system apply grants and the native Proposal worker, without an executor OAuth client or self-HTTP route |
+| Record and Proposal events | `event_destination.rs` and `proposal_hooks.rs` |
+| Application contracts and clients | `api/metadata.rs`, `crates/registry-breg-client`, and generated project types |
+| Local authoring and operator lifecycle | `crates/registry-bregctl` |
+
+Production code carries no fixture-specific domain types. Record types, Actions,
+and Proposals are the public model; canonical projects live under `examples/`,
+`acceptance/`, and `fixtures/`.
 
 ## Checks per change kind
 
@@ -207,7 +224,7 @@ any change to what a configured read route can return. Name the threat, the Rust
 enforcement point, and the focused negative test that pins it. Do not weaken a
 pinning test to make a gate pass.
 
-Update [`SECURITY-MODEL.md`](SECURITY-MODEL.md) in the same change when a trust
+Update the security model page (`docs/site/src/content/docs/security/breg.mdx`) in the same change when a trust
 boundary, an operator obligation, or an accepted residual changes. The
 change-by-change review narrative belongs in the pull request description, not
 in the repository.

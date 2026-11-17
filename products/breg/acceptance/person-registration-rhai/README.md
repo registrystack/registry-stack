@@ -1,7 +1,7 @@
 # Rhai person registration
 
 This synthetic project implements two immediate actions through the existing
-BREG compiler, package lifecycle and HTTP API. `register-person` preserves a
+BReg compiler, package lifecycle and HTTP API. `register-person` preserves a
 13-digit identifier string and computes `displayName` from supplied name parts.
 `register-person-with-registration` also demonstrates coordinated creates,
 symbolic references and an optional patch of an existing register.
@@ -16,86 +16,14 @@ specification or checksum.
 
 ## Authored contract
 
-[registry.yaml](registry.yaml) is the complete project. The simple action uses:
-
-```yaml
-functions:
-  - id: register-person-plan
-    runtime: rhai
-    source: scripts/register-person.rhai
-    entrypoint: plan
-    abi: registry.action-plan/v1
-```
-
-The immediate Action selects that Function through its `plan`:
-
-```yaml
-plan:
-  type: function
-  function: register-person-plan
-  inputs: [identifier, given-name, family-name]
-  refusals:
-    - code: blank-name
-      label: At least one name part is required.
-  writes:
-    - id: person
-      target:
-        recordType: person
-      operation: create
-      fields: [identifier, display-name]
-```
-
-This ABI accepts declared scalar inputs, including reference IDs. It does not
-accept `crs84-point`, `structured`, or arbitrary JSON object or array values.
-String and text inputs must declare `maximumLength` of at most 4,096 Unicode scalar
-values so every value fits Rhai's 16,384-byte UTF-8 string budget. This project
-uses 13 characters for the identifier and 80 for each name part. Other scalar
-types retain their own bounds, and decimal values use canonical JSON strings.
-Every input string also has a 16,384-byte admission limit, including timestamps.
-An HTTP request exceeding a declared bound or this byte limit returns
-`400 request.invalid` before the handler runs. A project with an overlarge
-`maximumLength` must reduce it; use fixed effects for actions needing point or
-structured inputs.
-
-The [handler](scripts/register-person.rhai) exports `fn plan(ctx)` and reads
-logical input IDs such as `ctx.inputs["given-name"]`. An omitted optional input
-has no map key; an explicit JSON `null` has a key with Rhai's unit value `()`.
-The scripts treat both as an empty name part, using this guard before trimming:
-
-```rust
-let family = if "family-name" in ctx.inputs && ctx.inputs["family-name"] != () {
-    ctx.inputs["family-name"]
-} else { "" };
-family.trim();
-```
-
-Test membership with `in` when absence matters. Calling string methods on an
-unguarded missing or null value fails handler execution. Required inputs such
-as `identifier` still reject omission and null before the handler runs.
-This optional-null behavior belongs to the handler ABI; fixed-effect actions
-reject explicit null inputs.
-
-The handler returns either
-`{effects: [...]}` or `{refusal: {code: "blank-name", field: "given-name"}}`
-using Rhai map syntax `#{...}`. An effect selects a declared slot by `id` and
-supplies typed `set` values and, for optional patch fields, `clear` field IDs.
-The host owns the target, operation, IDs, authority, validation and transaction.
-There is no database, filesystem, network, clock or stored-record API in Rhai.
-
-Each action declares one `plan`, either fixed effects or a named Function. The Function plan's
-`writes` are a ceiling, not CRUD permission. `person-registrar` can invoke the
-actions and receive their result references, but has no ordinary entity write
-grant. `person-reader` independently grants reads; `person-administrator`
-supplies ordinary creates and patches for the comparison and register setup.
-
-The stored identifier uses `pattern: '^[0-9]{13}$'` with `maximumLength: 13`.
-[PostgreSQL native patterns](../../native-patterns.md) enforce the expression on
-every write path. Requiredness is
-separate. Patterns are not silently converted into JavaScript regular
-expressions or JSON Schema patterns. Offline checks validate structure and
-bounds; PostgreSQL-backed schema tests validate expression syntax and storage
-integrity. Ordinary CRUD never runs these action handlers: a direct create
-requires a supplied `displayName`, which it preserves as supplied.
+[registry.yaml](registry.yaml) is the complete project, and the
+[handler](scripts/register-person.rhai) exports `fn plan(ctx)`. The stored
+identifier uses `pattern: '^[0-9]{13}$'` with `maximumLength: 13`. Ordinary CRUD
+never runs these action handlers: a direct create requires a supplied
+`displayName`, which it preserves as supplied. Function plan authoring, the
+handler input and result contract, and native string patterns are documented in
+[Immediate Actions](https://docs.registrystack.org/configure/breg-actions/) and
+[native string patterns](https://docs.registrystack.org/configure/breg-native-patterns/).
 
 ## Local computation checks
 
@@ -165,10 +93,10 @@ If the local check fails, repair the input or source identified by its diagnosti
 
 ## PostgreSQL and package journey
 
-Use the existing disposable TLS PostgreSQL setup documented in
-[the action guide](../../immediate-actions.md#runnable-schema-test-journey).
-With `BREG_TEST_DATABASE_URL` and `BREG_TEST_TLS_CA_PEM_PATH` supplied by that
-setup, run:
+Start a disposable TLS PostgreSQL database with
+`products/breg/scripts/local-postgres-tls.sh`, which prints the export lines.
+With `BREG_TEST_DATABASE_URL` and `BREG_TEST_TLS_CA_PEM_PATH` supplied by those
+exports, run:
 
 ```bash
 products/breg/scripts/test-immediate-action-examples.sh
@@ -197,7 +125,7 @@ and omitted patch conditions and requirements. Person and registration creates
 retain the configured events. The runner binds `person-events` to a synthetic
 non-delivery destination; it does not prove transport delivery to a consumer.
 For a deployed application, bind that logical destination through the existing
-[events and webhooks](../../EVENTS-AND-WEBHOOKS.md) configuration.
+[events and webhooks](https://docs.registrystack.org/operate/breg-webhooks/) configuration.
 
 For a long-running manual instance, use the normal
 [quickstart lifecycle](../../quickstart/README.md) with this project: test the

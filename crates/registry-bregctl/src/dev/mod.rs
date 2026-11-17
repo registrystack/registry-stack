@@ -135,9 +135,9 @@ enum DevAction {
     /// diagnostics in the project's private .breg/dev/logs directory.
     /// Catchable termination signals trigger owned cleanup, but an uncatchable
     /// outside kill can leave surviving service owners that need inspection
-    /// before restart. products/breg/DEV.md documents this lifecycle in
-    /// 'Native local BReg lifecycle' and its recovery in 'Retained state and
-    /// recovery'.
+    /// before restart. The lifecycle is documented at
+    /// `https://docs.registrystack.org/reference/bregctl-dev/` and its recovery
+    /// under 'Retained state and recovery'.
     Start(StartArgs),
     /// Stop only this project's supervised services, preserving its database,
     /// records, audit history, keys and built package.
@@ -145,8 +145,9 @@ enum DevAction {
     /// Add --remove to also remove the owned container and its data volume,
     /// discarding records so the next start can take edited inputs; to change
     /// inputs while keeping the records, copy the authored files to a new
-    /// project directory instead. products/breg/DEV.md documents the full stop
-    /// and recovery behavior in 'Retained state and recovery'.
+    /// project directory instead. The full stop and recovery behavior is
+    /// documented at `https://docs.registrystack.org/reference/bregctl-dev/`
+    /// under 'Retained state and recovery'.
     Stop(StopArgs),
     /// Show received local webhook deliveries, hiding projected values by default.
     Events(EventsArgs),

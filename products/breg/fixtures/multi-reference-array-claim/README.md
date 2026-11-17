@@ -20,4 +20,4 @@ bregctl dev start .
 `bregctl dev start` runs `tests/journeys.yaml` before serving the package. Stop
 the session with `bregctl dev stop . --remove`.
 The claim variants bind to their exact refusal steps through
-[`testBindings`](../../DEV.md#explicit-teaching-clients).
+[`testBindings`](https://docs.registrystack.org/reference/bregctl-dev/#explicit-teaching-clients).

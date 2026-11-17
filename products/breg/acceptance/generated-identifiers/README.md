@@ -13,5 +13,5 @@ cargo run --locked -p registry-bregctl -- check products/breg/acceptance/generat
 cargo run --locked -p registry-bregctl -- check products/breg/acceptance/generated-identifiers --file products/breg/acceptance/generated-identifiers/tests/journeys.yaml
 ```
 
-See [generated-identifiers.md](../../generated-identifiers.md) for migration,
+See [Generate business identifiers](https://docs.registrystack.org/configure/breg/#generate-business-identifiers) for migration,
 uniqueness, and Proposal retry behavior.

@@ -186,6 +186,32 @@ class SourceNeutralityTests(unittest.TestCase):
                 violations,
             )
 
+    def test_documentation_site_path_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "crates/registry-bregctl/src/dev/tests.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                'const PAGE: &str = "../../docs/site/src/content/docs/reference/bregctl-dev.mdx";\n',
+                encoding="utf-8",
+            )
+            self.assertEqual([], CHECKER.find_violations(root))
+
+    def test_domain_identifier_after_documentation_site_path_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "crates/registry-bregctl/src/dev/tests.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                'const PAGE: &str = "../../docs/site/src/content/docs/configure/farmer-pilot.mdx";\n',
+                encoding="utf-8",
+            )
+            violations = CHECKER.find_violations(root)
+        self.assertTrue(
+            any("metric/error identifier farmer" in violation for violation in violations),
+            violations,
+        )
+
     def test_generic_membership_authority_keeps_concrete_fixture_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

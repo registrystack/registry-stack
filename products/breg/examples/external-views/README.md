@@ -76,7 +76,7 @@ Test the source and its snapshot discipline independently:
 python3 -B products/breg/examples/external-views/test_source.py
 ```
 
-See the [operator guide](../../external-projection-storage.md) for refresh, retention,
+See the [operator guide](https://docs.registrystack.org/configure/breg-external-projections/) for refresh, retention,
 scope changes and backup recovery.
 
 ## Run with candidate binaries

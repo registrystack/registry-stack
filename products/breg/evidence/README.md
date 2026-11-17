@@ -4,7 +4,7 @@ These synthetic inputs connect independently governed products through public
 CLIs and the existing HTTP lookup contract. BReg owns stored records, exact
 selectors and source access. Evidence owns assertion meaning, caller grants,
 minimum disclosure and signing. An export creates no authority in either product.
-See [the export contract](../EVIDENCE.md) and [BReg development](../DEV.md).
+See [the export contract](https://docs.registrystack.org/configure/breg-evidence/) and [BReg development](https://docs.registrystack.org/reference/bregctl-dev/).
 
 | Input | Responsibility |
 | --- | --- |
@@ -75,7 +75,7 @@ commands. Its public selector flag is `--entity`, while BReg export uses
 Guided setup is optional and requires a retained session. It prepares a dedicated
 lookup client and policy successor, imports the Source and copies credentials
 privately. It does not authorize Evidence callers or define an assertion.
-Use the maintained [retained-session procedure](../DEV.md#prepare-a-source-after-using-a-registry)
+Use the maintained [retained-session procedure](https://docs.registrystack.org/reference/bregctl-dev/#prepare-a-source-after-using-a-registry)
 for activation and recovery. A source identity already present in a project must
 be reviewed through `source diff` and `source update`, rather than attached again
 under conflicting choices.
