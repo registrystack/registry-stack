@@ -200,7 +200,7 @@ does not claim certification of itself.
   also refuses a read whose stated receipt time falls outside the verifier's largest result window
   plus clock skew, so a verifier that kept a presentation cannot replay it beyond that window.
   {/* Evidence: crates/registry-evidence/src/wallet_presentation.rs, received_within_window,
-       SubjectLinkMode; products/evidence/CONCEPT.md, 15.10 Linking a credential to the subject. */}
+       SubjectLinkMode. */}
 - The calling relying party states the presenting principal and the session reference for a
   wallet read. Evidence refuses a principal that did not create the session, but it cannot tell
   which relying party a session was meant for. Run one relying party per Evidence deployment that

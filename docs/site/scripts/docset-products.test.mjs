@@ -86,6 +86,26 @@ test('the latest docset alone publishes the Document Store', () => {
   }
 });
 
+// The Registry Adapter ships from v0.46.0 (adapter, adapterctl,
+// adapter-installer), but docsets archived through v0.46.0 are locked as
+// published without its pages. The latest docset publishes it from main source.
+test('the latest docset publishes the Registry Adapter and no locked archive does', () => {
+  const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
+  const latest = manifest.docsets.find((docset) => docset.id === 'latest');
+  assert.deepEqual(
+    latest.products?.['registry-adapter'],
+    { version: 'main source (unreleased)', ref: 'HEAD' },
+  );
+  const locked = manifest.docsets.filter((docset) => {
+    const match = /^v0\.(\d+)\.\d+$/.exec(docset.id);
+    return match !== null && Number(match[1]) <= 46;
+  });
+  assert.ok(locked.length > 0, 'docsets.yaml must keep archived docsets');
+  for (const docset of locked) {
+    assert.equal(docset.products?.['registry-adapter'], undefined, docset.id);
+  }
+});
+
 test('no docset archived before v0.41.0 publishes Registry Coordinator', () => {
   const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
   const earlier = manifest.docsets.filter((docset) => {
@@ -218,6 +238,7 @@ test('every gated page exists and maps to its route', () => {
     '/operate/messaging/',
     '/reference/messaging-configuration/',
     '/reference/apis/registry-messaging/',
+    '/security/messaging/',
   ]);
   assert.deepEqual(productRoutes('registry-breg-services'), ['/configure/breg-mcp/']);
   assert.deepEqual(productRoutes('registry-scheduling'), [
@@ -227,7 +248,9 @@ test('every gated page exists and maps to its route', () => {
     '/configure/scheduling/',
     '/operate/scheduling/',
     '/reference/scheduling-configuration/',
+    '/reference/scheduling-task-grants/',
     '/reference/apis/registry-scheduling/',
+    '/security/scheduling/',
   ]);
   assert.deepEqual(productRoutes('registry-render'), [
     '/start/registry-render/',
@@ -235,6 +258,8 @@ test('every gated page exists and maps to its route', () => {
     '/explanation/render-determinism/',
     '/operate/registry-render/',
     '/reference/render-configuration/',
+    '/reference/render-payload/',
+    '/security/render/',
   ]);
   assert.deepEqual(productRoutes('registry-coordinator'), [
     '/start/coordinator/',
@@ -243,6 +268,7 @@ test('every gated page exists and maps to its route', () => {
     '/operate/coordinator/',
     '/reference/coordinator-configuration/',
     '/reference/apis/registry-coordinator/',
+    '/security/coordinator/',
   ]);
   assert.deepEqual(productRoutes('registry-documents'), [
     '/start/documents/',
@@ -250,6 +276,17 @@ test('every gated page exists and maps to its route', () => {
     '/operate/documents/',
     '/reference/documents-configuration/',
     '/reference/apis/registry-documents/',
+    '/security/documents/',
+  ]);
+  assert.deepEqual(productRoutes('registry-adapter'), [
+    '/configure/adapter/',
+    '/configure/adapter-routes/',
+    '/configure/adapter-consultation/',
+    '/configure/adapter-jobs/',
+    '/configure/adapter-ingestion-jobs/',
+    '/configure/adapter-packs/',
+    '/operate/adapter/',
+    '/reference/adapter-effective-contract/',
   ]);
   assert.deepEqual(productRoutes('registry-unknown'), []);
 });
@@ -354,8 +391,9 @@ test('drops Registry Coordinator\'s pages and CLI references from the docs colle
   ]);
 });
 
-test('drops the Registry Adapter\'s CLI references from the docs collection', () => {
+test('drops the Registry Adapter\'s pages and CLI references from the docs collection', () => {
   for (const id of [
+    ...PRODUCT_PAGES['registry-adapter'],
     'reference/cli/adapter',
     'reference/cli/adapter/serve',
     'reference/cli/adapterctl',
@@ -364,7 +402,13 @@ test('drops the Registry Adapter\'s CLI references from the docs collection', ()
     assert.equal(isEntryGatedOut(id, withoutAdapter), true, id);
     assert.equal(isEntryGatedOut(id, withAdapter), false, id);
   }
-  for (const id of ['index', 'reference/cli', 'reference/configuration-files', 'reference/cli/adapterx']) {
+  for (const id of [
+    'index',
+    'reference/cli',
+    'reference/configuration-files',
+    'reference/cli/adapterx',
+    'reference/evidence-request-adapter-api',
+  ]) {
     assert.equal(isEntryGatedOut(id, withoutAdapter), false, id);
   }
   assert.ok(!omittedCliBinaries(withAdapter).includes('adapterctl'));

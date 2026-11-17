@@ -1,0 +1,325 @@
+---
+title: Query history and corrections
+description: Declare validity intervals and a registry time zone, read what is in force, query a saved state, correct related intervals atomically, and erase or rebaseline retained history.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Base Registry Engine (BReg) retains complete stored-Record revisions.
+A successful mutation returns a `snapshot` reference for its committed change.
+Every item in a successful atomic batch shares that reference.
+Retrying the same idempotent request returns the original response and reference.
+
+This page covers validity intervals, the registry time zone, the reads that use them, correction batches, and the operator commands that erase retained history.
+The [Base Registry Engine API reference](../../reference/breg-api/) describes the Record response envelope and the route shapes.
+
+{/* Evidence: crates/registry-breg/tests/postgres_historical.rs snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned. */}
+
+## Choose a saved state
+
+Three inputs select the state a query reproduces:
+
+| Input | Meaning |
+|---|---|
+| `snapshot` | Which committed registry state to reproduce. Omit it to capture the latest committed state once. |
+| `validAt` | Optional effective date or UTC timestamp within that recorded state. Omit it to return recorded state without an effective-time filter. |
+| `$skiptoken` | Expiring continuation of an already authorized query, including its exact snapshot. |
+
+A snapshot reference is a bookmark, not a credential.
+Current access rules apply on every request, including after a package or policy upgrade.
+Keep the reference with the input revisions and the consumer's own decision and rule identity when a later decision must be reproducible.
+Correcting registry facts does not rewrite the consumer's earlier decision.
+
+{/* Evidence: crates/registry-breg/tests/postgres_historical.rs snapshot_row_authority_uses_selected_historical_row_values;
+    crates/registry-breg/tests/postgres_historical.rs snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional. */}
+
+## Configure validity and access
+
+A Record type can declare a validity interval without requiring non-overlap:
+
+```yaml
+temporal:
+  startField: valid-from
+  endField: valid-to
+```
+
+The start is required.
+Both fields use the same `date` or `timestamp` type; the end can be null.
+Intervals include the start and exclude the end.
+A non-null end must be later than the start.
+To prohibit overlapping intervals for a subject, add a `temporal-non-overlap` constraint with its `scopeFields` and the same two boundary fields.
+
+A date interval can name an inclusive last day instead of an exclusive end:
+
+```yaml
+temporal:
+  startField: valid-from
+  lastDayField: valid-through
+```
+
+`lastDayField` is a nullable `date` field.
+A Record is in force from its start through the whole of its last day, so "valid through 31 January" is stored as `2026-01-31`.
+Declare exactly one of `endField` and `lastDayField`.
+`bregctl check` refuses both, or neither, with `breg.temporal.end-conflict`, and refuses a `lastDayField` on a `timestamp` interval or a non-date field with `breg.temporal.last-day-type`.
+A last day earlier than the start is refused at write.
+A `temporal-non-overlap` constraint names `lastDayField` in place of the end.
+Responses return the stored last day unchanged; BReg never serves a computed exclusive end.
+
+Grant the `snapshot` operation explicitly to an authenticated access profile.
+Live `list` access and per-Record `revisions` access do not grant snapshot access.
+Configure readable, filterable and sortable fields, count permission, purpose and row restrictions through the usual access profile.
+
+{/* Evidence: crates/registry-breg/tests/postgres_temporal_corrections.rs real_postgres_last_day_interval_is_in_force_through_its_last_day;
+    crates/registry-breg/src/compiler.rs breg.temporal.end-conflict;
+    crates/registry-breg/src/compiler.rs breg.temporal.last-day-type. */}
+
+### Declare the registry time zone
+
+A registry that answers "today" declares an IANA time zone, spelled as in Casework calendars and Scheduling:
+
+```yaml
+project:
+  id: licences
+  timezone: Asia/Colombo
+```
+
+It is required wherever BReg resolves "today":
+
+- the `:current` read of a date-interval Record type, which BReg serves for every such type with a list grant;
+- an Action requirement's `currentDate` comparison, both when the Action commits and when BReg reports whether the Action is available;
+- `registry_context.evaluation_date()` in a derived field on a live read;
+- the current period of a statistics dataset.
+
+`bregctl check` refuses a project that uses any of these without a time zone as `breg.timezone.required`, naming the route, requirement or field that needs it, and refuses a name that is not an IANA zone as `breg.timezone.unknown`.
+A project that uses none of them needs no time zone.
+BReg takes today's date as `local_date(now, timezone)` from `registry-platform-calendar`, the helper Casework calendars and Scheduling use, at every one of these sites, so one registry has one today, and a registry in Colombo changes date at local midnight, not at 05:30.
+
+A project with a date-interval Record type, a `currentDate` requirement, an `evaluation_date()` field or a statistics dataset fails `bregctl check` until it adds the `project.timezone` line.
+The refusal names the line to add.
+`timezone: UTC` takes today's date in UTC.
+
+{/* Evidence: crates/registry-breg/tests/registry_timezone.rs a_current_read_of_a_date_interval_requires_a_timezone_and_names_the_line_to_add;
+    crates/registry-breg/tests/registry_timezone.rs a_name_that_is_not_an_iana_zone_is_refused;
+    crates/registry-breg/tests/registry_timezone.rs a_current_date_requirement_requires_a_timezone;
+    crates/registry-breg/tests/registry_timezone.rs a_live_derived_field_reading_the_evaluation_date_requires_a_timezone;
+    crates/registry-breg/tests/registry_timezone.rs a_timestamp_interval_answers_now_without_a_timezone;
+    crates/registry-breg/tests/registry_timezone.rs a_project_that_never_answers_today_needs_no_timezone. */}
+
+## Read what is in force
+
+A temporal Record type gains two live reads.
+`:current` returns the Records in force now, and `:as-of` the Records in force at `asOf`.
+Both follow the `validAt` rule by interval type: a date interval takes a calendar date such as `2026-06-05`, and a timestamp interval takes a UTC RFC 3339 instant.
+Any other `asOf` value answers `400 query.invalid` naming `asOf`.
+On a date interval, `:current` uses the registry's local date; on a timestamp interval it uses the current instant.
+Every `:current` and `:as-of` response echoes the `asOf` it used in collection `meta`, so a caller can record the date its answer was for.
+
+To tell one Record in force from several without paging, read with `$top=2` and no `$count` or `$orderby`.
+BReg then returns at most two items, selected after access rules, and the item count (0, 1 or 2) is the answer; `nextCursor` need not be followed.
+Coordinator's `breg.read-in-force/v1` uses this read with an equality filter built from its structured subject.
+
+A list read never turns a missing row boundary into an empty answer.
+A caller whose row-boundary claim is missing receives `404 resource.not_found` on the plain list, `:current` and `:as-of` reads, and a caller whose claim is an empty array receives `401 authentication.refused`.
+Only a successful read with zero rows means that nothing matched.
+
+{/* Evidence: crates/registry-breg/tests/temporal_reads.rs as_of_takes_a_calendar_date_on_a_date_interval_and_an_instant_on_a_timestamp_interval;
+    crates/registry-breg/tests/temporal_reads.rs current_and_as_of_responses_echo_the_as_of_they_used_in_meta;
+    crates/registry-breg/tests/postgres_historical.rs snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned. */}
+
+{/* TODO[evidence]: the $top=2 in-force read and the missing or empty row-boundary claim answers (404 resource.not_found, 401 authentication.refused) have no located test. */}
+
+## Query a saved state
+
+For the household history example project, an authorized consumer sends:
+
+```http
+GET /v1/records/memberships:snapshot?accessProfile=eligibility-consumer&snapshot=<saved-reference>&validAt=2026-06-05
+```
+
+After reporting a June 1 move from A to B, this returns B.
+After correcting the move's effective date to June 15, a newly captured snapshot returns A for June 5.
+The original saved reference still returns B, subject to current authorization and retained history.
+
+Responses contain `items` with `recordIdentifier`, `revisionIdentifier`, and selected `domainData`, plus collection `meta`, `snapshot`, `pageInfo.nextCursor`, optional `count`, and `validAt` when supplied.
+Use the usual `$select`, `$filter`, `$orderby`, `$top` and `$count` options.
+Follow a continuation using only `$skiptoken` and, if needed, `accessProfile`; do not repeat or override its snapshot, effective time or query options.
+
+Date intervals accept calendar dates such as `2026-06-05`.
+Timestamp intervals require a UTC RFC 3339 timestamp.
+Non-temporal Record types reject `validAt`.
+`recordedAsOf` is not supported.
+Live `:as-of` reads take `asOf` under the same per-type rule.
+
+Historical queries use stored fields only.
+They remain usable on a Record type that also defines live derived fields, but cannot select, filter or order by those derived fields or traverse live relationships.
+Revision selection precedes row restrictions, filters and lifecycle checks, so an obsolete matching revision cannot reappear after a later correction or tombstone.
+
+{/* Evidence: crates/registry-breg/tests/postgres_historical.rs snapshot_timestamp_valid_at_requires_utc_timestamp_and_filters_pg_rows;
+    crates/registry-breg/tests/postgres_historical.rs snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_failure;
+    crates/registry-breg/tests/postgres_historical.rs snapshot_valid_at_does_not_depend_on_the_database_time_zone;
+    products/breg/acceptance/household-history/registry.yaml temporal. */}
+
+## Correct related intervals atomically
+
+Use the configured same-Record-type batch route to patch both affected intervals.
+Each patch item carries the Record's current `ifMatch` ETag.
+A batch can include one optional top-level context:
+
+```json
+{
+  "kind": "correction",
+  "reasonCode": "effective-date-corrected",
+  "sourceReferences": ["case-document:correction-001"]
+}
+```
+
+Place this object in `changeContext` alongside `items`.
+A correction requires a nonempty reason code.
+Context is shared across the batch, with no item-level override.
+Bounds are 64 UTF-8 bytes for the code, 4 KiB for `reasonText`, and at most 16 source references of 256 bytes each.
+Unknown members are rejected.
+
+Only the compiled temporal exclusion constraints are deferred until the final batch state.
+Both interval-edit orders work; final overlap or a stale ETag rolls back the entire batch.
+A stale edit returns `412 precondition.failed`.
+Refetch the Records, review the change and submit a fresh request.
+Reusing an idempotency key with different items or context conflicts.
+
+Context is absent from snapshot responses and default revision output.
+A `revisions` grant can explicitly allow `provenanceFields` from `kind`, `reasonCode`, `reasonText` and `sourceReferences`.
+Shared context is omitted unless every affected revision is currently visible to that caller.
+
+{/* Evidence: crates/registry-breg/tests/postgres_temporal_corrections.rs real_postgres_temporal_correction_batches_validate_only_completed_intervals;
+    crates/registry-breg/tests/postgres_temporal_corrections.rs assert_temporal_constraints_are_narrowly_deferrable;
+    crates/registry-breg/src/contract.rs provenance_fields. */}
+
+## Coverage and operating limits
+
+Initial activation installs an empty history baseline.
+A saved reference never falls back to current data.
+Authorized queries return `503 source.unavailable` when required history, compatible field metadata or a database execution budget is unavailable.
+Unauthorized callers retain ordinary resource concealment.
+Historical database statements have a two-second budget; existing HTTP, projection, page, cell and response bounds also apply.
+One query can resolve at most 64 originating schema descriptors.
+
+Descriptors retain field interpretation, not old access policy or executable code.
+Supported policy-only and unrelated additive upgrades preserve queries over compatible requested fields.
+A newly required or incompatible historical field makes the query unavailable instead of inventing today's default.
+
+Reviewed bounded data migrations append internal `migration` revisions and commit membership.
+They do not fabricate user patches or business events.
+A transactional data step is a direct reviewed `UPDATE` on one retained Record type table with explicit affected-row bounds.
+The complete table must fit that bound, up to 1,000 rows, so before and after capture remains bounded within the transaction.
+A chunked backfill is a direct reviewed `UPDATE` of one retained Record type per chunk of at most 1,000 Record identifiers.
+Each chunk commits on its own with one migration commit for the rows it changed, so a resumed backfill never journals a committed chunk twice and the table size is bounded only by the step's `maxTotalRows`.
+Unsupported data-changing migrations refuse before changing Records.
+Runtime credentials do not acquire journal UPDATE or DELETE authority.
+
+{/* Evidence: crates/registry-breg/tests/postgres_historical.rs snapshot_reads_a_later_optional_field_as_null_under_older_descriptors;
+    crates/registry-breg/tests/postgres_historical.rs snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_failure;
+    crates/registry-breg/tests/postgres_history_erasure.rs erasure_uses_migration_authority_without_runtime_journal_mutation_grants. */}
+
+{/* TODO[evidence]: two-second statement budget, 64 descriptor limit, and the 1,000-row transactional and chunked migration bounds have no located test. */}
+
+## Erase retained history
+
+The migration authority can erase one Record's retained revisions through a specified revision number.
+This is irreversible maintenance, not a runtime API permission.
+It does not remove the current Record.
+Apply the institution's live-data removal policy separately when required.
+
+Prepare an absolute, owner-only JSON file, using permissions `0600` on Unix:
+
+```json
+{
+  "recordType": "membership-record",
+  "recordId": "00000000-0000-4000-8000-000000000001",
+  "eraseThroughRevision": 2,
+  "operatorReference": "approved-maintenance-001",
+  "reason": "approved-retention-request"
+}
+```
+
+Use the actual Record type id and Record id.
+Keep this file private, including after the operation.
+The command accepts paths so Record identifiers and reasons do not need to appear in process arguments:
+
+```sh
+bregctl history erase \
+  --runtime-config /absolute/path/runtime.yaml \
+  --request-file /absolute/path/erasure.json \
+  --acknowledge-irreversible
+```
+
+The command refuses without `--acknowledge-irreversible`, before it reads any file or opens any connection, because erasure cannot be undone and no command restores the erased revisions.
+
+One transaction erases at most 10,000 retained revisions, scrubs affected shared correction context and retained outbox payloads, and replaces affected cached idempotency responses with refusal tombstones.
+Retrying those mutation keys cannot replay their old bodies or execute them again.
+Required schema descriptors remain retained.
+The result and keyed audit contain counts, not the Record values or reason text.
+
+Coverage is conservative: snapshots at or after the earliest erased commit become unavailable, including later snapshots.
+Erasing baseline data makes all snapshot coverage unavailable.
+Earlier complete snapshots may remain usable; the command never silently re-baselines the registry, and `history rebaseline` is the separate command that does it explicitly.
+Live writes and separately authorized maintenance remain available.
+
+A successor package remains applicable after an erasure of revisions committed after the coverage baseline: the apply interlock admits a ready commit head whose unavailable-after position matches an erasure coverage record that a standalone erasure committed with its erasure.
+Erasing baseline data, a lifecycle erasure, and any gap the database does not record as an erasure still refuse successors until `history rebaseline` restores coverage.
+
+You remain responsible for current Records, saved exports, copies already delivered to external consumers, and backup expiry.
+Proposals and application receipts have their own retention policy and maintenance commands; erasing Record history does not erase those separate workflow Records.
+Neither a hash nor an opaque identifier is automatically anonymous, and a saved bookmark cannot restore erased bytes.
+
+{/* Evidence: crates/registry-breg/tests/postgres_history_erasure.rs audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable;
+    crates/registry-breg/tests/postgres_history_erasure.rs erasure_refuses_more_than_ten_thousand_actual_target_revisions;
+    crates/registry-breg/tests/postgres_history_erasure.rs erasing_baseline_member_marks_all_history_coverage_unready_and_allows_later_erasure;
+    crates/registry-breg/tests/postgres_history_erasure.rs erasure_preserves_native_proposal_target_and_submission_payloads;
+    crates/registry-breg/tests/postgres_history_erasure.rs assert_erasure_audit_is_minimized;
+    crates/registry-breg/tests/postgres_history_erasure.rs erasure_reports_an_unreadable_cached_response_rather_than_an_outage;
+    crates/registry-breg/src/history_erasure.rs acknowledge. */}
+
+## Restore snapshot coverage
+
+Nothing in the write path widens coverage again, so snapshot reads of current state stay unavailable after an erasure until the migration authority re-establishes a covered position.
+That is the same authority and the same bounded interlock as the erasure, in its own audited command.
+
+Prepare an absolute, owner-only JSON file carrying the operator reference alone, using permissions `0600` on Unix:
+
+```json
+{
+  "operatorReference": "approved-maintenance-002"
+}
+```
+
+```sh
+bregctl history rebaseline \
+  --runtime-config /absolute/path/runtime.yaml \
+  --request-file /absolute/path/rebaseline.json
+```
+
+One transaction proves the retained journal head of every live row still reproduces that row, installs one baseline commit at the head, and moves the coverage baseline to it.
+It resurrects nothing: snapshot references before the new baseline remain unavailable, because the bytes they named are gone.
+The command refuses when coverage is already complete, when the registry is not ready, when a retained journal head is not indexed by a commit, and when a live row has no retained journal head that reproduces it.
+Verification pages through the live rows to bound memory; there is no total live-row cap.
+The transaction holds every Record type table in ACCESS EXCLUSIVE mode, so reads and writes wait until verification commits.
+The result and keyed audit contain counts and positions, not Record values; the operator reference is recorded as a keyed hash.
+
+{/* Evidence: crates/registry-breg/tests/postgres_history_rebaseline.rs rebaseline_restores_snapshot_coverage_from_current_state_after_an_erasure;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs rebaseline_refuses_while_maintenance_is_not_ready;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs rebaseline_refuses_while_a_retained_journal_head_is_unindexed;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs rebaseline_refuses_when_a_live_row_has_no_matching_journal_head;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs rebaseline_verifies_more_live_rows_than_one_commit_indexes;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs assert_rebaseline_audit_is_minimized. */}
+
+## Next
+
+- [Model event records](../breg-event-records/)
+- [Actions and Proposals](../breg-actions/)
+- [Control access and reads](../breg-access/)
+- [Base Registry Engine API reference](../../reference/breg-api/)

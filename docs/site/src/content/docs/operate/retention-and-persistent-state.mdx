@@ -193,9 +193,9 @@ new log carries no chain to verify. Before the first start on the shared-writer 
 the old chained log to append-only storage and point `audit.path` at a fresh file in a directory
 that holds no old segments; do not point the new runtime at the old chained file or directory.
 
-{/* Evidence: crates/registry-render/src/runtime.rs;
-    products/render/README.md;
-    products/render/EVIDENCE.md. */}
+{/* Evidence: crates/registry-render/src/runtime.rs, audit.integrityKeyRef and audit.maxSegmentBytes;
+    crates/registry-platform-audit/src/writer.rs;
+    products/render/README.md. */}
 
 ## Upgrade Casework and Scheduling audit
 
@@ -368,7 +368,6 @@ every activation, and store secrets separately.
     crates/registry-breg/src/hooks.rs;
     crates/registry-breg/src/subject_access_log.rs, run_retention() and expire_tick();
     crates/registry-breg/src/ingestion_store.rs, install() and scrub_receipts_for_records();
-    products/breg/ACCESS-LOG.md;
     crates/registry-breg/src/runtime_config.rs, DEFAULT_HOOK_PAYLOAD_RETENTION_DAYS
     and MAX_HOOK_PAYLOAD_RETENTION_DAYS;
     crates/registry-bregctl/src/data_lifecycle.rs. */}

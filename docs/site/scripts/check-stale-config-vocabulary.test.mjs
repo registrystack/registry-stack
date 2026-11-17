@@ -133,6 +133,33 @@ test('allowances pass on BReg and cross-product pages', async () => {
   );
 });
 
+test('SSL_CERT_FILE passes on a BReg page only when it names the bregctl dev CA file', async () => {
+  await withFixture(
+    {
+      pages: {
+        'src/content/docs/reference/bregctl-dev.mdx':
+          'SSL_CERT_FILE="$PWD/registry/.breg/dev/tls/ca.pem" \\\n',
+      },
+    },
+    async (root) => {
+      const result = await runGate(root);
+      assert.equal(result.code, 0, result.output);
+    },
+  );
+  await withFixture(
+    {
+      pages: {
+        'src/content/docs/operate/breg.mdx': 'Set `SSL_CERT_FILE` to the PEM bundle.\n',
+      },
+    },
+    async (root) => {
+      const result = await runGate(root);
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.output, /operate\/breg\.mdx:1:/u);
+    },
+  );
+});
+
 test('retired type names in camel case fail on any page', async () => {
   for (const name of ['ChangeRequest', 'BRegLifecycleAction', 'BRegLifecycleAuthority']) {
     await withFixture(

@@ -1,0 +1,512 @@
+---
+title: Evidence derivation script API
+description: The derive/3 assertion derivation ABI, its inputs and outputs, the Rhai language surface, the Evidence primitives and the hard limits.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Use `derive/3` to turn a completed, schema-validated Source lookup into the concept values of the
+selected requirement.
+Registry Evidence supplies the private facts, the separately minimized authorized selectors and a
+deterministic evaluation context.
+Rust validates the result before subject binding, signing and release.
+
+Source acquisition and extraction use reviewed [Adapter packs](../../configure/adapter-packs/).
+Pack scripts use the Adapter exchange ABI and compile separately from Evidence assertion derivations.
+An Evidence Source binds a pinned pack, route, connection, selector inputs and fact schema through the
+compiled Source configuration.
+The retired `prepare`, `extract`, `prepare_batch` and `extract_batch` entry points are refused; they
+are not alternate forms of `derive`.
+
+{/* Evidence: crates/registry-evidence-authoring/src/derivation.rs function-interface;
+    crates/registry-evidence/src/rhai_runtime.rs compile_derivation, derive. */}
+
+This page describes the compiled assertion ABI under Evidence bundle Version 1.
+For the Functions you write in an Evidence project, use the
+[authoring form](../../products/registry-evidence/authoring-form/).
+An authored `assertion-derive/v1` Function returns local `{output, value}` entries; the authoring
+compiler translates them into compiled `{concept_id, value}` entries.
+The host helpers and resource limits apply to both authored and compiled assertion derivations.
+`evidencectl package` compiles authoring inputs and delegates execution to the real `evidence`
+binary; it supplies no additional script runtime or authority.
+
+{/* Evidence: crates/registry-evidence-authoring/src/compile.rs assertion-derive/v1;
+    crates/registry-evidence/src/rhai_runtime.rs compile_derivation. */}
+
+## Entry point
+
+```text
+derive(facts: map, selectors: map, evaluation_context: map)
+    -> array<DerivedConceptValue>
+```
+
+Each derivation artifact declares one public `derive` function with exactly three arguments.
+Statically named same-file helpers are permitted.
+Overloaded entry points, top-level executable statements, anonymous functions, function pointers and
+data-derived dispatch are refused.
+
+Scripts compile before readiness.
+Every invocation receives fresh state and fresh input copies, so local mutation cannot change the
+bundle, another invocation or another definition.
+Only a completed `match` reaches derivation.
+No-match, ambiguous, unresolved and malformed lookup results release no facts to this ABI.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    compile_requires_one_exact_entry_point_and_rejects_top_level_statements,
+    compiler_allows_unique_helpers_but_rejects_entry_overloads. */}
+
+## Inputs
+
+`facts` is the complete private FactSet from the matched pack route, validated against the Evidence
+Source's closed `factSchema`.
+Internal pack operations may compose several reviewed reads, but derivation receives one completed
+FactSet.
+Integer tokens outside the signed 64-bit range fail before conversion to Rhai rather than becoming
+imprecise floats.
+Provider identifiers outside that range must be strings.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    out_of_range_json_integer_tokens_fail_before_rhai, MAXIMUM_FACT_ENTRIES. */}
+
+`selectors` contains only the roles, profiles and fields declared by the requirement's derivation
+selector-input contract.
+Rust resolves them from the already authorized requirement subjects.
+Omission yields an empty map.
+A relationship derivation can compare a returned parent reference with the separately authorized
+candidate-parent selector without receiving the complete request, credentials, grant or unrelated
+lookup selectors.
+One declared role is represented as:
+
+```json
+{
+  "subject": {
+    "profile": "record-reference-v1",
+    "values": {"record_reference": "synthetic-reference"}
+  }
+}
+```
+
+{/* Evidence: crates/registry-evidence/src/selector.rs authority_selected_by_principal;
+    crates/registry-evidence/src/main.rs fixture_selector_value. */}
+
+`evaluation_context` contains exactly the runtime observation instant, the legal local date and
+time, the closed requirement parameters and the read-only codelist handles described in
+[Evidence primitives](#evidence-primitives).
+The caller cannot supply a clock.
+Parameters carry reviewed non-secret requirement data, not requester identity, authorization
+objects, credentials or runtime handles.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs derive;
+    crates/registry-evidence/src/rhai_runtime.rs derivation_decode_is_closed_and_retains_protected_types. */}
+
+## Output from derive
+
+`derive/3` returns an array of `DerivedConceptValue` maps:
+
+```text
+DerivedConceptValue {
+  concept_id: string,
+  value: supported value
+}
+```
+
+Each map has exactly `concept_id` and `value`.
+The array contains at most 16 items.
+Concept identifiers must equal the selected requirement's declared output set exactly.
+Duplicates, missing required concepts, undeclared concepts and extra map members fail before
+evidence construction.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs MAXIMUM_CONCEPT_VALUES,
+    derivation_decode_is_closed_and_retains_protected_types. */}
+
+Ordinary JSON-compatible values remain subject to the concept's declared form, codelist,
+cardinality, size, range and precision constraints.
+Three protected result forms require host constructors:
+
+- `Decimal` is created only by `decimal(canonical_text)` or `parse_decimal(canonical_text)`.
+  It has at most 28 significant digits and 9 fractional digits, and Rust serializes it as its exact
+  canonical JSON string.
+  Rhai floats cannot satisfy a bounded-decimal concept.
+- `EntityReferenceSeed` is created only by `entity_reference_seed(protected_string)`, whose input is
+  1 through 512 UTF-8 bytes.
+  The seed cannot be serialized, logged, compared or used directly as a public identifier.
+  Rust projects it to an audience-scoped reference after validation.
+- `EntityReferenceSeedList` is an array containing only `EntityReferenceSeed` values, with at most 64
+  items.
+  Rust projects each seed independently after the complete output gate passes.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    exact_decimals_and_validated_contiguous_buckets_work,
+    protected_seed_has_no_comparison_or_string_conversion_capability,
+    MAXIMUM_ENTITY_REFERENCE_ITEMS. */}
+
+## Selector-aware derivation and relationship decisions
+
+Selector-aware derivation exists for relational assertions whose truth is defined by both an
+authoritative source record and an independently authorized subject role.
+It does not turn Evidence into a general identity resolver.
+
+Permitted reviewed rules include:
+
+- exact membership of an authoritative opaque identifier in a complete source relationship set;
+- exact comparison of a closed tuple of authoritative attributes after a deterministic,
+  jurisdiction-governed canonicalization implemented in the derivation script; and
+- direct mapping of an explicit source-owned relationship decision.
+
+The default reference rule is exact opaque-identifier membership.
+A bundle using names, dates, transliteration or another attribute rule must version and review that
+rule explicitly, and name the resulting concept no more strongly than the source and governance
+justify.
+Probabilistic matching, fuzzy scoring, candidate ranking, deduplication and best-match selection
+stay outside this ABI.
+
+A derivation may return `false` only after the pack lookup established one uniquely resolved
+authoritative record and emitted a schema-required returned-record identifier, relationship-set
+contract identifier, reference namespace and `relationship_set_complete: true` fact.
+When the provider returns the lookup identifier, the derivation declares that authorized lookup
+selector and requires exact equality before using the record.
+The derivation must require and validate those facts before comparing the candidate.
+No match, ambiguity, returned-record mismatch, partial relationship data, namespace mismatch or
+protocol uncertainty stops before the boolean result and never becomes an authoritative negative
+assertion.
+Bundle review must justify how the configured source contract distinguishes an absent optional
+relationship from missing data.
+
+A reviewed pack may supply `reference_namespace` and `relationship_set_contract` as fixed constants
+checked against closed requirement parameters.
+Constant agreement does not prove that the provider returned a namespace or contract identifier.
+If either value can vary by record, the pack must derive and validate it from provider data, the fact
+schema must require it, and fixtures must cover the mismatch.
+Governance must always establish that returned references belong to the declared namespace and that
+the relationship set has the claimed meaning and completeness.
+
+`legal-parent-relationship` is valid only where deployment governance states that the configured
+source fields and matching rule establish legal parentage.
+The portable OpenCRVS reference therefore uses `registered-parent-relationship` until that stronger
+jurisdiction-specific meaning is documented.
+
+{/* Evidence: products/evidence/fixtures/acceptance/all-definitions/derivations/legal-parent-relationship.rhai;
+    products/adapter/packs/opencrvs-events/scripts/evidence.rhai relationship_set_complete. */}
+
+## Language surface
+
+Derivation scripts may construct `bool`, signed 64-bit integer, finite floating-point number,
+character, string, array, map and unit/null values.
+Derived values must satisfy the closed result gate; ordinary floats and unsupported host objects are
+rejected as public outputs.
+
+The ABI pins Rhai 1.27.0 core syntax plus the host registrations on this page.
+Rhai syntax does not grant host authority, but its observable behaviour is still part of the
+reviewed-script contract.
+The supported surface includes:
+
+- bindings: `let`, `const`, reassignment and local function parameters;
+- control: `if`/`else`, `return`, `throw` and bounded `for` over arrays;
+- construction: array, map, string, integer, boolean and unit literals;
+- access: fixed or computed map indexing and bounded non-negative array indexing;
+- boolean: `!`, `&&`, `||`, equality and inequality;
+- integer: arithmetic, bitwise operations, shifts, equality and ordering;
+- floating point: arithmetic, equality and ordering, including mixed integer and float operands;
+- string: concatenation, substring removal, equality and ordering; and
+- functions: statically named same-file functions within the global call-depth limit.
+
+Only arrays are registered as iterable by the host.
+Ranges, string slicing, `switch`, `try`/`catch`, unbounded loop forms, optional chaining and null
+coalescing are rejected by the hardened compiler.
+A missing map key produces unit.
+Map membership uses the registered `map.contains` helper.
+Equality between different types returns false and inequality returns true; same-type array or map
+comparison is not registered and fails.
+
+Rhai counts a negative array index from the end of the array.
+The startup source review therefore routes every index operand through a host-owned index guard, and
+a negative index fails the invocation however it was computed, rather than silently addressing
+another element.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    candidate_numeric_string_and_opaque_type_surface_is_pinned,
+    negative_array_indexes_fail_instead_of_selecting_from_the_end, INDEX_GUARD_FUNCTION. */}
+
+The following are forbidden:
+
+- `Fn(...)`, function pointers, `.call`, `.curry` and data-derived dispatch;
+- anonymous functions and closures;
+- interpolated backtick strings and their implicit value-to-string conversion;
+- raw string literals such as `#"..."#`, so the source review and the Rhai tokenizer can never
+  disagree about where a string ends (`#{` remains the map literal);
+- a block or an `if` chain used in operand position, because the source review could not then
+  classify a following `[` and the index guard would be lost (assign the intermediate result to a
+  mutable local and use that local);
+- top-level executable statements;
+- `try`/`catch`, so a script cannot suppress the host-private unavailable termination raised by
+  `required`; and
+- `switch`, `while`, `until`, `loop`, `do`, range construction, string slicing, optional chaining and
+  null coalescing, because the reviewed derivation language excludes them.
+
+The operation, call-depth, expression-depth, string, array and map ceilings apply to every otherwise
+permitted construct.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    compiler_rejects_every_forbidden_candidate_construct,
+    ambient_and_diagnostic_capabilities_are_unavailable. */}
+
+### Language essentials
+
+- Integer equality: `i64 == i64` and `i64 != i64`.
+- Integer ordering: `<`, `<=`, `>`, `>=` over signed 64-bit integers.
+- Integer arithmetic: binary `+`, `-`, `*`, `/`, `%`, `**`; unary `+` and `-`.
+- Integer bitwise: `&`, `|`, `^`, `<<`, `>>`.
+- Floating arithmetic: `+`, `-`, `*`, `/`, `%`, `**`, unary `+` and `-`, equality and ordering over
+  `f64`.
+- Mixed numeric operations: arithmetic, equality and ordering between `i64` and `f64` in either
+  operand order.
+- Boolean logic: `!bool`, boolean equality and inequality; `&&` and `||` are language control
+  operators.
+- String operations: `string + string`, `string + char`, `char + string`, `string - string`, `+=`,
+  equality and lexical ordering.
+- `array.len`: the number of array items as an integer.
+- `len(map)`: the number of map entries as an integer.
+- `map.contains(name)`: whether an exact string key exists.
+- Array iteration: `for value in array`, bounded by the operation and array limits.
+- `type_of(value)`: the pinned Rhai type name, including registered opaque type names.
+- `to_string(value)`: a signed 64-bit integer to canonical decimal text, or a Boolean to `true` or
+  `false`; only these two typed overloads exist.
+  Registered opaque handles cannot be converted to text.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    candidate_numeric_string_and_opaque_type_surface_is_pinned. */}
+
+### Evidence primitives
+
+Opaque values cross the result gate only through the declared Decimal and entity-reference forms.
+Some helpers require handles that only Rust can supply through derivation context.
+
+- `parse_date`: `string -> Date`; strict canonical proleptic-Gregorian `YYYY-MM-DD`.
+- `parse_instant`: `string -> Instant`; uppercase `T` and `Z`, explicit offset, no leap second,
+  optional 1 to 9 fractional digits, normalized to UTC.
+- `parse_integer`: `string -> i64`; optional ASCII `-` and one or more ASCII digits.
+  Leading zeroes are allowed.
+  It rejects `+`, whitespace, non-ASCII digits, fractions, exponents, empty input and overflow.
+- `decimal`: `string -> Decimal`; alias of `parse_decimal`.
+- `parse_decimal`: `string -> Decimal`; a canonical exact decimal with no `+`, exponent, leading
+  zero, trailing fractional zero, empty fraction, negative zero, NaN or infinity.
+  Zero is exactly `0`.
+- `integer_to_decimal`: `i64 -> Decimal`.
+- `add_calendar_years`: `(Date, i64) -> Date`; clamps the day at month end, from -1000 through 1000
+  years inclusive.
+- `add_calendar_months`: `(Date, i64) -> Date`; clamps the day at month end, from -12000 through
+  12000 months inclusive.
+- `compare_dates`: `(Date, Date) -> i64`; returns `-1`, `0` or `1`.
+- `compare_instants`: `(Instant, Instant) -> i64`; returns `-1`, `0` or `1`.
+- `days_between`: `(Date, Date) -> i64`; second minus first, from -365000 through 365000 days
+  inclusive.
+- `compare_decimals`: `(Decimal, Decimal) -> i64`; returns `-1`, `0` or `1`.
+- `bucket_number`: `(Decimal, array<NumericBucket>) -> string`; requires 1 to 64 contiguous, ordered
+  half-open buckets with unique codes.
+  A value outside every bucket fails the invocation.
+- `entity_reference_seed`: `string -> EntityReferenceSeed`; an opaque value permitted only through
+  the derived-value gate.
+- `codelist_lookup`: `(CodelistHandle, string) -> string or unit`; Rust alone supplies the handle.
+- `list_contains`: `(array<scalar>, scalar) -> bool`; supports boolean, integer, string, Date,
+  Instant and Decimal while keeping types distinct, and validates every element before answering.
+- `set_contains`: `(array<scalar>, scalar) -> bool`; the same scalar types and the same complete
+  validation, and it rejects duplicate set entries.
+- `array.push(value)`: appends one value to the invocation-local array within the 256-item bound and
+  returns unit.
+- `string.replace(from, to)`: replaces every exact non-overlapping literal occurrence in the
+  invocation-local string within the 16,384-byte bound and returns unit; no regex or normalization.
+- `required`: `(value, safe_error_code) -> value`; unit becomes the closed unavailable outcome.
+  The code must match `[a-z][a-z0-9_]*` and be at most 64 ASCII bytes.
+- `required` code handling: the bundle-owned code is validated for shape and then discarded.
+  It documents the reviewed script; it never reaches the public problem, the audit, the logs or the
+  raised signal, which is a host-private, unforgeable, uncatchable value.
+- `is_missing`: `value -> bool`; true only for unit.
+- `get_path`: `(value, json_pointer) -> value`; resolves one RFC 6901 pointer and returns unit when
+  any segment resolves to nothing.
+  Only the `~0` and `~1` escapes are recognised, and an array segment is a non-negative decimal
+  integer with no leading zero.
+  A pointer that is not resolvable syntax, exceeds 256 bytes or exceeds 16 segments is a script
+  fault and fails the invocation rather than answering missing.
+- `normalise_name`: `(profile, value) -> string`; applies the named, versioned profile
+  `name-match-v1` and returns the normalised text for one exact comparison with one expected value
+  normalised the same way.
+  The script compares the results with `==`.
+  The steps run in this order: NFKC; full case fold (no locale tailoring); NFKC; removal of the
+  nonspacing marks (Mn) in `U+0300` to `U+036F`, `U+1AB0` to `U+1AFF`, `U+1DC0` to `U+1DFF`,
+  `U+20D0` to `U+20FF`, `U+FE20` to `U+FE2F`, `U+064B` to `U+065F`, `U+0670` and `U+0591` to
+  `U+05C7` after NFD, then NFC; transliteration (`đ` and `ð` to `d`, `ø` to `o`, `ł` to `l`, `æ` to
+  `ae`, `œ` to `oe`, `ı` to `i`, `þ` to `th`); removal of `U+00AD`, `U+061C`, `U+200B` through
+  `U+200F` and `U+2060`; collapse of White_Space runs to one space; removal of hyphen-minus,
+  `U+2010`, `U+2011`, apostrophe, grave accent, `U+2018`, `U+2019`, `U+02BC`, `U+02BB` and space.
+  Spacing marks, Hangul syllables and every nonspacing mark outside those ranges survive (Devanagari
+  virama, nukta and anusvara, Thai tone marks); Latin, Greek and Cyrillic accents, Arabic vowel
+  signs and Hebrew points are removed.
+  An unknown profile name, an input over 1,024 bytes, or growth past 8,192 bytes in any step is a
+  script fault and fails the invocation.
+  The helper never searches, ranks or scores.
+  A pinned fingerprint test makes an ICU data or step change a reviewed change under a new profile
+  name.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    dates_instants_and_calendar_arithmetic_are_strict_and_bounded,
+    exact_decimals_and_validated_contiguous_buckets_work,
+    required_primitive_reports_closed_unavailability,
+    required_unavailability_carries_no_supplied_code_into_any_surface,
+    get_path_resolves_bounded_pointers_and_reports_absence_as_missing,
+    get_path_rejects_malformed_and_oversized_pointers,
+    list_contains_validates_every_element_before_any_answer;
+    crates/registry-evidence/src/name_normalisation.rs NAME_MATCH_V1, MAX_NAME_INPUT_BYTES. */}
+
+`NumericBucket` has exactly `minimumInclusive: Decimal`, `maximumExclusive: Decimal` and
+`code: string`.
+`LegalLocalTime` is another opaque registered type.
+It is supplied only as `evaluation_context.legal_local_time`; there is no script constructor.
+
+For context, Rust supplies derivation with exactly `observed_at: Instant`,
+`legal_local_date: Date`, `legal_local_time: LegalLocalTime`, validated `parameters: map` and
+`codelists: map<CodelistHandle>`.
+The authorized selectors are a distinct explicit derivation argument, not ambient context.
+Acquisition scripts use the separate Adapter exchange contract.
+
+`observed_at` is always a runtime-supplied instant normalized to UTC.
+`legal_local_date` and `legal_local_time` use the requirement's validated IANA `observationTimezone`;
+when that optional field is omitted, they use UTC.
+Declare the legal timezone of a time-dependent definition explicitly and pin boundary fixtures
+instead of relying on the fallback.
+
+{/* Evidence: crates/registry-evidence/src/config.rs observation_timezone;
+    crates/registry-evidence/src/rhai_runtime.rs derive. */}
+
+For JSON-originating values, `type_of` tags include `"i64"`, `"f64"`, `"bool"`, `"string"`,
+`"array"`, `"map"` and `"()"`.
+A script-created character has tag `"char"`.
+Ranges and `Fn` values, and their construction paths, are forbidden.
+The function can also return the registered names `"Date"`, `"Instant"`, `"LegalLocalTime"`,
+`"Decimal"`, `"EntityReferenceSeed"` and `"CodelistHandle"`.
+This limited type-name inspection is part of the reviewed surface.
+
+No implicit conversion to string, JSON parsing, JSON serialization, regular expression, sorting,
+object merge, string splitting or joining, Unicode normalization, case folding, URL encoding, Base64,
+hashing or cryptographic helper is available.
+Rhai does perform its existing mixed integer and float numeric operations.
+Exact legal or financial arithmetic must use the `Decimal` helpers.
+Rust performs serialization, URL encoding, authentication, signing and hashing outside the script.
+
+Finite ordinary floats inside the signed 64-bit magnitude may occur in private facts or local
+computation.
+A public derived value is never an ordinary float.
+Declare an integer concept or an exact `Decimal` instead; a float reaching the derived-value gate
+fails the invocation.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs public_derived_values_reject_ordinary_floats,
+    candidate_numeric_string_and_opaque_type_surface_is_pinned. */}
+
+`parse_integer` permits leading zeroes because provider text may use them; the result has ordinary
+integer semantics.
+Reviewed pack logic validates provider-specific bounds such as a non-negative count.
+Invalid derivation input terminates the invocation under a closed error class.
+
+No other Rhai standard package is loaded.
+In particular, scripts have no:
+
+```text
+network, HTTP client, filesystem, environment, process execution, logging,
+printing, diagnostics, clock, timezone database, randomness, UUID generation,
+shared mutable state, imports, modules, eval, plugins, dynamic function
+dispatch, object reflection beyond type_of, or secrets
+```
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    ambient_and_diagnostic_capabilities_are_unavailable, MAXIMUM_MODULES. */}
+
+## Hard limits
+
+These engine ceilings apply independently of script logic:
+
+- Script source: 65,536 bytes.
+- Operations per invocation: 100,000.
+- Call depth: 32.
+- Expression depth: 64.
+- Modules: 0.
+- String value: 16,384 bytes.
+- Array: 256 items.
+- Map: 256 entries.
+- Facts, parameters or result: 65,536 normalized bytes.
+- Input fact entries: 64.
+- Derived concept values: 16.
+- Configured codelists: 256.
+- Entries per codelist: 4,096.
+- Numeric buckets: 64.
+- Entity-reference seeds in one derived value: 64.
+- `get_path` pointer: 256 bytes.
+- `get_path` pointer segments: 16.
+- `normalise_name` input: 1,024 bytes.
+- `normalise_name` text after any step: 8,192 bytes.
+- Entity-reference seed input: 512 bytes.
+- `required` error code: 64 ASCII bytes.
+- Exact decimal precision: 28 significant digits.
+- Exact decimal scale: 9 fractional digits.
+- Instant and local-time fractional precision: 9 digits.
+
+Operation exhaustion, bound violations, invalid indexing, integer errors and explicit `throw`
+terminate the invocation.
+A failed derivation releases no partial concept values.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs MAXIMUM_OPERATIONS, MAXIMUM_CALL_DEPTH,
+    MAXIMUM_EXPRESSION_DEPTH, MAXIMUM_STRING_BYTES, MAXIMUM_ARRAY_ITEMS, MAXIMUM_MAP_ENTRIES,
+    MAXIMUM_FACT_ENTRIES, MAXIMUM_CONCEPT_VALUES, MAXIMUM_CODELIST_ENTRIES, MAXIMUM_RESULT_BYTES,
+    MAXIMUM_BUCKETS, MAXIMUM_ENTITY_REFERENCE_ITEMS, MAXIMUM_REQUIRED_CODE_BYTES,
+    MAXIMUM_POINTER_BYTES, MAXIMUM_POINTER_SEGMENTS,
+    operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error. */}
+
+{/* TODO[evidence]: no constant or test in registry-evidence pins the 65,536-byte script source limit
+    or the 256 configured-codelist limit. */}
+
+## Errors and observability
+
+A reviewed derivation can throw `derivation_input_error` to reject an inconsistent selector, fact or
+policy contract without including input values.
+The public result is `evidence.unavailable`, also used for no-match and ambiguous lookups, so the
+failure does not reveal that a record exists.
+The internal audit category stays value-free.
+
+{/* Evidence: crates/registry-evidence/src/main.rs validate_reference_error,
+    derivation_input_error. */}
+
+The `required` helper terminates a missing-value invocation with a host-private, unforgeable
+unavailable marker.
+Its safe-code argument is validated and then discarded.
+Scripts cannot manufacture the marker with `throw` or catch it; `try` and `catch` are refused.
+
+Rust maps compilation, entry-point, input-bound, invocation and result failures to closed internal
+classes.
+Selector values, source facts, parameters, credentials, tokens and raw Rhai errors are excluded from
+HTTP problems, audit details, logs, metrics, traces and snapshots.
+Signing and release audit receive only values that passed the complete output gate.
+
+{/* Evidence: crates/registry-evidence/src/rhai_runtime.rs
+    required_unavailability_carries_no_supplied_code_into_any_surface,
+    operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error. */}
+
+## Review examples
+
+The professional licence derivation in the acceptance fixtures uses runtime legal time, exact dates
+and Decimal buckets.
+The standalone example project combines a reviewed pack with an adult-status assertion derivation.
+The Adapter script contract defines the separate exchange input and result seams used inside packs.
+
+{/* Evidence: products/evidence/fixtures/acceptance/all-definitions/derivations/professional-licence.rhai;
+    products/evidence/examples/standalone/fixtures/adult-status.yaml. */}
+
+## Next
+
+- [Evidence fixtures](../evidence-fixtures/)
+- [Registry Evidence configuration reference](../evidence-configuration/)
+- [Registry Evidence errors and problems reference](../evidence-problems/)
+- [Prove a Registry Evidence project](../../tutorials/prove-an-evidence-project/)

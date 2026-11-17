@@ -74,6 +74,9 @@ maintenance moves to the successor's latest minor.
   An advisory without an upstream fix carries a scoped, documented ignore in `deny.toml`
   with a review trigger; a newly published advisory fails CI until it is fixed or receives
   its own documented ignore.
+  For Registry Manifest, an unsound or memory-safety advisory on a direct dependency (for
+  example, the `libyml` / `serde_yml` class of issues) escalates immediately and blocks the
+  release; replacing the dependency with a maintained equivalent is preferred over an ignore.
 
 ## Reporting and acknowledgment
 
@@ -84,8 +87,7 @@ within 5 business days.
 ## Scope notes
 
 - This policy applies to the recommended distribution and its tested Discovery patch variants.
-  Independently released Discovery uses its own version line. This page supersedes the narrower statement in
-  `products/manifest/SECURITY.md` that security fixes target the current `main` branch.
+  Independently released Discovery uses its own version line.
 - Pre-1.0 releases (`v0.x`) receive fixes only in the latest `v0.x` release, under the same
   roll-forward model.
 

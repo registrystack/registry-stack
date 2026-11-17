@@ -268,6 +268,66 @@ checkpoint, drive its routes directly, as the
     crates/registry-bregctl/src/data_lifecycle.rs, list_ingestion_runs() and cancel_ingestion_run();
     crates/registry-breg/tests/postgres_import_authority.rs. */}
 
+### Recover a run
+
+| Failure | Recovery |
+| --- | --- |
+| Lost response after a commit | Reread the run and replay the exact chunk; the original receipt returns. |
+| Transport interruption | Resubmit the chunk `nextChunkIndex` names. |
+| Invalid item or business refusal | The checkpoint stays; continue the remainder in a successor run. Rows are never skipped by default. |
+| Authorization lost | The run makes no progress. |
+| Package or schema binding changed | The run blocks; continue in a successor run. |
+| Import window closed, expired, exhausted, or superseded | The run blocks; open a new window and continue the uncommitted remainder in a successor run. |
+| Another open or blocked run holds the window | List runs with `bregctl data runs list`; the creator cancels the duplicate, then announces again. |
+| Operator stop | Cancel the run; its counts and audit stay. |
+
+A chunk that already committed replays its receipt in any run status, including `blocked`. A
+successor package that lowers the batch ceilings does not strand the committed prefix.
+
+Run creation has no replay. If the audit writer refuses the creation's response entry after the run
+commits, the caller receives `service.unavailable` without the run id. Once the audit writer is
+back, list the caller's runs with `--status open` and the input digest, then resume or cancel the
+run the list returns. Creating the run again opens a second run only when no import window
+prevents it.
+
+{/* Evidence: crates/registry-breg/tests/postgres_ingestion_runs.rs,
+    lost_chunk_response_replays_original_receipt_without_duplicate_mutation;
+    crates/registry-breg/tests/postgres_import_authority.rs. */}
+{/* TODO[evidence]: the run-creation lost-response recovery has no test that shows a run
+    surviving a refused response entry. The nearest test is
+    run_creation_opens_no_run_when_the_audit_writer_refuses_its_request_entry, which covers the
+    request entry. */}
+
+### Retention of runs and receipts
+
+A run has no retention horizon of its own. Its row, including the creator's issuer and subject,
+stays for the life of the database, so a run stays inspectable and its committed prefix
+accountable. The raw creator values appear in no run or audit response; audit records carry a
+keyed pseudonym.
+
+A chunk receipt holds what the batch route answers the same authorized caller with. It is erased
+when the record history it describes is erased, through the revision the erasure names. A receipt
+that describes only later revisions of the same record survives. A later read, or an exact replay
+of that chunk, answers `410 ingestion.receipt_erased`, and the chunk and its counts stay in the
+run. An erasure that commits while a release waits on the registry lock answers the same `410` and
+never the erased values.
+
+Every release of a retained receipt, whether a replay or a recovery read, re-projects the stored
+answer through the fields the run's profile can read now. A successor package that revokes or
+renames a readable field drops that member from later releases. A successor that retires a field
+and reuses its API name inherits none of its stored value. Where a Record type has encrypted
+fields, the stored receipt keeps the encrypted envelopes, and every release opens them as the batch
+route does; a process without key state, or one whose open fails, answers `service.unavailable`
+instead of releasing an envelope. A serving instance that a successor activation has retired also
+answers `service.unavailable` instead of releasing.
+
+{/* Evidence: crates/registry-breg/tests/postgres_ingestion_runs.rs,
+    erasing_record_history_erases_the_receipt_that_describes_it,
+    erasing_through_revision_one_keeps_the_revision_two_receipt,
+    a_fresh_receipt_opens_encrypted_members_and_stays_sealed_at_rest,
+    receipt_releases_fail_closed_without_key_state, and
+    a_stale_instance_cannot_release_a_retained_receipt. */}
+
 ## Export with a checkpoint
 
 `data export` pages through the list route and appends each page to the output file, then records

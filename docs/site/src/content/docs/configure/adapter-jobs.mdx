@@ -1,0 +1,544 @@
+---
+title: Adapter ingestion jobs
+description: Configure an Adapter ingestion job, with its source route, item contract, job profile, triggers, pass algorithm, destinations, operator commands and webhook ingress.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+The Adapter reads in place by default.
+An ingestion job copies a record only when the receiver must own it, such as registration into a registry through Base Registry Engine (BReg).
+Evidence checks and data-space reads stay read paths, served by a live facade or by Evidence's own acquisition, never by an ingestion job.
+Delivery is not approval, and approval is not application: a job reports what its destination accepted and nothing more.
+
+## Ownership
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs AdapterJob */}
+{/* Evidence: crates/registry-adapter-core/src/job.rs JobDestination */}
+
+- The source (KoboToolbox, files, a database, a queue) owns its data and its edits.
+  It is also the buffer a retry reads again.
+  Source data is not registry authority.
+- The Adapter ingestion job reads the source, compares items, maps for the direct destination, hands off, keeps the source position and reports status.
+  It holds a source credential and, per destination, a BReg credential or a signing key.
+  It holds no other product's client or credential, and it has no steps, branches, waits or business timers.
+- Coordinator, when used, owns admission, one Run per item, lookup, choice, waits, recovery of its own commands and reaching a person.
+  No product depends on it.
+- BReg owns Record type and Action contracts, authorization, Proposals, application, receipts and bulk runs.
+  It rechecks every operation under its own policy, and an ingestion grant is never an approval grant.
+- A review provider, such as Casework, owns review policy, assessment and decisions.
+  It does not bypass BReg's application checks.
+- The institution owns the meaning of the form, the matching rules, the review policy and the operating responsibility.
+  These are authored in the deployment, not compiled into the Adapter.
+
+Status keeps each observation separate: the job reports an item read, accepted by the destination, refused with a code, or held for an operator.
+Review and application are seen in BReg and the review provider, or in the Coordinator Run that follows them.
+A timeout proves neither failure nor the absence of an effect.
+
+Six rules govern the mode:
+
+1. Read in place by default. Copy a record only when the receiver must own it.
+2. One owner per concern. The job reads, maps for the direct destination and hands off. BReg and the review provider own authority, review and application. Coordinator owns lookups, choices, waits and reaching a person.
+3. Products stand alone. The Adapter may hold BReg's client and a BReg credential, and no other product's. The Coordinator destination is Coordinator's published signed-event contract. Bulk loads end in a file.
+4. Identity and progress, not payloads. The source is the buffer. The position moves only after the page settles under the declared acceptance and refusal policy, and a stopped pass leaves it unchanged.
+5. The pass is the only unit of work. Triggers decide only when a pass starts, hook bodies are untrusted, and a queue is a source.
+6. Direct only for one operation. An item goes direct only when it maps to exactly one BReg operation with no lookup. Everything else goes to Coordinator, and a refusal never falls back to another path.
+
+## Sources
+
+{/* Evidence: crates/registry-adapter-core/src/pack.rs SourceRouteDecl */}
+{/* Evidence: crates/registry-adapter-core/src/pack.rs SourceScan */}
+{/* Evidence: crates/registry-adapter-core/src/pack.rs SourceRecovery */}
+{/* TODO[evidence]: check refusing the job-only components in every facade route has no test located by symbol */}
+
+Source protocol, transport and data format are separate.
+CSV is a format, SFTP is a transport, PostgreSQL is a database connector, and KoboToolbox is an application API.
+A CSV file received by SFTP uses the same decoder and the same mapping as an identical local CSV file.
+
+Every source takes one shape: a job route, called with a cursor, that returns the item contract.
+`http` and `postgres` fit as sends, and `file` and `sftp` fit through the job-only read step.
+`adapterctl check` refuses all three job components in every facade route, so the facade gains no file or SQL path.
+
+Source kinds:
+
+- The KoboToolbox JSON API, through a reviewed pack over HTTP. Its stable key, edit order and record cap require deployment-specific verification, and the provider pack README records the known limits.
+- ODK Central reuses the KoboToolbox pattern.
+- Read-only SQL (PostgreSQL), local CSV and JSONL files, and SFTP.
+- Hooks, as a trigger.
+- A queue, as a source.
+- DHIS2 stays a live-facade source.
+
+### PostgreSQL
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_source_host.rs */}
+{/* TODO[evidence]: the parameterOrder binding rules and the offset-paging caveat have no test located by symbol; postgres_source_host.rs is the nearest file */}
+
+A PostgreSQL source uses a read-only identity, reviewed parameterized queries, statement timeouts and bounded fetches.
+`keyColumn` supplies stable item identity, and the whole row supplies its revision.
+An endpoint's `parameterOrder` maps reviewed names exactly to the query's contiguous native `$1`-onward positions, and you omit it only for a query with no positions.
+Text binds to PostgreSQL text-like types.
+Integers bind to `int2`, `int4` or `int8` with checked narrowing.
+Numbers bind to `float8`, and booleans bind to `bool`.
+A missing, extra or incompatible value refuses the read.
+
+Each page runs one statement in its own read-only, read-committed transaction.
+A root `ORDER BY` makes that statement deterministic but cannot make separate offset pages a snapshot, because a concurrent insert, a delete or a change to the ordering key can skip or repeat rows.
+A source that can change during a scan therefore needs a source-defined immutable snapshot, a monotonic cursor, or a bounded rescan with stable-key reconciliation.
+A timestamp watermark alone is no change feed.
+
+### Files and SFTP
+
+{/* Evidence: crates/registry-adapter-job/tests/job_file_host.rs */}
+{/* TODO[evidence]: the file source identity fence and legacy-state reconciliation have no test located by symbol; job_file_host.rs is the nearest file */}
+
+Files are UTF-8 text with declared quoting and null rules, and leading zeros are kept.
+A file is identified by its content digest and a row by a declared business key, never by position.
+CSV and JSONL `pollEnrich` steps require `keyPointer`, an RFC 6901 JSON Pointer of at most 512 bytes that selects a non-empty opaque string.
+CSV selectors name one flat field, and without headers they are canonical array indices.
+JSONL selectors may select the root or a nested field.
+Numeric values are not coerced.
+A file-wide duplicate key refuses the read before any page is returned.
+A cursor still binds the file digest and position, and neither contributes to row identity.
+
+The job store fences the file and SFTP source identity contract before a source read, and it requires operator reconciliation rather than silently registering existing effects again.
+Nonempty legacy file or SFTP state, including raw-file state, cannot attest its previous contract and also requires reconciliation.
+HTTP and PostgreSQL jobs are unaffected by this fence.
+The fence covers the source-route name, endpoint identifier, component kind, namespace, decoder options and key selector.
+Renaming or rebinding those source identities can require reconciliation even when the current file bytes would yield identical keys.
+Changing only the poll timeout or the page size does not.
+There is no automatic reset or rewrite of prior effects.
+
+SFTP verifies the host key and follows a completed-file convention.
+The `job-sftp` host feature is off by default.
+It reads over in-process `russh` and `russh-sftp`, and the host key is pinned before any credential is resolved or sent.
+AWS-LC backs the selected cipher paths, and key exchange and signatures also use RustCrypto, so the host makes no whole-session FIPS validation claim.
+Supported deployments use a dedicated read-only account confined to the source tree by the server, because SFTP v3 client pathname checks do not provide an atomic filesystem jail.
+
+### Queues
+
+{/* Evidence: crates/registry-adapter-job/tests/rabbitmq_pass.rs refusal_is_durable_before_source_rejection_and_held_never_settles */}
+{/* Evidence: crates/registry-adapter-job/tests/rabbitmq_pass.rs changed_raw_body_under_one_message_identity_is_held_without_another_effect */}
+
+A queue is a source that holds data until acknowledged.
+A message is acknowledged, or an offset committed, only after the destination accepts the item.
+A refused message goes to the broker's dead-letter path, so the broker remains the buffer.
+
+The `job-rabbitmq` host feature is off by default and uses `lapin` over verified TLS.
+The process installs its reviewed FIPS TLS provider before clients are constructed and refuses a conflicting provider.
+The source settles each message manually after the durable item outcome.
+A held item is not an acceptance, and pending settlement is bounded and leaves the position unchanged.
+
+A changed RabbitMQ delivery stays unsettled and can block later messages at the queue head.
+To clear it:
+
+1. Establish any possible destination outcome under that destination's own authority.
+2. Have the broker operator resolve the old delivery by dead-lettering or removing it under approved broker policy.
+3. Have the publisher or source operator correct its immutable-identity and version-handling logic before publishing legitimate future work under a new immutable message ID.
+
+The publisher never rekeys uncertain or already accepted work to force a fresh registration.
+Publishing a new message ID alone does not clear the old delivery, and the Adapter does not implicitly acknowledge or release it.
+
+## Job runtime
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs JobProfile */}
+{/* Evidence: crates/registry-adapter-core/src/job.rs ReadBounds */}
+{/* Evidence: crates/registry-adapter-core/tests/corpus_job_members.rs profile-read-required */}
+
+A job compiler loads a pack, an `AdapterJob` definition and an `AdapterJobRuntimeConfig`.
+The runtime config is the job's own file, distinct from the facade's `AdapterRuntimeConfig`.
+The compiler exposes the job's source route as a runnable program with no listener, no database requirement for the route, no OIDC issuer and no inbound Record shape.
+The exchange starts with a null body and the job cursor under a closed property name, bounded by the job profile's page deadline.
+The engine is the listener-free `registry-adapter-engine` crate, shared by the job host, the facade and the Evidence host.
+
+### Job profile
+
+The job profile is explicit and bounded, and it is separate from the facade ceilings, which are unchanged.
+A job send's per-attempt timeout stays at or below the platform-frozen 10 seconds.
+A pack endpoint that a job reaches may declare `maximumResponseBytes` up to the platform's 16 MiB response-body cap.
+The runtime binding may lower that bound and never raise it.
+
+The profile also bounds what the facade never sees: the page deadline of one route run, the read size and page size of the read step, and the row and field limits of the decoders.
+Every read has a count, byte and deadline bound.
+The `read` block (`maximumFileBytes`, `maximumRowBytes`, `maximumFieldBytes`, `maximumRowsPerPage`) bounds the file and PostgreSQL readers.
+A job whose source route reaches neither, such as an HTTP-only route, may omit it.
+`adapterctl check` refuses an omitted `read` with `adapter.job.profile-read-required` where a `pollEnrich` or a `postgres:` send or enrich is reachable.
+
+### Item contract
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs ItemPage */}
+{/* Evidence: crates/registry-adapter-core/src/job.rs SourceItem */}
+
+A source route returns `{items: [{key, revision?, value}], next}`.
+
+- `key` is the source's stable identifier for the item inside the job's namespace. Choose a non-personal key where the source has one, such as KoboToolbox's `_id`.
+- `revision` is the observed source version, when the source reports one reliably.
+- `value` is a projection of the fields the destination needs, shaped by the reviewed source route. It is not the captured source item, and a whole form never travels because a destination needed two of its fields.
+- `next` is the resumption cursor, absent at the end of a finite scan. An ongoing scan holds its place at the tail with a cursor on every page, so a rescan of it ends at its first empty page.
+
+A source route declares its contract:
+
+- Whether the scan is `finite` or `ongoing`.
+- The recovery semantics of `next`, from a closed set. `exact-replay` means a replayed cursor re-reads the same bytes, such as a file digest and position. `key-deduplicated` means upstream pages may shift between reads and the consumer deduplicates by key.
+- How edits are found. The position only moves forward, so a source declares whether an edit moves an item past the position (`ordered`) or needs a periodic read from the first page (`rescan`, with a declared delay between 60 seconds and one day). KoboToolbox declares `rescan`.
+
+`adapterctl check` enforces the declaration, and the job entry validates every produced page against the contract shape and bounds before it is returned.
+A source route is bound by no facade operation and is not callable through `direct:`.
+
+### Projection
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs ProjectionDecl */}
+{/* Evidence: crates/registry-adapter-core/src/job.rs ProjectionDigestOf */}
+{/* Evidence: crates/registry-adapter-job/tests/job_file_host.rs projection-flat-dotted-name */}
+
+The job declares its projection: the dotted field list the destination needs.
+The pass picks exactly those fields from each `value` at hand-off, a missing field as `null`, so nothing outside the declared list reaches a destination.
+A path walks nested objects of `value`, and the projected item carries one member per path, named by the path as written.
+For example, `household.household_size` reads `{"household": {"household_size": 3}}` and hands off `{"household.household_size": 3}`.
+
+A source with flat rows, such as the PostgreSQL source or a CSV file, projects its column names.
+It can also group columns in its route when a workflow expects a grouped path.
+A flat member whose name is the dotted path (a CSV column headed `household.household_size`) is not that path.
+The pass stops as `adapter.job.projection-flat-dotted-name` before staging the page, rather than hand off a `null`.
+Group the columns into a nested object in the route to fix it.
+
+The item digest covers the projected fields by default (`digestOf: projection`).
+A job may declare `digestOf: value` to digest the route's whole `value` together with the sorted declared field list, so a field-list edit still changes every digest.
+The store records the projection declaration's own digest beside the items, so a changed field list is visible.
+
+### Item table
+
+The job keeps one row per item, and nothing else about it:
+
+| Column | Meaning |
+| --- | --- |
+| Key | The source's stable identifier, under the job's namespace |
+| Last digest | A plain `sha256:` digest of the digest basis, with no secret |
+| Sequence | Counts changes to the item from 1, so a revert from B back to A is a change |
+| Status and code | `pending` (handed off, answer not yet recorded), `acknowledged` (accepted by the destination), `refused` with the destination's item-scoped code, or `held` for an operator |
+| Reference | What the destination returned: a Proposal ID, an Action receipt, or a Coordinator Run ID |
+
+Beside the rows, the job's state holds its source position, its lease, and the schedule and outcome of its last pass.
+The table holds no payload, so a dump of it identifies items but exposes no answers.
+It is protected like any operational database, with no digest secret and no per-row encryption.
+
+### Triggers
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs JobTrigger */}
+{/* Evidence: crates/registry-adapter-core/src/job.rs hook_binding_and_revised_receiver_read_as_closed_authored_contracts */}
+
+A trigger decides only when a pass starts and carries no data into it.
+The interval trigger ports Camel's scheduled-poll options (delay, initial delay, greedy, and idle and error backoff) with their declared defaults.
+Scheduling options belong to the interval trigger.
+
+A hook trigger names a unique absolute `path` and a runtime `binding`, and it requires an interval trigger for reconciliation.
+Hook paths are bounded to 256 bytes and use slash-separated segments of ASCII letters, digits, and `-`, `.`, `_` or `~`.
+A path therefore has no query, fragment, percent escapes, empty segments, or `.` and `..` segments.
+See [Webhook ingress](#webhook-ingress).
+
+### The read step
+
+The read step is a bounded port of Camel's `pollEnrich`.
+It is a job-only step over a static URI (`file:<endpointId>`, `sftp:<endpointId>` or `rabbitmq:<endpointId>`) with a mandatory timeout, and it reads one bounded page per read.
+Every source stays one route shape: a job route whose steps poll or send and whose final body is the item page.
+`adapterctl check` refuses the step in every facade route.
+
+## The pass
+
+{/* Evidence: crates/registry-adapter-job/src/main.rs refusal-limit */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs a_rescan_retries_the_refused_item_and_skips_the_unchanged_ones */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs a_pass_whose_lease_is_held_refuses_whole */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs a_held_item_settles_and_stays_held_until_the_source_changes */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs a_source_revert_advances_the_sequence_and_stays_held */}
+
+A pass is the only unit of work: one bounded read from the saved position, a comparison, the hand-offs and a saved position.
+It works in this order:
+
+1. Take the job's lease, so one job runs one pass at a time.
+2. Read one page from the saved position.
+3. For each item, compare the digest with its row. A new item, or a changed digest, writes the row as `pending` and hands off. A `pending` row with the same digest hands off again with the same identity. An unchanged settled row is skipped.
+4. Record the destination's answer: accepted with its reference, or refused with its code for an item-scoped refusal.
+5. Stop the pass, with the position unchanged, on any answer that describes the deployment rather than the item (authentication, a held deployment, an unavailable service).
+6. When every item on the page is settled, acknowledge the page to the source if it is a queue, then save the position.
+
+A schema or policy change can refuse every item alike, which would run the position to the end of the source.
+The `--refusal-limit` flag of `adapter-job pass` and `adapter-job rescan` bounds how many consecutive refusals with one code stop the pass with the position unchanged (20 by default).
+The count starts again in every pass, so a slow tail that brings fewer new items per pass than the limit is not stopped by it: each item is refused and the position advances.
+Status names the refused codes and counts, and `rescan` retries refused items on request.
+
+An item that changes after a first hand-off is revised, and a `pending` row counts as possibly accepted, because a lost response may hide a real effect.
+A revised item never becomes a second registration.
+The job either holds it for an operator or, when the job names a Coordinator receiver for revisions, sends it there as a `revised` event so that a workflow can reach a person.
+Automatic correction of submitted, approved or applied work is out of scope.
+
+The pass hands each item to its destination through one seam.
+The destination answers in one of three ways: accepted, with its reference; refused, with an item-scoped code; or stop, with a deployment-scoped code.
+Every hand-off of the same item carries the same identity, derived from the job, the item key and the item's sequence.
+
+## Destinations
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs DirectBregMode */}
+{/* Evidence: crates/registry-adapter-job/tests/seam.rs stop_held_and_acknowledged_answers_map_onto_the_seam */}
+{/* Evidence: crates/registry-adapter-job/tests/direct_breg_native.rs postgres_source_reaches_native_breg_and_holds_a_revised_row */}
+{/* Evidence: crates/registry-adapter-job/tests/signed_coordinator_event_native.rs postgres_source_reaches_native_coordinator_and_reviews_a_revised_row */}
+
+There are exactly two destinations, chosen per job by what its items need.
+
+| | Direct to BReg | Signed event to Coordinator |
+| --- | --- | --- |
+| Use when | The item maps to one BReg operation with no lookup: an immediate Action, or a Proposal start and submit | The item needs a lookup, a choice between operations, a wait, a person, or a write outside BReg |
+| Adapter holds | The BReg client behind the `direct-breg` feature, and a BReg credential | A signing key, no product client and no Coordinator crate |
+| Mapping runs | In the job, as a Rhai script | In the workflow, as a Rhai Function on the same engine |
+| Retry identity | Command keys derived from the job, the item key and its sequence | An event ID derived from the same three |
+| Accepted means | BReg committed the Action, or the Proposal is submitted | Coordinator admitted the event and opened a Run |
+| Follow-up | None in the job; review and application are seen in BReg and the review provider | The workflow follows the outcome with `wait-for` and reaches a person when needed |
+| Parts to run | The job, BReg, and a review provider if the Action needs one | The job, Coordinator, BReg, and a review provider |
+
+A refusal from one destination never falls back to the other, and a denied Proposal never falls back to a direct write.
+The item is refused or held, and a person decides.
+
+### Direct to BReg
+
+{/* Evidence: crates/registry-adapter-job/src/pass.rs breg-receiver-changed */}
+{/* Evidence: crates/registry-adapter-job/src/pass.rs breg-body-changed */}
+{/* Evidence: crates/registry-adapter-job/src/pass.rs breg-identity-unrecorded */}
+{/* Evidence: crates/registry-adapter-job/src/runtime_destination.rs breg-action-guarded */}
+{/* Evidence: crates/registry-adapter-core/src/job.rs receipt_retention_days */}
+
+The job maps the item, prepares the BReg request and sends it under keys derived from the item.
+A lost response is recovered by sending the same request again, and BReg replays its receipt.
+The job stores no prepared attempt: a retry re-reads the source, re-maps and resends.
+
+The job durably freezes two public digests before the first send: the receiver (BReg binding, base URL, token endpoint, caller, TLS trust profile, access profile, Action and mode) and the mapped operation.
+A possibly accepted `pending` sequence whose receiver or mapped operation differs on retry stops the pass before any BReg call, with the position unchanged, as `adapter.job.breg-receiver-changed` or `adapter.job.breg-body-changed`.
+Restoring the original configuration lets it settle.
+A pending row staged before the digests were recorded stops as `adapter.job.breg-identity-unrecorded`.
+If the item itself changed, BReg answers `idempotency.key-reused` and the item is held for an operator, which is the safe direction.
+
+A Proposal uses two command identities, start and submit, derived from the same item key and sequence.
+The start receipt returns the Proposal ID that submit needs.
+
+The receipt horizon falls on the job.
+BReg keeps a receipt for `retention.receiptRetentionDays` (7 days by default), after which an exact repeat answers `410 idempotency.expired` and is never executed.
+A `pending` row whose current sequence was staged longer ago than that is held for manual reconciliation.
+BReg does not serve the setting, so the job declares the expected horizon, and status warns as pending rows age toward it.
+
+The direct path is only for new work that needs no target resolution.
+An Action that declares target-condition keys is refused when the destination binds (`adapter.job.breg-action-guarded`), and the destination for it is Coordinator.
+BReg has no external-key upsert, and its lookup answers `lookup.unresolved` alike for no match, two matches and a hidden record, so "no match, so create" is unsafe.
+A form that corrects existing households needs a lookup, and therefore Coordinator.
+
+The direct BReg connector is the only Adapter crate that links a product client, behind the off-by-default `direct-breg` job-host feature.
+Engine and facade binaries cannot reach it.
+Its bounded operation set follows the reviewed Action mode and caller-filtered metadata, and it never acquires approval or Apply authority.
+A direct job selects one Action: it invokes that Action immediately or starts and submits its Proposal, according to the metadata and the declared mode.
+A metadata mismatch or operation refusal never selects another operation or destination.
+
+### Signed event to Coordinator
+
+{/* Evidence: crates/registry-adapter-core/src/job.rs RevisedEventReceiver */}
+{/* Evidence: crates/registry-adapter-core/src/job.rs revised_receiver_refuses_the_registration_trigger */}
+
+The job sends one signed event per item, in the platform's `HookEnvelope` format signed with `sign_v1`.
+It admits one Run of a reviewed workflow through `workflow.eventTriggers`.
+Admission and Run commit together, and a repeat of the same event recovers the same Run.
+The workflow maps, resolves the target, calls one typed operation such as `breg.submit-proposal/v1`, and follows the outcome with `wait-for`.
+Coordinator recovers its own commands, and the job tracks only the admission.
+
+The event data has one fixed wrapper: `job: {id, version}`, `key`, `sequence`, `digest`, `item` (the declared projection), and `priorRunId` only when known.
+Event identity and event time are stable for one item sequence.
+Transport time, signature and the monotonically increasing delivery attempt are renewed for retry.
+The selected public receiver identity is frozen durably before sending.
+A possibly accepted pending sequence cannot be retargeted by configuration changes: the pass stops without advancing position, and restoring the original receiver permits recovery.
+
+`destination.revisedReceiver` optionally selects a revised-item `trigger`, `eventType` and `dataSchema` inside the same workflow and runtime binding.
+Its trigger must be distinct from the registration trigger.
+Without it, revised items remain held.
+A revised event may have no prior Run ID after an uncertain admission.
+The workflow must handle that case without creating a second registration or acquiring a person's authority.
+
+### Bulk
+
+A bulk load is a third hand-off, not a destination: the job would write a bounded file with its digest and item count, and an operator would run `bregctl data import`.
+This hand-off is not implemented, and no job writes such a file.
+The job never launches another product's CLI.
+
+## Mapping
+
+{/* Evidence: crates/registry-adapter-core/src/mapping.rs AdapterMapping */}
+
+A mapping has one interface, run where the destination is:
+
+```text
+map(item, context) -> input | refusal(diagnostics)
+```
+
+The interface is pure.
+Its context (business date, locale, code-system versions) is explicit, and it has no network, file, clock or credential access.
+It runs in Rhai under the published script limits, and its output is validated against the operation's input schema before a request is prepared.
+A missing answer never clears a registry field.
+A mapping never selects a person, approves a change, or emits SQL.
+Diagnostics name the rule and the field, never the value.
+Author the mapping as an `AdapterMapping` file; see [Field mapping](../adapter/#field-mapping).
+
+## Corrections and held items
+
+A source edit after a first hand-off never overwrites reviewed or applied work.
+In BReg, changes requested leave the Proposal `submitted` with the turn on the party, and an officer corrects and resubmits there.
+Terminal Proposals are never reopened, and a correction starts new work against current state.
+In the direct destination, a person sees held items in job status and works in BReg.
+In the Coordinator destination, a workflow reaches staff through a review request, or stops a Run so that it needs attention.
+Source deletion is reported by `rescan` as items not seen, and never selects a cancel or a tombstone.
+
+A held row has no Adapter-side release, acceptance, acknowledgement or `mark-accepted` operation.
+An unchanged held item skips in ordinary passes and rescans.
+The operator resolves any destination outcome under that destination's own authority, while the Adapter row stays held.
+
+## Custody and controls
+
+The job keeps no payload at rest, so there is nothing to seal and no vault to run.
+
+| Control | Threat | Cost |
+| --- | --- | --- |
+| No payload in the item table | A dump or backup exposes personal data | A retry needs the source; a source that deletes early loses the item |
+| Field projection | A whole form reaches BReg, Coordinator, or their operators | One declared field list |
+| Narrow grants | An ingestion credential approves or applies | BReg Start, Submit and Get, or one Action; no Apply, no List |
+| Signed events, Coordinator destination only | A forged event starts a Run | One rotatable signing key; a clock within 30 seconds |
+| Value-free logs and status | Personal data reaches log aggregation | None |
+
+Four properties are never cut:
+
+- The position moves only after the page settles under the declared acceptance and refusal policy, and a stopped pass leaves it unchanged.
+- The same item sends the same identity.
+- No payload is at rest.
+- Diagnostics are value-free.
+
+Attachments, automated Revise and Rebase, write-back to the source, automatic deletions, fuzzy matching, multi-source merges and a graphical operations application are out of scope.
+
+## Operator commands
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs init_store_bootstraps_only_the_store_from_the_runtime_reference */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs init_store_repeats_unchanged_and_advances_a_supported_schema */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs init_store_refuses_a_future_schema_without_mutation */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs status_and_inspect_name_init_store_without_bootstrapping */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs a_rescan_refuses_while_a_pass_holds_the_lease */}
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs an_explicit_rescan_dry_run_restarts_without_moving_the_active_state */}
+
+The companion executable `adapter-job` has these commands:
+
+- `init-store` applies the embedded job-store schema without compiling or running a job.
+- `check` compiles a job the way a pass would.
+- `pass` runs one bounded pass, the shape a CronJob drives, or loops on the job's interval trigger.
+- `status` counts the item table's statuses and refusal codes, says whether a pass is overdue, and says why the last pass stopped.
+- `inspect` goes from an item to its destination reference.
+- `rescan` runs one pass from the first page, in which unchanged items skip by digest and refused items retry.
+
+A refusal the receiver answers is stored under the destination's own prefix, with the receiver's word kept as the last segment.
+It is `adapter.job.breg.<word>` for a direct BReg answer and `adapter.job.coordinator.<word>` for a Coordinator answer, so a status count never mixes two destinations that use the same word.
+Codes the Adapter itself owns carry no destination segment.
+
+A preview pass reads the actual source, delivers nothing, writes nothing, and records what a destination would have received.
+Every output is value-free by default, and only an explicit preview `--show-values` prints projected values.
+
+`init-store` parses the runtime document but resolves only the store connection and the optional store trust reference.
+It applies compatible migrations under the store's advisory lock, is idempotent, and creates no job-state or item row.
+`status`, `inspect` and preview passes check the schema without migrating it.
+The store's one runtime connection also applies migrations, so this mode makes no split migration-role claim.
+A schema newer than the binary refuses.
+
+Aggregate `status` names only a count and a code, so it points you to `inspect` rather than claiming a destination reference.
+`inspect` names the stored reference when one exists and otherwise says that none is established.
+
+The mode packages as one native companion executable on PostgreSQL.
+For a small IT team, a direct job adds one binary, one database, one source credential and one BReg credential.
+A Coordinator job swaps the BReg credential for a signing key and a clock within 30 seconds of Coordinator's.
+
+## Webhook ingress
+
+{/* Evidence: crates/registry-adapter-engine/src/job_sources.rs HookIngressConfig */}
+{/* Evidence: crates/registry-adapter-job/src/hook_ingress.rs HookIngressServer */}
+{/* Evidence: crates/registry-adapter-job/src/main.rs hook-listening */}
+{/* Evidence: crates/registry-adapter-job/src/hook_ingress.rs hook-shutdown-timeout */}
+{/* Evidence: crates/registry-adapter-job/tests/hook_ingress_postgres.rs partial_request_head_is_force_closed_on_real_cli_shutdown */}
+{/* Evidence: crates/registry-adapter-job/tests/hook_ingress_postgres.rs a_hook_during_a_running_cli_pass_starts_one_follow_up_pass */}
+{/* Evidence: crates/registry-adapter-job/tests/hook_ingress_postgres.rs lost_hook_is_reconciled_by_the_real_cli_interval */}
+
+A hook is a trigger: it starts a pass early or joins one already running, and the pass re-reads the source.
+Hook ingress is a default-off job-host feature, separate from the facade.
+Build the job host with the explicit `job-hook` feature, because without it a hook declaration refuses rather than silently polling.
+Hooks arrive on a separate ingress with their own authentication per source and never weaken the facade's OIDC.
+Only `pass --loop` opens ingress, and checks, previews and one-shot passes do not.
+
+The KoboToolbox example adds a webhook trigger with `job.hook.yaml` and `job-runtime.hook.example.yaml`.
+Configure the KoboToolbox webhook to send `POST` requests to the public HTTPS URL whose path is `/hooks/kobo-submissions`, using HTTP Basic authentication.
+
+Each source binding has its own Basic credentials through secret references, and finite request-rate and burst bounds.
+Put the exact username and password in the two files referenced by `hookIngress.sources.kobo-submissions`, with the file permissions the platform secret provider requires (mode `0400` or `0600`).
+Write them without a trailing newline, for example `printf '%s' "$PASSWORD" > hook-password`, because the host refuses a value that ends with a newline.
+The Adapter resolves and captures them at host startup, and `adapter-job check` resolves them too.
+A missing, unsafe or malformed credential is therefore refused with the runtime member and the secret reference named, instead of failing later as a `401`.
+
+### Listener
+
+The job listener is loopback-only.
+In production, an operator-controlled reverse proxy must:
+
+- terminate TLS;
+- expose only the one reviewed webhook path;
+- preserve the `Authorization` header;
+- bound request sizes, header-read and idle timeouts, and connections;
+- rate-limit failed authentication;
+- forward to `127.0.0.1:8091`.
+
+The host limits only authenticated requests per source.
+It does not time out a partly sent request head, cap open connections, or count unauthenticated attempts, so a slow client can hold connections until the proxy closes them.
+Do not expose the loopback plaintext listener directly or change it to a non-loopback bind.
+The host does not expose non-loopback plaintext ingress.
+
+`development-loopback` and port `0` are only for local development and tests.
+When port `0` is selected, the host writes one startup line to standard error as `adapter.job.hook-listening address=<loopback-address>:<assigned-port>`.
+Standard output remains reserved for command reports.
+
+The generated authoring schema accepts canonical loopback socket text: any canonical `127.0.0.0/8` IPv4 address or `[::1]`, followed by an unpadded decimal port from `0` through `65535`.
+The shared typed reader can normalize equivalent noncanonical IPv6 loopback or padded port text, but the Adapter schema does not duplicate that broader grammar.
+Use `[::1]` and an unpadded port when you author a listener.
+
+Hook paths are slash-separated, nonempty ASCII segments.
+Each segment uses only letters, digits, `-`, `.`, `_` or `~`, and `.` and `..` segments are refused.
+This keeps the authored path identical through ordinary HTTP clients and reverse proxies, without percent-decoding or Unicode normalization.
+
+### Run the loop
+
+Start the same controlled loop used by the interval-only example:
+
+```sh
+adapter-job pass <example-dir>/job.hook.yaml \
+  --pack <source-checkout>/products/adapter/packs/kobotoolbox/pack.yaml \
+  --runtime <example-dir>/job-runtime.hook.example.yaml \
+  --profile <example-dir>/profile.yaml \
+  --project <example-dir>/project.yaml \
+  --loop
+```
+
+### Behavior
+
+- An authenticated request starts one pass early when the host is idle.
+- Further requests join the pending pass.
+- Requests that arrive while a pass runs queue at most one follow-up pass, which starts when the running pass ends. However many arrive, there is only one follow-up, so a change the running pass read too early does not wait a full interval.
+- After a stopped pass or a held lease, a request waits out the error backoff or the lease instead of starting a pass at once. The PostgreSQL lease remains the cross-process authority.
+- The request body is read only through a 1 MiB bounded discard that must finish within 10 seconds. It is never parsed, stored, logged, forwarded, or used to choose a job, cursor, rescan, source or destination. The compiled job and saved store position make every one of those choices.
+- On shutdown (`SIGTERM` or `Ctrl+C`), accepted ingress connections have 10 seconds to drain. A client that leaves a request head or body incomplete cannot hold the process open after that bound. The host closes the ingress and reports the value-free `adapter.job.hook-shutdown-timeout` diagnostic.
+
+The interval trigger remains mandatory and continues reconciling the source.
+A forged request fails authentication, duplicate requests coalesce, and a lost request waits for the next interval.
+These cases can change timing, but not the set or meaning of source items processed.
+
+## Next
+
+- [configure an adapter project](../adapter/)
+- [adapter route language](../adapter-routes/)
+- [ingestion job sources](../adapter-ingestion-jobs/)

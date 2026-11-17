@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-23"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -204,6 +204,20 @@ narrower route. When a target, or the Record type a path passes through, must ne
 without its own row check, give that Record type `accessRequirements` with row boundaries: the
 compiler then refuses any read path grant that reaches it.
 
+### Require access conditions on a Record type
+
+`accessRequirements` on a Record type are mandatory compiler checks, not grants.
+The key gives no profile any access.
+`bregctl check` refuses every access profile that reaches the Record type, including a profile a module contributes, when the profile:
+
+- lacks a required scope (`breg.access.requirements-scope-missing`);
+- widens the allowed purposes, which includes an empty purpose list (`breg.access.requirements-purpose-widened`);
+- omits a required row boundary, with the exact field, claim, and operator binding (`breg.access.requirements-row-boundary-missing`).
+
+{/* Evidence: crates/registry-breg/src/access.rs check_profile,
+    breg.access.requirements-scope-missing, breg.access.requirements-purpose-widened,
+    breg.access.requirements-row-boundary-missing. */}
+
 {/* Evidence: crates/registry-breg/src/access.rs, breg.access.profile-related-disclosure and
     breg.access.requirements-read-path-row-boundary-unsupported; crates/registry-breg/src/api/mod.rs,
     authorize_read_path_route(); crates/registry-bregctl/src/lib.rs, --deny-warnings;
@@ -225,13 +239,121 @@ Records that a separate steward profile creates and deactivates. A request that 
 deactivation commits no longer sees the Records; a read already running may finish. Historical
 reads compare against current memberships too, so a past membership cannot restore access.
 
-Membership boundaries apply to reads only: get, lookup, list, snapshot, and revisions. Give writes
-to a separate profile. Declare `rowBoundaries` beside them, even if only `unrestricted`; every
-membership and row boundary must hold.
+A facility stores `organization`, a reference to an `organization` Record type.
+A separate `membership` Record type stores an `organization` reference, a string `principal`, and a Boolean `active`.
+Its optional descriptive fields can remain private.
+Add the boundary to the facility's read grant:
 
-{/* Evidence: crates/registry-breg/src/contract.rs, MembershipBoundarySource;
-    crates/registry-breg/src/membership.rs, validate() and breg.access.membership-read-only;
-    products/breg/membership-access.md. */}
+```yaml
+accessProfiles:
+  - id: member
+    principalClaim: principal
+    requiredScopes:
+      - records:read
+      - membership:use
+    permissions:
+      records:
+        - recordType: facility
+          rowBoundaries: unrestricted
+          operations:
+            - get
+            - list
+            - lookup
+            - snapshot
+            - revisions
+          readableFields:
+            - label
+          filterableFields:
+            - label
+          sortableFields:
+            - label
+          allowCount: true
+          revisionAccess: true
+          lookups:
+            - selector: label
+              valueOrigin: request
+          membershipBoundaries:
+            - field: organization
+              membershipRecordType: membership
+              membershipKeyField: organization
+              principalField: principal
+              activeField: active
+```
+
+The `label` lookup selector must already be declared on the facility Record type.
+The two organization fields must be stored references to the same Record type.
+`principalField` must be a stored string or text field and `activeField` a stored Boolean.
+Only active-lifecycle membership rows with `active: true` and an exact match to the profile's verified principal grant access.
+A missing membership, null value, inactive membership, or other principal does not.
+Configure a stable identity claim from a trusted issuer, and do not accept caller-submitted principal values as authority.
+
+Every listed membership boundary and ordinary `rowBoundaries` predicate must hold.
+Declare `rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: unrestricted` adds no direct claim predicate and leaves the membership checks in force.
+Up to eight membership boundaries are supported.
+The declared fields are authorization inputs, not an additional readable-field grant.
+The root profile must satisfy the membership Record type's mandatory scopes and purposes.
+The current boundary does not carry additional direct row requirements from that source, so the compiler rejects a membership Record type with mandatory `rowBoundaries`.
+
+The organization membership access example project in the repository (at your release tag) holds the complete authored model, including separate steward grants and an index on principal, organization, and active status.
+Run `bregctl check` against that directory to compile it.
+The same boundary compiles for facility and document registries without new server code.
+
+{/* Evidence: crates/registry-breg/src/contract.rs MembershipBoundarySource;
+    crates/registry-breg/src/membership.rs breg.access.membership-limit, breg.access.membership-key-type,
+    breg.access.membership-principal-type, breg.access.membership-active-type,
+    breg.access.membership-source-row-requirement;
+    crates/registry-breg/tests/membership_access.rs membership_boundaries_compile_for_distinct_registry_models;
+    products/breg/fixtures/organization-membership-access/registry.yaml. */}
+
+Membership boundaries apply to reads only: get, lookup, list, count, snapshot, and revisions.
+A record grant with a membership boundary cannot also grant writes.
+Action and Proposal grants do not accept `membershipBoundaries` and do not inherit membership checks from read grants.
+Give record mutations and membership administration to a separate, explicitly authorized steward profile.
+Cursor replay on a read re-evaluates live membership, and a read grant never authorizes a mutation or its replay.
+Spatial bbox permissions use a separate authority role and cannot currently be combined with membership boundaries; ordinary reads of facilities remain available under the membership profile.
+
+Membership profiles can protect the root of a relationship read path.
+A related Record type's membership rules cannot silently be bypassed by targeting it through a separate root grant, so the compiler rejects such target permissions.
+Membership sources must remain leaf Record types without their own membership boundaries or incoming relationship read paths, which prevents recursive row-security policies.
+
+{/* Evidence: crates/registry-breg/src/membership.rs breg.access.membership-read-only,
+    breg.access.membership-read-path-target, breg.access.membership-source-recursive,
+    breg.access.membership-spatial-unsupported;
+    crates/registry-breg/tests/membership_access.rs membership_boundaries_refuse_unenforced_authority_paths. */}
+
+### Revocation and history
+
+Authorization queries read current membership Records in PostgreSQL.
+A new request issued after a membership deactivation commits is denied or returns an empty authorized collection, including counts, lookups, and cursor continuations.
+An already running read can finish from the statement snapshot that preceded revocation.
+There is no token membership cache, external authorization service, or registry-wide authorization lock.
+
+Snapshots and revisions compare the retained Record's organization with current memberships.
+The historical membership state cannot restore access, and deactivation removes access to those historical Records as well.
+Moving a facility to another organization does not by itself remove access to its older revisions from members of the previous organization.
+This preserves the ordinary historical row-boundary contract, and current-owner-only history is a different policy that this feature does not imply.
+Erased history remains unavailable.
+
+{/* Evidence: crates/registry-breg/tests/postgres_membership_access.rs
+    real_postgres_membership_reads_recheck_live_membership_and_hide_processing_inputs. */}
+{/* TODO[evidence]: the claim that moving a facility keeps older-revision access for previous members is not asserted by a test I could name. */}
+
+### How PostgreSQL enforces it
+
+PostgreSQL enforces the predicate through generated `SECURITY INVOKER` functions and forced row-level security.
+Each generated PL/pgSQL function saves the prior authorization context, enables only its matching membership probe, and restores the context before returning.
+Its exception block rolls back the local context on errors.
+It does not grant direct membership endpoints or derived views access to private membership Records.
+The logical source views keep `security_invoker`, so the caller's row-level security policies decide every read through them; they are not barrier views.
+No additional database role or RLS bypass is required.
+PostgreSQL 17 remains the minimum for this surface, and other enabled features can require a newer supported version.
+
+Use `bregctl explain access` to inspect the expanded membership boundary alongside its scopes, purposes, and ordinary row boundaries.
+Compiler diagnostics identify the unsupported field or grant and describe the supported alternative.
+
+{/* Evidence: crates/registry-breg/src/membership.rs;
+    crates/registry-breg/tests/postgres_membership_access.rs
+    real_postgres_membership_reads_recheck_live_membership_and_hide_processing_inputs. */}
 
 ## Require the subject's consent
 
@@ -252,10 +374,13 @@ The profile id is the scope the subject agreed to. Removing `requireConsent` or 
 profile in place would read under a scope the subject never saw, so publish a new profile and list
 the old id under `retiredConsentScopes`.
 
+[Gate reads on consent](../breg-consent/) covers the consent Record type, recipients, and how an
+Action issues a consent.
+
 {/* Evidence: crates/registry-breg/src/contract.rs, ConsentRequirementSource, recipients and
     retired_consent_scopes; crates/registry-breg/src/consent.rs, breg.consent.require-read-only,
     breg.consent.require-clients and is_reserved_claim(); crates/registry-breg/src/model.rs,
-    recipient_set(); products/breg/consent.md. */}
+    recipient_set(). */}
 
 ## What a reader meets when a check fails
 
@@ -266,8 +391,7 @@ leaves the Record out. The caller learns nothing about why, or whether the Recor
 codes, and the [configuration reference](../../reference/breg-configuration/) carries every key
 named on this page.
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, concealed(); products/breg/consent.md;
-    products/breg/membership-access.md. */}
+{/* Evidence: crates/registry-breg/src/api/mod.rs, concealed(). */}
 
 ## Grant statistical datasets
 

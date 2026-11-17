@@ -1,11 +1,11 @@
 ---
 title: Registry Coordinator configuration reference
 description: Generated key-path reference for the Registry Coordinator project, runtime, and scenario files, and the host operations a workflow can call.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-17"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -80,6 +80,235 @@ at most {reference.operations[0].maximum_call_attempts} attempts of
 {/* Evidence: products/coordinator/generated/operations/catalog.json;
     crates/registry-coordinator/src/operations.rs, CATALOG. */}
 
+## Connections
+
+`runtime.yaml` declares every logical connection in one `connections` map, at most sixteen names.
+Each entry selects its complete contract with `type`: `breg`, `casework-review-producer`, `messaging`, `scheduling`, `external-http`, or `evaluation`.
+The [deployment runbook](../../operate/coordinator/) covers the rest of the `deployment` block.
+
+{/* Evidence: crates/registry-coordinator/src/runtime.rs ConnectionConfig. */}
+
+### Base Registry Engine connections
+
+A `breg` connection to Base Registry Engine (BReg) serves `breg.invoke-action/v1` and the Proposal operations.
+Give it an ordinary service `authorization` and an explicitly permitted `profile`.
+Do not set `authorization.taskAuthority` on a connection used by `breg.invoke-action/v1`: that operation accepts no Casework grant and has no task-authority fallback.
+Keep a task-bound record-read connection separate when a workflow needs both authority types.
+
+The Proposal operations use the same connection type.
+In the BReg project, grant the connection's profile `get` on every Action the workflow follows, under `permissions.proposals`.
+Where the workflow starts or submits requests itself, also grant `start` on the Action under `permissions.actions`, and `cancel`, plus `submit` when the workflow submits, under `permissions.proposals` with `ownership: caller`.
+Leave `writableInputs` off that Proposal grant, or list every input the workflow sends: with the list, Start refuses a value for any other input.
+Never grant `apply`, because no Coordinator operation applies a Proposal.
+Two optional members serve Proposal waits:
+
+```yaml
+connections:
+  licences:
+    type: breg
+    baseUrl: https://licences.example.org
+    profile: coordinator-follow
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-licences
+      signingKeyRef: secret:file/licences-jwk
+    resultCheckSeconds: 300
+    requestLink: https://staff.example.org/proposals/{proposalId}
+```
+
+`resultCheckSeconds` runs from 60 to 86,400 and defaults to 900.
+It spaces the Proposal reads of a waiting run, and each read is one request to BReg per waiting run.
+`requestLink` is an `https` template with exactly one `{proposalId}`, or `http` on a loopback IP address such as `127.0.0.1` for a local staff app.
+Inspection shows it as "Open the request".
+Neither member is part of a live run's binding, so you can change both while runs wait.
+A missing `get` grant shows on the waiting run as the hold `proposal-unreadable`.
+A missing `start` or `submit` grant shows as BReg's refusal of that step.
+
+{/* Evidence: crates/registry-coordinator/src/runtime.rs request_link, result_check_seconds;
+    crates/registry-coordinator/src/breg_proposal.rs proposal-unreadable. */}
+
+### External provider connections
+
+An `external-http` connection serves `external.get/v1` and `external.command/v1`.
+For reads, set `baseUrl`, exact `paths`, optional `queryParameters`, optional ordinary service `authorization`, and the required `responseSchema` for `{status, body}`.
+Omitted authorization means a public read.
+The attempt timeout defaults to 2000 milliseconds and the response size to 65,536 bytes, and you can reduce both.
+Use HTTPS for institutional endpoints; HTTP requires numeric loopback.
+`authorization.taskAuthority` is refused on this connection type.
+
+For `external.command/v1`, add `commandPath`: the one exact relative path, resolved against `baseUrl`, that the command may POST to.
+The command uses the connection's `authorization`, `responseSchema`, attempt timeout, and response size bound, and its request body is limited to 65,536 bytes.
+The attempt timeout also covers DNS resolution and token acquisition, so a slow token endpoint leaves less time for the answer and makes a timeout after the send, which holds the run as uncertain, more likely.
+Omit `commandPath` to keep a connection read-only; `paths` still lists at least one read path.
+Use a separate connection when commands need a different credential or scope than reads.
+
+```yaml
+connections:
+  payments:
+    type: external-http
+    baseUrl: https://payments.example.org/v1/
+    paths:
+      - bills/status
+    commandPath: bills
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-payments
+      signingKeyRef: secret:file/payments-jwk
+      resource: https://payments.example.org
+      scopes:
+        - bills:create
+    responseSchema:
+      type: object
+      required:
+        - status
+        - body
+      properties:
+        status:
+          type: integer
+```
+
+The provider must deduplicate on the `Idempotency-Key` header.
+A repeated key must return the original result and never apply the command twice, for at least as long as a run can be held and retried, which is until its deadline.
+Coordinator sends the same key on every attempt of a step, including after a restart and `retry-same`.
+A provider that cannot deduplicate is not safe for same-command recovery: do not use `retry-same` with it, and resolve a held run from the provider's own records.
+Coordinator trusts a 429 to mean the provider did not process the command, so the provider must never answer 429 after applying it.
+
+{/* Evidence: crates/registry-coordinator/src/external_http.rs command_path;
+    crates/registry-coordinator/src/runtime.rs command_path;
+    crates/registry-coordinator/tests/external_command.rs. */}
+
+### Evaluation connections
+
+An `evaluation` connection serves `evaluation.evaluate/v1`.
+Set protocol `system-one` or `openai-decisions`, `baseUrl`, `model`, and either `authorization.bearer` (`tokenRef` and a stable account `principal`) or an explicit `authorization.local: {}` on numeric loopback.
+Request and response limits default to 65,536 bytes and the attempt limit to 8000 milliseconds.
+Rotate credentials under the same provider account and binding.
+
+Review the data your mappings disclose before you activate a remote model binding.
+Model calls may incur cost.
+Inputs and results use Coordinator's existing protected state and retention; provider retention stays under your provider account contract.
+A model alias can change upstream even when the local binding is unchanged, so use an immutable release or deployment identifier when your provider offers one.
+No failover or model substitution occurs within an admitted command.
+
+An accepted response must include the returned model and provider usage metadata.
+OpenAI Decisions must supply its documented nonnegative token counts; malformed metadata leaves the result uncertain instead of advancing the workflow.
+
+If evaluation completion becomes unknown, inspection reports `hold-after-dispatch` and refuses `retry-same` and reconciliation.
+Cancellation sets `cancelRequested` while preserving `uncertain` and the attention state; it cannot undo provider processing.
+A separately authorized new start can evaluate again, with possible additional cost and a different answer.
+The same conservative hold applies to HTTP 429, including temporary rate limits with `Retry-After`: these bindings do not automatically resend an evaluation.
+Terminal `needs-review` returns control to the caller and creates no resumable approval task.
+The [decision follow-up example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/decision-follow-up) includes refusal and unknown-result cases.
+
+{/* Evidence: crates/registry-coordinator/src/runtime.rs Evaluation;
+    crates/registry-coordinator/src/decision.rs DecisionConfig;
+    crates/registry-coordinator/src/definition.rs hold-after-dispatch. */}
+
+### Casework review producer connections
+
+`casework.submit-review-request/v1` and `casework.cancel-review-request/v1` use a `casework-review-producer` connection configured as one of Casework's review producers.
+`profile` names the Casework access profile the producer's client is admitted to.
+`producer` names the producer's `id` in the Casework project's `trustedProducers`.
+The ordinary service `authorization` obtains a token whose issuer and subject are the ones that producer declares.
+Do not set `authorization.taskAuthority`: a review producer acts under its own identity, and `check` refuses a task authority on a Casework connection.
+Configure one connection for each producer.
+A `wait-for` step reads the result through the same connection, with the same producer authorization.
+
+Add a `completion` block to let Casework wake a waiting run as soon as a review completes:
+
+```yaml
+connections:
+  review:
+    type: casework-review-producer
+    baseUrl: https://casework.example.org
+    profile: coordinator-producer
+    producer: coordinator
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-review-producer
+      signingKeyRef: secret:file/review-jwk
+      resource: urn:example:casework
+      scopes:
+        - casework:review
+    completion:
+      recipientBinding: coordinator-v1
+      bearerTokenRef: secret:file/review-completion-token
+    resultCheckSeconds: 900
+```
+
+Coordinator then accepts Casework's completion events at `POST /v1/review-completions` on the service listener.
+It finds the connection by the `Authorization: Bearer` token and the `registry-recipient-binding` header together, comparing the token in constant time.
+It refuses any other sender with HTTP 401 `authentication.refused` before reading the body.
+`recipientBinding` is 1 to 256 visible ASCII characters and differs between Casework connections.
+An authenticated event must meet these rules, and anything else answers HTTP 400 `request.invalid` or 415 `request.unsupported-media-type`:
+
+- It is `application/json` and at most 2048 bytes.
+- It names non-nil identifiers.
+- It repeats its `eventId` as the `idempotency-key` header.
+- It carries a `completedAt` no older than 365 days and no more than 5 minutes ahead of the Coordinator's clock.
+
+Every authentic event answers HTTP 204, whether or not a run waits on its request, and an event only brings forward the next result read of a run that does.
+HTTP 503 `service.unavailable` asks Casework to deliver it again.
+Without a `completion` block the route refuses every event, and waits rely on result checks alone.
+
+`resultCheckSeconds` runs from 60 to 86,400 and defaults to 900.
+It spaces the reads of a waiting run when no event arrives.
+Lower it when completion events cannot reach Coordinator; each read is one request to Casework per waiting run.
+A live run's binding includes `producer` but neither `completion` nor `resultCheckSeconds`, so you can change either, or rotate the completion token, while runs wait.
+
+Select the review policy by ID from the owning Casework project's compiled `policyBindings` report.
+Casework binds its current concrete policy at first acceptance.
+If the workflow requires an exact policy, also copy both its compiled version and digest; a synthetic fixture digest is not a deployable pin.
+Preserve the original selection and idempotency key when you recover work.
+Submitted context uses `mode: submitted`; current-source context uses the owning policy's `mode: current-source` and configured context provider.
+Review policy and trusted producer configuration stay with Casework.
+
+Configure the same producer on the Casework side.
+In the Casework project, the producer's `completion` block names a destination and the same recipient binding:
+
+```yaml
+trustedProducers:
+  coordinator:
+    profile: coordinator-producer
+    issuer: https://issuer.example.org
+    subject: coordinator-review-producer
+    sourceNamespaces:
+      - applications
+    reviewPolicies:
+      - application-review
+    retention:
+      receiptRetentionDays: 7
+    completion:
+      destinationId: coordinator
+      recipientBinding: coordinator-v1
+```
+
+In the Casework runtime file, bind that destination to the Coordinator route and to Casework's own reference to the same token.
+Present it as a bearer token with `bearerTokenRef` or `auth: {secretRef}`; Coordinator accepts no custom header.
+`attemptTimeoutMilliseconds`, `maximumAttempts`, and `retryDelaySeconds` bound Casework's delivery, as the Casework runtime configuration describes:
+
+```yaml
+reviewCompletionDestinations:
+  coordinator:
+    url: https://coordinator.example.org/v1/review-completions
+    bearerTokenRef: secret:file/coordinator-completion-token
+```
+
+The [reviewed notice example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/reviewed-notice) lists the full set of Casework prerequisites for one review producer.
+
+{/* Evidence: crates/registry-coordinator/src/http/admission_contracts.rs review-completions;
+    crates/registry-coordinator/src/runtime.rs recipient_binding, bearer_token_ref;
+    crates/registry-coordinator/tests/casework_adapter.rs. */}
+
+### Observation authorization
+
+Configure `observationAuthorization` only on task-bound Scheduling connections.
+Other adapters do not consume that identity, and offline validation refuses it there instead of presenting an unused credential as part of recovery authority.
+Downstream bindings use HTTPS, or explicit loopback HTTP for supervised local fixtures.
+Token signing-key rotation preserves the registered downstream client identity, endpoint, audience, resource, scopes, and approved task authority.
+
+{/* Evidence: crates/registry-coordinator/src/runtime.rs observation_authorization. */}
+
 ## Check commands
 
 Every file Coordinator reads has a command that checks it offline, with no service running. Each
@@ -91,4 +320,7 @@ describes.
 
 ## Next
 
-[Registry Coordinator API](../apis/registry-coordinator/)
+- [registry coordinator api](../apis/registry-coordinator/)
+- [deploy registry coordinator](../../operate/coordinator/)
+- [author a coordinator workflow](../../configure/coordinator/)
+- [how registry coordinator works](../../explanation/how-coordinator-works/)

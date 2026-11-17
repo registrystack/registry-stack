@@ -77,6 +77,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const hasBregServices = Boolean(selectedDocset.products?.['registry-breg-services']);
   const hasCoordinator = Boolean(selectedDocset.products?.['registry-coordinator']);
   const hasDocuments = Boolean(selectedDocset.products?.['registry-documents']);
+  const hasAdapter = Boolean(selectedDocset.products?.['registry-adapter']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   const currentHasMessaging = Boolean(currentDocset.products?.['registry-messaging']);
@@ -104,6 +105,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     hasBregServices,
     hasCoordinator,
     hasDocuments,
+    hasAdapter,
     currentHasMessaging,
     currentHasCoordinator,
     currentHasDocuments,
@@ -125,6 +127,7 @@ const {
   hasBregServices,
   hasCoordinator,
   hasDocuments,
+  hasAdapter,
   currentHasMessaging,
   currentHasCoordinator,
   currentHasDocuments,
@@ -246,6 +249,21 @@ const renderRoutes = productRoutes('registry-render');
 export function renderRedirects(hasRender, currentDocsetRedirect) {
   if (hasRender) return {};
   return Object.fromEntries(renderRoutes.flatMap((route) => [
+    [route, currentDocsetRedirect(route)],
+    [`${route.slice(0, -1)}.md`, currentDocsetRedirect(route)],
+  ]));
+}
+// The Registry Adapter pages follow the Scheduling and Render rule: the
+// current docset publishes them, so a docset without them redirects each
+// route to the same route of the current docset.
+const adapterRoutes = productRoutes('registry-adapter');
+/**
+ * @param {boolean} hasAdapter
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function adapterRedirects(hasAdapter, currentDocsetRedirect) {
+  if (hasAdapter) return {};
+  return Object.fromEntries(adapterRoutes.flatMap((route) => [
     [route, currentDocsetRedirect(route)],
     [`${route.slice(0, -1)}.md`, currentDocsetRedirect(route)],
   ]));
@@ -374,10 +392,14 @@ const caseworkRoutes = [
   '/explanation/how-casework-works/',
   '/configure/casework/',
   '/configure/casework-directory/',
+  '/configure/casework-completion-receivers/',
   '/operate/casework/',
   '/operate/change-a-casework-package/',
   '/operate/casework-retention/',
+  '/reference/casework-configuration/',
+  '/reference/casework-task-grants/',
   '/reference/apis/registry-casework/',
+  '/security/casework/',
 ];
 
 /**
@@ -445,6 +467,7 @@ export default defineConfig({
     ...messagingRedirects(hasMessaging, currentHasMessaging, currentDocsetRedirect),
     ...coordinatorRedirects(hasCoordinator, currentHasCoordinator, currentDocsetRedirect),
     ...documentsRedirects(hasDocuments, currentHasDocuments, currentDocsetRedirect),
+    ...adapterRedirects(hasAdapter, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     '/explanation/publishing-pipeline/': internalRedirect('/products/registry-manifest/'),
@@ -688,6 +711,7 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Prove with fixtures', slug: 'tutorials/prove-an-evidence-project' },
+                { label: 'Deployment patterns', slug: 'explanation/evidence-deployment-patterns' },
                 { label: 'Build and deploy', slug: 'tutorials/build-and-deploy-evidence-project' },
                 { label: 'Sign with Vault Transit', slug: 'tutorials/move-evidence-to-production-signing' },
                 { label: 'Run with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
@@ -706,6 +730,8 @@ export default defineConfig({
             },
             { label: 'Configuration reference', slug: 'reference/evidence-configuration' },
             { label: 'Errors and problem codes', slug: 'reference/evidence-problems' },
+            { label: 'Derivation script API', slug: 'reference/evidence-request-adapter-api' },
+            { label: 'Fixture contract', slug: 'reference/evidence-fixtures' },
             { label: 'API overview', slug: 'reference/apis/registry-evidence' },
             // The API plugin supplies its own operation groups. An extra HTTP
             // API wrapper would add a disclosure without helping navigation.
@@ -738,10 +764,20 @@ export default defineConfig({
               items: [
                 { label: 'Author a project', slug: 'configure/breg' },
                 { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
+                { label: 'Native field patterns', slug: 'configure/breg-native-patterns' },
+                { label: 'Event records', slug: 'configure/breg-event-records' },
                 { label: 'Control access and reads', slug: 'configure/breg-access' },
+                { label: 'Gate reads on consent', slug: 'configure/breg-consent' },
                 { label: 'Actions and Proposals', slug: 'configure/breg-actions' },
+                { label: 'WASM action handlers', slug: 'configure/breg-wasm-action-handlers' },
+                { label: 'Record timers', slug: 'configure/breg-record-timers' },
+                { label: 'Configure Proposals', slug: 'configure/breg-proposals' },
+                { label: 'Query history and corrections', slug: 'configure/breg-history' },
+                { label: 'Query geometries', slug: 'configure/breg-spatial-queries' },
                 { label: 'Encrypt a field', slug: 'configure/breg-field-encryption' },
                 { label: 'Publish statistics', slug: 'configure/breg-statistics' },
+                { label: 'Export a lookup for Evidence', slug: 'configure/breg-evidence' },
+                { label: 'External projections', slug: 'configure/breg-external-projections' },
                 { label: 'Test with journeys', slug: 'configure/breg-journeys' },
               ],
             },
@@ -752,6 +788,7 @@ export default defineConfig({
                 { label: 'Deploy and serve', slug: 'operate/breg' },
                 { label: 'Change an active registry', slug: 'operate/breg-changes' },
                 { label: 'Monitor and recover', slug: 'operate/breg-monitor' },
+                { label: 'Subject access log', slug: 'operate/breg-access-log' },
                 { label: 'Retain, erase, and audit', slug: 'operate/breg-retention' },
                 { label: 'Move data in bulk', slug: 'operate/breg-data' },
                 { label: 'Bind webhook receivers', slug: 'operate/breg-webhooks' },
@@ -764,7 +801,11 @@ export default defineConfig({
                 { label: 'Client reference', slug: 'reference/breg-client-capabilities' },
                 { label: 'Client API reference', slug: 'reference/client-api' },
                 { label: 'API reference', slug: 'reference/breg-api' },
+                { label: 'Task grants and standing agents', slug: 'reference/breg-task-grants' },
+                { label: 'Access profiles as ODRL', slug: 'reference/breg-odrl-export' },
                 { label: 'PublicSchema wizard', slug: 'reference/bregctl-publicschema-wizard' },
+                { label: 'bregctl explain output', slug: 'reference/bregctl-explain' },
+                { label: 'Native local lifecycle', slug: 'reference/bregctl-dev' },
                 { label: 'Authenticate with eSignet', slug: 'explanation/esignet-authentication-over-breg' },
               ],
             },
@@ -787,6 +828,7 @@ export default defineConfig({
               ],
             }] : []),
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
+            { label: 'Security model', slug: 'security/breg' },
             ...(hasBregOpenApi ? [bregOpenApiSidebarGroup] : []),
           ],
         },
@@ -803,6 +845,7 @@ export default defineConfig({
               items: [
                 { label: 'Author a policy', slug: 'configure/casework' },
                 { label: 'Staff the directory', slug: 'configure/casework-directory' },
+                { label: 'Receive completion wakes', slug: 'configure/casework-completion-receivers' },
               ],
             },
             {
@@ -821,9 +864,12 @@ export default defineConfig({
                 { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
               ],
             },
+            { label: 'Configuration reference', slug: 'reference/casework-configuration' },
+            { label: 'Task grants', slug: 'reference/casework-task-grants' },
             { label: 'API contract', slug: 'reference/apis/registry-casework' },
             caseworkOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
+            { label: 'Security model', slug: 'security/casework' },
           ],
         }] : []),
         ...(hasScheduling ? [{
@@ -836,8 +882,10 @@ export default defineConfig({
             { label: 'Author a policy', slug: 'configure/scheduling' },
             { label: 'Deploy and operate Scheduling', slug: 'operate/scheduling' },
             { label: 'Configuration reference', slug: 'reference/scheduling-configuration' },
+            { label: 'Task grants', slug: 'reference/scheduling-task-grants' },
             { label: 'API contract', slug: 'reference/apis/registry-scheduling' },
             schedulingOpenApiSidebarGroup,
+            { label: 'Security model', slug: 'security/scheduling' },
           ],
         }] : []),
         ...(hasRender ? [{
@@ -849,6 +897,8 @@ export default defineConfig({
             { label: 'How Render works', slug: 'explanation/render-determinism' },
             { label: 'Deploy Render', slug: 'operate/registry-render' },
             { label: 'Configuration reference', slug: 'reference/render-configuration' },
+            { label: 'What a template receives', slug: 'reference/render-payload' },
+            { label: 'Security model', slug: 'security/render' },
           ],
         }] : []),
         ...(hasMessaging ? [{
@@ -864,6 +914,7 @@ export default defineConfig({
             { label: 'API contract', slug: 'reference/apis/registry-messaging' },
             messagingOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
+            { label: 'Security model', slug: 'security/messaging' },
           ],
         }] : []),
         ...(hasCoordinator ? [{
@@ -878,6 +929,7 @@ export default defineConfig({
             { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-coordinator' },
             coordinatorOpenApiSidebarGroup,
+            { label: 'Security model', slug: 'security/coordinator' },
           ],
         }] : []),
         ...(hasDocuments ? [{
@@ -890,6 +942,21 @@ export default defineConfig({
             { label: 'Configuration reference', slug: 'reference/documents-configuration' },
             { label: 'API reference', slug: 'reference/apis/registry-documents' },
             documentsOpenApiSidebarGroup,
+            { label: 'Security model', slug: 'security/documents' },
+          ],
+        }] : []),
+        ...(hasAdapter ? [{
+          label: 'Registry Adapter',
+          collapsed: true,
+          items: [
+            { label: 'Configure an Adapter project', slug: 'configure/adapter' },
+            { label: 'Adapter route language', slug: 'configure/adapter-routes' },
+            { label: 'GovStack Consultation and Write', slug: 'configure/adapter-consultation' },
+            { label: 'Adapter ingestion jobs', slug: 'configure/adapter-jobs' },
+            { label: 'Ingestion job sources', slug: 'configure/adapter-ingestion-jobs' },
+            { label: 'Job packs', slug: 'configure/adapter-packs' },
+            { label: 'Operate the Adapter', slug: 'operate/adapter' },
+            { label: 'Effective operation contract', slug: 'reference/adapter-effective-contract' },
           ],
         }] : []),
         {
@@ -963,6 +1030,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'reference' },
             { label: 'Errors and status codes', slug: 'reference/errors' },
+            { label: 'Signed hook deliveries', slug: 'reference/delivery-signing' },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Configuration files', slug: 'reference/configuration-files' },
             { label: 'API overview', slug: 'reference/apis' },

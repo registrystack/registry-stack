@@ -1,0 +1,679 @@
+---
+title: Configure Proposals
+description: Declare review and application for a Proposal Action, separate its grants, follow whose turn it is, and recover blocked or refused work.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use an Action with `execution.mode: proposal` when a change must remain as durable work before application.
+Base Registry Engine (BReg) owns the draft, the frozen Plan, target authorization, guards, local application, the receipt, audit, and retention.
+An external review authority owns review policy and decisions.
+
+The facility template declares generated CRUD for its directory, immediate registration of a facility and an assignment, and two Proposal Actions.
+The reviewed-change example uses a fixed Plan when a named function is unnecessary.
+[Actions and Proposals](../breg-actions/) introduces both Action modes; this page is the Proposal reference for adopters and operators.
+
+{/* Evidence: crates/registry-breg/src/contract.rs ActionSource;
+    crates/registry-breg/tests/postgres_facility_proposal.rs pending-review;
+    crates/registry-breg/tests/postgres_reviewed_change_example.rs review-context. */}
+
+## Declare review and application
+
+The Action owns its execution mode.
+Callers cannot turn an immediate Action into a Proposal or choose an application mode at invocation.
+
+```yaml
+execution:
+  mode: proposal
+  proposal:
+    review:
+      type: required
+      authority: casework
+      source: facility-registry
+      policy:
+        id: facility-address-review
+    retention:
+      mode: retain
+```
+
+An ID-only policy delegates selection to the configured authority.
+The provider atomically records its current concrete policy with the first acceptance.
+Later retries use the original request and recover that acceptance, even if the active policy has changed.
+BReg keeps the original selection in the frozen Proposal, stores the accepted policy separately, and requires results to match it exactly.
+
+Set `review.source` to the source namespace configured in the Review provider.
+It may differ from the registry's `project.id`.
+BReg and the provider use that namespace for the Review subject and delivery digest; the opaque BReg context reference still identifies the registry.
+Retrying an unsettled request also repairs the legacy registry-id digest without changing its request or idempotency key.
+The first delivery and its accepted settlement are logged at `info`.
+Uncertain deliveries warn with the SHA-256 of the Proposal id string, the authority, the attempt count, and a bounded outcome code; request values and credentials are not logged.
+
+This default lets the provider administrator evolve review policy for future submissions, including choosing human review or automatic assessment.
+When the registry owner must separately approve policy changes, supply both `version` and `digest` alongside `id` from the provider's exported policy binding.
+Partial pins are refused.
+An unavailable or mismatched policy never grants approval.
+
+Use an exact pin when the policy version chosen at submission must decide the review.
+With an ID-only selector, provider changes before first acceptance can affect pending deliveries throughout the recovery window (30 days by default); an operator resubmit restarts that window without replacing an existing acceptance.
+A new submission after changes-requested selects the provider's current policy again unless pinned.
+
+Omitting `application` selects automatic application by the built-in executor.
+It receives only the compiled system grant for the exact frozen submission, never an author or reviewer identity or a general Record grant.
+
+For explicit application by a separately authorized caller:
+
+```yaml
+    application:
+      mode: manual
+```
+
+For durable work without external review, declare `review.type: none`.
+Review, application mode, and retention are separate choices.
+Such a Proposal has no review outcome: follow it to `applied` or `cancelled`.
+A blocked application is a turn change, not an outcome.
+The caller corrects the work with Retry, Revise or Rebase, or cancels it.
+
+{/* Evidence: crates/registry-breg/src/contract.rs ProposalPolicySource;
+    crates/registry-breg/src/review_store.rs review-ended;
+    crates/registry-breg/tests/postgres_proposal_review_delivery.rs producer-identity-mismatch;
+    crates/registry-breg/src/proposal_workflow.rs ProposalState. */}
+
+## Govern targets and plans
+
+A Record type can require Proposals independently of profile grants:
+
+```yaml
+mutationPolicy:
+  patch: proposal-required
+```
+
+A direct Patch or immediate Action cannot bypass that rule.
+The Action's `plan` is either `type: fixed` with ordered effects or `type: function` naming a project-local function and its write ceiling.
+Effects use `fromInput`, `fromEffect`, literal `value`, and explicit clear operations.
+Function code computes effects within that ceiling; it cannot invent authority or a review result.
+The facility function uses `registry.action-plan/v1` and `ctx.inputs`.
+
+A Proposal draft may omit an input declared `required: true` during Start, Edit, Revise, or Rebase.
+Every value that is present must still match its declared type, nullability, and the caller's `writableInputs` authority.
+Submit requires every required input and only then runs the Plan.
+Immediate Invoke remains complete and strict at invocation.
+Starting or editing an incomplete draft does not run the planner or disclose whether a target exists.
+
+`commitGuards` checks frozen input and current target requirements at commit.
+Submission freezes exact inputs, effects, target revisions, the Action revision, the review selection, and the effect digest.
+Apply never reruns a changed planner to alter approved work.
+Any required Evidence is resolved under explicit operator trust and the Action's declared capability; commit-time Evidence cannot change effects.
+
+{/* Evidence: crates/registry-breg/src/package/tests/immediate_actions.rs proposal-required;
+    crates/registry-breg/src/proposal_workflow.rs ProposalState;
+    crates/registry-breg/tests/postgres_proposal.rs writable_inputs. */}
+
+## Separate the grants
+
+Profiles declare `permissions.records`, `permissions.actions`, and `permissions.proposals` independently.
+Start authorizes creation of a draft.
+Proposal Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply each need their own grant.
+`get-application-actor` is a supplemental disclosure grant and must appear with Get in the same Proposal grant.
+List requires List authority and conceals other owners' and jurisdictions' work before filters or counts.
+Record and changes projections in review context also require current Record disclosure.
+Frozen input and document projections use their declared review-context grants and current applicable checks.
+A review-status service grant is restricted to its named authority and returns no display values.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs get-application-actor;
+    crates/registry-breg/tests/postgres_proposal_security.rs get-application-actor. */}
+
+### Limit the inputs a profile writes
+
+A Proposal grant may name `writableInputs`, the Action inputs that profile may set.
+Without it, every declared input stays writable.
+With it, Start refuses a value for any other input.
+Edit, Revise and Rebase must restate every other input exactly as the current draft or submitted version holds it, including whether an optional input is absent or explicitly `null`.
+A refusal answers `400 request.invalid` with `fieldPath` naming the first such input, for example `/input/licenceNumber`.
+The draft stays unchanged and the refusal is audited without the value.
+
+The list must name declared inputs and needs Start, Edit, Revise or Rebase authority.
+When the grant holds Edit, Revise or Rebase, every input outside the list must be in `readableInputs`, so the equality check never reveals a value the caller cannot read.
+Attachments keep their own `writableAttachments` grant.
+
+For an Action whose inputs are `holder`, `statement` and `licence-number`, an applicant may write the first two while an officer, under a grant without the list, records the licence number:
+
+```yaml
+proposals:
+  - action: apply-for-licence
+    operations:
+      - get
+      - list
+      - edit
+      - submit
+      - revise
+      - cancel
+    ownership: caller
+    readableInputs:
+      - holder
+      - statement
+      - licence-number
+    writableInputs:
+      - holder
+      - statement
+```
+
+Treat a holder or applicant identifier as an ordinary typed input.
+A self-service application fills it from authenticated caller metadata, and BReg rechecks the matching target boundary against verified claims at Submit.
+BReg does not provide a claim-copy expression for Action inputs.
+It records the Proposal owner and each submitter from the authenticated request, independently of the input value.
+An officer acting for another applicant uses a separate staff profile with its own row boundaries and no caller-ownership restriction.
+
+A standing human officer grant can hold Edit, Revise, Submit, and a bounded `writableInputs` list.
+Revise increments `submissionVersion`; a later Submit records that authenticated submitter and, when Review is required, creates a new exact Review.
+Edit, Revise, and Rebase audit only the IDs in `changedInputs`, never their values.
+The earlier version remains available through `readProposalSubmission`, including its retained `decision` and `publicReason`, while its Review result or application receipt remains retained.
+
+{/* Evidence: crates/registry-breg/src/model.rs writable_inputs, readable_inputs;
+    crates/registry-bregctl/tests/cli.rs writable_inputs;
+    crates/registry-breg/tests/postgres_proposal.rs writable_inputs. */}
+
+### Access after a target leaves the row boundary
+
+Ownership alone does not preserve access after a target leaves the caller's current row boundary.
+Proposal Get then returns a concealed 404, List omits the Proposal, and transitions such as Cancel return the generic precondition refusal.
+The saved Proposal remains governed work, but that caller can no longer view, cancel or recover it.
+Explain this loss of access to users and provide a service contact path; do not retain a private copy as substitute authority.
+
+{/* TODO[evidence]: no single test named for the concealed-404 and generic-refusal behaviour after a target leaves the row boundary. */}
+
+## Read review status
+
+A Proposal offers its `reviewStatus` link in every state except `draft`, including after it was rejected, applied or cancelled, so a client that follows links can still reach a retained result.
+The link is absent once the current submission's detail was erased.
+
+An authorized review-status read includes `requestId` after the Review provider has accepted that exact submission.
+Before acceptance the member is absent.
+Use this provider-issued ID to correlate independently authorized Casework history, clocks or notes reads, including a changes-requested explanation.
+The ID grants no Casework access and is absent from human review-context reads.
+
+The same read carries `handoff`, which says where the submission stands with the Review provider, so a client need not infer it from `requestId` and an unchanged `result`:
+
+| `handoff.state` | Meaning |
+|---|---|
+| `pending` | Queued, in flight, or retrying after an uncertain exchange. No `requestId` yet. |
+| `accepted` | The provider accepted the request; `requestId` is present. A later stage of the review that fails, such as a poll or cancellation budget, still reads as `accepted`; `result` carries the review outcome. |
+| `failed` | The handoff ended without an acceptance, or the provider contradicted a recorded one. `handoff.reason` names the cause. |
+| `withdrawn` | The submission was withdrawn before the provider accepted it, for example because the Proposal was cancelled. |
+
+`handoff.reason` is one of `remote-refused`, `producer-identity-mismatch`, `review-acceptance-changed`, `review-policy-changed`, `submission-recovery-expired`, `operator-closed`, or `unspecified` for a stored cause outside this list.
+It is a closed vocabulary: stored error text never reaches the caller.
+`handoff` is absent from human review-context reads and from submissions whose Action requires no review.
+Refetch status for the intended submission after Revise or Rebase; do not use a previous submission's request ID for new work.
+
+{/* Evidence: crates/registry-breg/src/proposal_artifacts.rs handoffRefusal;
+    crates/registry-breg/src/review_store.rs producer-identity-mismatch;
+    crates/registry-breg/tests/postgres_proposal_review_delivery.rs producer-identity-mismatch. */}
+
+### Show review progress to the applicant
+
+To show an applicant where their current submission is in review, set `readableReviewProgress: true` on the Action's caller-owned Proposal grant that includes `get-review-status`.
+Have the Review provider declare the codes it can release.
+With Casework, set `publicProgressCode` on the stages the applicant sees.
+
+Follow the Proposal's `reviewStatus` link with `include=progress` and the applicant's BReg credential.
+In the SDK, use `read_proposal_review_status_with_progress` or `readProposalReviewStatusWithProgress`.
+A successful response can add `progressCode`, a local identifier you can map to a translated label.
+BReg checks current Proposal visibility, fetches the code for the exact accepted review under its own producer credential, and checks the current round again before release.
+The ordinary read and the Review authority's machine status read use the local status projection.
+When the selected grant enables progress, the opt-in response omits the Proposal ETag because Casework can advance independently of the Proposal revision.
+Use the ordinary Proposal read for lifecycle conditions.
+
+When the active stage has no code, the handoff is pending, the round has ended, or the provider cannot answer promptly with the exact binding, the response omits `progressCode`.
+Render the current handoff and result in that case.
+After a return and resubmission, read status again for the new round.
+Use `progressCode` for display.
+The terminal result and BReg's application state govern any follow-up that depends on a decision or committed change.
+[Review a Proposal in Casework](../../tutorials/review-breg-changes-in-casework/) pairs this read with a Casework stage.
+
+{/* Evidence: crates/registry-breg/src/model.rs readable_review_progress;
+    crates/registry-breg/src/contract.rs readable_review_progress;
+    crates/registry-breg/tests/refactor_contract.rs readable_review_progress. */}
+
+### Correlate for an audit
+
+For an audit investigation, correlate the exact Proposal, Action revision, submission version and effect digest with the accepted `requestId` and retained `resultId`.
+Read Casework's request history and Decisions under separate current Casework authority.
+Automatic application records BReg's system executor, not the human reviewer; an application receipt does not embed the officer's Decision.
+Retain the needed evidence under each product's retention policy before detail or receipts expire.
+This correlation does not bypass either product's disclosure checks or recover erased history.
+
+An external Apply or Retry of automatic work requires a verified human with an explicit grant.
+Automatic execution never impersonates that human.
+Manual Apply uses its separately configured current caller authority.
+
+Automatic application is the default.
+Explicit manual mode has no apply-task queue, assignee or due date, and an approval does not open a Casework task to apply the change.
+You own the follow-up: list submitted Proposals, inspect their current Apply availability, and arrange who acts before approval expires.
+Casework remains the review provider; BReg owns and authorizes application.
+
+{/* TODO[evidence]: audit-correlation guidance (resultId, system executor in the receipt) is operating guidance with no single test; closest is postgres_proposal.rs applied_by. */}
+
+## Bind an optional review authority
+
+Deployment `reviewAuthorities` maps the authored logical authority to its exact endpoint, producer identity, profile, and credential.
+Use secret references and a renewable `privateKeyJwt` credential where your issuer supports it.
+[Run a project with rstack dev](../run-a-project-with-rstack-dev/) shows the local client binding.
+No executor credential or self-HTTP binding is needed.
+
+With the binding absent, only operations requiring that authority are disabled.
+The runtime still starts, and unrelated CRUD, immediate Actions, no-review Proposals, and draft Start or Edit remain available.
+Submit for a Proposal that requires the unbound authority is unavailable.
+`bregctl doctor` reports the advisory `proposal.submit.review-authority-unbound`; restore the binding to resume retained work.
+Approval must be freshly authenticated and unexpired before any uncommitted manual or automatic application.
+Already committed receipt recovery follows the local retention contract.
+
+BReg submits every Proposal with `subjectType: proposal`.
+The Action identity comes from the Proposal's `actionId`, not from the subject type.
+Treat `context.reference` as opaque: preserve it for exact correlation and use the declared context contract rather than parsing its current spelling.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs proposal.submit.review-authority-unbound;
+    crates/registry-breg/src/runtime_config.rs RawReviewAuthorityConfig. */}
+
+## Inspect and resume work
+
+```sh
+bregctl check ./registry
+bregctl --format json explain actions ./registry
+bregctl --format json explain proposals ./registry
+bregctl --format json explain lifecycle
+```
+
+These commands inspect configuration without a database or review decision.
+The lifecycle explanation needs no project.
+Each state lists every `turn` the runtime can derive and the condition for it, using the same pure rule that serves Proposal documents and lifecycle events.
+These turns describe whose move the work waits on.
+They do not grant an operation; current links and runtime checks continue to decide caller authority.
+
+At runtime, select the Action from caller-filtered metadata, Start a draft, then use its promoted Proposal links.
+Refetch after each transition.
+Keep lifecycle conditions separate from record ETags.
+
+An authorized Proposal Get identifies `actionId`, `actionRevision`, `submissionVersion`, `effectDigest`, the current revision, and `applicationStatus`.
+Preserve that exact frozen binding while observing progress.
+Revise or Rebase makes the earlier binding stale; do not silently follow its successor.
+Applied work carries retained application evidence.
+Blocked work carries a safe reason, a recovery hint, and currently authorized links.
+Observation cannot establish whether an earlier uncertain Start or Submit executed; recover that command with its original prepared request and idempotency key.
+
+`applicationStatus` reports application progress only.
+Under required Review it reads `awaiting-review` until an approved result exists, then `pending`, `applying`, `blocked`, `applied`, `cancelled` or `rejected`.
+Its `application-refused` reason means an executor refused the frozen effects; a review outcome never appears there.
+
+A unique-constraint failure during manual Apply returns `409 mutation.conflict` without retaining any Record effects.
+Subsequent reads report `applicationStatus.state: blocked`, `reason: application-refused`, and `recovery: correct-input`.
+Apply is unavailable; Rebase remains available to correct the input and prepare a fresh submission.
+A stale Record revision instead returns `412 precondition.failed` without creating that application block.
+Read the current Proposal before choosing the next authorized operation.
+
+Submit and Apply check the Action's field commit guards against the current target Record.
+A failed field guard answers `412 action.guard_failed`, with `guardReason` when the guard declares one.
+That answer appears only when the selected profile can perform the ordinary target Get, read the guard field and every row-boundary field, and the guard still fails against the value that Get returns.
+The response names no guard ID and no Record value.
+A profile without that authority, a guard that no longer fails on the re-read, and every revision mismatch answer `412 precondition.failed`.
+A revision guard is concurrency, not a business-state blocker, so it never answers `action.guard_failed`.
+
+The `apply` link's availability reports Review separately:
+
+| Review of the current submission | Apply availability |
+|---|---|
+| Delivered and awaiting a decision | `pending-review`, recovery `refresh` |
+| Delivery or result lookup failing | `dependency-outage`, recovery `retry`; Retry resumes it |
+| `changes-requested` | `review-changes-requested`, recovery `revise` |
+| Approval past its `availableUntil` | `review-ended`, recovery `revise` |
+| Review submission failed for good | `review-ended`, recovery `revise` |
+| `answered`, or cancelled or superseded by the provider | `review-ended`, recovery `revise` |
+
+Withdrawal ends the current round immediately, including while remote cancellation is pending or a late approval remains as historical evidence.
+Apply reads `review-ended` and the turn returns to `party`; a package block still takes precedence.
+When Revise is the recovery, the Retry link reports the same reason instead of `invalid-input`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_proposal.rs pending-review;
+    crates/registry-breg/tests/postgres_proposal_guard_failure.rs apply_names_a_failed_field_guard_and_keeps_stale_revisions_generic;
+    crates/registry-breg/src/problem.rs action.guard_failed;
+    crates/registry-breg/src/review_store.rs review-ended. */}
+
+### Whose turn it is
+
+Every Proposal document and lifecycle event carries a derived `turn`:
+
+- `party`: the caller who drives the Proposal acts next. A draft, a blocked application that needs corrected input, and a submission whose Review ended without an approval it can use (changes requested, an expired approval, a failed review submission, a provider end) are the party's turn.
+- `official`: a reviewer or applier acts next. Review in progress or being retried, an approved or review-free manual submission awaiting Apply, and an automatic application blocked on a dependency outage are an official's turn.
+- `nobody`: no one needs to act. The Proposal is `applied`, `cancelled` or `rejected`, or its automatic application is queued or running.
+
+`turn` is derived from the lifecycle state, the current submission's review progress and its application status when the Proposal is read; nothing stores it.
+It says whose move the work waits on, not who is authorized to make it: the links still decide what the current caller may do.
+List Proposals by turn with `GET /v1/proposals?turn=party` (or `official`, `nobody`).
+A page may hold fewer than `limit` items, so keep paging while `nextCursor` is present.
+
+Every Proposal document carries `createdAt`, the UTC time its draft was started (RFC 3339, microsecond precision).
+It does not change when the Proposal is submitted, revised or applied, so it orders attempts on the same target chronologically; the list itself is ordered by Proposal id, not by time.
+A command receipt stored before this member was served replays without it.
+
+The `action` and `state` filters narrow the candidate Proposals before a request spends its scan budget, so a filtered page is not emptied by Proposals of other Actions or states.
+The `owner`, `target` and `turn` filters apply to each authorized Proposal after that, so a page filtered only by those may still hold fewer than `limit` items.
+
+Use `GET /v1/proposals?pendingManualApplication=true` for a work queue of submitted manual Proposals that the caller may see and whose local application status is pending.
+The filter includes review-free submissions and required-review submissions with a current, approved, unexpired, and non-withdrawn result.
+BReg filters its retained local Proposal and Review state before paging; listing makes no remote Review calls.
+Keep paging while `nextCursor` is present.
+
+{/* Evidence: crates/registry-breg/src/api/proposals.rs pendingManualApplication;
+    crates/registry-breg/src/proposal_artifacts.rs pendingManualApplication;
+    crates/registry-bregctl/tests/cli.rs turn. */}
+
+### When the review authority refuses the hand-off
+
+When the review authority refuses to accept the current submission for good, Apply reads `review-ended` with recovery `revise`, as in the table.
+Proposal Get, each Proposal in a list, and the per-version submission read then also carry the authority's reason, when it is one BReg recognizes:
+
+```json
+"handoffRefusal": {"code": "review.initiator-required"}
+```
+
+The allowlisted codes are `review.initiator-required`, `review.initiator-excluded` and `review.policy-mismatch`.
+Any other refusal reads `review.refused`, and BReg never copies the authority's text.
+The member is absent while the hand-off is pending, accepted or retrying, and for a later submission version.
+`review.initiator-required` and `review.initiator-excluded` usually mean a service submitted work that a person must submit: let the person start or submit the Proposal instead of removing the policy's exclusion.
+The Rust, Node.js and Python clients add the member in the same release, because each refuses unknown Proposal members.
+
+{/* Evidence: crates/registry-breg/src/review_store.rs review.initiator-required;
+    crates/registry-breg/tests/postgres_proposal_review_delivery.rs review.initiator-required;
+    crates/registry-breg/src/artifacts.rs review.initiator-required. */}
+
+### After a Review result
+
+A result settles only the submission version it was recorded for.
+A rejection of the current submission ends the Proposal: it moves to `rejected` in the transaction that records the result, with a `rejected` lifecycle event.
+Any other result leaves the Proposal `submitted` until it is applied or cancelled; a changes-requested result records a `review-returned` event.
+
+| Result | What follows |
+|---|---|
+| `approved`, automatic application | The built-in executor applies the frozen effects. `applicationStatus` reads `applied`, or `blocked` with a recovery hint when an executor refuses them. |
+| `approved`, manual application | The `apply` link becomes available. An authorized caller applies before the approval's `availableUntil`. |
+| `rejected` | The Proposal is `rejected`, a terminal state. Every command link reads `review-rejected` with recovery `receipt-only`: Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer 409 `proposal.rejected`, also after a package activation changes the Action revision; an attachment upload or removal is an Edit and answers the same. Start a new Proposal to propose the work again. |
+| `changes-requested` | The Proposal stays `submitted`. Apply reads `review-changes-requested` with recovery `revise`. Revise submits the corrected version. |
+| `answered` | Apply reads `review-ended` with recovery `revise`. An answer is not a decision on a change. |
+| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A round BReg withdrew also reads as ended; a late approval cannot restore Apply authority. |
+
+{/* Evidence: crates/registry-breg/src/proposal_workflow.rs ProposalState;
+    crates/registry-breg/tests/postgres_proposal.rs review-ended;
+    crates/registry-breg/src/problem.rs proposal.rejected. */}
+
+### The decision
+
+Proposal Get, each Proposal in a list, and the per-version submission read carry `decision` once the reviewer decided the submission:
+
+```json
+"decision": {
+  "status": "rejected",
+  "decidedAt": "2026-10-16T09:12:44.000000Z",
+  "publicReason": "The certificate on file expired."
+}
+```
+
+`status` is `approved`, `rejected`, `changes-requested` or `answered`.
+`publicReason` appears only when the reviewer wrote one for the subject; it is the only reviewer text BReg serves.
+Notes, internal reasons and the reviewer's identity stay with the review provider.
+A provider-side end (`cancelled`, `superseded`) is not a decision and has no `decision`; neither has a result whose content retention erased.
+A lifecycle command's response omits `decision`: read the Proposal to see it.
+Each read that serves a public reason records a fixed `proposal-review-public-reason` marker in its audit entry, never the text.
+
+Revise after an approved, not yet applied, manual submission discards the approval.
+The approval binds the earlier version only, and the revised version needs its own Review before it can be applied.
+Apply first if the approved change must take effect.
+
+Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's queued, applying or blocked automatic application job in the same transaction.
+The job reads `cancelled`; it never applies a superseded version.
+
+{/* Evidence: crates/registry-breg/tests/postgres_proposal.rs proposal-review-public-reason;
+    crates/registry-breg/src/mutation/proposal.rs proposal-review-public-reason. */}
+
+### When activation blocks submitted work
+
+A successful package activation that marks a submitted Proposal `package-changed` closes its queued, applying or blocked application jobs and withdraws its Review in the same transaction.
+A never-sent Review is cancelled locally.
+An accepted Review uses the existing producer cancellation operation.
+An already-sent request with an uncertain outcome recovers the same request and idempotency key only to obtain its acceptance and cancel it.
+Cancellation may remain pending while the authority is unavailable.
+Failed rounds are withdrawn too: a retained acceptance can be cancelled, while an exhausted delivery without an acceptance stays closed.
+
+A late exact result is retained under the existing retention rules, but cannot queue an application or advance the withdrawn round.
+Rebase and Submit create a fresh version and Review.
+Rolling back to the frozen Action revision can clear `blockedReason`; it never revives a cancelled round or a closed job, including when no application job existed before withdrawal.
+A closed automatic application remains observable as `blocked` with `package-changed`, `rebase`, and `automaticRetry.scheduled: false`, including after rollback clears the package block.
+The Proposal stays submitted and its authorized requester can still Rebase or Cancel; observing it never requeues the old application.
+This includes an approved result received after withdrawal when no application job exists: Get, List and turn filtering keep the Proposal recoverable, while its retained decision remains historical evidence.
+Manual rounds also return the turn to the requester and refuse Apply after a restoring package clears the block.
+
+A Proposal blocked by a refused manual Apply (`application-refused`) keeps that reason through every package activation; only Rebase clears it.
+A compatible activation leaves the block, its Review and its Apply refusal in place.
+An activation that changes the Action withdraws the Review as described but keeps `application-refused` as the reason, and a later restoring package neither clears the refusal nor reopens the withdrawn round.
+
+`bregctl review-recovery resubmit` and `retry-application` refuse a currently blocked, still-submitted Proposal with reason `package-changed` or `application-refused` and direct its requester to Rebase for fresh Review or Cancel.
+Once cancelled, it receives the existing terminal or withdrawn refusal instead.
+The recovery operations keep their authority and cannot reopen a withdrawn round after rollback.
+
+The private metrics listener exposes `breg_proposal_application_blocked_jobs`: the count of application jobs closed or held by a package change on the current submitted Proposal.
+These jobs do not age the runnable application queue.
+The count drops when that version is no longer current, its Proposal is cancelled, or rollback clears the block.
+A failed database sample omits the series.
+Database operators can list the same retained jobs without reading source values:
+
+```sql
+SELECT q.action_id, q.proposal_id, q.submission_version, q.state
+FROM registry_internal.registry_proposal_application_jobs q
+JOIN registry_internal.registry_proposal_state p USING (action_id, proposal_id)
+WHERE p.state = 'submitted' AND p.submission_version = q.submission_version
+  AND p.blocked_reason = 'package-changed'
+  AND q.state IN ('queued', 'applying', 'blocked', 'cancelled');
+```
+
+A distinct handoff failure, `producer-identity-mismatch`, means a valid provider acceptance explicitly named a different producer ID.
+The bounded warning names BReg's configured `reviewAuthorities` `producerId` and the provider's admitted producer ID.
+Align them with the provider's `trustedProducers` configuration before submitting new work.
+The provider may retain the mismatched Review; this diagnosis does not mean its mutation rolled back.
+Transport failures, missing metadata with a wrong digest, and malformed acceptances retain uncertain effect handling.
+Submission bodies and credentials are excluded from the warning.
+
+{/* Evidence: crates/registry-breg/src/review_recovery.rs PackageChanged;
+    crates/registry-breg/src/metrics.rs breg_proposal_application_blocked_jobs;
+    crates/registry-breg/tests/postgres_proposal_review_delivery.rs producer-identity-mismatch;
+    crates/registry-breg/src/proposal_ddl.rs registry_proposal_application_jobs. */}
+
+### Read one submission
+
+`GET /v1/proposals/{id}/submissions/{version}` reads one submitted version under Proposal Get authority.
+It returns that version's frozen `effectDigest`, its review result, its `decision` when one was made, and its application status as separate members, and `current` says whether it is still the Proposal's latest version.
+The Rust, Node.js and Python clients read it with `read_proposal_submission` (`readProposalSubmission` in Node.js).
+An unknown or non-canonical version is concealed like an unknown Proposal.
+Once neither the review result nor the application receipt is retained, the read answers 410 `proposal.submission_expired`, and its audit entry records a result count of zero.
+
+Settle a followed Proposal only from this per-version read, or from the current Proposal Get for the current version.
+Never settle it from a Casework result for the Proposal subject.
+Revise and Rebase are allowed while a review submission is uncertain or cancelling, so a late Casework result for an earlier version can still arrive after BReg has moved on.
+
+{/* Evidence: crates/registry-breg/src/problem.rs proposal.submission_expired;
+    crates/registry-breg/tests/postgres_proposal.rs submission_expired. */}
+
+### Who applied a Proposal
+
+The application receipt records who applied the Proposal, as a keyed actor pseudonym scoped to the database and issuer, and when.
+The audit journal records the same pseudonym on the application request.
+A profile holding both `get` and `get-application-actor` receives `appliedBy` and `appliedAt` in the application member of Proposal Get and the per-version submission read.
+Both members are absent without that supplemental operation, and Proposal List omits them even for a holder.
+No response carries the raw issuer or subject.
+The pseudonym lets a holder link Proposals applied by the same actor within one database and issuer.
+A holder who knows the applier of one Proposal from another source can associate that actor with other matching pseudonyms.
+An audit hash-key holder can also recompute it for a known issuer and subject.
+
+Mutation refusals intentionally share a generic 412 for unavailable authority and failed preconditions; the one distinct 412 is `action.guard_failed` for a field commit guard the selected profile can read.
+To show or test why Apply is unavailable, first read the authorized Proposal and inspect `links.apply.availability.reason`, such as `pending-review`.
+Check the expected Proposal revision as well.
+A 412 alone does not prove that Review is pending, and availability is an observation, not a promise that a later mutation will pass its current checks.
+
+{/* Evidence: crates/registry-breg/src/proposal_workflow.rs appliedBy;
+    crates/registry-breg/tests/postgres_proposal_security.rs get-application-actor;
+    crates/registry-breg/tests/postgres_proposal.rs appliedBy. */}
+
+## Show the frozen changes
+
+Declare the fields a reviewer may inspect in the Action's `reviewContext`:
+
+```yaml
+reviewContext:
+  id: facility-address-context
+  fields:
+    changes:
+      type: changes
+      recordType: facility
+      fields:
+        - address-line
+        - city
+        - postal-code
+```
+
+Each matching frozen effect exposes its record ID, operation, and selected `before` and `after` values.
+A create has `before: null`.
+These values come from the stored submission, including computed changes.
+Inspection does not run the planner or apply the change.
+A `type: record` mapping selects a current field through a reference input; a `type: input` mapping selects one frozen input.
+Either field is `null` when its optional input was omitted at preparation, and a `type: record` field is also `null` when its optional Record field is empty.
+
+The reviewer needs `get-review-context` with the named `readableContextFields`.
+Record and changes projections also require an ordinary Record Get grant for the selected fields.
+Current row boundaries, membership, and consent govern those values, including subjects named by frozen before and after snapshots.
+Use a separate profile for lifecycle operations when Record reads require consent.
+
+Input projections disclose only the selected caller-supplied frozen inputs under the context grant.
+They do not infer Record permissions or consent from an input's meaning.
+Use a record or changes projection when displaying authoritative Record values that must follow those current disclosure rules.
+
+Review context and its document downloads require the active Action revision to match the frozen submission.
+After an Action contract changes, BReg conceals the old display rather than mapping its inputs or effects through the new definition.
+Where Rebase is available, an authorized caller can explicitly Rebase and submit new work under the current Action for fresh Review.
+Refetching alone does not replace the frozen submission.
+Display-free review status remains independently authorized for exact retained submission correlation.
+
+{/* Evidence: crates/registry-breg/src/compiler/review_context.rs review_context;
+    crates/registry-breg/tests/postgres_reviewed_change_example.rs review-context;
+    crates/registry-breg/tests/postgres_facility_proposal.rs public_reason. */}
+
+## Serve field-limited task-grant context
+
+A service profile can grant `get-task-grant-context` for one Proposal Action and a nonempty `readableContextFields` subset.
+Keep this profile distinct from human `get-review-context` and service `get-review-status` profiles.
+The caller uses `POST /v1/proposals/{proposal_id}/task-grant-context?accessProfile=<profile>`; task identifiers and requested fields stay in the body.
+Distinct means the caller explicitly selects the separately authored task-context operation and profile.
+It does not require that profile to contain no other independently authored permissions.
+
+The request binds the expected Action, frozen subject identity, context contract, exact accepted review policy, Casework request and task correlation, purpose, and requested field set.
+Correlation, purpose, and expected identity are not grants, and BReg does not infer that Casework has verified a task from them.
+BReg first matches the frozen identity and contract, the provider-issued request ID and exact policy from the accepted review binding, and the source's current non-withdrawn acceptance.
+The task ID and purpose remain Casework correlation that BReg echoes without treating it as authority.
+BReg then resolves only the requested context fields under their current Record, row-boundary, membership, and consent rules.
+Any mismatch is concealed before those values are resolved.
+The accepted source row is locked through the read, so a concurrent withdrawal either wins and conceals the context, or waits for the already admitted read to finish.
+
+The response wraps the ordinary Proposal review document with the exact request binding.
+Its `context.fields` member contains only the requested keys.
+A provider validates those selected values against their owning properties in the exported review-context schema; the subset is not a complete instance of that schema and need not contain its unrelated required properties.
+
+{/* Evidence: crates/registry-breg/tests/postgres_proposal_security.rs task_grant_context_malformed_requests_are_audited_and_fail_closed;
+    crates/registry-breg/src/proposal_ddl.rs get-task-grant-context;
+    crates/registry-breg/src/audit.rs get-task-grant-context. */}
+
+## Show a supporting document
+
+An Action can project a declared document slot into its review context:
+
+```yaml
+reviewContext:
+  id: facility-address-context
+  fields:
+    supportingDocument:
+      type: document
+      slot: supporting-document
+```
+
+Grant the reviewer `get-review-context` and include `supportingDocument` in `readableContextFields`.
+The field is `null` when that optional slot was empty at submission.
+Otherwise it contains the frozen document's slot ID, SHA-256, media type, byte size and an exact source download link.
+Proposal `get` and `readableAttachments` are separate grants and are unnecessary for this review.
+
+Use the maintained client to select the review binding and download explicitly:
+
+```js
+const metadata = await client.registryContract('proposal-reviewer');
+const binding = metadata.selectProposalReviewContext(
+  'proposal-reviewer', 'correct-address',
+);
+const context = (await client.readProposalReviewById(binding, proposalId)).value;
+const document = await client.downloadProposalReviewDocument(
+  binding, context, 'supportingDocument',
+);
+// document.body contains the verified bytes; document.mediaType identifies them.
+```
+
+Each download requires the exact submission, effect and context schema and rechecks current authorization and the complete context's Record and changes disclosure before releasing bytes.
+Revise, Rebase, erased detail or unavailable document verification can make a saved link unusable.
+Refetch the intended context explicitly; the client never follows a successor or an external URL.
+
+A document projection cannot infer the subjects described inside an opaque PDF.
+For consent-sensitive review, also declare the authoritative Record or changes projection whose current disclosure must hold.
+A document-only context grants the selected frozen content without adding an inferred consent relationship.
+The facility template combines supporting-document display with current Record and frozen changes projections.
+
+{/* Evidence: crates/registry-breg/tests/postgres_facility_proposal.rs supporting-document;
+    crates/registry-breg/src/compiler/review_context.rs review_context. */}
+
+## Retain or erase detail
+
+`retain` keeps detail.
+`operator-erase` makes eligible terminal detail removable through the operator workflow.
+Inspect before erasing:
+
+```sh
+bregctl proposal-retention list --runtime-config /etc/breg/runtime.yaml
+bregctl proposal-retention dry-run --runtime-config /etc/breg/runtime.yaml \
+  --action-id correct-address --proposal-id "<proposal-uuid>" --submission-version "<version>"
+```
+
+Erasure removes retained payload detail and cannot be undone.
+Review the exact dry-run result before running `proposal-retention erase` with the same binding.
+History, Proposal detail, Evidence uses, attachments, and idempotency responses have separate retention scopes.
+Expired or erased receipts cannot execute again.
+
+{/* Evidence: crates/registry-breg/src/model.rs OperatorErase;
+    crates/registry-breg/tests/postgres_proposal_human_recovery.rs operator-erase;
+    crates/registry-bregctl/src/data_lifecycle.rs proposal-retention. */}
+
+### Bounded review-context reads
+
+A caller with the existing `get-review-context` grant can request up to 100 distinct canonical Proposal UUIDs in one exchange: `GET /v1/proposals/review-context?accessProfile=<profile>&ids=<uuid>,<uuid>`.
+The ordered `items` contain the requested `id` and either `status: visible` with the ordinary `context` document, or `status: concealed` with no document.
+Unknown and currently unauthorized Proposals have the same concealed result.
+Every item retains its own current Proposal and Record disclosure checks, transaction, and paired audit entries.
+Batch transport adds no authority.
+Operational failures refuse the entire batch; the aggregate response is bounded at 8 MiB.
+Use smaller batches when contexts approach that bound.
+The native Rust client validates cardinality, order, IDs, Action binding and closed item shapes before releasing any document.
+
+{/* Evidence: crates/registry-breg/src/api/proposals.rs review-context. */}
+
+## Next
+
+- [Actions and Proposals](../breg-actions/)
+- [Control access and reads](../breg-access/)
+- [Base Registry Engine API reference](../../reference/breg-api/#proposals)
+- [Review a Proposal in Casework](../../tutorials/review-breg-changes-in-casework/)

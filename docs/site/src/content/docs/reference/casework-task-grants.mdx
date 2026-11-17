@@ -1,0 +1,288 @@
+---
+title: Registry Casework task grants
+description: Declare task templates, configure the assertion authority, and preview, approve, revoke and resume bounded work that a Casework ReviewTask holder approves for an institutional agent.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+A task grant records a current human ReviewTask holder's explicit approval for one institutional agent to perform bounded work under its own principal.
+Casework grants only from a ReviewTask.
+The trusted producer remains authoritative for the subject and proposal; the resource server independently authorizes and commits the agent's operation.
+
+A grant subject binds a row only where the resource server's profile authors a boundary on that key.
+For Base Registry Engine (BReg), that is a row boundary on the identity key the template's `subjects` names.
+Casework cannot check this, because it never sees that profile.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs TaskTemplate, TaskGrantBounds */}
+
+## Declare templates
+
+Add `taskTemplates` to the Casework project.
+Each template declares:
+
+- A stable id as its key under `taskTemplates`, an immutable `version`, and a human-readable `label`.
+- `eligibleTeams`, human Staff or Supervisor `eligibleProfiles`, `source`, and `reviewPolicies` naming the held ReviewTasks that can issue the grant.
+- Exact `agent: {issuer, subject}`, OAuth `client`, one absolute `resource`, and `purpose`, plus explicit OAuth `scopes` for that resource.
+- `bounds`, one of the three forms in the next section.
+- `subjects`, mapping token identity keys to governed source logical fields.
+- `lifetimeSeconds`, an explicit approved duration.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs TaskTemplate, lifetime_seconds, authorization_mode */}
+
+### Bounds
+
+`bounds` takes one of these forms:
+
+```yaml
+bounds:
+  type: evidence
+  requirement: ...
+```
+
+```yaml
+bounds:
+  type: breg
+  permissions:
+    - collection: ...
+      operations: [...]
+```
+
+```yaml
+bounds:
+  type: scheduling
+  permissions:
+    - service: ...
+      location: ...
+      actions: [...]
+```
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs TaskGrantBounds, TaskGrantBoundsWire */}
+
+### Subjects and source context
+
+The review policy's source must serve task-grant context.
+A BReg-backed policy needs the provider's distinct `task-grant-context` capability and a source profile granting `get-task-grant-context` for the exact fields.
+When that capability is absent, `caseworkctl check` and the runtime refuse the template as `casework.task-template.unserved-capability`.
+
+Required current-source fields must be disclosed to the approving human and available through the provider's separate `task-grant-context` capability for later checks.
+For BReg, Casework uses the provider's separately authored `taskGrantProfile`; there is no fallback to its human display or status profiles.
+BReg verifies the frozen Proposal identity and contract, the exact accepted review-policy binding, the current non-withdrawn source acceptance, and current disclosure for every requested field.
+Submitted-context grants use the admitted snapshot.
+Callers cannot supply subject values.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs unserved-capability;
+    crates/registry-caseworkctl/src/provider_pair.rs unserved-capability */}
+
+### Lifetime and authorization mode
+
+`lifetimeSeconds` is an explicit approved duration.
+
+- An omitted `authorizationMode` means `immediate`, with a 900-second ceiling.
+- Opt in with `authorizationMode: deferred` for a duration of at most 604800 seconds (seven days).
+  Seven days is an initial hard ceiling, not a default duration.
+- The preview shows the mode and duration before approval.
+
+A deferred grant cannot carry bounds of type `evidence`.
+Evidence checks the grant deadline and no grant status, so an Evidence grant keeps the 900-second immediate window.
+`caseworkctl check` reports the combination as `casework.task-template.deferred-evidence`.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs deferred-evidence, authorization_mode;
+    crates/registry-casework/migrations/0200_reviews.sql 604800 */}
+
+### Scopes and operations
+
+Scopes are immutable approved authorization, not inferred from product operations.
+The assertion includes those scopes, and stock token exchange only accepts a requested subset.
+Use exact product operation names.
+Wildcards and duplicate bounds are refused.
+
+A registry operation under `bounds.permissions[].operations` is a local identifier: a lowercase letter, then at most 63 lowercase letters, digits, underscores or hyphens.
+So `apply-request` and `apply_request` are both well formed, and the registry decides which one it knows.
+Any other value is refused as `casework.task-template.invalid-operation` at the operation's own pointer.
+
+For BReg, bind a named Action or Proposal operation and its exact target scope.
+A task grant does not authorize an arbitrary direct record write.
+BReg checks its own governed operation and the current grant status before commit.
+
+Changing a template requires a new version.
+Retiring a version invalidates its live grants; reactivation does not restore those grants.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs invalid-operation */}
+
+### Scheduling permissions
+
+Scheduling permissions use the same strict claim grammar its runtime verifies: one to 64 unique `(service, location)` pairs, each with one to 32 unique action names.
+Services and locations are exact, whitespace-free values with no wildcard.
+Actions are lowercase operation names such as `appointment.create`, `appointment.reschedule`, `appointment.cancel`, `hold.create` or `hold.release`.
+Casework copies these governed bounds into the signed assertion; it does not import Scheduling or infer an offering.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs TaskGrantBounds */}
+{/* TODO[evidence]: the 64 pair and 32 action limits are not named by a symbol found in the Casework crates; the strict grammar lives in registry-scheduling auth */}
+
+## Configure the authority
+
+Runtime `taskAuthority` declares the assertion `issuer`, `exchangeAudience`, `signingKeyRef` and `statusClients`.
+Register its public JWKS, served at `/.well-known/jwks.json`, with the token-exchange issuer.
+Keep the private ES256 or RS256 signing key in the configured secret provider, with its registered key identifier.
+
+The signed assertion identifies the grant and its immutable bounds.
+The token exchange issuer derives `registry_grant_source_issuer` from the verified assertion issuer instead of accepting an assertion-supplied source issuer.
+Casework retains that issuer and returns it as `sourceIssuer` from the status endpoint.
+
+{/* Evidence: crates/registry-casework/src/config.rs TaskAuthorityConfig, exchange_audience, signing_key_ref, status_clients;
+    crates/registry-casework/src/task_grants.rs registry_grant_source_issuer, source_issuer */}
+
+### Clients and assertion issuers
+
+Include agent and resource status clients in OIDC `allowedClients`.
+Template agent issuers must match that verifier.
+Register the agent's client-credentials bootstrap for only the Casework resource and `casework:grants:assert`.
+Register token exchange separately for its exact resource and access scopes.
+The agent uses its own `private_key_jwt` credential for both requests.
+
+Optionally add `assertionIssuers` alongside `allowedClients` to bind a client to the assertion authorities its tokens can claim.
+When a client has an entry there, a token presented to Casework that carries `registry_assertion_issuer` is accepted only if that value is one of the client's listed authorities.
+A token without the claim, such as the agent's client-credentials bootstrap, is unaffected.
+
+{/* Evidence: crates/registry-casework/src/auth.rs assertion_issuers;
+    crates/registry-casework/tests/review_http.rs assertion_issuers */}
+
+### Status clients
+
+`statusClients` maps each resource server's service client to one exact resource audience.
+These clients use `casework:grants:status`.
+Configure the matching BReg `taskGrantStatus` entry for governed writes; [Task grants and standing agents](../breg-task-grants/) describes it.
+
+{/* Evidence: crates/registry-casework/src/auth.rs casework:grants:status;
+    crates/registry-casework/src/task_grants/http_tests.rs status_clients */}
+
+## Preview and approve
+
+1. The current eligible holder reads `GET /v1/review-tasks/{taskId}/task-templates` using the Casework profile and, for current-source context, the human's source profile.
+   The response includes the current task revision and the exact disclosed authorization to review.
+2. After explicit approval, call `POST /v1/review-tasks/{taskId}/task-grants` with only `templateId` and `templateVersion`, the current `If-Match`, and an `Idempotency-Key`.
+   Casework rechecks the exact holder, eligibility, proposal identity and subject facts.
+3. The agent obtains its bootstrap token and calls `POST /v1/task-grants/{grantId}/assertion` with an empty body.
+   This endpoint rejects human profile headers and verifies the exact agent tuple.
+4. Exchange the assertion using RFC 8693.
+   Assertions last at most 60 seconds; access tokens last at most 300 seconds.
+   Neither extends the grant deadline.
+
+{/* Evidence: crates/registry-casework/src/http.rs task-templates, casework:grants:assert;
+    crates/registry-casework/src/task_grants/http_tests.rs casework:grants:assert */}
+{/* TODO[evidence]: the 60 second assertion and 300 second access token limits are in auth.rs and config.rs but no symbol there is a named constant for them */}
+
+### Client helpers
+
+The Casework clients expose `task_assertion_endpoint(grant_id)` (or `taskAssertionEndpoint(grantId)` in Node) for the exact empty-POST route.
+Pass that endpoint to a shared `exchange` authorization option with a Casework-audience bootstrap scoped only to `casework:grants:assert`.
+The provider checks the grant, client, resource, scopes and deadline in each fresh assertion before exchanging it.
+Its cache ends by the grant deadline; renewal asks Casework again, so an inactive grant cannot issue another access token.
+
+The unified Node and Python Casework clients expose these operations.
+Credentials stay on the server.
+Exact approval retries return the original grant without extending its deadline.
+New authorization requires explicit new approval and a new grant ID.
+Listings omit retained subject selectors.
+
+{/* Evidence: crates/registry-casework-client-py/src/lib.rs task_assertion_endpoint;
+    crates/registry-casework-client-node/src/lib.rs task_assertion_endpoint;
+    crates/registry-casework-client-node/__test__/task-grants.test.js taskAssertionEndpoint */}
+
+## Revocation and status
+
+Any officer with a profile and team membership eligible under the grant template for the task's queue can call `POST /v1/review-tasks/{taskId}/task-grants/{grantId}/revoke` with an empty body.
+Revocation does not require holding the task or reading its source.
+
+Resource servers call `GET /v1/task-grants/{grantId}/status`; inactive status returns no grant detail.
+For the status check, machine callers cannot substitute resources or subjects.
+That says nothing about which rows the resource server binds; see the row-binding paragraph at the start of this page.
+
+{/* Evidence: crates/registry-casework/src/http.rs revoke, casework:grants:status;
+    crates/registry-casework-client-py/tests/python/test_task_grants.py revoke */}
+
+### What invalidates a grant
+
+Retired templates and observed definitive subject changes invalidate grants.
+Deferred grants pin an assignment generation.
+Release, reassignment, queue movement, absence-cover change, decision and completion change it in the same task transaction.
+A release followed by reclaim cannot revive the approval, even if no status check observed the intervening release.
+
+Immediate grants keep the exact ordinary task revision.
+Deferred grants allow draft revision changes while the assignment, subject, proposal and disclosed facts stay unchanged.
+Temporary source failure refuses the current request without permanent invalidation.
+A mutable source revision alone does not change frozen proposal identity.
+
+Source proposal version, digest or integrity, binding generation and exact subject facts are material.
+Unrelated source revision churn is not.
+An observed definitive change invalidates permanently.
+Review directory eligibility is checked at observation, so removing and restoring a membership between observations is not a historical revocation signal.
+Use explicit revocation when authority must stay withdrawn.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs assignment_generation;
+    crates/registry-casework/migrations/0200_reviews.sql assignment_generation */}
+
+### Source access after approval
+
+The approving officer's own source access is checked once, at approval, with that officer's credential.
+Later observations read the source with the configured service reader.
+They recheck the officer's Casework eligibility, the proposal and the disclosed facts, but not whether the source still lets that officer read the record.
+
+A withdrawal of that source access alone leaves the grant active until its deadline.
+That is at most 900 seconds for an immediate grant, and up to the template's `lifetimeSeconds`, at most seven days, for a deferred one.
+When an officer loses source access, also revoke their live grants or remove their Casework eligibility, which ends each grant at its next observation.
+Keep deferred lifetimes no longer than the work needs.
+
+{/* TODO[evidence]: no test asserts that withdrawal of source access alone leaves a grant active; the claim follows from the service reader observation in registry-casework task_grants */}
+
+### Resource-side status checks
+
+Offline reads can continue until the earlier access-token or grant deadline.
+BReg checks fresh status before new writes, later approval and application.
+Scheduling deployments using deferred work configure `taskGrantStatus` and check fresh exact status before every capacity command and receipt replay.
+A Scheduling deployment that instead writes `taskGrantStatus: unchecked-final-fifteen-minutes` permits only authorization with at most 900 seconds remaining.
+The final fifteen minutes of a deferred grant can also use this offline path, with that bounded stale-authority window.
+
+A configured registry never falls back when status is unavailable or inactive.
+There is no distributed transaction between a status observation and a resource commit.
+Scheduling also rechecks the earlier execution-token and grant expiry under its capacity locks, so waiting for a lock cannot carry an expired execution credential into a later commit.
+Evidence wallet-delivery deferred offers carrying a task grant remain refused.
+
+[Registry Scheduling task grants](../scheduling-task-grants/) describes the Scheduling side.
+
+{/* Evidence: crates/registry-scheduling/src/auth.rs unchecked-final-fifteen-minutes */}
+
+## Resume deferred work
+
+Retain the grant ID, the original deadline, and the owning product's logical operation and idempotency key.
+After waiting or restarting, authenticate as the same agent and construct a fresh exchange provider using the original grant reference and deadline.
+An assertion refresh is neither a new authorization nor a new operation.
+Expiry or cancellation requires an explicit new decision; there is no fallback to standing service authority.
+Deferred work reaches BReg or Scheduling only: deferred grants cannot carry Evidence bounds, because Evidence accepts a grant until its deadline without checking its status.
+
+This mode retains the current holder's continuing authority.
+It does not survive release, reassignment or completion of the review task.
+Keep that task active while the approved deferred work waits, then complete it when the workflow no longer needs the authorization.
+An institutional decision that survives task completion requires a separately designed policy.
+
+The grant limits allowed operations, resources, principal, purpose, subject facts and deadline.
+It does not promise one business effect.
+Each resource server owns its atomic business limits and duplicate rules.
+Preserve the same operation key across refresh and restart to recover the same effect; a new key names a new logical operation, still inside the approved bounds.
+
+Temporary source or status failure refuses the current attempt and can be retried.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs deferred-evidence, assignment_generation */}
+
+## Next
+
+- [registry casework runtime configuration reference](../casework-configuration/)
+- [task grants and standing agents](../breg-task-grants/)
+- [registry scheduling task grants](../scheduling-task-grants/)
+- [author a casework policy](../../configure/casework/)

@@ -26,3 +26,4 @@ products:
   registry-breg-services: breg-mcp
   registry-coordinator: coordinator
   registry-documents: documents
+  registry-adapter: adapter

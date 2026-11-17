@@ -1,11 +1,11 @@
 ---
 title: Deploy and operate the Document Store
 description: Provide PostgreSQL, an issuer, and a content verifier for the Registry Document Store, apply and serve its package, replay stuck verifications, and handle removal, erasure, events, and restores.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -36,7 +36,7 @@ checkout, as the [overview](../../start/documents/#status) explains.
 
 {/* Evidence: crates/registry-documents/src/store.rs, PostgreSQL 17 refusal, connect_reference,
     and tls_connector; crates/registry-documents/src/config.rs, check_database;
-    products/documents/RUNTIME-CONFIG.md, Keys and Startup;
+    products/documents/generated/runtime/runtime.schema.json;
     crates/registry-documents/src/verification.rs, activate_verifier;
     crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier. */}
 
@@ -54,6 +54,12 @@ CREATE DATABASE documents;
 
 Set each role's password with `\password documents_migration` and `\password documents_runtime` in
 `psql`, which prompts for it instead of taking it in a statement.
+
+Document content is stored as `bytea`, so the database is slightly larger than the stored payload.
+A custom-format `pg_dump` is larger than the payload because `pg_dump` writes `bytea` as hex, so plan
+backup space above the database size.
+
+{/* Evidence: crates/registry-documents/migrations/0100_documents.sql, content bytea. */}
 
 In the `documents` database, hand the schema to the migration role:
 
@@ -73,7 +79,7 @@ with the migration credential to restore its grants.
 {/* Evidence: crates/registry-documents/src/activation.rs, apply (grant_runtime_role and
     stray_authority) and check_runtime;
     crates/registry-documents/src/activation.rs, LedgerUnreadable;
-    crates/registry-documentsctl/src/operate.rs, failure; products/documents/RUNTIME-CONFIG.md, Startup; observed with documents
+    crates/registry-documentsctl/src/operate.rs, failure; observed with documents
     0.43.0-dev on 2026-10-22 against PostgreSQL 17. */}
 
 ## Write the runtime file
@@ -100,13 +106,14 @@ matter most:
 Uploads, downloads, and verification attempts each hold a whole version in memory, and share one
 transfer budget: the larger of 256 MiB and `storage.maximumDocumentBytes`, which is 256 MiB at
 every ceiling the runtime accepts. Copies made while hashing, storing, and sending come on top of
-it, so give the host headroom beyond the budget and the process's own needs. An upload or download
+it and can reach about twice the budget (about 512 MiB at the default budget), so give the host
+that much document memory beyond the process's own needs. An upload or download
 that finds no room is refused at once with `service.unavailable` and `Retry-After`, and never
 waits. A verification attempt waits for room within its attempt timeout, then is retried later.
 
 The [configuration reference](../../reference/documents-configuration/) lists every key.
 
-{/* Evidence: products/documents/RUNTIME-CONFIG.md, Keys and Transfer memory;
+{/* Evidence: products/documents/generated/runtime/runtime.schema.json;
     crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
     S3_MAXIMUM_DOCUMENT_BYTES, MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS, AuditConfig, and
     ContentVerificationConfig;
@@ -152,7 +159,7 @@ The secret holds a JSON Web Key Set of RSA or EC public keys, and every key need
 `kid`: startup refuses a key without one, a repeated `kid`, and a symmetric key. The set is read
 once at startup and never rotates, so to change keys, replace the secret and restart `serve`.
 
-{/* Evidence: products/documents/RUNTIME-CONFIG.md, Access tokens and Signing keys;
+{/* Evidence: products/documents/generated/runtime/runtime.schema.json;
     crates/registry-documents/src/config.rs, verifier_profile and DOCUMENTS_ACCESS_TOKEN_TYPE;
     crates/registry-documents/src/auth.rs, authenticate;
     crates/registry-documents-core/src/access.rs, AccessProfiles::resolve;
@@ -291,7 +298,6 @@ Every other route answers `401 authentication.refused` without a valid token. Th
 commands write their own audit journal beside the service's.
 
 {/* Evidence: products/documents/README.md, Operate;
-    products/documents/RUNTIME-CONFIG.md, Startup;
     crates/registry-documentsctl/src/operate.rs;
     crates/registry-documents/src/main.rs, initialize_logging;
     crates/registry-documents/src/runtime.rs, operational_log_level;
@@ -437,7 +443,6 @@ service still serves, still takes removal requests, and logs a warning at startu
 wait until you set it back to `active` and restart, and a replayed job waits with them.
 
 {/* Evidence: products/documents/README.md, Retention and erasure;
-    products/documents/RUNTIME-CONFIG.md, Keys;
     crates/registry-documents/src/erasure.rs, cleanup_once, dead_letters, report, and replay;
     observed with documentsctl 0.43.0-dev on 2026-10-22. */}
 

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -41,6 +41,37 @@ One period, with every dimension code and every total, must fit in 10,000 cells.
     crates/registry-breg/src/compiler/statistics.rs,
     MAX_STATISTICAL_CELLS_PER_PERIOD. */}
 
+Modules cannot contribute statistical datasets; only the root project declares them.
+The population uses the typed read-filter grammar and the API field names of the unit.
+A dimension names a logical field ID and must be a boolean or a closed vocabulary field.
+BReg refuses encrypted fields and consent-gated source grants.
+
+{/* Evidence: crates/registry-breg/src/contract.rs StatisticalDatasetSource;
+    crates/registry-breg/tests/compiler_statistics.rs
+    statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_count_grants,
+    population_uses_api_field_names_and_refuses_invalid_typed_predicates. */}
+
+### Dimension codes
+
+A dimension cell carries a code, not a label.
+Boolean codes are `true` and `false`.
+`_T` denotes a total, and `_U` denotes a null value when the field can be null; derived fields are
+nullable for this purpose.
+A vocabulary code beginning with `_` is reserved and refused.
+A non-null value outside the declared vocabulary refuses the whole computation without disclosing
+that value.
+
+The names `period`, `periodStart`, `periodEnd`, `value`, and `status` are reserved for the document
+and CSV representation, so a dimension cannot use one of them.
+
+{/* Evidence: crates/registry-breg/src/statistics.rs TOTAL_CODE, UNKNOWN_CODE,
+    unknown_code_error_names_dataset_and_dimension_but_not_value (tests/statistics.rs);
+    crates/registry-breg/src/compiler/statistics.rs
+    breg.statistical-dataset.dimension-reserved,
+    breg.statistical-dataset.dimension-code-reserved;
+    crates/registry-breg/tests/compiler_statistics.rs
+    statistical_dataset_refuses_reserved_and_unbounded_dimensions. */}
+
 ## Live counts and releases
 
 A live count is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live cell is a count the profile could already obtain by listing records.
@@ -49,6 +80,36 @@ A release is a stored, numbered version of one ended period, computed against on
 
 {/* Evidence: crates/registry-breg/src/postgres/statistics.rs;
     crates/registry-breg/src/compiler/statistics.rs, definition_digest. */}
+
+Publication computes under one source snapshot and records the shared history head with that
+computation.
+The release's `snapshot` is an opaque bookmark when history coverage is available, or `null` after
+erasure or another coverage invalidation.
+Publication continues from current data without a history rebaseline, and a rebaseline can restore
+bookmarks for later releases.
+Persistence then verifies the same package activation, rechecks eligibility and freshness, and
+allocates the next version.
+BReg refuses a computation that a newer committed computation superseded.
+Immediate Actions and ordinary mutations advance the same history head.
+
+Versions increase monotonically per dataset and period, including across changed definitions.
+Latest reads skip withdrawn versions, and `status=final` selects only final releases.
+A version from another definition stays stored but is unavailable until that exact definition is
+active again, because read eligibility uses the active definition digest.
+The digest covers the unit, population, period, dimensions and codes, the definitions of referenced
+fields and derived SQL inputs, publisher visibility on every source dependency, and the disclosure
+parameters.
+The `read-releases` and `read-live` grants and `firstPeriod` do not change it.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_http.rs
+    publication_rejects_a_snapshot_older_than_the_locked_release_head,
+    activation_between_compute_and_persist_is_a_version_conflict_without_writes,
+    provisional_persisting_after_final_is_refused,
+    changing_population_through_package_apply_starts_a_new_release_series;
+    crates/registry-breg/tests/postgres_statistics_history.rs
+    publication_uses_null_snapshot_until_erased_history_is_rebaselined;
+    crates/registry-breg/tests/compiler_statistics.rs
+    definition_digest_excludes_grants_and_first_period_but_covers_values. */}
 
 ## Decide who reads a dataset
 
@@ -61,6 +122,144 @@ Each [access profile](../../reference/glossary/#access-profile) that reaches it 
 One profile at most holds `publish` on a dataset. Give it to a profile a person or a service uses directly: a standing agent profile, one with `actorKind: agent` and no `taskGrant`, cannot publish or withdraw a release, and `bregctl check` refuses the project with `breg.access-profile.standing-agent-publish-forbidden`. [Control access](../breg-access/) explains task grants.
 
 A publisher and every `read-live` profile also need a count-capable list permission on the unit. A publisher's visibility must not depend on the caller, because the same dataset would otherwise count a different population for each caller. A profile that holds only `read-releases` needs no record permission. The configuration reference carries the full set of rules. Run `bregctl explain access` to see, for each dataset, which profiles hold each operation.
+
+### Rules the compiler enforces
+
+`bregctl check` refuses a project that breaks one of these rules:
+
+- A dataset needs at least one grant (`breg.statistical-dataset.grants-empty`).
+- A profile names a dataset in at most one permission, and a permission on a dataset the project does
+  not declare is refused (`breg.access-profile.permission-dataset-unknown`).
+- At most one profile holds `publish` on a dataset (`breg.statistical-dataset.publisher-multiple`).
+- When a dataset has a publisher, the publisher and every `read-live` profile must also hold
+  `read-releases` (`breg.statistical-dataset.read-releases-required`), because release reads
+  authorize the publisher, every `read-live` profile, and every other `read-releases` profile.
+- `read-releases` on a dataset nobody publishes is refused
+  (`breg.statistical-dataset.publisher-missing`).
+
+Every dataset profile is authenticated, and you choose one profile per request with
+`accessProfile`.
+BReg never combines profiles into a larger grant.
+`/v1/registry` and `/openapi.json` filter dataset operations with the same authorization checks, and
+a release-only reader receives no Record type grant.
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs
+    breg.statistical-dataset.grants-empty, breg.statistical-dataset.publisher-multiple,
+    breg.statistical-dataset.read-releases-required, breg.statistical-dataset.publisher-missing,
+    breg.access-profile.permission-dataset-unknown;
+    crates/registry-breg/tests/compiler_statistics.rs
+    a_dataset_has_one_publisher,
+    a_profile_that_reads_live_counts_or_publishes_also_holds_read_releases,
+    read_releases_is_refused_on_a_dataset_no_profile_publishes,
+    a_dataset_permission_names_a_declared_dataset;
+    crates/registry-breg/tests/postgres_statistics_http.rs
+    caller_filtered_openapi_hides_an_inaccessible_statistical_default. */}
+
+#### Live reads and the list grant
+
+The statistical query uses the same list predicates, forced row security, visibility checks, and
+field expressions as the ordinary list query.
+The list grant must therefore permit the fields and typed filter operators the population, the period
+or validity selection, and the dimensions use.
+Live reads keep the caller's row and membership boundaries, purpose, and request visibility.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_stock.rs
+    facility_statistics_match_count_twins_and_release_evaluation_date,
+    partial_vocabulary_population_matches_the_authorized_list_count. */}
+
+#### Publisher independence
+
+A publisher's population must not depend on the caller.
+The compiler checks the unit and every source Record type that a referenced derived definition reads.
+On each of them the publisher needs a read grant without claim-bound rows, membership boundaries,
+purpose filters, consent gates, or owner-dependent request visibility.
+Mandatory Record type boundaries also make publication ineligible.
+This keeps different publishers from producing different populations under one dataset identity.
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs validate_publisher_independence;
+    crates/registry-breg/tests/compiler_statistics.rs
+    statistical_dataset_refuses_caller_dependent_publisher_authority. */}
+
+#### Standing agents
+
+Publishing or withdrawing a release commits at once, with no draft for a person to confirm.
+A standing agent profile therefore cannot hold `publish`, and the compiler holds the unit's Record
+type profile for the publisher's id, which both operations authorize through, to the same rule.
+A standing agent may hold `read-live` and `read-releases`.
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs
+    breg.access-profile.standing-agent-publish-forbidden;
+    crates/registry-breg/tests/standing_agent_ceiling.rs
+    standing_agent_cannot_publish_a_statistical_release. */}
+
+## Periods and evaluation dates
+
+Granularities are day, month, quarter, and year, using UTC calendar periods.
+The period codes are `YYYY-MM-DD`, `YYYY-MM`, `YYYY-Qn`, and `YYYY`.
+A range uses positive four-digit years, and each period's exclusive end must also fit that date
+range: `9999-11` is valid and `9999-12` is refused.
+A range includes both named periods and contains at most 366 periods.
+A response contains at most 10,000 cells, including totals and zero-filled domain combinations.
+
+{/* Evidence: crates/registry-breg/src/statistics.rs MAX_PERIODS_PER_READ;
+    crates/registry-breg/tests/statistics.rs
+    period_codes_are_strict_sdmx_calendar_codes,
+    period_range_is_inclusive_and_bounded_to_366,
+    period_codes_require_positive_four_digit_years_for_every_frequency,
+    period_codes_keep_the_exclusive_end_in_the_four_digit_date_domain;
+    crates/registry-breg/tests/postgres_statistics_http.rs
+    live_and_series_refuse_period_and_response_cell_caps. */}
+
+Canonical JSON documents and CSV responses are limited to 8 MiB.
+The compiler bounds a single-period document.
+If a multi-period range returns `400 query.invalid` naming no parameter, its representation exceeds
+that limit; reduce the range.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES;
+    crates/registry-breg/tests/compiler_statistics.rs
+    statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap;
+    crates/registry-breg/tests/postgres_statistics_byte_limits.rs
+    authored_multi_period_response_obeys_the_shared_document_byte_limit. */}
+
+A flow counts the unit's rows whose date field falls in `[start, end)`.
+A stock counts the rows valid on the period's reference date.
+A stock names its validity in one of two ways:
+
+```yaml
+period:
+  type: stock
+  granularity: month
+  firstPeriod: 2025-01
+  validity: temporal
+```
+
+`validity: temporal` uses the Record type's temporal declaration.
+Alternatively, `validity` names the date fields with `from` and `until`.
+The interval is `[from, until)`, and a null end means open-ended.
+When `until` names the unit's `lastDayField`, the interval runs through that last day inclusive, as
+it does under `validity: temporal`.
+An ended period's reference date is its final day.
+The current period uses today's date in the registry's time zone, which a project with a
+statistical dataset must declare; [History reads](../../reference/breg-api/#history-reads)
+describes `project.timezone`.
+Publication requires an ended period at or after `firstPeriod`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_stock.rs
+    a_stock_counts_a_record_on_its_last_day_whichever_way_the_validity_is_named;
+    crates/registry-breg/tests/compiler_statistics.rs
+    temporal_and_pair_stock_compile_and_invalid_periods_are_refused,
+    a_statistics_dataset_requires_the_registry_timezone_for_its_current_period;
+    crates/registry-breg/tests/postgres_statistics_first_period.rs. */}
+
+A derived field that calls `registry_context.evaluation_date()` runs at today's date in the
+registry's time zone for live reads and at the period's reference date for publication.
+A live read of a dataset that depends on this function accepts only its current period, which keeps
+the live result count-equivalent to its ordinary list query.
+A release counts the registry's present rows evaluated at the reference date; it does not
+reconstruct what the registry held on that past date.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_stock.rs
+    facility_statistics_match_count_twins_and_release_evaluation_date. */}
 
 {/* Evidence: crates/registry-breg/src/contract.rs, PermissionsSource,
     DatasetPermissionSource, DatasetOperation;
@@ -75,9 +274,44 @@ A release suppresses positive counts below `minimumCount` and rounds the rest to
 
 Suppression does not keep a cell unknown. With minimum five and base five, two suppressed cells under a published total of ten must each be four. The minimum counts records, not people, so a cell can describe fewer subjects than the minimum. A suppressed cell at minimum two holds exactly one. A count below half the rounding base publishes as zero with status `rounded`. BReg applies no privacy budget across versions; dimensions, cadence, and readers remain your institution's disclosure decision.
 
+Live data contains exact counts for the selected profile.
+Released data applies the `minimum-count-and-rounding` method, the only disclosure method BReg
+implements.
+For every base cell and every margin, an exact zero stays zero with status `exact`, a positive count
+below `minimumCount` becomes null with status `suppressed`, and every other count rounds to the
+nearest multiple of `roundingBase` with status `rounded`, including a rounded zero.
+True counts exist only during computation; release storage keeps the transformed document, its
+digest, and lifecycle metadata.
+
+The compiler checks only that each parameter is at least two.
+Three limits stay with the dataset's author:
+
+- `minimumCount` is a threshold on unit rows, not on distinct people or organizations.
+  Where one subject can hold several unit rows, a published cell can describe fewer subjects than
+  the threshold.
+- A suppressed cell holds one through `minimumCount` minus one. At the floor of two, `suppressed`
+  means exactly one.
+- The two parameters are not checked against each other.
+  A count from `minimumCount` up to, but not including, half of `roundingBase` publishes as zero
+  with status `rounded`, which its status tells apart from an exact zero.
+  With minimum two and base five, a rounded zero is exactly two.
+  A `roundingBase` of at most twice `minimumCount` produces no rounded zero.
+
+Seven positive suppressed cells under a rounded total of five pin every cell to one.
+Deterministic rounding also permits differencing between releases or overlapping populations, and
+exact zeros disclose absence and can disclose group attributes.
+Review each dataset's population, dimensions, release cadence, and auxiliary information before you
+grant readers access.
+
+{/* Evidence: crates/registry-breg/tests/statistics.rs
+    disclosure_threshold_rounding_and_halves_up_are_exact,
+    rounded_zero_exists_only_below_half_of_the_rounding_base,
+    accepted_suppression_residual_is_pinned_for_four_plus_four_and_seven_ones;
+    crates/registry-breg/src/statistics.rs minimum-count-and-rounding. */}
+
 {/* Evidence: crates/registry-breg/src/statistics.rs, round_halves_up;
-    crates/registry-breg/tests/statistics.rs;
-    products/breg/STATISTICS.md. */}
+    crates/registry-breg/tests/statistics.rs
+    accepted_suppression_residual_is_pinned_for_four_plus_four_and_seven_ones. */}
 
 ## Publish an ended period
 
@@ -98,6 +332,18 @@ bregctl statistics publish \
 ```
 
 The response names the version, definition digest, content digest, and snapshot. Reuse the key to retry the same publication; choose a new key for a correction. A current or future period, or one before `firstPeriod`, is refused.
+
+Publication and withdrawal require an `Idempotency-Key`, scoped to the caller like every BReg
+mutation key.
+An identical retry under the same current authority returns the retained status, headers, and body
+without creating another version, for `retention.receiptRetentionDays` after the first commit.
+After that the retry returns `410 idempotency.expired` and creates nothing.
+Binding the key to a different request returns `409 idempotency.key-reused`.
+
+{/* Evidence: crates/registry-breg/src/postgres/statistics.rs map_idempotency;
+    crates/registry-breg/tests/postgres_statistics_http.rs
+    publication_replay_is_bound_to_the_active_package,
+    statistical_http_full_journey_preserves_visibility_release_and_withdrawal_rules. */}
 
 ## Read a series
 
@@ -136,11 +382,120 @@ bregctl statistics withdraw \
 
 A direct read of that version then returns 410 with the reason, and a latest read falls back to the previous eligible version. Every package installs the release store, and the runtime database role cannot update or delete it, so keep the separate migration credential.
 
+The database records the withdrawal and deletes the content in one fixed PostgreSQL function, and
+the immutable version header remains.
+A direct read of the withdrawn version returns `410 statistical_dataset.version_withdrawn` with the
+reason code.
+A second withdrawal is refused, and an identical idempotent retry returns its original response.
+
+A withdrawn header omits `contentDigest` in the withdrawal response, in its audit entry, and in every
+later listing.
+The digest is an unsalted hash of a document whose members other than the cells can be derived from
+the header and the dataset metadata, so serving it would let a reader confirm guessed cell values
+offline after the content is gone.
+The stored header row and the publication's own audit entry keep the digest for operators, and an
+identical retry of the publication returns the response the publisher first received.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_http.rs
+    statistical_http_full_journey_preserves_visibility_release_and_withdrawal_rules;
+    crates/registry-breg/tests/postgres_statistics.rs
+    withdrawal_records_reason_and_removes_only_content_atomically;
+    crates/registry-breg/src/problem.rs statistical_dataset.version_withdrawn. */}
+
 {/* Evidence: crates/registry-bregctl/src/lib.rs, StatisticsPublishArgs,
     StatisticsWithdrawArgs;
     crates/registry-breg/src/postgres/statistics.rs, list_releases;
     crates/registry-breg/src/statistics_store.rs, STATISTICS_TABLES;
     crates/registry-breg/src/postgres/catalog.rs. */}
+
+## Representations
+
+Live and series reads use `from` and `to`, and a series requires both.
+Latest and series reads accept `status=final`.
+Header listing accepts `$top` from one through 100 and an opaque `$skiptoken`.
+The cursor binds the activation, dataset definition, selected profile, principal, purpose, and page
+size, so reauthorize before you open it.
+Listings order periods newest first, then versions newest first, and a consumer should tolerate
+concurrent publications while paging.
+
+A document contains `dataset`, `periods`, `dimensions`, and `cells`, plus `live` or `release`
+metadata, and a released document also describes `disclosure`.
+A cell contains `period`, its dimension codes, `value`, and `status`.
+A released series represents missing periods explicitly and does not invent cells for them.
+
+An absent or unmatched `Accept` header selects JSON.
+Use `Accept: application/json` or `Accept: text/csv` for live, latest, version, and series reads.
+CSV follows RFC 4180 quoting with these columns:
+
+```text
+period,periodStart,periodEnd,<dimension field IDs...>,value,status
+```
+
+Suppressed values are blank in CSV.
+Plot `periodStart` against `value`, filter dimension codes before plotting, and keep `status` so a
+blank cell cannot be mistaken for zero.
+Release listings and mutation responses are JSON.
+
+Stored JSON is canonicalized with RFC 8785 and hashed with SHA-256.
+`Repr-Digest` uses RFC 9530 syntax and hashes the exact response bytes, so a CSV digest differs from
+its JSON digest.
+Responses send `Cache-Control: no-store` and `Vary: authorization, accept`, without a strong `ETag`.
+[Statistical dataset routes](../../reference/breg-api/#statistical-datasets) lists the routes.
+
+{/* Evidence: crates/registry-breg/src/api/statistics.rs;
+    crates/registry-breg/tests/statistics.rs
+    canonical_document_is_stable_has_allocated_version_and_no_self_digest,
+    csv_is_rfc4180_and_carries_period_bounds_on_every_row,
+    live_document_uses_the_same_wire_shape_without_disclosure;
+    crates/registry-breg/tests/postgres_statistics_http.rs
+    generated_openapi_validates_the_actual_statistical_http_wire_contract. */}
+
+## Operate statistical releases
+
+Release tables are engine-owned and installed in every package.
+The runtime can insert and select headers and content and select withdrawals, but it cannot update
+or delete those tables.
+Only the migration-owned withdrawal function can delete content, while it records the withdrawal.
+Catalog verification covers that function's owner, body, language, volatility, privileges, and fixed
+search path.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics.rs
+    statistics_store_has_exact_runtime_acl_and_withdrawal_function_shape,
+    statistics_catalog_refuses_extra_grants_and_withdrawal_function_tampering. */}
+
+Every protected request has an audit attempt before database I/O and an accepted terminal entry
+before bytes are returned.
+A publication or withdrawal whose commit fails, or whose deadline passes while the commit is in
+flight, has no proven outcome.
+It returns `503 source.unavailable` and appends no terminal entry, so its attempt is answered
+`unfinished`, never `refused`.
+Retry with the same `Idempotency-Key`: a write that did commit returns its retained response.
+Audit entries contain keyed references and lifecycle metadata, never cell values or unit counts.
+Aggregate reads add no individual subject access-log hits.
+
+{/* Evidence: crates/registry-breg/tests/postgres_statistics_http.rs
+    release_commit_failure_is_answered_unfinished_not_refused,
+    release_deadline_during_commit_is_answered_unfinished_not_refused,
+    statistical_live_profile_admission_is_audited. */}
+
+A computation consumes the HTTP request deadline, including pool acquisition, locks, the grouped
+statement, and persistence.
+The statement budget is capped at 30 seconds.
+BReg has no release cache and no background scheduler: schedule the publish command from your
+institution's cron or CI with a token file.
+A dashboard reader needs an OAuth client that can satisfy the deployed issuer and the selected
+profile, so verify that authentication journey for your dashboard connector before you configure it.
+
+{/* Evidence: crates/registry-breg/src/api/statistics.rs from_secs(30);
+    crates/registry-breg/tests/postgres_statistics_http.rs
+    computation_statement_obeys_the_request_deadline_and_persists_nothing. */}
+
+The statistical API is a native count-document API with standard JSON, CSV, HTTP digest, and
+calendar conventions.
+It does not implement the full SDMX REST API or a JSON-stat representation.
+
+{/* TODO[evidence]: the absence of SDMX REST and JSON-stat support has no test; it is a statement
+    about unimplemented surface. */}
 
 ## Next
 

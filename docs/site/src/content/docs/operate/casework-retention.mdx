@@ -107,7 +107,7 @@ resend after the response was erased is `idempotency.expired`.
 
 A completion destination is the producer's URL Casework calls when a result is ready. The call
 carries no decision; the producer then reads the result. Each destination is declared under
-`reviewCompletionDestinations` in the [runtime configuration](../casework/#casework-runtime-configuration),
+`reviewCompletionDestinations` in the [runtime configuration](../../reference/casework-configuration/#casework-runtime-configuration),
 keyed by the destination id the producer names in `casework.yaml`.
 
 A failed call returns to the queue and is tried again after `retryDelaySeconds` (default 30), up to
@@ -150,7 +150,7 @@ reason was given. This is the request entry of the decision in
 The journal names people and records only by keyed pseudonym and carries no context, reason or
 result. Its location, key, rotation and local retention are `audit.path`, `audit.hashKeyRef`,
 `audit.rotateBytes` and `audit.retentionDays` in the
-[runtime configuration](../casework/#casework-runtime-configuration). Entries are neither chained
+[runtime configuration](../../reference/casework-configuration/#casework-runtime-configuration). Entries are neither chained
 nor signed, so ship sealed files to an archive you control, and keep the key as long as you need
 to recompute pseudonyms; [audit key handover](../advanced/back-up-and-restore/#hand-over-the-casework-audit-key)
 covers rotation.

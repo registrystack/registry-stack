@@ -58,7 +58,8 @@ Registry Evidence's versioned routes are `POST /v1/evidence`, `POST /v1/evidence
 [experimental surfaces](#experimental-surfaces).
 
 {/* Evidence: products/evidence/examples/public-check/README.md;
-    products/evidence/CONCEPT.md, "Public certificate check". */}
+    crates/registry-evidence/src/public_check_tests.rs,
+    an_unactivated_check_answers_exactly_as_an_unknown_route. */}
 
 {/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE;
     crates/registry-breg/src/contract.rs, ACTION_PLAN_ABI_V1;
@@ -112,7 +113,7 @@ experimental surface.
 {/* Evidence: crates/registry-breg/src/api/statistics.rs; crates/registry-breg/src/api/gis.rs;
     crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds;
     crates/registry-breg/src/action_handler.rs, compile_source_for_action;
-    products/breg/IMPLEMENTATION.md;
+    crates/registry-breg/src/immediate_actions.rs;
     products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL;
     products/discovery/README.md, the published registry-discovery-v1alpha1 profile resources;
     crates/registry-discovery-profile/src/lib.rs, PROFILE_ID;
@@ -238,7 +239,7 @@ other promised products.
 ## Base Registry Engine WASM action handlers
 
 A WASM action handler is promised within the limits the
-[WASM action handler guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/wasm-action-handlers.md)
+[WASM action handler guide](../../configure/breg-wasm-action-handlers/)
 states:
 
 - the project keys `handler.type: wasm`, the `module` path, and handler ABI
@@ -254,8 +255,7 @@ Raising a limit is additive; lowering one is breaking. The fuel budget, which li
 first, performance, backend speed, and the Wasmtime version are not promised. WASM hook handlers
 and the WASM handler SDK are outside the promise.
 
-{/* Evidence: products/breg/wasm-action-handlers.md, What ships and Operator configuration;
-    crates/registry-breg/src/wasm_handler.rs, structural_violation() and admission_violation();
+{/* Evidence: crates/registry-breg/src/wasm_handler.rs, structural_violation() and admission_violation();
     crates/registry-platform-script/src/wasm.rs, GuestMalformedRequest and GuestInternalError. */}
 
 ## Upgrades and state

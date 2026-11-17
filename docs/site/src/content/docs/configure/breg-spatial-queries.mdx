@@ -1,0 +1,248 @@
+---
+title: Query geometries and connect QGIS
+description: Expose a stored CRS84 Point, Polygon, or MultiPolygon as GeoJSON, grant bounded bounding-box queries, and connect QGIS through the GIS adapter.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - geojson
+  - ogc-api-features
+---
+
+Base Registry Engine (BReg) can expose a stored CRS84 Point, Polygon, or MultiPolygon as GeoJSON and grant bounded current-Record bounding-box queries.
+PostGIS is required for every spatial predicate.
+Polygon and MultiPolygon storage always requires PostGIS.
+Ordinary Point storage, validation, history, and GeoJSON reads that do not use a spatial predicate work without it.
+
+The spatial service sites example project in the repository (at your release tag) is a complete reference.
+It has public and protected Point map profiles, a separate Polygon collection, a hidden-geometry profile, a get-only profile, and synthetic edge and null cases.
+
+## Author stored geometries and an explicit query grant
+
+Each Record type can declare multiple stored geometry fields.
+Choose one stored `crs84-point` or `crs84-polygon` field as the primary GeoJSON geometry through `geojson.geometryField`.
+A polygon field accepts both Polygon and MultiPolygon values:
+
+```yaml
+fields:
+  - id: boundary
+    type: crs84-polygon
+    precision: 9
+    maximumPositions: 10000
+    bbox:
+      west: "100.450000000"
+      south: "13.600000000"
+      east: "100.700000000"
+      north: "13.900000000"
+
+geojson:
+  geometryField: boundary
+```
+
+`precision` is required and ranges from 0 through 9.
+`maximumPositions` is required and ranges from 4 through 10,000, counting every position in every ring and Polygon part, including each closing position.
+The optional `bbox` uses the same west, south, east, and north bounds as a Point field.
+
+The value is a closed two-dimensional GeoJSON object with only `type` and `coordinates`.
+Its type is `Polygon` or `MultiPolygon`.
+Rings contain at least four positions and must close exactly.
+BReg refuses foreign members, a third coordinate, invalid topology, and a consecutive longitude change greater than 180 degrees.
+Split a shape at the antimeridian and represent its parts as a MultiPolygon.
+BReg preserves the geometry, ring order, and winding the caller provided.
+It does not derive or store an area value.
+
+{/* Evidence: crates/registry-breg/src/contract.rs maximumPositions, valid_crs84_polygon;
+    crates/registry-breg/tests/value_type_consistency.rs;
+    crates/registry-breg/tests/postgres_spatial_read.rs
+    polygon_records_validate_write_and_intersect_bbox_through_native_and_gis_routes. */}
+
+On the existing access-profile grant for that Record type, add:
+
+```yaml
+spatialQueries:
+  bbox:
+    maximumLongitudeSpanDegrees: 0.25
+    maximumLatitudeSpanDegrees: 0.20
+```
+
+The grant needs direct `list` authority and must allow reading the primary geometry.
+Span limits must be positive finite numbers, at most 360 longitude degrees and 180 latitude degrees.
+Fractional limits are supported.
+Geometry selection belongs to the Record type, so the bbox grant does not repeat a field name.
+
+Reading a geometry does not grant bbox access, and installing PostGIS does not grant access either.
+Existing scope, purpose, row, field, and count restrictions still apply to the exact selected profile.
+Geometry fields cannot be declared as scalar filter, sort, selector, or row-boundary fields.
+
+{/* Evidence: crates/registry-breg/src/contract.rs SpatialQueryPermissionSource, maximum_longitude_span_degrees;
+    crates/registry-breg/tests/postgres_spatial_read.rs
+    real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit. */}
+
+## Native requests and responses
+
+For the public map profile in the example project, request:
+
+```http
+GET /v1/records/service-sites?accessProfile=map-reader&bbox=100.54,13.74,100.56,13.76
+Accept: application/geo+json
+```
+
+The order is west, south, east, north in longitude and latitude degrees.
+Edges are inclusive.
+A zero-width or zero-height box is valid.
+Null geometries do not match.
+A Polygon or MultiPolygon matches only when its actual geometry intersects the box; an overlap between bounding envelopes alone is not a match.
+The input accepts four finite decimal or exponent values with a leading digit.
+Both the input and its canonical decimal form are bounded to 256 bytes, so an extreme exponent can exceed the budget even when its input text is short.
+BReg refuses a box that crosses the antimeridian, has inverted bounds or a third dimension, has out-of-range coordinates, or spans more than the grant.
+Bbox combines with permitted scalar filters using AND.
+It is unavailable on historical reads, lookups, and relationship read paths.
+
+{/* Evidence: crates/registry-breg/tests/postgres_spatial_read.rs
+    sdk_bbox_geojson_and_continuations_use_real_postgis,
+    polygon_records_validate_write_and_intersect_bbox_through_native_and_gis_routes. */}
+
+`Accept: application/json` retains the native JSON representation.
+GeoJSON `get` returns a Feature.
+A direct list returns a FeatureCollection.
+A feature's `id` is the native Record ID, `geometry` is the selected primary geometry, and `properties` contains the other selected logical fields, including authorized derived fields.
+Revision metadata is in `registry.revision`.
+
+If `$select` omits the readable primary geometry, GeoJSON emits `geometry: null`.
+A profile that cannot read the primary geometry cannot request this representation or use bbox.
+A GeoJSON get does not supply a mutation ETag.
+
+Follow `registry.pageInfo.nextCursor` with the native `$skiptoken` option and normal authorization on every request.
+A cursor binds the effective query, selection, page size, profile, authority, package, and representation, so do not change those options on continuation.
+Pages read live data, not a frozen snapshot, so concurrent writes can affect traversal.
+Count remains separately authorized and opt-in.
+
+GeoJSON responses and bbox query responses are limited to 2 MiB of canonical JSON bytes.
+A response over that limit fails atomically through the read service's `source.unavailable` refusal, without a partial feature collection.
+Use a smaller page size or select fewer fields when Records are large.
+The limit bounds released response bytes, not total database or process memory.
+
+{/* Evidence: crates/registry-breg/src/data.rs MAX_DATA_HTTP_RESPONSE_BYTES;
+    crates/registry-breg/tests/postgres_spatial_read.rs
+    real_postgres_spatial_response_budget_refuses_oversized_payloads_atomically,
+    real_postgres_spatial_paging_cursor_replay_and_pool_reset_are_bounded,
+    malformed_acquired_geojson_fails_atomically_and_records_terminal_audit. */}
+
+## Connect QGIS
+
+The in-process `/v1/gis` adapter serves the QGIS OGC API Features (OAPIF) provider.
+Its collection IDs are `<record-type-id>.<profile-id>`, so changing a profile cannot silently select another profile's authority.
+Only direct list permissions with readable primary geometry and explicit bbox capability are advertised.
+
+The landing document advertises `breg-gis-bounded-crs84-point-bbox-v1` when the caller can see only Point collections.
+If any visible collection uses a Polygon or MultiPolygon, it advertises `breg-gis-bounded-crs84-geometry-bbox-v1`.
+A Point collection detail retains the profile `bounded-crs84-point-bbox`.
+A Polygon collection detail uses `bounded-crs84-polygon-bbox`.
+
+GIS deployments require an operator-configured origin:
+
+```yaml
+listener:
+  bind: 127.0.0.1:8080
+  publicOrigin: http://127.0.0.1:8080
+```
+
+Use HTTPS outside loopback development.
+The value can include a deployment path prefix, such as `https://registry.example.org/registry-a`, but not credentials, a query string, or a fragment.
+Discovery, paging, and schema links preserve that prefix and never use the request Host or forwarded headers.
+QGIS requires absolute links to retain authentication and follow every page.
+
+The adapter accepts `bbox`, `limit`, `cursor`, and `f=json`.
+An oversized `limit` is clamped to the compiled page maximum, with an opaque cursor-only next link when more rows remain.
+It returns flat authorized attributes and `numberReturned`.
+It does not compute hidden extents or counts.
+
+The stock issuer in the quickstart accepts private-key JWT clients only, so it has no QGIS authentication recipe.
+To connect QGIS to a protected collection, configure an institution-operated issuer flow that QGIS supports and keep its credentials in the QGIS authentication store, not in URLs or project source.
+Removing the client at its issuer prevents subsequent renewal but does not erase data already cached by QGIS.
+
+The adapter has six routes: landing, API description, conformance, collection listing, collection detail, and collection items.
+There is no adapter item-detail route, editing, custom QGIS plugin, direct database access, or full OGC conformance claim.
+BReg refuses unsupported formats, CRS options, and filter languages.
+
+{/* Evidence: crates/registry-breg/src/api/gis.rs "breg-gis-bounded-crs84-geometry-bbox-v1",
+    "breg-gis-bounded-crs84-point-bbox-v1", "bounded-crs84-polygon-bbox";
+    crates/registry-breg/src/runtime_config.rs public_origin;
+    crates/registry-breg/tests/postgres_spatial_read.rs
+    gis_item_reads_write_a_subject_access_log_entry_per_feature,
+    head_on_gis_reads_is_refused_without_a_journaled_read,
+    gis_properties_are_unsupported_while_native_select_overreach_is_audited,
+    gis_profile_admission_refusals_are_audited_without_changing_discovery. */}
+{/* TODO[evidence]: the clamping of an oversized limit to the compiled page maximum and the absence of an item-detail route are not asserted by a named test. */}
+
+## Prepare the database
+
+Polygon storage and every bbox query require PostgreSQL 17 or later and PostGIS 3.5 or later.
+A Point-only package with no bbox grant does not require PostGIS.
+The quickstart pins PostgreSQL 17 with PostGIS 3.5.2.
+An administrator installs PostGIS into the admin-owned `registry_spatial_ext` schema.
+When the package grants bbox, the administrator also provisions the non-login bbox role.
+Runtime and migration roles cannot install or upgrade the extension.
+[Deploy and serve](../../operate/breg/) has the role and schema statements.
+
+The bbox role owns only generated views that return matching Record IDs.
+It cannot write data, own tables, or bypass row security.
+The ordinary runtime has no membership in that role.
+It joins the ID views to compute authorized attributes, derived values, filters, and pages through the normal read path.
+
+Run `bregctl doctor --runtime-config /absolute/path/to/runtime.yaml` to check the configured package and startup dependencies without opening a listener.
+If a GIS package reports `startup.database.unready`, have the database administrator verify the supported PostGIS version, extension schema, schema `USAGE` grants, and bbox-role privileges, as well as the package's maintenance and schema state.
+Do not give the runtime role extension-installation authority to work around the refusal.
+
+The package always generates a stored PostGIS geometry column and GiST index for a Polygon field.
+It generates the equivalent column and partial GiST index for a Point only when a profile grants bbox.
+JSONB remains the sole writable source.
+Internal geometry columns do not become logical fields or appear in history or exports.
+PostGIS types, functions, and operators are schema-qualified.
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs POSTGIS_EXTENSION_SCHEMA;
+    crates/registry-breg/tests/postgres_spatial_storage.rs
+    real_postgres_postgis_prerequisites_are_role_bound_and_shadow_resistant,
+    bbox_grant_derives_postgis_projection_policy_and_inventory,
+    crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable,
+    real_postgres_forced_rls_bbox_policy_uses_gist_for_representative_volume;
+    crates/registry-breg/tests/postgres_spatial_read.rs
+    predicate_free_geojson_works_on_plain_postgresql_without_postgis. */}
+{/* TODO[evidence]: the `startup.database.unready` code for a GIS package is asserted in postgres_spatial_migration.rs by helper, not by a named literal. */}
+
+## Change geometry settings on an existing registry
+
+Adding or changing the geometry binding or bbox grant requires the normal reviewed successor lifecycle.
+The compiler derives the projection and index DDL, so you do not write dummy SQL to enable spatial storage or bbox.
+Missing prerequisites refuse before maintenance begins.
+An apply failure after maintenance begins keeps Records unavailable until the existing reviewed recovery procedure completes.
+Removing the last bbox grant removes the helper.
+It also removes a Point's generated projection and index when no other bbox grant needs them.
+A Polygon keeps its generated projection and index.
+Stored data, history, and the administrator-owned extension and role remain.
+
+Changing a Point or Polygon field's `precision`, `bbox`, or `maximumPositions` is a field type change, even when it only loosens the contract.
+It needs a [reviewed migration descriptor](../../operate/breg-changes/#write-a-reviewed-migration-descriptor) with at least one SQL step, a backup binding, and a rehearsal receipt.
+A tightening that a retained value violates is not caught by a pre-check: the apply fails on the generated check constraint, the target stays non-ready, and [failed-activation recovery](../../operate/breg-changes/#recover-a-failed-activation) applies.
+[Issue 2646](https://github.com/registrystack/registry-stack/issues/2646) proposes treating a loosening as a compatible change.
+
+Adding the stored projection can rewrite existing rows, and creating its index takes locks and additional disk space.
+Plan a maintenance window and a tested backup and restore path for an existing registry.
+The small quickstart does not establish an online migration or a safe conversion time for production volumes.
+
+{/* Evidence: crates/registry-breg/tests/postgres_spatial_migration.rs
+    enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_safely,
+    polygon_contract_changes_refresh_and_enforce_retained_projection,
+    destructive_spatial_successor_package,
+    postgis_provisioning_keeps_the_sqlstate_of_a_refused_statement. */}
+
+## Next
+
+- [Control access and reads](../breg-access/)
+- [Deploy and serve](../../operate/breg/)
+- [Change an active registry](../../operate/breg-changes/)
+- [Base Registry Engine configuration reference](../../reference/breg-configuration/)

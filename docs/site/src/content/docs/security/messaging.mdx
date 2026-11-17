@@ -1,0 +1,479 @@
+---
+title: Registry Messaging security model
+description: "What Registry Messaging's security boundaries hold, the obligations that stay with the operator, and the residual risks a deployment accepts, each with its stable identifier."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+This page states what Registry Messaging's security boundaries hold, what you must do for them to
+hold, and which residual risks a deployment accepts.
+The row-per-invariant baseline is rows `MESSAGING-SEC-01` to `MESSAGING-SEC-11` in the
+[security invariant matrix](https://github.com/registrystack/registry-stack/blob/v0.46.0/products/messaging/contracts/security-invariant-matrix.yaml);
+each row names its enforcement and tests, and this page does not repeat the rows.
+
+## Scope and trust boundaries
+
+Messaging accepts a message from an authenticated caller, renders it from a reviewed template or
+permitted direct content, and sends it through a provider the operator configured.
+It stores the message, its dispatch state, and provider delivery reports in PostgreSQL.
+
+### Callers
+
+There is no unauthenticated mode.
+Every `/v1` route except the provider callback routes resolves its caller first.
+A credential is an RFC 9068 access token from the configured issuer and audience, from a client in
+`authentication.oidc.allowedClients`, signed by a published or static key.
+An exchanged token is refused unless `assertionIssuers` declares its authority.
+`allowedClients: unrestricted` is refused in every mode, because an access profile resolves from
+the matched client.
+Every refusal is the same `401 authentication.refused`; causes are told apart only by value-free
+metric reasons and rate-limited log stage labels.
+A client listed in two access profiles is refused when the package loads, and a profile must state
+its scopes or write `unrestricted`.
+(MESSAGING-SEC-01, MESSAGING-SEC-04)
+
+{/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-01,
+    MESSAGING-SEC-04;
+    crates/registry-messaging/src/http.rs
+    only_the_sender_role_submits_and_only_through_what_its_profile_lists;
+    crates/registry-messaging/tests/postgres_messages.rs
+    a_message_is_visible_to_its_submitter_and_an_operator_only. */}
+
+### Authorization
+
+Authorization is decided against the one access profile the verified client resolves to, never
+against raw claims.
+A sender submits only through the sender profiles and templates its profile lists, and direct
+content only where `allowDirectContent` is set.
+Operators never submit.
+A message is visible to the principal that submitted it (same issuer and subject) and to operator
+profiles; a missing message answers exactly like an invisible one, so an identifier cannot be
+probed.
+A replay is authorized and rendered again against the active package before the stored receipt is
+returned, so a key cannot outlive the caller's authority.
+
+{/* Evidence: crates/registry-messaging/src/http.rs
+    only_the_sender_role_submits_and_only_through_what_its_profile_lists;
+    crates/registry-messaging/tests/postgres_messages.rs
+    a_message_is_visible_to_its_submitter_and_an_operator_only;
+    crates/registry-messaging-core/src/access.rs principal_claim. */}
+
+### Provider callbacks
+
+Provider callbacks carry no bearer token.
+Each is authenticated by the verifier its provider's runtime configuration names
+(`hmac-sha1-url-form`, `hmac-sha256-body`, or `path-token`; there is no `none`).
+Every cause of refusal answers `403 callback.unverified`, so the route does not reveal which
+providers receive callbacks.
+It is 403 rather than 401 because a provider cannot answer a challenge.
+A callback changes a message only forward, and only for the message whose provider reference the
+accepting attempt stored, scoped to that provider.
+(MESSAGING-SEC-07)
+
+{/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-07;
+    crates/registry-messaging/tests/postgres_callbacks.rs
+    duplicate_and_out_of_order_receipts_never_regress_the_report. */}
+
+### Providers
+
+HTTP and SMTP providers are trusted to receive what the operator sends them and nothing else.
+HTTP sends only through the platform fixed-destination substrate: no userinfo, query, fragment or
+dot segment in the base URL, no redirects, and loopback, private, shared, link-local and metadata
+addresses refused unless an exact `allowedPrivateCidrs` entry admits them.
+Scripts choose a relative target, declared header values, and a body; they never see a credential,
+the base URL, or a runtime-owned header, and run with an operation budget, the send deadline, and
+no `import`, `eval`, `print` or `debug`.
+SMTP requires `STARTTLS` or implicit TLS, verifies the certificate against the configured host
+name, sends no credential to a relay that does not offer `STARTTLS`, and cannot have a header line
+opened from template data.
+Plain `http` and `development-loopback` SMTP are limited to loopback; a production listener posture
+refuses plaintext SMTP at `messagingctl check` and at startup.
+(MESSAGING-SEC-03)
+
+{/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-03;
+    crates/registry-messaging/src/providers/tests.rs
+    an_activated_provider_resolving_to_loopback_is_refused_before_connecting;
+    crates/registry-messaging/src/http_provider/mod.rs allowed_private_cidrs;
+    crates/registry-messaging/src/smtp/settings.rs
+    plaintext_is_refused_for_a_host_that_is_not_loopback,
+    plaintext_is_refused_by_a_build_without_a_test_feature,
+    the_well_known_ports_require_their_tls_mode. */}
+
+### Templates
+
+Templates come only from the package digested at startup and render in an empty `minijinja`
+environment (no loader, macros, filters, globals, file, network or clock access), bounded by fuel,
+recursion and per-part output size.
+HTML escapes every value and ignores a template's own `autoescape` block.
+A locale the version does not declare is refused, never answered in another language.
+(MESSAGING-SEC-09)
+
+{/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-09;
+    crates/registry-messaging-core/src/render.rs a_runaway_template_runs_out_of_fuel. */}
+
+### The package and database
+
+A package carries a checksum envelope and is pinned by digest; symbolic links, unknown files and
+oversized files are refused.
+`messaging serve` refuses unless the active ledger row matches the configured deployment and
+installed package, and `/ready` stops passing if the database identity, digest, schema, role grants
+or audit writer health change.
+In split-role mode the runtime credential cannot write either ledger or own Messaging objects; the
+migration credential holder is trusted to change them.
+PostgreSQL 17 or newer is required, and the server version is checked before any migration or
+activation write.
+A shipped runtime refuses `database.testOnlyPlaintext: true`, so database traffic is TLS.
+
+{/* Evidence: crates/registry-messaging/src/package.rs
+    a_symbolic_link_anywhere_in_the_package_is_refused;
+    crates/registry-messaging/tests/postgres_package.rs
+    split_role_activation_binds_identity_and_withholds_both_ledgers;
+    crates/registry-messaging/src/store.rs UnsupportedPostgres;
+    crates/registry-messaging/src/config.rs plaintext_postgres_is_refused_outside_the_test_build. */}
+
+### Audit and logs
+
+Records carry the operation, caller pseudonym, sender profile, template reference, correlation,
+outcome class and a keyed recipient reference.
+They never carry a contact, rendered part, template data, credential or provider reference.
+Metric labels are closed sets fixed in code, and `MESSAGING_LOG` accepts only `error`, `warn` or
+`info`.
+Authentication and access-profile refusals, duplicate or no-op callbacks and reads (the status
+route, `messagingctl messages list` and `show`) are not journaled: a refusal is counted on the
+private metrics listener, and a message view releases no contact, part or data.
+(MESSAGING-SEC-08)
+
+{/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-08;
+    crates/registry-messaging/tests/postgres_callbacks.rs
+    a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics;
+    crates/registry-messaging/src/runtime.rs MESSAGING_LOG. */}
+
+### Dispatch
+
+The worker holds a lease and every outcome write names the lease and generation, so a stale worker
+changes nothing.
+A send that may have reached the provider stops the message as `unknown` rather than retrying,
+unless the sender profile sets `onUncertain: retry`, which the package accepts only over a provider
+that declares `idempotentSubmit` or a profile that sets `acceptDuplicates`.
+A cancel and a claim serialize on the job row; a message whose current attempt may have reached the
+provider is refused `409 message.dispatch-started`.
+(MESSAGING-SEC-05, MESSAGING-SEC-06)
+
+{/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-05,
+    MESSAGING-SEC-06;
+    crates/registry-messaging/tests/postgres_dispatch.rs a_stale_fence_cannot_finish_a_requeued_message;
+    crates/registry-messaging/src/providers/tests.rs
+    an_activated_provider_cut_off_after_the_message_left_is_maybe_sent;
+    crates/registry-messaging-core/src/package.rs idempotent_submit, accept_duplicates;
+    crates/registry-messaging-core/src/problem.rs MESSAGE_DISPATCH_STARTED_PROBLEM. */}
+
+### Operator tooling
+
+`messagingctl messages retry`, `settle` and `cancel` preview and change nothing without `--apply`,
+recheck status in the changing transaction, and write an `operator-tool` audit record.
+`list` and `show` mask the recipient and never print a part, template data or the submitter's
+subject.
+`messagingctl check` reads no database, network or secret.
+
+`messagingctl dev` is for a developer's machine, and some of what it writes outlives a session
+until the next start in the same project removes it: the last session's audit journal and log in
+`.messaging/dev` (neither carries a payload value), the containers of a session killed with
+SIGKILL, and, for a borrowed session, each exported client assertion key in an owner-only file.
+A `dev token` killed before it returns can leave a second owner-only copy of that key under
+`.messaging/dev/.client-check-*`.
+These are development keys for a loopback issuer only.
+
+{/* Evidence: crates/registry-messaging/src/dispatch.rs OperatorTool;
+    crates/registry-messagingctl/tests/postgres_messages_cli.rs operator-tool;
+    crates/registry-messagingctl/src/dev/mod.rs clear_previous;
+    crates/registry-messagingctl/src/dev/borrowed.rs refresh. */}
+
+### Listeners
+
+The public listener refuses a public unicast bind in every setting.
+`/metrics` is served only on `metricsListener`, a concrete loopback or private address that cannot
+share the public socket.
+
+{/* Evidence: crates/registry-messaging/src/config.rs valid_metrics_listener,
+    the_metrics_listener_must_be_private_and_apart_from_the_listener,
+    the_metrics_listener_may_not_share_a_wildcard_listener_port;
+    crates/registry-messaging/src/http.rs the_metrics_listener_serves_counters_and_nothing_else. */}
+
+### Configuration and secrets
+
+Every mapping is closed and an unknown, removed or retired key is refused with its path, so an old
+file cannot fall back to a default.
+Credentials are `secret:env/NAME` or `secret:file/name` references in `...Ref` members, resolved
+once at startup before a listener binds.
+`${VAR}` expansion cannot reach a `Ref` member or alter document structure.
+No diagnostic repeats a value read from the file or environment.
+
+{/* Evidence: crates/registry-messaging/src/config.rs an_unknown_key_is_refused_with_its_path,
+    a_removed_key_names_the_key_that_replaced_it,
+    a_retired_api_version_names_its_replacement. */}
+
+## Operator obligations
+
+The boundaries hold only if your deployment does the following.
+
+1. Require provider idempotency, or accept duplicates deliberately.
+   Set `onUncertain: retry` only over a provider that declares `idempotentSubmit`, or on a profile
+   that sets `acceptDuplicates`.
+   Messaging cannot make a provider deduplicate.
+   The capability is stored with each accepted message, so removing it from a later package does
+   not withdraw the key from a retry already accepted.
+2. Drain senders before narrowing a package or profile.
+   An exact retry refused `403` or `422` after such a change proves nothing about the first attempt,
+   which may have been accepted and may still be sending.
+3. Apply a new package digest explicitly, then restart.
+   A new digest is served only after restart.
+   Copy installed packages into place; symlink mounts (for example ConfigMap volumes) are refused.
+4. Run split database roles in production and migrate with the migration credential only.
+5. Put an edge proxy in front of the public listener that bounds request rates and authenticated
+   floods (see MESSAGING-RES-02).
+6. Ship audit to storage you control.
+   Messaging fsyncs file acceptance but does not chain, sign, aggregate or archive audit segments.
+   Tamper evidence and retention beyond local `retentionDays` are yours, and off-host shipping must
+   precede local expiry.
+   Keep the runtime stream and the `messagingctl` stream; there is no total order across process
+   streams and no audit outbox replay.
+7. Tell callers to choose random idempotency keys.
+   The [Registry Messaging API](../../reference/apis/registry-messaging/) reference says so; the
+   confidentiality of a spent key depends on it (MESSAGING-RES-01).
+8. Set `principalClaim: sub` on any caller profile that must be bound to its issuer and subject when
+   it observes an original receipt.
+   Other profiles keep the configured principal ownership rule.
+9. Name `scopeClaim` explicitly if your issuer puts different scopes in `scope` and another claim.
+   Messaging reads exactly one claim, `scope` by default, and a scope refusal logs the configured
+   claim, the first missing scope and the access profile, never token contents.
+10. Set `allowedPrivateCidrs` only for relays and providers you run, and treat
+    `allowInsecureHttp: true` as a loopback or test setting; startup warns when it is set.
+    With it, an attacker on the network path to the issuer can substitute keys.
+    Declare only issuer and JWKS addresses you intend Messaging to reach, because a declared private
+    address is trusted on your word (MESSAGING-RES-09).
+11. For AWS SMS, provide the IAM authority, origination registration and secret rotation yourself.
+    Temporary credentials are loaded at activation and need replacing and a restart before they
+    expire.
+    The adapter declares no provider idempotency and no delivery receipts, so an ambiguous failure
+    holds the message as `unknown`; settle or retry it with `messagingctl`.
+12. Rotating `audit.hashKeyRef` changes pseudonyms only.
+    It frees no spent idempotency key, so an exact retry across a rotation replays its receipt or is
+    refused as expired, and never sends again.
+
+{/* Evidence: crates/registry-messaging-core/src/package.rs idempotent_submit, accept_duplicates;
+    crates/registry-messaging/src/package.rs a_symbolic_link_anywhere_in_the_package_is_refused;
+    crates/registry-messaging/tests/postgres_package.rs
+    split_role_activation_binds_identity_and_withholds_both_ledgers;
+    crates/registry-messaging-core/src/access.rs principal_claim;
+    crates/registry-messaging/src/config.rs default_scope_claim, insecure_http_startup_diagnostic;
+    crates/registry-messaging/src/http_provider/aws_tests.rs aws_settings;
+    crates/registry-messaging/tests/postgres_messages.rs
+    an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again. */}
+
+## Accepted residuals
+
+Each residual states the condition, the consequence, the operator mitigation and the related matrix
+rows.
+
+### MESSAGING-RES-01: spent idempotency keys are confirmable from an unkeyed digest
+
+- Condition: a spent key is found under `key_reference`, an unkeyed SHA-256 over a fixed domain and
+  the length-prefixed issuer, subject, operation and key.
+  The digest is unkeyed on purpose: a keyed digest would let an audit-key rotation free every spent
+  key and so allow duplicate sends.
+- Consequence: anyone who can read the table and can guess a caller's issuer, subject and key can
+  confirm that the caller spent that key.
+  The row also holds the raw issuer, subject and key while its receipt stands, and under some
+  access profiles the subject may identify a person (for example a staff email address).
+  Retention erases all three when the receipt is erased after `receiptRetentionDays` (a schema
+  constraint holds them together); the digest then stays until `recordRetentionDays`, so the key
+  stays spent for that caller alone.
+- Mitigation: callers use random keys.
+  Restrict read access to the database.
+  Keep `receiptRetentionDays` short.
+- Related: MESSAGING-SEC-02, MESSAGING-SEC-08, MESSAGING-SEC-11.
+
+{/* Evidence: crates/registry-messaging/src/messages.rs idempotency_key_reference,
+    a_key_reference_digests_a_domain_and_the_length_prefixed_caller_operation_and_key;
+    crates/registry-messaging/tests/postgres_retention.rs
+    a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-02, MESSAGING-SEC-08,
+    MESSAGING-SEC-11. */}
+
+### MESSAGING-RES-02: floods of refused or authenticated requests grow the journal
+
+- Condition: a caller sending past its rate, or repeating original-receipt observation, still makes
+  the runtime authenticate each request and write one journal record.
+  The body limit bounds each request; nothing bounds journal growth from the flood.
+  The per-caller token bucket is in process: each replica enforces its own, and a restart refills
+  it.
+  `maximumMessagesPerDay` is stored-count based and holds across restarts and replicas.
+- Consequence: disk growth and verification work, not data exposure.
+  Receipt observation is deliberately outside the submission budget so that exhausting that budget
+  never prevents recovering an already accepted command.
+- Mitigation: bound request rates at the edge proxy.
+- Related: MESSAGING-SEC-01, MESSAGING-SEC-02, MESSAGING-SEC-08.
+
+{/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-01,
+    MESSAGING-SEC-02, MESSAGING-SEC-08;
+    crates/registry-messaging/tests/postgres_messages.rs
+    a_submission_naming_an_unknown_member_is_refused_and_records_nothing. */}
+
+### MESSAGING-RES-03: a callback can arrive before it can match, and some never match
+
+- Condition: a callback that arrives before the accepting attempt commits finds no reference.
+  A message held as `unknown` after a maybe-sent attempt stores no reference, so no receipt can
+  settle it.
+  A reference shared by two messages is applied to neither.
+  A reference over 128 bytes is not stored and never matches.
+- Consequence: the report stays where it was, or the callback is counted `unmatched` or `ambiguous`
+  and answers 204 so the provider does not retry.
+  A genuine report may be lost unless the provider repeats it.
+- Mitigation: use providers that repeat callbacks; settle `unknown` messages with
+  `messagingctl messages settle`.
+- Related: MESSAGING-SEC-07.
+
+{/* Evidence: crates/registry-messaging/src/receipts.rs MAXIMUM_STORED_REFERENCE_BYTES;
+    crates/registry-messaging/tests/postgres_callbacks.rs
+    duplicate_and_out_of_order_receipts_never_regress_the_report;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-07. */}
+
+### MESSAGING-RES-04: callback verification has no replay window and spends a per-process budget
+
+- Condition: none of the three verifier kinds signs a timestamp, so no replay window can be
+  enforced.
+  A replayed genuine callback repeats a report the message already holds or has passed, so it
+  changes nothing and is not stored or audited again.
+  The callback rate (6000 a minute, burst 600) is charged before verification, per provider and per
+  process, and is not configurable.
+  `hmac-sha1-url-form` uses HMAC-SHA1 as a MAC (SHA-1's collision weakness does not apply) because a
+  widely deployed provider signs with it, and verifies over the configured external `url`, so a
+  wrong `url` refuses every callback.
+- Consequence: anyone who knows a provider's id can spend that provider's budget and delay its
+  genuine callbacks, which the provider retries; separate buckets keep the flood from delaying
+  another provider.
+  A provider reporting faster than 100 a second is refused in bursts.
+- Mitigation: rate-limit the callback path at the edge; configure the external `url` exactly as the
+  provider signs it.
+- Related: MESSAGING-SEC-07.
+
+{/* Evidence: crates/registry-messaging/src/limits.rs CALLBACK_REQUESTS_PER_MINUTE, CALLBACK_BURST,
+    each_callback_provider_and_the_unrouted_paths_have_separate_budgets;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-07. */}
+
+### MESSAGING-RES-05: template rendering can briefly allocate up to a multiple of the data size
+
+- Condition: the fuel budget counts instructions, not bytes, so an expression such as string
+  repetition can allocate up to the data's size multiplied by one factor before the per-part output
+  ceiling refuses it.
+  `{% autoescape false %}` is accepted by the parser and has no effect.
+  The loader reads each file after listing the directory, so a file swapped between the two reads is
+  caught only by the digest the ledger compares.
+- Consequence: bounded memory pressure per render; no escape change; a swapped package file is
+  refused at activation by digest mismatch.
+- Mitigation: the request body limit bounds the data; keep the package directory writable only by
+  the deployer.
+- Related: MESSAGING-SEC-09.
+
+{/* Evidence: crates/registry-messaging-core/src/render.rs a_runaway_template_runs_out_of_fuel;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-09. */}
+
+### MESSAGING-RES-06: HTTP provider address checks and script placement
+
+- Condition: the test suite cannot inject a resolver; it proves refusal with a name that resolves to
+  loopback and with literal private and metadata addresses, and the substrate's own tests cover an
+  answer that changes between resolutions.
+  Provider scripts run on the async runtime thread within the send deadline.
+  The OAuth token decoder is closed (`access_token`, `token_type` `Bearer`, `expires_in` unless
+  `assumedLifetimeSeconds` is set, optional `scope`) and refuses any other member, so the send is
+  transient.
+  Plain `http` to a loopback host is accepted by every build.
+  A 2xx the interpret script cannot classify is `maybe-sent`, never accepted.
+- Consequence: a script can occupy its thread until the send deadline; an unexpected token response
+  fails the send as transient.
+- Mitigation: review provider scripts before promotion; pass package activation and example
+  evaluation.
+  Keep production base URLs on `https`.
+- Related: MESSAGING-SEC-03.
+
+{/* Evidence: crates/registry-messaging/src/providers/tests.rs
+    an_activated_provider_resolving_to_loopback_is_refused_before_connecting;
+    crates/registry-messaging/src/http_provider/mod.rs freeze_oauth, assumed_lifetime_seconds;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-03. */}
+
+### MESSAGING-RES-07: SMTP credentials are not zeroized
+
+- Condition: lettre's `Credentials` holds the username and password as plain `String` values that
+  are not zeroized on drop, unlike the runtime's own protected secrets.
+  They live for the life of the process.
+  The EHLO name is lettre's address literal `[127.0.0.1]` and is not configurable.
+- Consequence: a process memory dump can reveal the relay credential.
+  A relay that checks the EHLO name may refuse the session.
+- Mitigation: restrict who can dump runtime memory (no debugger or core dump access); use a relay
+  credential scoped to Messaging alone.
+- Related: MESSAGING-SEC-03, MESSAGING-SEC-08.
+
+{/* Evidence: crates/registry-messaging/src/smtp/settings.rs Credentials;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-03,
+    MESSAGING-SEC-08. */}
+
+### MESSAGING-RES-08: retention depends on batch completion and audit expiry is separate
+
+- Condition: an applied retention run erases in batches of at most 1,000 of each kind under a
+  five-second lock timeout and a sixty-second statement timeout.
+  A batch that exceeds either is rolled back whole.
+  Audit segment retention is independent of payload and record erasure.
+- Consequence: a backlog stalls only when one batch of 1,000 cannot complete in sixty seconds;
+  payloads then outlive `payloadRetentionDays` until it can.
+  Audit segments can outlive or predate the data they describe.
+- Mitigation: watch `messaging_retention_runs_total{outcome="failed"}`; ship audit off host before
+  local expiry.
+- Related: MESSAGING-SEC-10, MESSAGING-SEC-11.
+
+{/* Evidence: crates/registry-messaging/src/retention.rs RETENTION_BATCH, LOCK_TIMEOUT,
+    STATEMENT_TIMEOUT;
+    crates/registry-messaging/src/metrics.rs messaging_retention_runs_total;
+    crates/registry-messaging/tests/postgres_retention.rs
+    a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-10,
+    MESSAGING-SEC-11. */}
+
+### MESSAGING-RES-09: declared issuer and key endpoints are trusted
+
+- Condition: the runtime file names an issuer or JWKS URI, or sets
+  `authentication.oidc.allowInsecureHttp: true`.
+- Consequence: a declared issuer or JWKS URI may name any private address that is not cloud
+  metadata or link-local; the operator who writes the file is trusted to name it.
+  A discovered key endpoint on another origin stays under the strict public-network policy and must
+  use HTTPS, and redirects are disabled.
+  Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
+  keys and so mint tokens Messaging accepts.
+  Startup logs a fixed warning when the setting is on.
+- Mitigation: use an HTTPS issuer; leave `allowInsecureHttp` unset; or pin keys with a static
+  `jwksSource`.
+- Related: MESSAGING-SEC-01.
+
+{/* Evidence: crates/registry-messaging/src/config.rs insecure_http_startup_diagnostic;
+    crates/registry-platform-oidc/src/lib.rs
+    a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in,
+    cloud_metadata_is_refused_for_declared_and_discovered_key_endpoints;
+    products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-01. */}
+
+## Report a vulnerability
+
+Report a suspected vulnerability through the process in
+[Report a vulnerability](../report-a-vulnerability/).
+
+## Next
+
+- [Security](../)
+- [Deploy Registry Messaging](../../operate/messaging/)
+- [Registry Messaging configuration reference](../../reference/messaging-configuration/)
+- [How Registry Messaging works](../../explanation/how-messaging-works/)
+- [Author a Messaging package](../../configure/messaging/)

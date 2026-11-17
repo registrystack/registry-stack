@@ -1,0 +1,340 @@
+---
+title: WASM action handlers
+description: Write an immediate Action in Rust compiled to WebAssembly, package it into a Base Registry Engine project, and configure, upgrade and roll back the runtime that executes it.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+A Base Registry Engine (BReg) immediate Action can run a named WebAssembly Function instead of a
+Rhai script. You write the decision logic as a Rust function, compile it to a module, and name the
+module in your registry project. This page covers what a WASM handler can do, how to author and
+package one, the runtime configuration, and the upgrade and rollback paths.
+
+You need Rust 1.95 or later with the `wasm32-unknown-unknown` target installed
+(`rustup target add wasm32-unknown-unknown`). A handler uses no WASI, no JavaScript and no server:
+it is a function from the request inputs to one outcome document.
+
+## What a WASM handler is
+
+A WASM handler is one named Function with `runtime: wasm`, a project-local `source` path,
+`entrypoint: plan` and `abi: registry.action-plan/v1`. An immediate Action selects it from its
+bounded Plan.
+
+- A WASM handler is input-only and has no resolver. The compiler refuses a Proposal-mode WASM Plan,
+  and refuses an Action that declares `evidence` together with a WASM handler. Planners for
+  Proposals stay Rhai-only.
+- The module has no I/O, no clock, no randomness, no network and no threads. It runs under fuel,
+  epoch, memory and stack budgets, inside the request's transaction.
+- The guest contract is a closed byte ABI. The module has zero imports and five required exports:
+  `alloc`, `handle`, `result_ptr`, `result_len` and `memory`. The request is exactly the
+  `{"inputs": ...}` JSON document. The response is exactly one JSON document, checked by the same
+  outcome validator the Rhai path uses. The Rust SDK hides all of this behind a plain function.
+- Hook handlers keep their separate `registry.hook-handler/v1` ABI.
+
+{/* Evidence: crates/registry-breg/src/wasm_handler.rs, MAXIMUM_WASM_MODULE_BYTES;
+    crates/registry-breg/src/immediate_actions.rs, breg.action.handler-wasm-build-unsupported;
+    crates/registry-breg/tests/wasm_handler_admission.rs;
+    crates/registry-breg/tests/postgres_wasm_action_handlers.rs. */}
+{/* TODO[evidence]: the refusals of a Proposal-mode WASM Plan and of a WASM handler on an Action
+    that declares evidence have no test named here; find the admission test that pins each. */}
+
+## Write a handler
+
+The SDK lives in the `wasm-handler-sdk` directory of the
+[source repository](https://github.com/registrystack/registry-stack/tree/main/products/breg/wasm-handler-sdk).
+It is its own cargo workspace. It holds these crates and files:
+
+| Path | What it is |
+| --- | --- |
+| `sdk/` | `registry-breg-wasm-sdk`, imported as `breg_wasm_sdk`. It hides the byte ABI: request decoding, outcome types and the module export macros. |
+| `template/` | `breg-wasm-handler-template`, the reference handler (phone normalization), written entirely against the SDK. Copy it to start. |
+| `preinit/` | `breg-wasm-preinit`, a build-time tool that pre-initializes a module by running its `init` once and snapshotting the warmed memory. |
+| `admission/` | `breg-wasm-admission-proof`, a harness that compiles the built module into a registry project and runs every fixture outcome. |
+| `scripts/build.sh` | Builds the module, records sizes and hashes, enforces the size ceilings and runs the proof. |
+| `fixtures/` | The fixture corpus shared by the template's host tests and the admission proof. |
+
+1. Copy `template/` to a new crate and rename it. Keep `crate-type = ["lib", "cdylib"]`: the `lib`
+   half lets your tests run on your machine, and the `cdylib` half is the module.
+2. Write your decision logic as a pure function, then read the declared inputs around it:
+
+   ```rust
+   use breg_wasm_sdk::{Effect, HandlerFailure, Outcome, Refusal, Request, Value};
+
+   pub fn my_handler(request: &Request) -> Result<Outcome, HandlerFailure> {
+       let raw = required_string(request, "raw-phone")?;
+       // ... your logic ...
+       Ok(Outcome::effects(vec![Effect::new("phone").set("phone", "+22222123456")]))
+       // or: Ok(Outcome::refusal(Refusal::new("invalid-phone").field("raw-phone")))
+   }
+
+   fn required_string<'a>(request: &'a Request, id: &str) -> Result<&'a str, HandlerFailure> {
+       match request.input(id) {
+           Some(Value::String(text)) => Ok(text),
+           _ => Err(HandlerFailure::MalformedRequest),
+       }
+   }
+   ```
+
+3. Declare the module's entry once, at the crate root:
+
+   ```rust
+   fn handle(request: Request) -> Result<Outcome, HandlerFailure> {
+       my_handler(&request)
+   }
+
+   breg_wasm_sdk::handler!(handle);
+   ```
+
+   If your handler warms lazily initialized library statics, such as metadata tables or compiled
+   regular expressions, add a `warm()` function and use
+   `breg_wasm_sdk::handler_with_init!(handle, warm);` instead. The pre-initializer runs `warm` once
+   at build time and snapshots the result.
+
+Write one handler per module. The registry packages one module path per action handler, and the
+export macros define the module's ABI surface, so a second invocation in one crate is a compile
+error.
+
+{/* Evidence: products/breg/wasm-handler-sdk/sdk/src/macros.rs, handler_with_init;
+    products/breg/wasm-handler-sdk/sdk/src/outcome.rs, Outcome and Refusal;
+    products/breg/wasm-handler-sdk/template/src/lib.rs. */}
+
+### What your function receives
+
+The platform sends exactly the `{"inputs": {...}}` JSON document as bytes, and `Request` decodes it.
+Inputs are keyed by authored input id, and values keep their exact kinds. Integers stay exact (a
+64-bit integer beyond floating-point precision survives the round trip), decimals stay strings, and
+a reference envelope stays a JSON object. An absent input and an explicit `null` are different:
+`request.input("x")` returns `None` for the first and `Some(Value::Null)` for the second.
+`request.input_str("x")` collapses both to `None`, which matches the usual reading that absent means
+empty.
+
+### What your function returns
+
+One `Outcome`: effects against the handler's declared write slots, or one declared refusal. The
+serialized document is exactly what the shared outcome validator accepts:
+
+- `{"effects": [{"id": "<slot>", "set": {<field>: <value>}}]}`, with an optional
+  `"clear": [<field>, ...]` for patch slots.
+- `{"refusal": {"code": "<code>", "field": "<input id>"}}`, where `field` is optional.
+
+The codes come from the refusal catalogue you declare in the project, and `field` must be a declared
+input id; the validator refuses the outcome otherwise. A set value of `null` is also refused: use
+`clear` on an optional patch field instead.
+
+Do not confuse a business rejection with a failure. A declared refusal is a normal outcome that the
+registry records and audits. `HandlerFailure` is a handler fault with a static message, for example
+when the request violates the input contract the registry already admitted. Reaching it means the
+module and the project disagree about the inputs.
+
+### What the SDK guarantees
+
+- Values are exact end to end: integers serialize as integers, decimal strings and reference
+  envelopes pass through untouched, and absent stays distinguishable from null on the request side.
+- Your crate holds no pointer code. Allocation, the handle boundary and the result window are
+  generated, and a panic in your handler never crosses the boundary uncaught.
+- Each outcome is exactly one JSON document in the shape the validator accepts. The refusal builder
+  cannot construct a document the validator would reject on shape.
+- The generated module imports nothing (std only, no WASI), which module admission requires.
+
+{/* Evidence: products/breg/wasm-handler-sdk/sdk/src/macros.rs, handler_with_init;
+    products/breg/wasm-handler-sdk/sdk/src/outcome.rs, Refusal;
+    crates/registry-breg/tests/wasm_handler_admission.rs. */}
+
+## Run the fixtures
+
+The template's host tests drive the generated exports directly (allocate, handle, read the result
+window), so they run the same decision code the module runs:
+
+```sh test-skip="needs the SDK workspace and a Rust toolchain"
+cargo test -p breg-wasm-handler-template
+```
+
+Fixtures live in `fixtures/normalize-phone-cases.json`. Each case is the request inputs and the
+exact outcome document expected. Add your cases there, or point your crate at its own corpus. The
+admission proof reads the same file, so one corpus serves both levels.
+
+## Build the module
+
+```sh test-skip="needs the SDK workspace and a Rust toolchain"
+scripts/build.sh             # build, record sizes, enforce ceilings, run the proof
+scripts/build.sh --preinit   # also produce the pre-initialized variant
+scripts/build.sh --skip-proof
+```
+
+The build compiles the template for `wasm32-unknown-unknown` in the `release-wasm` size profile
+(opt-level `z`, LTO, one codegen unit, no unwinding) and writes the module to `artifacts/`. It
+records every produced artifact's bytes, ceiling, verdict and sha256 in
+`artifacts/module-sizes.tsv`, and it fails the build when a module is over its ceiling. These are
+the ceilings:
+
+- 2 MiB for an ordinary module. This is also the default execution ceiling a deployment runs with
+  when no operator configuration is present, so an ordinary module that fits here runs anywhere.
+- 5 MiB for a pre-initialized library module (the `--preinit` variant). Such a module needs an
+  operator who sets `wasmExecution.maximumModuleBytes` accordingly. The default-budget runtime
+  refuses it with a typed error at execution while admission still accepts it.
+- A structural 5 MiB ceiling, enforced by the compiler at admission, sits above both. Nothing over
+  it compiles into a package.
+
+{/* Evidence: products/breg/wasm-handler-sdk/scripts/build.sh;
+    crates/registry-breg/src/wasm_handler.rs, DEFAULT_WASM_MODULE_BYTES and MAXIMUM_WASM_MODULE_BYTES. */}
+
+## Package it into a BReg project
+
+Declare a named Function, then select it from an immediate Action's bounded Plan:
+
+```yaml
+functions:
+  - id: normalize-phone-plan
+    runtime: wasm
+    source: wasm/handler.wasm
+    entrypoint: plan
+    abi: registry.action-plan/v1
+```
+
+```yaml
+execution:
+  mode: immediate
+plan:
+  type: function
+  function: normalize-phone-plan
+  inputs: [phone, region]
+  refusals:
+    - code: invalid-phone
+      label: The phone number is not a valid phone number.
+    - code: invalid-region
+      label: The region is not a usable phone region.
+  writes:
+    - id: phone
+      target:
+        recordType: person
+      operation: create
+      fields: [phone]
+```
+
+These fragments sit beside the complete project's typed inputs, Record types, datasets and explicit
+grants. The SDK guest exports stay separate from the public Action Plan declaration.
+
+The `source` path is project-local, relative, and ends in `.wasm`. The declared input ids,
+write-slot ids, fields and refusal codes must match what the module reads and emits. At compile
+time the registry reads the module bytes, checks the ceilings, hashes them, and validates the module
+against the guest ABI (zero imports, exactly the `alloc`, `handle`, `result_ptr`, `result_len` and
+`memory` exports). A package either carries a module the runtime can run or the compiler refuses it
+with a diagnostic that names the violation. The `admission/` crate in the SDK holds a complete
+working project.
+
+{/* Evidence: crates/registry-breg/tests/wasm_handler_admission.rs;
+    products/breg/wasm-handler-sdk/admission/src/lib.rs. */}
+
+## Build support
+
+Maintained `registry-breg` and `registry-bregctl` builds enable the `wasm` cargo feature by
+default. The feature gates authoring and admission (script and module pairing, module budgets, and
+structural validation of the module bytes through the executor the runtime uses) and execution.
+
+A custom build with `--no-default-features` omits WASM support and the Wasmtime dependency. A custom
+feature selection must include `--features wasm` to admit and run WASM handler packages. A build
+without the feature refuses a WASM-bearing package during compiler admission or package
+rederivation, before activation. It refuses authoring with `breg.action.handler-wasm-build-unsupported`
+or, for a WASM hook handler, `breg.hook.handler-wasm-build-unsupported`.
+
+Check the Action's compiled explanation and the operator execution budgets before you deploy it.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs, breg.action.handler-wasm-build-unsupported;
+    crates/registry-breg/src/compiler.rs, breg.hook.handler-wasm-build-unsupported. */}
+
+## Configure the runtime
+
+The runtime configuration takes an optional `wasmExecution` section:
+
+| Field | Range | Default | Enforcement |
+| --- | --- | --- | --- |
+| `maximumModuleBytes` | 1 KiB to 5 MiB | 2 MiB | Package load into the runtime, and prepare |
+| `maximumGuestMemoryBytes` | 1 MiB to 1 GiB | 32 MiB | Per-invocation guest memory |
+| `backend` | `pulley` or `native` | `pulley` | One resolved value feeds execution, admission validation and the prepared-module cache key |
+
+Pulley is the default backend and uses no runtime code generation. Choose `native` only as an
+operator opt-in.
+
+- A bad value is refused with a typed error that carries a code and a path, and unknown members are
+  refused. The section installs at startup and clears at shutdown, whether graceful or aborted.
+- A structural 5 MiB ceiling sits above the operator range. Compiler admission, the package closure
+  and `bregctl` capture enforce it whatever the configuration, so configuration never admits what
+  authoring refused. Raise `maximumModuleBytes` above 2 MiB only for pre-initialized library modules.
+- One resolver feeds execution, admission validation and the prepared-module cache key, which is the
+  module content hash plus the backend. A module admitted under one backend cannot execute under
+  another through configuration drift. Authoring compilation has no operator configuration in scope,
+  so admission validates under the default (`pulley`). The ABI check is independent of the target, so
+  admission cannot accept a module the configured backend rejects.
+- The runtime runs one engine and one 1 ms epoch ticker per process. Prepared modules are cached by
+  content hash and backend with least-recently-used eviction and a hard cap of 32. Each call gets a
+  fresh store and instance. Budgets and backend are fixed at construction, so a configuration change
+  replaces the runtime and its cache together. Evaluation before any install is refused with a typed
+  error, and a failed epoch-ticker spawn surfaces at install rather than leaving deadlines inert.
+- The section has no fuel setting. The compiled-in fuel budget is a far backstop that the epoch
+  deadline reaches first, and the two map to different public categories (resource exhaustion
+  versus deadline). Exposing fuel without fixing which limit wins would let one wall-clock overrun
+  surface as either category.
+- A module whose exported memory declares a minimum above the guest-memory budget is refused at
+  validation. A negative guest-reported outcome length or pointer is a bounded ABI violation, never
+  an empty success.
+
+Freeze aggregate deployment budgets (host memory, preparation peaks) per deployment. Cold
+preparation compiles one module in roughly 100 ms.
+
+{/* Evidence: crates/registry-breg/src/wasm_handler.rs, DEFAULT_WASM_MODULE_BYTES,
+    DEFAULT_WASM_GUEST_MEMORY_BYTES, MAXIMUM_WASM_MODULE_BYTES, WasmExecutionBackend;
+    crates/registry-breg/tests/runtime_config.rs,
+    wasm_execution_budgets_default_below_the_structural_module_ceiling,
+    wasm_execution_budgets_refuse_out_of_range_values,
+    wasm_execution_backend_defaults_to_pulley_and_accepts_native,
+    wasm_execution_backend_refuses_unknown_values,
+    wasm_execution_section_refuses_unknown_members;
+    crates/registry-platform-hooks/src/executor/wasm.rs, WASM_HOOK_RETAINED_MODULES;
+    crates/registry-platform-script/src/wasm.rs, check_memory_minimum (memory minimum refusal; negative result length and pointer). */}
+{/* TODO[evidence]: the Action runtime's cache cap of 32, the 1 ms epoch ticker and the cold
+    preparation figure of roughly 100 ms have no anchor here. WASM_HOOK_RETAINED_MODULES is the
+    hook executor's cap, so it is a weak anchor for the Action runtime. */}
+
+## Upgrade
+
+1. Existing Rhai and declarative packages need no change, no re-publication and no migration.
+2. Use the maintained default build, or include `--features wasm` in a custom feature selection,
+   and redeploy. Existing packages load unchanged.
+3. Add the `wasmExecution` section only if you need non-default budgets or the native backend.
+   Defaults apply otherwise.
+4. Author WASM handler packages with the SDK, and record the minimum server requirement (the
+   `compatibility` member states it). Older servers and feature-off servers refuse the package
+   during load, before an invocation or attempt audit can exist.
+5. Calibrate budgets on the deployment's own architecture. Fuel is not a cross-host invariant, and
+   the worst single calls can exceed the budgeted 99th percentile on both backends.
+6. For library-backed handlers, always pre-initialize. A naive library module costs hundreds of
+   milliseconds per call natively and seconds on Pulley, and pre-initialization is what makes the
+   default backend viable.
+
+## Roll back
+
+1. Deactivate or replace WASM handler packages through the ordinary activation procedures. Plugin
+   execution and a failed activation introduce no schema mutation and no late guest effects.
+2. Remove the `wasmExecution` section. The install clears at shutdown.
+3. Before you deploy a custom build without the feature, deactivate or replace every WASM handler
+   package. Such a build cannot rederive and load those packages. Build with `--no-default-features`
+   and the other features you need; the resulting dependency tree omits Wasmtime.
+4. Verify package loading before you serve traffic. A feature-off build refuses WASM handler
+   packages during rederivation.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs, breg.action.handler-wasm-build-unsupported;
+    crates/registry-breg/tests/postgres_wasm_action_handlers.rs. */}
+{/* TODO[evidence]: no test shows that a failed activation of a WASM package leaves no schema
+    mutation; the postgres_wasm_action_handlers.rs anchor shows execution only. */}
+
+## Next
+
+- [Actions and Proposals](../breg-actions/)
+- [Author a registry project](../breg/)
+- [Deploy and serve](../../operate/breg/)

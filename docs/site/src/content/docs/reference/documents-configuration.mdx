@@ -1,11 +1,11 @@
 ---
 title: Document Store configuration reference
 description: Generated key-path reference for the Registry Document Store project and runtime files.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-11-17"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -53,7 +53,7 @@ must carry.
     crates/registry-documents-core/src/project.rs, DocumentsProject and reference_findings;
     crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND and project_findings;
     crates/registry-documents/src/runtime.rs, prepare_with and check_against_project;
-    products/documents/RUNTIME-CONFIG.md. */}
+    products/documents/generated/runtime/runtime.schema.json. */}
 
 ## Key paths
 
@@ -69,6 +69,156 @@ choose as `name.*`, as in `documentPolicies.*.mandatoryRestrictions.cleanupGrace
     Run npm run generate from docs/site. */}
 <ConfigurationReference contracts={reference.contracts} prefix="documents" />
 
+## The runtime file
+
+The Document Store reads one versioned operator document, selected with
+`documents --runtime-config ABSOLUTE_FILE serve`.
+The selected file path and every operated resource path are absolute, and the file may not be writable by its group or by others.
+The document is at most one mebibyte.
+
+The closed envelope is:
+
+```yaml
+apiVersion: id.registrystack.org/formats/documents/runtime/v1alpha1
+kind: DocumentsRuntimeConfig
+```
+
+The JSON Schema for editors states the same grammar, and the
+[starter runtime example](https://github.com/registrystack/registry-stack/blob/main/products/documents/examples/starter/runtime.example.yaml)
+is a complete, commented document.
+
+`documentsctl check --runtime-config FILE` checks the same document offline, with no database, network, or secret.
+`--environment` fills each `${VAR}` expression from the environment and checks its value; without it, each expression is checked by its syntax and position.
+The check reports every finding at once, each with its code and member, and never repeats a configured value.
+
+The shared runtime loader parses YAML before it substitutes `${VAR}`, `${VAR:-default}`, or `${VAR:?message}` inside string values.
+Expressions are refused in or under members whose names end in `Ref` and in secret-provider declarations: credentials remain literal `secret:` references to a declared provider.
+
+{/* Evidence: crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND;
+    crates/registry-documents/src/runtime.rs, prepare_with;
+    products/documents/generated/runtime/runtime.schema.json. */}
+{/* TODO[evidence]: the one-mebibyte limit and the group-or-other-writable refusal need a cited constant or test. */}
+
+## Runtime keys
+
+The runtime reads and checks every key in the schema.
+It acts on `identity`, `package`, `listener`, `secretProviders`, `database`, `authentication`, `audit`, `storage`, `contentVerification`, `transfers`, `cleanup`, and `retention.receiptRetentionDays`.
+The other blocks are checked, so a deployment written now keeps its meaning when the behavior behind them arrives.
+
+- `identity.databaseId` is the logical identity of the one database this deployment owns, independent of the connection URL.
+  It is required.
+- `package.root` is the directory that holds the deployment's `documents.yaml`.
+  `package.expectedDigest` optionally pins it.
+- `listener.bind` is the socket address the HTTP listener binds.
+  The starter uses `127.0.0.1:8116`.
+- `listener.tlsTermination` is `operator-controlled-upstream` behind a TLS proxy, or `development-loopback` for local work only.
+- `listener.networkExposure` is the shared network exposure declaration for the listener.
+- `secretProviders` declares the secret providers, such as `file.root`.
+  A reference to an undeclared provider is refused.
+- `database.runtimeUrlRef` is the secret reference to the PostgreSQL URL the runtime connects with.
+  The connection always uses TLS and verifies the server certificate and its host name; an `sslmode` in the URL does not change that.
+- `database.migrationUrlRef` is the secret reference to the PostgreSQL URL that `documentsctl apply` connects with to apply the schema, record the package in the activation ledger, and grant the runtime role.
+  The runtime never uses it, and it requires TLS like the runtime URL.
+- `database.trustedRootCertificateRef` is an optional secret reference to a PEM bundle of the CA certificates that sign the database certificate, for a private CA.
+  When it is set, these are the only roots trusted; when it is omitted, the system's trusted roots are used.
+- `database.testOnlyPlaintext` is accepted only by builds with the `postgres-test` feature, for the PostgreSQL test suites.
+  An operator build refuses it with `documents.runtime.plaintext-database`, so a local run needs a database that serves TLS too.
+- `authentication.oidc` is the shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), with `allowedClients` and `scopeClaim` (default `scope`).
+  `allowedClients` must list clients, and `unrestricted` is refused.
+  `jwksSource` defaults to the key set that the issuer's discovery document names.
+  [Access tokens](../../operate/documents/#access-tokens) states what a token must carry and describes the other key sources.
+- `audit` takes `destination` (`file`, the default, or `stdout`), `path` for a file journal, and `hashKeyRef`.
+  A file journal seals its active file at `rotateBytes` (1048576 to 4294967295, default 104857600, which is 100 MiB) and deletes sealed files older than `retentionDays` (1 to 36500, default 90).
+  The operator commands' companion journal rotates and is kept the same way.
+  Either key beside `destination: stdout` is refused with `documents.runtime.invalid-audit`.
+  Deleting a sealed file is not proof that it reached off-host storage, so ship the records you must keep before `retentionDays` passes.
+- `storage` is `type: database`, or `type: s3` with the shared object storage keys: `url`, `bucket`, `region`, `pathStyle`, `accessKeyIdRef`, `secretAccessKeyRef`, `caBundleRef`, and `attemptTimeoutMilliseconds`.
+  `maximumDocumentBytes` is the deployment ceiling on one document version: 16 MiB when omitted, at most 16 MiB for `database` and 64 MiB for `s3`.
+  Startup refuses a package whose policy asks for more.
+  The storage binding is pinned at the first upload, and a later start under another backend, bucket, or scope is refused.
+- `contentVerification` is `type: http` with `url`, `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds` (100 to 60000).
+  `type: disabled` is accepted only beside `tlsTermination: development-loopback`.
+- `transfers.minimumDeadlineSeconds` is 1 to 3600, default 60: the deadline of the smallest upload or download.
+- `transfers.mebibyteAllowanceSeconds` is 1 to 600, default 8: the time added to a transfer's deadline for every started mebibyte of the document.
+- `cleanup.erasure` is `active` or `paused`.
+  `paused` stops every erasure and the sweep of orphaned objects; a removal request still stops release at once, and lapsed uploads are still expired.
+- `destinations.hooks` is the shared URL hook destination block, keyed by the destination id that `documents.yaml` names.
+  Each entry takes `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 10000, 5000 when omitted), and `maximumAttempts` (1 to 20, 8 when omitted), with at most 128 destinations.
+  Startup refuses a project hook whose destination is not bound here and a signing key it cannot resolve.
+  Plain `http` needs both a loopback address (`127.0.0.1`, `localhost`, or `[::1]`) and `listener.tlsTermination: development-loopback`.
+  Without the listener mode it is refused with `documents.runtime.insecure-url`, and a non-loopback `http` address is refused at startup.
+  A pending or leased delivery pins the binding it was captured under (id, URL, key reference, timeout, attempts), so startup refuses while one remains whose binding is no longer here.
+  To move a hook, bind a new destination id, point the hook at it and apply, and remove the old entry once its deliveries have drained or expired.
+- `retention.receiptRetentionDays` is 1 to 365, default 7: how long a replay of an `Idempotency-Key` on a reservation or a grant is answered with the original outcome.
+  After it the key stays spent: a replay answers `idempotency.expired`, and the row keeps only the key and request digests and the resource id.
+- `retention.hookPayloadRetentionDays` is 1 to 30, default 7: how long a captured event is held for delivery.
+  A delivery not completed by then expires unsent.
+
+Seven days is a placeholder, not a jurisdictional recommendation: a retention schedule approves the deployed values.
+
+Erasure reaches only what the Document Store serves.
+Database backups, WAL archives, replicas, and S3 bucket replicas or provider backups keep erased bytes for as long as the operator retains them.
+A removed document's bytes stay on PostgreSQL pages until they are overwritten or `VACUUM FULL` rewrites the table.
+Set the retention of backups, archived WAL, and bucket replicas to the longest period that the retention schedule allows erased content to survive; no key in this file controls them.
+
+[Deploy and operate the Document Store](../../operate/documents/) describes the transfer memory budget, the operational log, and the access-token checks that these keys feed.
+
+{/* Evidence: crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
+    S3_MAXIMUM_DOCUMENT_BYTES, MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS, AuditConfig and
+    ContentVerificationConfig;
+    crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and DEFAULT_AUDIT_RETAIN_DAYS;
+    products/documents/generated/runtime/runtime.schema.json. */}
+{/* TODO[evidence]: the transfer deadline bounds, the 128-destination cap, the destination attempt bounds and the erasure-pause semantics need cited constants or tests. */}
+
+## Startup
+
+`serve` reads and checks the whole document and stops, naming every finding, before it opens a connection or binds a socket.
+It then does these steps in order:
+
+1. It reads the package at `package.root`, verifies it, and refuses a digest other than `package.expectedDigest` when one is pinned.
+2. It checks the runtime file against the package's project and refuses it with the report that `documentsctl check --project` gives for the same files.
+   A hook whose destination `destinations.hooks` does not bind is `documents.runtime.unbound-hook-destination` at `/destinations/hooks`, on its line of the file.
+3. It connects with the runtime credential and refuses a runtime role that cannot use the schema or read the activation ledger, and says to restore its grants with `documentsctl apply`.
+   It then reads the activation ledger and refuses a database with no active package, one recorded for another `identity.databaseId`, and one whose active package is not the verified package.
+   It then refuses a database that does not carry exactly this release's schema, or a runtime role that lost its grants or gained authority over the schema.
+   Serving never applies the schema: `documentsctl apply --runtime-config FILE` does, over the migration credential.
+4. It opens the audit journal.
+5. It activates content storage and refuses a storage binding other than the one pinned at the first upload.
+6. It activates the content verifier, then suspends and re-queues every finalized version verified or queued under another verifier binding.
+7. It binds the listener, serves `GET /health`, `GET /ready`, and the document routes, and runs the content verification worker until shutdown.
+
+An upload that finalizes a version wakes the verification worker of its own process, which claims the job at once.
+The worker also looks for due jobs every five seconds while idle, which picks up a job enqueued by another instance or by an operator command, and one due again after a backoff.
+
+The runtime checks the active package identity on each authenticated request and each worker transaction.
+A successor activation or unreadable ledger stops new protected requests with `503 service.unavailable` and stops new verification, erasure, and cleanup work.
+An admitted download may finish within its transfer deadline; an upload still receiving bytes must pass a fresh activation check before finalization.
+Apply waits at most five seconds for each lock held by a bounded verification attempt or object-storage write or deletion.
+Drain or stop busy old workers before you retry a refused apply.
+Already-materialized hook deliveries may finish their bounded attempt.
+
+Set both database credentials' `search_path` to the schema that contains the activation ledger.
+A ledger resolved through a later schema is refused, so runtime effects and activation always synchronize on the same schema.
+
+Every document route verifies a bearer access token against `authentication.oidc` before it reads a request body.
+A token the verifier refuses answers `authentication.refused` with a `Bearer` challenge; a verifier that cannot be reached answers `service.unavailable`.
+
+{/* Evidence: crates/registry-documents/src/runtime.rs, prepare_with, check_against_project, drain_until_stopped and WORKER_IDLE_POLL;
+    crates/registry-documents/src/activation.rs, LedgerUnreadable;
+    crates/registry-documents/src/verification.rs, activate_verifier. */}
+{/* TODO[evidence]: the five-second apply lock wait and the search_path requirement need a cited constant or test. */}
+
+## Operator commands
+
+`documentsctl plan`, `apply`, `status`, `verification list` and `replay`, and `erasure status`, `list`, and `replay` read this same document.
+They write their audit records to a companion journal under the `documentsctl` process name, beside the runtime's file journal, so they never contend for the running service's journal.
+The `verification` and `erasure` commands, like `serve`, need an activated database: a runtime role that cannot use the schema or read the activation ledger is refused as `documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`.
+Run `documentsctl apply` with the migration credential, which grants the runtime role what it lacks, then retry.
+`verification replay` also activates the project's hooks, so it refuses a hook whose destination `destinations.hooks` does not bind with the diagnostic that `serve` gives, on its line of the file.
+
+{/* Evidence: crates/registry-documentsctl/src/operate.rs;
+    crates/registry-documents/src/activation.rs, LedgerUnreadable. */}
+
 ## Check commands
 
 Both files have a command that checks them offline, with no service, database, or secret. Each
@@ -80,4 +230,6 @@ describes.
 
 ## Next
 
-[Document Store API](../apis/registry-documents/)
+- [Registry Document Store API](../apis/registry-documents/)
+- [Deploy and operate the Document Store](../../operate/documents/)
+- [Configuration files](../configuration-files/)

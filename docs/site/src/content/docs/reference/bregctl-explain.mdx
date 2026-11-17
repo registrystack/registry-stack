@@ -1,0 +1,192 @@
+---
+title: bregctl explain output
+description: The JSON contract of bregctl explain, with each subject's format, current version, schema and the changes between versions.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Use this contract when you consume the explanations that `bregctl` produces for a Base Registry
+Engine (BReg) project. `bregctl --format json explain <subject> <project>` writes a `BRegCtlReport` whose `explanation`
+member is a separately versioned document. `bregctl` inserts the subject's `apiVersion` and `kind`
+after it serializes the explanation. The report keeps its own `breg/ctl-report/v1alpha1` version.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, explain_envelope;
+    crates/registry-bregctl/tests/explain_contract.rs. */}
+
+## Subjects and formats
+
+| Subject | Format | Current version | Schema |
+| --- | --- | --- | --- |
+| `model` | `BRegModelExplanation` | `v1alpha7` | `ModelExplanation.schema.json` |
+| `access` | `BRegAccessExplanation` | `v1alpha8` | `AccessExplanation.schema.json` |
+| `access --scenario` | `BRegAccessPreview` | `v1alpha4` | `AccessPreview.schema.json` |
+| `actions` | `BRegActionsExplanation` | `v1alpha7` | `ActionsExplanation.schema.json` |
+| `proposals` | `BRegProposalsExplanation` | `v1alpha3` | `ProposalsExplanation.schema.json` |
+| `routes` | `BRegRoutesExplanation` | `v1alpha6` | `RoutesExplanation.schema.json` |
+| `queries` | `BRegQueriesExplanation` | `v1alpha5` | `QueriesExplanation.schema.json` |
+| `events` | `BRegEventsExplanation` | `v1alpha6` | `EventsExplanation.schema.json` |
+| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha8` | `LifecycleExplanation.schema.json` |
+
+The schemas live in the `products/breg/contracts/explain/` directory of the
+[source repository](https://github.com/registrystack/registry-stack/tree/v0.46.0/products/breg/contracts/explain).
+Each format's identifier is `id.registrystack.org/formats/breg/<format>/<version>`, with the format
+name in lowercase kebab-case. For example, the model format is
+`id.registrystack.org/formats/breg/model-explanation/v1alpha7`.
+
+`lifecycle` accepts no project and describes the engine-owned Proposal state machine. Every other
+subject requires a project. `proposals` returns the same source-free Action definitions as
+`actions`, filtered to Proposal execution.
+
+{/* Evidence: products/breg/contracts/explain/ModelExplanation.schema.json;
+    crates/registry-breg/tests/native_inspection_inventory.rs;
+    crates/registry-bregctl/tests/explain_contract.rs. */}
+
+## Schemas and compatibility
+
+Each schema is draft 2020-12 and self-contained. A pinned object seals its members with
+`additionalProperties: false`. Adding, removing, renaming or changing a pinned member requires a
+version bump for that format alone. Select the schema that matches the version in the document.
+
+`x-registry-passthrough` marks compiler-owned values whose internal shape is outside this
+contract. Validate any opaque data you use. The annotation states why each node is opaque, and JSON
+Schema validators ignore it. The Access authority inventory pins `principalClaims` and the mutually
+exclusive inventory and error relationship, while the remaining inventory members stay opaque.
+Casework provider pairing independently verifies its sealed context export and grants no BReg
+authority.
+
+The Lifecycle payload is pinned in full, because its model exists only to explain this state
+machine. Actions and Proposals share a source-free inspection shape, and their schemas describe it
+independently, without external references.
+
+{/* Evidence: products/breg/contracts/explain/LifecycleExplanation.schema.json;
+    products/breg/contracts/explain/AccessExplanation.schema.json;
+    crates/registry-bregctl/tests/explain_contract.rs. */}
+{/* TODO[evidence]: x-registry-passthrough and the Access principalClaims pin are claims about
+    schema content; confirm the annotation text in the schema files. */}
+
+## Version changes
+
+Each entry names the format version that introduced the change. Select the matching schema.
+
+### Model
+
+- `v1alpha7` adds `recordTypes[].eventRecord`, `recordTypes[].grouping` and `actions[].grouping`.
+  - `eventRecord` is `null` unless the Record type declares an event record descriptor. Otherwise it
+    is the resolved descriptor (`descriptorVersion` `1`, an integer). It names the stored fields that
+    say what a row is about, when it happened, when it takes effect, what it was recorded from and
+    what it corrects.
+  - A declared `occurredAt` or `effective` names its shape in `type` (`point` or `interval`) beside
+    that shape's members.
+  - Undeclared `summary`, `occurredAt`, `effective`, `correction` and `sourceEventId` are explicit
+    `null`, as are an interval's open `end` and a `sourceEventId`'s unset `namespace`,
+    `namespaceField` and `constraint`.
+  - A role's `label`, a native role's `namespace` and a field's `target` (present only for a
+    reference) are omitted, never `null`.
+  - `recordedTime` is always `{"source": "creation-revision"}`, because recorded time is read from
+    record history and is never authored.
+  - `grouping` is `null` unless the Record type or Action authors `display.purpose` or
+    `display.group`. It is presentation only and never changes identity, access or execution. Do not
+    infer a purpose or an event record from names, routes, dates or references.
+- `v1alpha6` adds dataset display inventories, retains field display and module origins, and adds
+  `authoring.documents`.
+  - Each document names a project-relative file and lists the RFC 6901 JSON Pointers present in the
+    source before defaults or module composition. Paths expose structure and authored mapping keys,
+    without copying leaf content such as labels or configuration values. Documents also identify
+    their kind and module.
+  - Each document's `bindings` links an `explanationPointer` against the explanation to a
+    `sourcePointer` against that source document. The links follow ids and module origins, so they
+    stay correct when compilation reorders arrays or a module extends a Record type. The root
+    explanation binds to `/project`.
+  - Bindings cover datasets, project access profiles, review authorities, Record types, stored and
+    derived fields, record hooks, Actions, inputs, Proposal hooks and statistical datasets.
+  - To test authored display, find the object's binding and append `/display/label` or
+    `/display/description` to its source pointer, then look for that exact path in the same
+    document's `authoredPaths`. Use the same approach for an unchanged source member such as a
+    stored field's `required`. Absence means the source did not author that member; it does not mean
+    every generated member has a default. Compiled names such as `revision`, `canonicalId` and
+    `schema` have no implied source counterpart.
+- `v1alpha5` names the native model and Proposal contracts. Model inspection returns source-free
+  `recordTypes`, `actions` and the compiled `revision`.
+  - Model field entries always include `id`, `apiName`, `required`, `classification`, `schema` and
+    `fieldType`, including fields absent from every query projection.
+  - Current formatters also include boolean `encrypted` metadata in the author-only Model and
+    Actions inventories; derived fields report `false`. This extends the compiler-owned field
+    metadata without closing its passthrough shape. Validate this value before you use it to propose
+    before and after review context; the schema permits older field metadata without this member.
+  - `fieldType` carries the same compiled type object as query field summaries, so a form can
+    distinguish multiline `text` from a bounded `string` and discover a reference's target. Its
+    internal shape follows the engine field type contract; the JSON value `schema` remains the
+    validation contract for field values.
+
+### Access
+
+- `v1alpha8` adds the required `timers` inventory. It names each root-enabled autonomous timer, the
+  Record and Action surfaces that can shape its control, predicate and mapped-input fields, and the
+  exact product-owned system grant that bounds its future effect. The report does not turn that
+  authority into a selectable access profile or imply a direct Record grant.
+- `v1alpha7` names the target Record type, through Record type and route on every read-path grant.
+  Its `rowReach` inventory includes a `read_path` surface under the disclosed target Record type,
+  with the root profile's row boundaries and an exact source path back to the grant.
+- `v1alpha6` adds the access-profile display inventory.
+- `v1alpha5` names the top-level `recordTypes`, and uses `recordType` in route references and
+  consent record references.
+
+### Access preview
+
+`AccessPreview` stays at `v1alpha4` because its pinned shape is unchanged.
+
+### Actions and Proposals
+
+- Actions `v1alpha7` and Proposals `v1alpha3` add `migrationReviewRevision`, the digest of the
+  Action behavior contract used to decide whether an activation change requires migration review.
+- Actions `v1alpha6` and Proposals `v1alpha2` retain optional authored input `display` separately
+  from the existing `label`, whose fallback remains `apiName`. Display text is presentation metadata
+  and never changes identity, matching or authority. Keep the id alongside any label in selection
+  and approval interfaces.
+- At `v1alpha5`, Action inspection uses the same normalized definitions as Model inspection,
+  including execution policy, Plan, commit guards, dependencies and bounds.
+- `ProposalsExplanation` started at `v1alpha1`.
+
+### Routes and queries
+
+- Routes `v1alpha6` adds `availability` to the closed Action route kind set, for immediate Actions
+  with reference inputs.
+- At `v1alpha5`, Record routes use `type: record`, and Action routes include `start` and no longer
+  describe the removed request operations. Query operations use `recordType`.
+
+### Events
+
+- `v1alpha6` adds the `rejected` and `review-returned` Proposal transitions to the transition
+  selection a Proposal hook may name.
+- Event inspection adds the owning hook phase and the Proposal transition selection.
+
+### Lifecycle
+
+- `v1alpha8` adds `recoveryReasons` to every transition. `retry` recovers `dependency-outage` and
+  `lease-expired`; other transitions currently report an empty list.
+- `v1alpha7` adds each state's possible `turns`. Submitted work has a conditional turn whose ordered
+  rules use the same evaluator as runtime Proposal documents.
+- `v1alpha6` adds the terminal `rejected` state, the `reject` transition from `submitted`, and the
+  `review-authority-result` enforcement, which allows only a verified review result to perform it.
+- `v1alpha5` replaces the request state machine with the Proposal state machine.
+
+{/* Evidence: products/breg/contracts/explain/ModelExplanation.schema.json;
+    products/breg/contracts/explain/AccessExplanation.schema.json;
+    products/breg/contracts/explain/ActionsExplanation.schema.json;
+    products/breg/contracts/explain/EventsExplanation.schema.json;
+    products/breg/contracts/explain/LifecycleExplanation.schema.json;
+    crates/registry-bregctl/tests/explain_contract.rs. */}
+{/* TODO[evidence]: the per-version change history is stated from the schemas' version history;
+    the anchors show the current shape only, so each historical version claim is weakly anchored. */}
+
+## Next
+
+- [Author a registry project](../../configure/breg/)
+- [Actions and Proposals](../../configure/breg-actions/)
+- [Control access and reads](../../configure/breg-access/)

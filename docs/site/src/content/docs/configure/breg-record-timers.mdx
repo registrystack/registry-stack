@@ -1,0 +1,540 @@
+---
+title: Schedule Actions with Record timers
+description: Declare a Record timer that runs one bounded immediate Action from control fields on a Record, then inspect, pause, resume, and retry timer work.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+If a governed Record carries its own due instant, such as an activation date, a Record timer lets
+Base Registry Engine (BReg) run one bounded immediate Action when that instant arrives.
+You declare the timer on the Record type, grant it from the root project, and operate its work with
+`bregctl timer`.
+
+A timer is part of the reviewed Registry package.
+It is not a caller route, a queue payload, or a general scheduler.
+Use a timer when the due instant and scheduling controls belong to the anchor Record, and the
+Action can decide and shape its effect from current governed facts within its declared local read
+scope.
+Keep external calendar coordination, capacity scheduling, and cross-system orchestration outside
+BReg.
+
+{/* Evidence: crates/registry-breg/src/contract.rs TimerSource, TimerGrantSource;
+    crates/registry-breg/tests/timer_authoring.rs timer_compiles_complete_typed_mapping_and_exact_system_grant. */}
+
+## Author one future activation
+
+The Record type declares the timer.
+The root project separately grants the exact `recordType` and timer pair:
+
+```yaml
+recordTypes:
+  - id: service
+    fields:
+      - id: status
+        type: vocabulary-code
+        vocabulary: service-status
+        classification: internal
+      - id: activates-at
+        type: timestamp
+        classification: internal
+      - id: activation-not-after
+        type: timestamp
+        classification: internal
+      - id: activation-revision
+        type: uuid
+        classification: internal
+    timers:
+      - id: activate
+        at: activates-at
+        notAfter: activation-not-after
+        rearmOn: activation-revision
+        when:
+          type: fields
+          equals:
+            status: scheduled
+        invoke: activate-service
+        input:
+          service:
+            fromRecordId: true
+          planned-at:
+            fromField: activates-at
+          occurrence:
+            fromTimer: occurrence-id
+
+timerGrants:
+  - recordType: service
+    timer: activate
+```
+
+{/* Evidence: crates/registry-breg/src/contract.rs TimerSource, TimerGrantSource,
+    TimerPredicateSource, TimerInputSource;
+    crates/registry-breg/tests/timer_authoring.rs timer_project_value. */}
+
+The invoked Action is an ordinary immediate Action, and the timer must map every one of its inputs.
+The compiler refuses a timer that invokes a Proposal Action, a publicly invokable Action, or an
+Action with remote Function, Evidence, commit-Evidence, or consent-issuance capability.
+A local bounded handler remains available when it needs none of those capabilities.
+
+{/* Evidence: crates/registry-breg/tests/timer_authoring.rs
+    timer_refuses_public_invoke_and_non_immediate_actions,
+    timer_refuses_remote_function_and_evidence_capabilities,
+    timer_refuses_consent_issuance_capability,
+    timer_requires_exact_root_grant_and_complete_mapping;
+    crates/registry-breg/src/compiler.rs breg.timer.action-public-invoke. */}
+
+The timer's plan may Patch only the exact anchor Record and may Create bounded new Records.
+A timer Action cannot Tombstone a Record.
+Its declared guards and linked reads stay bounded by the compiled system grant; that read scope
+does not grant mutation of another existing Record.
+Ordinary authorized tombstoning of the anchor cancels its timer work.
+
+{/* Evidence: crates/registry-breg/tests/timer_authoring.rs
+    timer_system_authority_is_anchor_and_create_bounded;
+    crates/registry-breg/tests/postgres_record_timer_native.rs
+    native_lifecycle_writer_first_tombstone_cancels_without_timer_effect. */}
+
+`timerGrants` is root-project authority.
+A module may contribute a timer definition, but it cannot enable autonomous work.
+A project that imports the module must name the exact contributed timer in its root `timerGrants`;
+without that grant, compilation fails.
+To remove a timer, activate a reviewed successor that removes both its declaration and its matching
+grant.
+A false `when` predicate or a global pause is not permanent disablement.
+
+{/* Evidence: crates/registry-breg/tests/timer_authoring.rs
+    module_timer_definition_requires_and_uses_root_enablement,
+    timer_authoring_is_closed_and_root_grants_are_root_only. */}
+
+A timer does not backfill historical Records.
+A newly created Record can arm its timer from its initial control values.
+A Record that existed before the timer was activated needs a later material write to `at`,
+`notAfter`, or `rearmOn`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timers.rs
+    adding_a_timer_does_not_arm_historical_records;
+    crates/registry-breg/tests/postgres_record_timer_native.rs
+    native_historical_record_stays_unarmed_until_a_material_control_write. */}
+
+## Limits
+
+Record timers do not cover these cases:
+
+- A timer-initiated Action that would arm a successor timer is refused. The refusal is atomic, so the Action writes nothing.
+- There is no command to force a timer to run.
+- There is no payment observation, Messaging delivery, Proposal timing, or membership scheduling.
+- There is no per-Record timer projection.
+- Studio and App Kit do not author timers.
+- No capacity is claimed for a large backlog of due timers.
+- No full backup-and-restore or downstream-reconciliation exercise is claimed (see [Restore a database](#restore-a-database)).
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timers.rs
+    timer_action_that_would_arm_a_successor_refuses_atomically,
+    timer_action_that_would_arm_another_anchor_timer_refuses_atomically,
+    timer_action_that_would_arm_a_created_record_timer_refuses_atomically.
+    The remaining boundaries are absences: no force-run, payment, Messaging, Proposal-timing,
+    membership-scheduling or projection surface exists in crates/registry-breg/src/timer_operator.rs
+    TimerOperatorService. */}
+
+## Control fields, predicates, and inputs
+
+`at` and `notAfter` name timestamp fields.
+`rearmOn` names a UUID or integer field whose changed value distinguishes a new occurrence even when
+its due time is unchanged.
+`notAfter`, `rearmOn`, and `when` are optional.
+Control fields cannot be encrypted, because their admitted types are not encryptable.
+
+{/* Evidence: crates/registry-breg/tests/timer_authoring.rs
+    timer_control_predicate_and_mapping_types_are_closed,
+    timer_control_fields_cannot_be_encrypted;
+    crates/registry-breg/tests/postgres_record_timers.rs
+    authorized_int64_rearm_write_changes_material_identity. */}
+
+### When a write creates an occurrence
+
+The material control tuple is the current value of `at`, `notAfter`, and `rearmOn`.
+Any change to that tuple creates a new occurrence, including a change from A to B and later back
+to A.
+Changing only fields named by `when` does not create an occurrence: a false predicate holds the
+current unfinished occurrence, and a later true predicate releases that same unfinished occurrence.
+Settled work stays settled.
+BReg refuses a new or materially changed control tuple whose `notAfter` is not later than `at`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timers.rs
+    material_rearm_retains_history_and_never_reuses_an_occurrence,
+    false_gate_from_start_is_not_claimed_until_an_ordinary_write_opens_it,
+    terminal_occurrences_remain_closed_across_writes_activation_and_pruning;
+    crates/registry-breg/tests/postgres_record_timer_native.rs
+    native_lifecycle_writer_first_predicate_hold_preserves_pending_occurrence,
+    native_lifecycle_predicate_release_executes_the_same_occurrence_once. */}
+
+That refusal is not a general editing block.
+If a current occurrence is already configuration-blocked by an invalid window inherited across a
+package change, an unrelated Record edit may preserve the unchanged controls.
+It keeps that exact configuration block and creates no timer work.
+This exception does not create a configuration block for a Record with no current occurrence or for
+settled work, and it does not replace a preserved technical block or exhausted attempt history.
+
+{/* TODO[evidence]: the unrelated-edit exception for an inherited invalid window has no test
+    that names it directly; invalid_successor_window_blocks_until_a_reviewed_correction in
+    crates/registry-breg/tests/postgres_record_timers.rs covers the block itself. */}
+
+### Predicates
+
+`when.type: fields` is a bounded conjunction of equality checks over current stored fields.
+Every named field and literal must agree with the field's declared type.
+BReg checks the predicate against the locked current Record, not against a payload captured when
+the timer was armed.
+
+{/* Evidence: crates/registry-breg/src/contract.rs TimerPredicateSource;
+    crates/registry-breg/tests/timer_authoring.rs
+    timer_control_predicate_and_mapping_types_are_closed,
+    timestamp_predicate_matches_the_stored_instant_across_offsets. */}
+
+### Action inputs
+
+Each Action input selects exactly one source:
+
+- `fromRecordId: true` maps the anchor Record UUID to a reference input that targets that Record
+  type.
+- `fromField: FIELD` maps the field's current locked value to an input of the same type.
+- `fromTimer: occurrence-id` maps the durable occurrence UUID.
+- `fromTimer: due-at` maps the occurrence's intended timestamp.
+- `value: VALUE` maps a typed non-null literal.
+
+`fromField` may name an optional field even when the Action input is required.
+If the current Record omits that field, ordinary live Action input validation refuses the
+occurrence.
+It does not substitute a value or bypass the input's required constraint.
+
+{/* Evidence: crates/registry-breg/src/contract.rs TimerInputSource, TimerValueSource;
+    crates/registry-breg/tests/timer_authoring.rs timer_control_predicate_and_mapping_types_are_closed;
+    crates/registry-breg/tests/postgres_record_timers.rs
+    mapped_required_input_refusal_is_terminal_and_consumes_one_attempt. */}
+
+### Encrypted fields
+
+Encrypted predicate and `fromField` values remain supported.
+Runtime execution reads only the exact grant-covered fields from the locked anchor.
+Field-at-rest encryption protects the stored Record value, not the policy itself: authored
+`when.equals` and `input.value` literals remain visible in the project and in compiled or effective
+package inspection.
+Do not put secrets in those literals.
+
+On the successful worker path, the plaintext of a mapped encrypted field does not appear in the
+timer tables, the operator projection, captured audit entries, or the worker's scoped tracing.
+That coverage does not extend to actual `bregctl` process logging or to every failure path.
+[Encrypt a field](../breg-field-encryption/) covers the encryption itself.
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timers.rs
+    encrypted_predicate_write_opens_the_same_occurrence_and_maps_current_plaintext;
+    crates/registry-breg/tests/timer_authoring.rs
+    encrypted_predicate_and_mapped_fields_are_in_the_exact_anchor_read_ceiling. */}
+
+## Inspect the effective authority
+
+Run the normal authoring checks and inspect the compiled access report:
+
+```sh
+bregctl check ./registry --production
+bregctl --format json explain access ./registry
+```
+
+The access explanation lists each timer's control, predicate, and effect-shaping input fields, the
+profiles and operations that can write those fields, and the exact product-owned future-effect
+grant.
+That system grant is not an access profile or a token-selectable identity.
+Its target `operation` member reuses the shared Operation representation, which is a superset of
+timer authority.
+A realizable timer grant contains only `get` for exact reads, `create` for bounded new Records, and
+`patch` for the exact anchor.
+Other Operation values in the shared schema do not grant a timer those capabilities.
+
+{/* Evidence: crates/registry-breg/tests/access_explanation.rs
+    access_explanation_names_timer_policy_writers_and_exact_future_authority;
+    crates/registry-breg/src/access.rs TimerAccessExplanation, TimerFutureEffectExplanation;
+    crates/registry-breg/tests/timer_authoring.rs timer_system_authority_is_anchor_and_create_bounded. */}
+
+A timer-only Action remains in governed compiled inspection, but it has no public Action route,
+access entry, default profile, generated invoke method, portable Action contract, or public
+Registry metadata entry.
+Do not add a synthetic profile to make it callable.
+
+{/* Evidence: crates/registry-breg/tests/timer_authoring.rs
+    timer_compiles_complete_typed_mapping_and_exact_system_grant. */}
+
+## Inspect and control timer work
+
+The timer commands use the runtime configuration of the Registry deployment you are operating.
+The path must be absolute.
+They use the runtime database credential and the keyed companion audit journal from that
+configuration.
+JSON output suits scripts and keeps the closed state, block, outcome, and technical-code
+vocabularies explicit:
+
+```sh
+runtime_config=/absolute/path/to/runtime.yaml
+
+bregctl --format json timer status --runtime-config "$runtime_config"
+bregctl --format json timer list --runtime-config "$runtime_config" --limit 50
+bregctl --format json timer show --runtime-config "$runtime_config" \
+  --occurrence-id 00000000-0000-0000-0000-000000000000
+```
+
+The `status` member of each report is the shared CLI result class.
+Timer status reports the scheduler state in its `timer` member.
+Status, list, and show remain available while timer claims are paused or in adoption hold.
+
+{/* Evidence: crates/registry-bregctl/src/timer_operator_lifecycle.rs;
+    crates/registry-bregctl/tests/timer_operator_cli.rs
+    timer_help_exposes_only_the_bounded_operator_commands,
+    timer_read_command_help_names_the_bounded_selection_contract;
+    crates/registry-breg/tests/postgres_record_timer_operator.rs
+    built_bregctl_executes_every_timer_operator_command_against_real_postgres,
+    operator_reads_pending_and_completed_occurrences_without_record_values. */}
+
+The operator surface is separate from ordinary Record APIs.
+Its list and show reports contain bounded operational metadata and keyed Record references, not
+mapped input values, participants, result payloads, or claim tokens.
+
+{/* Evidence: crates/registry-breg/src/timer_operator.rs
+    public_projection_uses_closed_value_free_vocabularies,
+    occurrence_projection_keys_record_and_receipt_references;
+    crates/registry-breg/tests/postgres_record_timer_operator.rs assert_value_free. */}
+
+### Read the bounded reports
+
+List pages use an opaque cursor returned by the preceding page.
+`--limit` defaults to 50 and accepts at most 200.
+Show returns at most the latest 100 retained attempts, in chronological order.
+`attemptsTruncated` reports either pagination or expired attempt detail that is no longer retained.
+`attemptCount` remains the cumulative count even after attempt detail expires.
+`detailAvailable` and `detailExpiresAt` describe retained occurrence-level diagnostic detail, not
+whether the Action executed.
+
+Status scans each occurrence state and each block kind independently, with a 10,000-row ceiling for
+every category.
+It reports each capped count and sets `countsTruncated` when any category or the separate
+live-lease sample exceeds its ceiling.
+`staleRevisionCount` is a separate sum over capped samples of up to 10,000 pending, leased, and
+blocked rows per state.
+Prometheus current-occurrence and block gauges also use independent category caps, while current
+executed-attempt and stale-current gauges are sums over a separate sample of at most 10,000 current
+rows.
+Those gauges need not reconcile with the category counts after truncation.
+
+{/* Evidence: crates/registry-breg/src/postgres/timer_operator_read.rs
+    STATUS_OCCURRENCE_SCAN_MAXIMUM, SHOW_ATTEMPT_MAXIMUM, attempts_truncated, stale_revision_count;
+    crates/registry-breg/src/timer_operator.rs DEFAULT_TIMER_LIST_LIMIT, MAXIMUM_TIMER_LIST_LIMIT;
+    crates/registry-breg/src/metrics.rs counts_truncated;
+    crates/registry-breg/tests/postgres_record_timer_metrics.rs. */}
+
+Status is a bounded live observation assembled from several database reads, not a transactionally
+coherent snapshot.
+Its category counts, stale-revision count, lease owners, and lag can therefore reflect slightly
+different moments.
+Each mutating command rechecks the exact current control epoch and occurrence state.
+List pagination is also a live diagnostic view, not a durable event feed or a snapshot: work
+committed after a page can sort behind its cursor and be absent from the remainder of that scan.
+Start a new scan when completeness matters.
+
+{/* Evidence: crates/registry-breg/src/postgres/timer_operator_read.rs;
+    crates/registry-breg/tests/postgres_record_timer_operator.rs
+    operator_status_preserves_later_block_kinds_after_bounded_terminal_history. */}
+
+### Protect the operator credential
+
+There is no separate timer operator database role.
+Protect the runtime configuration and its credential as operator capability: the database cannot
+distinguish `bregctl timer` from another holder of the same credential.
+That holder could use the runtime role's database grants to write timer tables and control columns
+without the reason, audit, and compare-and-set checks of `bregctl`.
+Migration-owned protocol and instance-binding state remains outside those runtime writes.
+
+{/* Evidence: crates/registry-breg/src/timer_operator.rs TimerOperatorService::from_runtime_config;
+    crates/registry-breg/tests/postgres_record_timers.rs
+    forged_system_context_without_a_live_claim_is_denied_by_rls. */}
+
+### Pause and resume
+
+Pause and resume use the control epoch that status returns.
+Re-read status after an epoch mismatch.
+Supply a bounded change reference and reason that serve your institutional audit process, and put
+no secrets or personal data in either value:
+
+```sh
+bregctl --format json timer pause --runtime-config "$runtime_config" \
+  --expected-control-epoch 42 \
+  --operator-reference CHG-1234 \
+  --reason 'Pause while the downstream service is unavailable'
+
+bregctl --format json timer resume --runtime-config "$runtime_config" \
+  --expected-control-epoch 43 \
+  --operator-reference CHG-1235 \
+  --reason 'Resume after downstream recovery was verified'
+```
+
+{/* Evidence: crates/registry-bregctl/src/timer_operator_lifecycle.rs;
+    crates/registry-bregctl/tests/timer_operator_cli.rs timer_mutation_help_requires_exact_epochs_and_audit_inputs;
+    crates/registry-breg/tests/postgres_record_timer_operator.rs
+    operator_pause_resume_uses_shared_control_epoch_and_fences_native_workers. */}
+
+### Retry a technically blocked occurrence
+
+Retry is limited to the exact current technically blocked occurrence and its observed cumulative
+attempt count.
+It grants one additional attempt to that occurrence; it does not run the Action synchronously,
+reset the count, or bypass current package, control, instance, or Action authority.
+BReg refuses retry unless the global timer control is `running`, so reconcile the block, then resume
+a paused or adoption-held control before you retry:
+
+```sh
+bregctl --format json timer retry --runtime-config "$runtime_config" \
+  --occurrence-id 00000000-0000-0000-0000-000000000000 \
+  --expected-attempt-count 5 \
+  --operator-reference INC-5678 \
+  --reason 'Retry after the transient runtime failure was resolved'
+```
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timer_operator.rs
+    operator_retry_grants_one_technical_allowance_and_refuses_other_states,
+    operator_retry_after_actual_exhaustion_fails_again_and_preserves_history. */}
+
+An expired valid `notAfter` window makes retry ineligible.
+The worker eventually materializes unfinished work as missed; status does not promise that this
+asynchronous transition is visible at the exact deadline.
+An invalid or unknown current window remains a configuration block until a corrective governed
+Record write or a reviewed successor timer configuration makes the window valid.
+A preserved technical block remains technical across those successor changes.
+BReg never infers an invalid window as missed from a stale predecessor deadline.
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timers.rs
+    valid_window_blocks_expire_without_a_new_attempt_or_predicate_release,
+    elapsed_false_gate_is_discovered_and_missed_without_a_claim,
+    invalid_successor_window_blocks_until_a_reviewed_correction. */}
+
+### Recover from an unconfirmed audit
+
+Pause, resume, and retry commit the database transition before they write the final
+companion-audit response.
+A `timer.audit.unavailable` result can therefore mean the transition committed but was not
+confirmed to you.
+Do not assume rollback, and do not repeat the command blindly.
+Re-read status and the exact occurrence, compare the control epoch, occurrence state, and
+`attemptCount`, then reconcile the unfinished audit request before you choose a follow-up.
+
+{/* Evidence: crates/registry-breg/src/timer_operator.rs TimerOperatorError, AuditUnavailable,
+    unresolved_operator_outcome_is_not_a_definite_refusal. */}
+
+## Upgrade an existing Registry
+
+Every package built with this release declares Record timer store support, including a project that
+defines no timers.
+A package built by an earlier release is predecessor-only for this engine feature.
+Starting the new runtime with that older package neither adds tables nor rewrites the active
+catalog.
+Keep the exact active package directory, build a governed successor from it with this release, plan
+and apply that successor, and only then restart the runtime on the successor package:
+
+```sh
+bregctl test PROJECT --baseline-package ACTIVE_PACKAGE --runtime-config RUNTIME --credentials CREDENTIALS --output RECEIPT
+bregctl package PROJECT --baseline-package ACTIVE_PACKAGE --test-receipt RECEIPT --output BUILD
+bregctl plan --runtime-config RUNTIME --package BUILD/package
+bregctl apply --runtime-config RUNTIME --package BUILD/package
+```
+
+This is the ordinary successor-package workflow, not a separate timer migration command.
+The package records the engine-owned timer store transition; you do not supply timer schema SQL.
+[Change an active registry](../../operate/breg-changes/) covers successor packages in general.
+
+{/* Evidence: crates/registry-breg/src/package/tests/record_timers.rs
+    pre_timer_store_package_is_predecessor_only_and_unknown_features_refuse,
+    unchanged_pre_timer_store_registry_plans_one_engine_transition_without_authored_ddl. */}
+
+For a successor, `bregctl plan` reports each added, changed, removed, or effect-input-migration
+timer without Record values.
+It includes predecessor and successor policy revisions plus a bounded observation of current
+unfinished markers.
+`observedUnfinishedCount` may be partial when `truncated` is true; `hasStaleRevisions` says the
+observed cache spans older policy revisions.
+Changed-policy outcomes remain unknown until refresh.
+A removed timer is known to be fenced from execution, and a newly added timer leaves historical
+Records unarmed.
+The plan does not scan business Records or offer backfill.
+
+{/* Evidence: crates/registry-breg/src/package/tests/record_timers.rs
+    timer_activation_preview_is_structural_value_free_and_change_specific,
+    timer_policy_add_change_and_removal_are_explicit_reviewed_changes;
+    crates/registry-breg/src/timer_activation_preview.rs observed_unfinished_count,
+    has_stale_revisions;
+    crates/registry-breg/tests/postgres_record_timers.rs
+    changed_timer_policy_refreshes_the_current_occurrence_before_claim. */}
+
+## Run more than one replica
+
+All replicas of one Registry deployment use the same active package, authoritative database, and
+logical `identity.instanceId`.
+They also need the same relevant runtime key and provider configuration.
+Keep `identity.instanceId` stable across replicas: it identifies the deployment and derives durable
+hook event identity, not the individual process or timer worker.
+
+Configure a distinct durable audit sink for each process.
+Replica processes must connect directly to PostgreSQL or through session-mode pooling.
+Do not use transaction-mode PgBouncer: BReg's registry interlocks use session-level PostgreSQL
+advisory locks that must remain on the same connection.
+
+Use process IDs, logs, and the database connection's application name to tell worker processes
+apart.
+Worker concurrency and database pool limits apply to each process.
+The number of lease owners visible in timer status is an observation of current ledger work, not a
+count of deployed replicas.
+
+{/* Evidence: crates/registry-breg/src/postgres/interlock.rs pg_advisory_lock;
+    crates/registry-breg/tests/postgres_record_timer_native.rs
+    two_native_processes_contend_then_restart_without_duplicate_effect,
+    native_bounded_fairness_interleaves_all_timer_lanes_across_types_and_replicas. */}
+
+## Restore a database
+
+Fence the original primary before a restored or promoted copy can serve.
+Run the existing instance-claim adoption against the restored database, then keep timer work in
+adoption hold while you reconcile the recovery window.
+Inspect the timer status and resume only with the expected control epoch and an audited operator
+reference and reason.
+Resume is the only transition that releases an adoption hold.
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timer_operator.rs
+    instance_claim_adoption_fences_old_timer_lease_until_audited_resume. */}
+
+A database restore carries the timer ledger and retained attempt history only up to the restore
+point.
+It cannot establish whether an external downstream effect completed after that point.
+Reconcile those downstream systems and any logical outbox delivery separately before you resume.
+No full backup-and-restore or downstream-reconciliation exercise is claimed for timers.
+
+### Retention and missing detail
+
+`retention.receiptRetentionDays` bounds terminal diagnostic detail and attempt history.
+Finished attempt detail may expire even while a current occurrence remains blocked; the cumulative
+attempt count and current failure metadata stay available.
+After detail expires, a restore cannot recover it.
+Retention may also remove expired non-current terminal occurrences.
+The current settled generation marker and binding-removal incarnation fences survive indefinitely,
+so do not infer missing execution from absent expired detail or older terminal rows.
+
+{/* Evidence: crates/registry-breg/tests/postgres_record_timer_retention.rs
+    retention_prunes_expired_detail_without_reopening_or_losing_current_markers;
+    crates/registry-breg/src/postgres/timer_retention.rs. */}
+
+## Next
+
+- [Author a registry project](../breg/)
+- [Actions and Proposals](../breg-actions/)
+- [Encrypt a field](../breg-field-encryption/)
+- [Deploy and serve](../../operate/breg/)
+- [Change an active registry](../../operate/breg-changes/)

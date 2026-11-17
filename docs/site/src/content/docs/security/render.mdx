@@ -1,0 +1,212 @@
+---
+title: Registry Render security model
+description: "The residual risks a Registry Render deployment accepts, and the conditions under which each applies, including those of optional document sealing."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+This page lists the residual risks a Registry Render deployment accepts, with the conditions under
+which each applies.
+Several apply only when you seal documents.
+To deploy and configure Render, see [Deploy Registry Render](../../operate/registry-render/) and the
+[Registry Render configuration reference](../../reference/render-configuration/).
+
+## Accepted residuals
+
+### A render worker is not a sandbox
+
+It runs as the serving process's user, with the same filesystem and network.
+A worker that gained code execution through a Typst or decoder defect could read files that user
+can read, including key files under `secretProviders.file.root`, connect to any socket that user
+can reach, and signal the serving process, which can stop the service.
+The worker starts with a cleared environment (only the dynamic loader's search paths are kept), and
+on Linux the serving process marks itself non-dumpable before it reads any secret, which keeps the
+parent's environment and memory out of the worker's reach.
+On macOS it does not: a same-user process reads another's arguments and environment through
+`KERN_PROCARGS2`, so such a worker can read every `${VAR}` and `secret:env` value the serving
+process holds; seal on Linux.
+The rest is not enforced.
+The worker needs only its pipes, so refusing socket creation and restricting its filesystem view
+(seccomp, Landlock) would narrow it; neither is in place, because each needs per-architecture
+filters proven on the release image.
+
+{/* Evidence: crates/registry-render/src/worker.rs worker_command,
+    a_worker_sees_no_parent_variable_beyond_the_loader_paths,
+    a_worker_keeps_the_parents_loader_paths;
+    crates/registry-render/src/server.rs KERN_PROCARGS2, serving_marks_the_process_not_dumpable;
+    crates/registry-render/tests/serve.rs
+    another_process_of_the_serving_user_cannot_read_the_serving_environment. */}
+
+### The audit log is not tamper-evident on the host
+
+It carries no hash chain or signature, so a host user able to write the audit file can remove,
+rewrite, or reorder lines undetected.
+A render worker that gained code execution is such a user: it runs as the serving user, who owns the
+`file` destination.
+Deployments that need tamper evidence ship the `file` or `stdout` stream to append-only storage they
+control; deployments that seal use `audit.destination: stdout`, shipped to storage the serving user
+cannot write.
+
+{/* Evidence: crates/registry-render/tests/serve.rs
+    a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation, audit_to_stdout. */}
+
+### macOS workers have no address-space cap
+
+`RLIMIT_AS` is not exposed by rustix on macOS: the timeout kill is the sole wall.
+Run Serve deployments for pilots on Linux, where the rlimit applies.
+
+{/* Evidence: crates/registry-render/src/worker.rs RLIMIT_AS, setrlimit;
+    crates/registry-render/tests/serve.rs
+    pathological_renders_are_bounded_and_the_service_recovers. */}
+
+### The output-size check runs after PDF export
+
+The check runs in memory after export; Linux workers bound the spike by `RLIMIT_AS`, macOS only by
+the kill.
+
+{/* Evidence: crates/registry-render/src/runtime.rs maximum_output_bytes;
+    crates/registry-render/src/render.rs DEFAULT_MAX_OUTPUT_BYTES;
+    crates/registry-render/src/worker.rs RLIMIT_AS. */}
+
+### A chunked body that trips the tower stream limit mid-body
+
+Such a body breaks the request stream, so the connection closes with no response and no audit
+event.
+Refusing chunked transfer before the first body byte is what keeps that path unreachable for
+ordinary callers; the backstop remains for a client that frames a Content-Length and then sends
+more.
+
+{/* Evidence: crates/registry-render/tests/serve.rs chunked_bodies_are_refused_upfront_as_problems,
+    oversized_bodies_are_refused_after_auth_as_problems. */}
+
+### Asset caps are code-level constants
+
+The caps (per-asset 2 MiB, request total 8 MiB, JPEG and PNG only) are constants in code, not
+per-document manifest declarations.
+
+{/* Evidence: crates/registry-render/src/bundle.rs DEFAULT_MAX_ASSET_BYTES,
+    DEFAULT_MAX_TOTAL_ASSET_BYTES;
+    crates/registry-render/tests/golden.rs wrong_media_type_and_oversize_assets_are_refused. */}
+
+### A compromised worker can still get arbitrary content sealed
+
+The worker renders the content, so one that gained code execution can return any single-revision
+document, and the parent signs it.
+That content sits in the first revision, under `documentDigest`, because the parent writes every
+byte after it: comparing the digest with the record, or re-rendering from the record and comparing,
+exposes it.
+The parent bounds what it signs (the seal key never enters the worker, and the parent accepts only a
+single-revision answer and writes every byte after it), not what the document says.
+The mitigations are governed templates, which are verified at startup and by each worker, the key
+staying outside the worker, and the value-free audit that lets an institution reconcile every
+sealed hash with its own records.
+The same worker can rewrite a `file` audit destination (see
+[The audit log is not tamper-evident on the host](#the-audit-log-is-not-tamper-evident-on-the-host)),
+so that reconciliation holds only for an audit sent to `stdout` and on to storage the serving user
+cannot write.
+Such a worker can also connect to a Transit seal's proxy socket, which the serving user can reach,
+and have Transit sign digests of its choosing outside the parent and its audit.
+A Vault or OpenBao audit device, when one is enabled, records each such call; the worker sandbox
+named in [A render worker is not a sandbox](#a-render-worker-is-not-a-sandbox), which refuses socket
+creation, is what would close it.
+
+{/* Evidence: crates/registry-render/src/seal.rs
+    a_worker_cannot_put_signed_bytes_outside_the_document_digest,
+    the_seal_key_never_crosses_into_the_worker;
+    crates/registry-render/tests/golden.rs tampered_package_is_refused;
+    crates/registry-render/tests/serve_seal.rs a_seal_writes_a_paired_value_free_audit. */}
+
+### The timestamp authority's identity is not pinned
+
+Render reaches the authority over TLS with the host's root certificates, or with only the CA bundle
+`timestampAuthority.caBundleRef` names, and accepts a token that matches the signature, nonce and
+key usage; it does not pin the authority's certificate or decide whether it is trusted.
+Validators decide trust in the seal certificate and the timestamp authority.
+
+{/* Evidence: crates/registry-render/src/runtime.rs ca_bundle_ref;
+    crates/registry-render/src/seal.rs random_timestamp_nonce, accept_timestamp_response. */}
+
+### Local seal key files are for test seals
+
+A `local-jwk` signer's `privateKeyRef` resolves a JWK through the file secret provider, so the key
+is readable by the serving user and, with the worker not a sandbox (see
+[A render worker is not a sandbox](#a-render-worker-is-not-a-sandbox)), by a worker that gained
+code execution.
+`assuranceProfile: production` refuses a key file: production custody is Transit, reached through a
+signing proxy.
+A compromised serving host can still ask that proxy to sign for as long as it is compromised, but
+cannot take the key.
+The custody check refuses only a Transit key that can leave Transit (exportable, derived, or with
+plaintext backup allowed). An imported (bring-your-own-key) Transit key passes it, so where the key
+material was before its import is the institution's to account for.
+Custody is read at startup only: a change to the key's flags after `serve` starts shows at the next
+start.
+A PKCS #11 HSM or a cloud key service is not supported.
+Reading a key file leaves two copies of key text that Render does not erase: a file the strict JSON
+parser refuses (bad syntax, a duplicate member) drops its partial parse tree inside
+`registry-platform-canonical-json`, and `serde_json` keeps a scratch copy of a string written with
+escapes, which a base64url member does not need.
+
+{/* Evidence: crates/registry-render/src/runtime.rs a_production_runtime_never_signs_with_a_key_file;
+    crates/registry-render/tests/serve_seal.rs a_production_runtime_never_signs_with_a_key_file,
+    a_production_seal_signs_through_its_transit_key;
+    crates/registry-platform-crypto/src/lib.rs transit_discovery_refuses_what_initialization_refuses,
+    transit_signer_accepts_openbao_native_metadata_and_sign_response_fixtures. */}
+
+### `/ready` is unauthenticated
+
+Anyone who reaches the listener reads each seal's id, readiness, value-free reason and test-only
+mark, and, while a Transit seal is not ready, makes it probe Transit over a fixed message: at most
+one probe in flight per seal, and the next no sooner than one second after a failed one ended,
+however many calls arrive.
+`/ready` never waits on Transit, so a stalled proxy cannot hold the readiness answer an orchestrator
+acts on.
+The listener stays on a loopback or private address.
+
+{/* Evidence: crates/registry-render/tests/serve_seal.rs
+    ready_answers_at_once_while_a_probe_waits_on_a_stalled_transit_proxy,
+    a_burst_of_ready_calls_sends_transit_at_most_one_probe_a_second;
+    crates/registry-render/src/seal.rs a_signer_that_turned_not_ready_is_probed_once_and_recovers;
+    crates/registry-render/src/runtime.rs validate_bind. */}
+
+### No revocation data, no qualification
+
+A seal is PAdES baseline B-B or B-T.
+It embeds no revocation information (no B-LT or B-LTA) and makes no eIDAS qualification claim.
+
+{/* Evidence: crates/registry-render/src/runtime.rs without_timestamp;
+    crates/registry-render/tests/serve_seal.rs a_b_b_seal_is_the_named_choice_and_carries_no_timestamp. */}
+
+### PDF/A conformance rests on the template
+
+veraPDF passed a fixture template at every accepted PDF/A level and at PDF/UA-1, rendered and
+sealed, so the seal keeps a level the rendered file meets; `check` refuses a reserved space the
+level's string limit cannot hold.
+A deployer's own template is not checked against its level, and veraPDF checks machine-checkable
+rules only.
+
+{/* Evidence: crates/registry-render/tests/check_seals.rs
+    check_accepts_a_seal_under_every_pdf_standard;
+    crates/registry-render/src/seal.rs
+    a_document_type_is_unsealable_when_its_standard_cannot_hold_the_reserved_space;
+    crates/registry-render/src/pdf_signature.rs
+    sealable_holds_pdf_a_1_2_and_3_to_their_string_length_limits. */}
+
+## Report a vulnerability
+
+Report a suspected vulnerability through the process in
+[Report a vulnerability](../report-a-vulnerability/).
+
+## Next
+
+- [Security](../)
+- [Deploy Registry Render](../../operate/registry-render/)
+- [Registry Render configuration reference](../../reference/render-configuration/)
+- [How Registry Render works](../../explanation/render-determinism/)
+- [Registry Render overview](../../start/registry-render/)

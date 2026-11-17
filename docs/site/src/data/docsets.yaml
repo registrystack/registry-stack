@@ -44,6 +44,9 @@ docsets:
       registry-documents:
         version: main source (unreleased)
         ref: HEAD
+      registry-adapter:
+        version: main source (unreleased)
+        ref: HEAD
   - id: v0.46.0
     label: v0.46.0
     path: /v/0.46.0/

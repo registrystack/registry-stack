@@ -1,0 +1,340 @@
+---
+title: Ingestion job sources
+description: Configure the Registry Adapter's file, CSV, JSONL, PostgreSQL, and SFTP job sources and the pollEnrich step that reads them, with the limits, defaults, and refusal codes each one carries.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+If you author a Registry Adapter ingestion job, this page lists what each job source accepts, the
+defaults and bounds it applies, and the refusal codes a read can stop with.
+The engine is a bounded Rust port of Apache Camel, so a source reads like the Camel component of the
+same name where this page does not say otherwise.
+Where the Adapter differs from Camel in a way that changes what you author, this page says so.
+[Operate the Adapter](../../operate/adapter/) covers running, upgrading, and recovering a job.
+
+A job source is read by a `pollEnrich` step over a static URI.
+The sections that follow describe each source, then the step.
+
+## File job source
+
+The file source is a non-recursive, read-only job source.
+It supports a flat `include` glob, an optional `doneFileName`, `readLock` values `none` and
+`changed`, and `maxMessagesPerPoll`.
+It always sorts candidates by filename in ascending order; there is no authored `sortBy` expression.
+
+`readLock` defaults to `none`.
+A source must declare how it knows a file is complete.
+The declaration is one of these:
+
+- A `doneFileName`.
+- `readLock: changed`.
+- `producerAtomicHandover: true`, when the producer writes each file elsewhere and renames it into
+  the directory (the SFTP source's `completed-name` declaration).
+
+`adapterctl job check` and startup refuse a source that declares none, because a read could
+otherwise take a file the producer is still writing.
+`readLock: none` alone is no declaration.
+This differs from Camel, whose file consumer reads with no lock by default.
+
+For `changed`, `readLockTimeoutMilliseconds` defaults to `10000`, and
+`readLockCheckIntervalMilliseconds` defaults to `1000`.
+Each bound must remain inside its declared finite range.
+`maxMessagesPerPoll` defaults to `500`, where Camel's value `0` means unbounded.
+The job profile applies its own row and byte bounds as well.
+
+The source is always `noop` in the literal sense that it does not delete, move, rename, mark, or lock
+source files.
+This differs from Camel's `noop=true` consumer behavior: the Adapter re-reads unchanged bytes and
+relies on the job item table to suppress another delivery.
+Raw files use namespace-plus-content identity.
+Decoded rows use their declared business key.
+
+The fixed source directory, flat names, no-follow open, and symlink checks restrict traversal.
+The checks do not turn the file client into an atomic operating-system jail.
+A symlink that escapes the directory refuses the read; it is not skipped.
+
+{/* Evidence: crates/registry-adapter/tests/camel_file.rs
+    the_noop_divergence_re_reads_a_consumed_file,
+    a_raw_read_orders_the_files_and_ends_the_scan,
+    the_done_file_forms_gate_candidates,
+    the_changed_read_lock_paces_a_stable_file,
+    max_messages_per_poll_bounds_the_candidates,
+    a_symlink_escape_refuses_the_read;
+    crates/registry-adapter-engine/src/job_sources.rs default_max_messages_per_poll,
+    producer_atomic_handover. */}
+
+{/* TODO[evidence]: the 10000 and 1000 millisecond read-lock defaults have no named test; the
+    bounds are BoundedU64 types in job_sources.rs. */}
+
+A `doneFileName` is a literal or one `file:name` placeholder.
+
+## CSV decoder
+
+You select the CSV decoder on a file or SFTP endpoint, not through a Camel `unmarshal` step.
+Its defaults are a comma delimiter, double-quote quoting enabled, a header record, no comment marker,
+no trimming, and UTF-8.
+`delimiter`, `quote`, and `commentMarker` each accept one ASCII character.
+
+With headers enabled, rows are maps of strings.
+With `header: false`, rows are arrays of strings.
+The decoder performs no type inference, so `007` stays `"007"`.
+A short record carries an empty string for the missing trailing field, not JSON `null`.
+A quoted multiline field decodes as one field.
+A line that starts with the comment marker is not a record.
+
+The decoder reads UTF-8 only and has no encoding member.
+A record that is not valid UTF-8 refuses the read as a malformed record, so re-export a
+Windows-1252 or Latin-1 file as UTF-8.
+
+The source cursor binds the file content digest and byte position.
+A malformed CSV record fails the read closed, leaves the cursor unchanged, and is encountered again
+after you repair or replace the source file.
+The decoder identifies the zero-based record ordinal, including the header.
+The pass reports `record: {ordinal}` beside its closed code and keeps the same location in its
+value-free stop reason.
+It returns no partial page and does not advance the cursor.
+
+CSV and JSONL require one declared `keyPointer` selecting a non-empty string business key.
+The item identity combines a versioned, length-delimited namespace with that exact key, preserving
+leading zeros; it does not include the file digest or position.
+Reordering unchanged rows therefore retains their keys, and changing a row with the same key uses the
+job's revised-item rule.
+Whole-file prevalidation refuses a duplicate business key before any page escapes, including a
+duplicate beyond the current page.
+The existing row and field bounds apply during prevalidation.
+Changing the identity contract requires you to reconcile prior effects; the store does not silently
+adopt a new selector over nonempty legacy state.
+
+{/* Evidence: crates/registry-adapter/tests/camel_csv.rs
+    the_pipe_delimiter_reads_maps,
+    a_quoted_multiline_field_decodes_whole,
+    a_comment_marker_line_is_not_a_record,
+    the_header_disabled_decoder_reads_arrays;
+    crates/registry-adapter/tests/camel_file.rs an_oversized_csv_row_refuses_the_read;
+    crates/registry-adapter-engine/src/decoder.rs csv_defaults_decode_deterministic_rows. */}
+
+## JSONL decoder
+
+The JSON Lines (JSONL) decoder reads one bounded JSON value per line.
+Camel has no corresponding data format.
+It counts and skips a malformed line and keeps the line ordinal for diagnostics.
+The run report carries the count as `malformedLines`.
+A malformed line yields no per-item outcome, so a skipped line never appears in the refusal counts.
+It uses a declared business key for item identity, pages at the job row bound, and refuses an
+oversized line.
+
+{/* Evidence: crates/registry-adapter/tests/camel_jsonl.rs
+    a_malformed_line_continues_with_a_count,
+    jsonl_pages_at_the_rows_bound,
+    an_oversized_line_refuses_the_read. */}
+
+## PostgreSQL source
+
+The PostgreSQL source accepts one digest-pinned, plain `SELECT` with a root `ORDER BY`.
+It does not accept dynamic SQL, multiple statements, utility commands, a data-changing common table
+expression, or a query with more than 16 positional parameters.
+`parameterOrder` gives each contiguous `$1`-onward position a reviewed name.
+Runtime values bind as text, checked integers, double-precision numbers, or booleans.
+
+The engine pages the statement itself.
+It appends `OFFSET $n+1` after the reviewed positions and binds the cursor's offset, zero on the
+first page.
+A root `LIMIT`, `OFFSET`, or `FETCH` therefore refuses at compile.
+Each page is read with that `OFFSET`, so the database scans every earlier row again and the cost
+grows with table size.
+On a very large table, point the source at a narrower view, for example one limited to recently
+changed rows.
+
+Every page runs in its own read-only, read-committed transaction with a local statement timeout and
+bounded rows, row bytes, field bytes, and response bytes.
+Root ordering makes one statement deterministic, but it does not make several offset pages one
+snapshot.
+An editable source therefore still needs an immutable snapshot, a monotonic cursor, or a bounded
+rescan discipline.
+
+{/* Evidence: crates/registry-adapter/tests/camel_sql.rs
+    the_query_compile_refuses_everything_but_one_plain_select,
+    a_real_fetch_bounds_its_rows_and_statement,
+    the_read_only_transaction_refuses_a_write;
+    crates/registry-adapter-job/tests/postgres_source_host.rs
+    actual_named_parameters_bind_text_integer_float_and_boolean_values;
+    crates/registry-adapter-engine/src/component/postgres.rs MAXIMUM_POSTGRES_QUERY_PARAMETERS. */}
+
+### Column types
+
+Each result column crosses as one JSON value, by its PostgreSQL type:
+
+- `text`, `varchar`, `char`, `name`: a string.
+- `smallint`, `integer`, `bigint`: an integer.
+- `real`, `double precision`: a number; NaN and infinities refuse.
+- `boolean`: a boolean.
+- `numeric`: an exact decimal string at the column's scale, such as `"12345.6700"`; NaN and
+  infinities refuse.
+- `date`: a string, `YYYY-MM-DD`.
+- `timestamp`: a string, ISO 8601 without an offset, such as `2026-11-03T10:15:30`.
+- `timestamptz`: a string, RFC 3339 in UTC, such as `2026-11-03T08:15:30.250Z`.
+- `uuid`: a string, lowercase hyphenated.
+- `jsonb`: a bounded JSON value, including objects and arrays.
+- SQL `NULL` of any type above: `null`.
+
+Any other type stops the page with `adapter.job.postgres-column-type` and a record locator that names
+the one-based column, never its value; cast that column in the query to a type above.
+A `NULL` key column stops the page with `adapter.job.postgres-key-null` and the row's zero-based
+ordinal.
+A JSONB key column stops the page with `adapter.job.postgres-key-type`.
+Select a stable scalar such as a UUID for the key.
+
+JSONB is a result type only.
+The job checks the raw JSONB content against the field limit before parsing, then checks the encoded
+field, row, and page sizes.
+JSONB numbers follow the strict canonical JSON boundary, including refusal of an inexact plain
+integer.
+Return exact decimals as `numeric` columns or decimal strings.
+
+{/* Evidence: crates/registry-adapter-engine/src/component/postgres.rs
+    MAXIMUM_POSTGRES_QUERY_PARAMETERS;
+    crates/registry-adapter-job/tests/postgres_source_host.rs
+    actual_named_parameters_bind_text_integer_float_and_boolean_values. */}
+
+{/* TODO[evidence]: no test or constant in a cited file names the column-type mapping or the
+    adapter.job.postgres-column-type, postgres-key-null and postgres-key-type codes; the
+    page rests on the source's reviewed description. */}
+
+## SFTP job source
+
+The SFTP source is read-only and belongs to the job host; the facade does not reach it.
+The runtime requires these:
+
+- A normalized absolute `baseDirectory`.
+- One pinned OpenSSH host key (`pinnedHostKey`), Ed25519 or ECDSA P-256.
+- A password or private-key credential through secret references.
+
+The SFTP source is the only secure-transfer source.
+Plain FTP is unsupported, and any exception needs an independently authenticated encrypted channel.
+FTPS stays out until a named adopter needs it.
+
+The default port is `22`.
+An optional flat `include` glob selects candidates.
+Hidden names (a leading dot, such as `.DS_Store` or an rsync temp file) and subdirectories are never
+candidates and never fail a read.
+
+`maximumListingEntries` defaults to `500` and is bounded at `10000`.
+It bounds the candidates a read can open (names matching `include`, done files excluded), not every
+name in the directory.
+Consumed files stay in place, so move them away or narrow `include` before the matching count
+reaches the bound.
+The source exposes no `readLock` option.
+Its operation deadline and completion rechecks bound an interrupted read instead.
+
+Exactly one producer completion protocol is required:
+
+- `completed-name` requires `producerAtomicHandover: true`; the producer closes temporary bytes and
+  atomically renames them into the final candidate name.
+- `done-file` requires a literal or `file:name` marker; the producer removes a stale marker before
+  replacement, atomically renames complete bytes into place, and publishes the marker last.
+
+The server must be able to confine the source account to `baseDirectory`: give the source a dedicated
+read-only account whose server-side authorization does that.
+Client pathname, canonical-path, symlink, and recheck logic is defense in depth.
+SFTP v3 provides no portable atomic open-beneath operation, so the client does not establish an atomic
+SSH jail.
+A link or an off-root candidate refuses the read; it is not followed.
+
+The client offers a short modern algorithm set and nothing weaker:
+
+- Key exchange: `curve25519-sha256`, `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`.
+- Ciphers: `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, `aes256-ctr`, `aes128-ctr`.
+- MACs for the CTR ciphers: `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512-etm@openssh.com`.
+- Host key: the algorithm of the pinned key (Ed25519 or ECDSA P-256).
+
+A server that offers none of a category (one limited to finite-field Diffie-Hellman, CBC ciphers, or
+SHA-1 MACs, for example) stops the page with `adapter.job.sftp-connection` and a message naming
+algorithm negotiation, so it is not mistaken for a network fault.
+The GCM cipher paths use AWS-LC while the CTR, MAC, key exchange, and signature paths use RustCrypto.
+This is not a whole-session Federal Information Processing Standards (FIPS) validation claim.
+
+A wrong host key is refused before the credential is resolved.
+A same-name replacement is read again, because the item identity is digest-based.
+
+{/* Evidence: crates/registry-adapter-job/src/sftp_source.rs ACCEPTED_KEX, ACCEPTED_CIPHERS,
+    ACCEPTED_MACS,
+    incorrect_host_key_does_not_reach_credential_resolution_or_authentication,
+    done_file_gates_partial_file_and_completed_file_is_read_only,
+    stalled_and_oversize_reads_are_bounded,
+    traversal_symlink_and_off_root_candidates_are_refused;
+    crates/registry-adapter-job/tests/sftp_cli_host.rs
+    check_refuses_invalid_or_unsupported_host_keys_without_effects,
+    actual_cli_pass_recovers_cursor_and_same_name_replacement;
+    crates/registry-adapter-engine/src/job_sources.rs default_sftp_port,
+    default_maximum_sftp_listing_entries, producer_atomic_handover. */}
+
+## The pollEnrich step
+
+The Adapter's `pollEnrich` is a job-source read step over a static `file:`, `rabbitmq:`, or `sftp:`
+URI.
+`timeoutMilliseconds` is mandatory and bounded from `1` to `10000`.
+Absent an aggregation strategy, the bounded item page replaces the route body.
+The closed aggregation-strategy set may merge the page, but arbitrary processors are not accepted.
+Dynamic endpoint expressions, `consumerSendTo`, and streaming are not supported.
+
+The step is refused in every facade-reachable route.
+A job read starts without facade request headers and returns the closed item page body plus its source
+metadata, so Camel's header-preservation behavior after `pollEnrich` does not apply.
+
+{/* Evidence: crates/registry-adapter-core/src/checks.rs poll_steps_check_their_uri_timeout_and_decoder;
+    crates/registry-adapter/tests/camel_csv.rs the_read_aggregates_like_an_enrich;
+    crates/registry-adapter/tests/adapter_job.rs the_default_build_refuses_a_file_job;
+    crates/registry-adapter-core/src/route.rs timeout_milliseconds. */}
+
+### Refusal codes
+
+A refused read stops the page with a closed code that names what to fix:
+
+- `adapter.job.read-timeout` (any source): check the source's latency, or raise the step's
+  `timeoutMilliseconds`.
+  For a file source with `readLock: changed`, the file did not settle in time; raise
+  `readLockTimeoutMilliseconds`.
+- `adapter.job.read-bound` (any source): a file, row, listing, or delivery exceeded a configured bound;
+  raise the bound or split the input.
+- `adapter.job.sftp-connection` (SFTP): check `host` and `port`, and that the server accepts
+  connections from this host.
+  When the message names algorithm negotiation, the server offers no key exchange, cipher, MAC, or
+  host-key algorithm from the accepted set (see [SFTP job source](#sftp-job-source)); enable one on
+  the server.
+- `adapter.job.sftp-host-key` (SFTP): the server's key does not match `pinnedHostKey`.
+  Verify the key out of band before you update the pin, because a changed key can mean an
+  interception.
+- `adapter.job.sftp-credential` (SFTP): the credential's secret reference did not resolve to a valid
+  password or OpenSSH private key.
+- `adapter.job.sftp-authentication` (SFTP): the server refused the `user` and credential; rotate the
+  password or key and confirm the account is enabled.
+- `adapter.job.sftp-malformed` (SFTP): the listing or file read was incomplete; check the producer's
+  completion protocol, then rerun.
+- `adapter.job.sftp-path` (SFTP): place regular files, not links or directories, directly under
+  `baseDirectory`.
+- `adapter.job.rabbitmq-topology` (RabbitMQ): the message names what is missing.
+  Create the durable `queue` and the direct `deadLetterExchange` (with `deadLetterQueue` bound by
+  `deadLetterRoutingKey`), or set `declareTopology: true` so the host declares them.
+  A refusal that names neither is a permission failure or, with `declareTopology: true`, queue
+  arguments that differ from the durable dead-letter arguments the host declares.
+- `adapter.job.rabbitmq-unavailable` (RabbitMQ): check `host`, `port`, `vhost`, `user`, and
+  `passwordRef`, and that the broker runs.
+  A rerun after an uncertain settlement is safe.
+
+{/* Evidence: crates/registry-adapter-engine/src/job.rs;
+    crates/registry-adapter-engine/src/processor/poll_enrich.rs SFTP_CONNECTION_CODE,
+    SFTP_HOST_KEY_CODE, SFTP_CREDENTIAL_CODE, SFTP_AUTHENTICATION_CODE, SFTP_MALFORMED_CODE,
+    SFTP_PATH_CODE. */}
+
+## Next
+
+- [adapter ingestion jobs](../adapter-jobs/)
+- [operate the adapter](../../operate/adapter/)
+- [adapter job packs](../../configure/adapter-packs/)
+- [govstack consultation and write](../../configure/adapter-consultation/)

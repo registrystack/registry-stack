@@ -1,11 +1,11 @@
 ---
 title: Connect an OIDC issuer
-description: Choose the secure network configuration for a Registry Stack token issuer.
+description: Choose the secure network configuration for a Registry Stack token issuer, and apply the Registry Stack branding to the ThunderID sign-in screens.
 status: current
 owner: registry-docs
 source_repos:
   - registry-platform
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -13,6 +13,7 @@ standards_referenced: []
 
 Use this guide when a Registry Stack runtime must fetch OpenID Connect (OIDC) discovery metadata
 or signing keys from an issuer on a public, private, container, or loopback network.
+If the issuer is ThunderID, it also covers branding its hosted sign-in screens.
 
 ## Choose the issuer connection
 
@@ -103,3 +104,217 @@ CA chain, and that `SSL_CERT_FILE` names the mounted file inside the container.
 {/* Evidence: Cargo.toml, workspace reqwest features rustls-tls-native-roots;
     crates/registry-platform-httputil/src/lib.rs, OutboundClientBuilder;
     crates/registry-caseworkctl/src/dev/mod.rs, SSL_CERT_FILE runtime environment. */}
+
+## Brand the ThunderID sign-in screens
+
+If your issuer is ThunderID, Registry Stack provides a theme and a layout that style its hosted
+sign-in, registration, and recovery screens as Registry Stack.
+The package uses ThunderID's existing Design resources and application metadata.
+It adds no authentication method and changes no registration policy.
+The light palette uses Registry blue, ink, white, and ledger paper, with Public Sans and square
+corners; the dark palette follows the documentation site.
+Form labels, validation messages, keyboard focus, and disabled states stay visible in both.
+A small "Powered by ThunderID" line sits under the card, with Registry Stack as the primary brand.
+The stylesheet supplies that attribution because the ThunderID version your release pins does not
+render layout footer slots.
+
+Keep one branding package across environments.
+The issuer URL, credentials, redirect URIs, and application policies belong to each environment.
+
+{/* Evidence: products/identity/thunderid/branding/registry-stack.css Powered by ThunderID;
+    products/identity/thunderid/branding/branding.json themeId, layoutId, assetBasePath;
+    crates/registry-thunderid-tooling/src/render.rs render_branding. */}
+
+### Build the package
+
+Build the package from `products/identity/thunderid/branding/` at the release tag you install.
+The README beside `build.py` lists the files and the build options.
+The build writes a new output directory that holds the importable `resources.yaml`, the same theme
+and layout as native resource documents under `resources/`, the public `assets/` (Public Sans, its
+licence, and the wordmark as an SVG), and a `Dockerfile`.
+The layout embeds the stylesheet, so a browser makes no separate stylesheet request.
+
+The assets are served from the root-relative path `/gate/assets/registry-stack` unless you build
+with another same-origin mount or an absolute HTTPS URL.
+Another origin needs explicit Content Security Policy (CSP) permission for fonts and images, plus
+font CORS headers.
+Same-origin hosting works with ThunderID's default CSP.
+
+{/* Evidence: products/identity/thunderid/branding/build.py build, resource_yaml, DEFAULT_ASSET_BASE;
+    products/identity/thunderid/branding/test_build.py
+    test_a_root_relative_path_or_https_url_rewrites_the_font_url. */}
+
+### Local development sessions
+
+Local development sessions that provision browser applications select the theme and layout
+automatically.
+They write the public assets under the session's state directory and mount them read-only into the
+pinned ThunderID image, so no Python and no administrator API call is needed at runtime.
+Machine-only sessions need no branding resources.
+A retained session keeps its configuration and state, and adopting a new build does not reset it.
+
+{/* Evidence: crates/registry-thunderid-tooling/src/render.rs BRANDING_ASSETS_DIR, render_branding;
+    crates/registry-thunderid-tooling/src/container.rs BRANDING_ASSETS_MOUNT_POINT. */}
+
+### Add the package to an environment with native resource files
+
+If the environment owns its ThunderID configuration, merge the generated theme and layout
+documents from `resources/` into its native resource directory, or append `resources.yaml`
+through its resource assembler.
+Keep the other application, flow, role, and user documents.
+
+Set both stores to `composite` in the environment's `deployment.yaml`:
+
+```yaml
+theme:
+  store: composite
+layout:
+  store: composite
+```
+
+Add the asset directory to the ThunderID service.
+This Docker Compose override assumes the built package sits beside the Compose file:
+
+```yaml
+services:
+  thunderid:
+    volumes:
+      - ./registry-stack-branding/assets:/opt/thunderid/apps/gate/assets/registry-stack:ro
+```
+
+Keep the environment's existing image, database, certificate, resource, network, and configuration
+mounts.
+Then select the theme and layout identifiers on each browser application, and set the application
+logo to the wordmark on your issuer's public origin, using the fields in
+[Select the branding on an application](#select-the-branding-on-an-application).
+
+Use either native files or the import API for these fixed resource identifiers.
+A deployment that already imported the resources through the API can keep its API-managed copies.
+
+:::caution
+Loading the same identifiers from native files as well as the API can prevent a `composite` store
+from starting.
+:::
+
+{/* Evidence: crates/registry-thunderid-tooling/src/identity_generate.rs;
+    products/identity/thunderid/branding/branding.json themeId, layoutId. */}
+
+### Use an image that includes the assets
+
+The generated `Dockerfile` takes its base image from the ThunderID pin your release carries and
+copies only the public font, its licence, and the wordmark.
+Build it from the output directory and use the result in place of the stock image when a bind mount
+is inconvenient:
+
+```sh
+docker build --tag "registry-stack-thunderid:<tag>" "<output-directory>"
+```
+
+The image contains no environment configuration, keys, credentials, or startup administrator
+script.
+It serves the default `/gate/assets/registry-stack` path, so an external asset URL still needs the
+assets served at that URL.
+Load the theme and layout documents and select them on applications as before.
+
+{/* Evidence: products/identity/thunderid/branding/build.py build, Dockerfile. */}
+
+### Install into an API-managed deployment
+
+1. Serve the contents of the output's `assets/` directory at `/gate/assets/registry-stack/` on the
+   identity server.
+   With the pinned Docker image, mount that directory read-only at
+   `/opt/thunderid/apps/gate/assets/registry-stack`.
+   This adds static assets without replacing the Gate application.
+2. Import `resources.yaml` through the Console's YAML import workflow.
+   It contains only a theme and a layout, both named Registry Stack.
+   The `/import` API accepts the same file as its `content` string, with `options.upsert: true` for
+   later updates.
+3. Open the application and select Registry Stack for both its theme and layout under
+   Customization.
+   Set its application logo to the absolute, same-origin URL of `registry-stack-wordmark.svg`.
+4. Start a fresh sign-in through that application's normal OAuth or OIDC entry point.
+   Check registration and recovery if the application enables them.
+
+For deployments that load resources at startup, append the generated documents to the existing
+resource bundle and set the theme and layout stores to `composite` or `declarative`, following the
+deployment's resource loading convention.
+
+:::caution
+Do not replace an existing bundle with the branding-only file.
+ThunderID's explicit resources-file mode ignores every other resource source.
+:::
+
+{/* Evidence: products/identity/thunderid/branding/build.py resource_yaml, build;
+    products/identity/thunderid/branding/branding.json assetBasePath. */}
+
+### Select the branding on an application
+
+For an existing declarative application, merge these fields into its definition:
+
+```yaml
+themeId: 019a05b7-1000-7000-8000-000000000001
+layoutId: 019a05b7-1000-7000-8000-000000000002
+logoUrl: https://identity.example.org/gate/assets/registry-stack/registry-stack-wordmark.svg
+```
+
+Keep the application's other fields, authentication flows, grants, and redirect URIs.
+These are fields to merge into the definition, not a complete application or a replacement
+`PUT /applications/{id}` body.
+The fixed resource identifiers belong to this package; do not assign them to another theme or
+layout.
+
+{/* Evidence: products/identity/thunderid/branding/branding.json themeId, layoutId;
+    crates/registry-thunderid-tooling/src/render.rs render_branding, logoUrl. */}
+
+### Wordmark and custom flows
+
+The stock Default Authentication Flow already renders `application.logoUrl`.
+For the Console-specific flow and for custom flows that omit the supplied image, the stylesheet
+displays "Registry Stack" as text on top of the form.
+It omits that fallback when the supplied wordmark image is present, so the name appears once
+and no authentication flow changes.
+
+A flow that renders the application logo explicitly uses this image component:
+
+```yaml
+type: IMAGE
+src: "{{ meta(application.logoUrl) }}"
+alt: Registry Stack
+```
+
+Set the existing image's alternative text to "Registry Stack" as well when you use this wordmark.
+Make that change in the application's own flow, because shared translation overrides can affect
+other applications.
+
+The SVG is the name set in Public Sans 700, not a new logo.
+It uses paths, so it renders in an image element without external fonts.
+Its blue is kept in light mode, and the stylesheet renders it white in dark mode.
+Provider logos, QR codes, and other flow images are not recoloured or resized.
+
+{/* Evidence: products/identity/thunderid/branding/registry-stack.css Registry Stack. */}
+
+### Compatibility and removal
+
+- ThunderID consumes `layout.head.stylesheets` on the hosted Gate screens.
+  The package does not rely on layout `screens`, header slots, or footer slots, which the pinned
+  Gate version does not render.
+- Invite acceptance is outside the page-and-card stylesheet's scope in the pinned version: that
+  route omits the component variant classes the other Gate screens use.
+  It can inherit theme tokens, but its layout and wordmark need a separate integration.
+- Selectors use the public component class suffixes, so a custom product-name prefix is supported.
+  Generated Emotion class names are not used.
+- Inline CSS uses the CSP nonce that ThunderID supplies.
+  Fonts are self-hosted, with no Google Fonts, CDN imports, or JavaScript injections.
+- The stylesheet includes the font-family override that the pinned Gate version's `FontImporter`
+  needs, because it can otherwise fall back to its system font.
+- Native error, MFA, consent, and recovery content stays in the flow.
+  Styling enables no authentication method and no registration policy.
+
+After an upgrade, repeat a browser check of the real Gate screens, especially if component class
+names, the font importer, or the CSP changed.
+
+To remove the branding, restore each application's previous theme, layout, and logo selections.
+Remove the resources only after every application stops using them.
+
+{/* Evidence: products/identity/thunderid/branding/registry-stack.css FontImporter;
+    products/identity/thunderid/branding/build.py build (layout.head.stylesheets). */}

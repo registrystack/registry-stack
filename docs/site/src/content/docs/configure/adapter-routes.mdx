@@ -1,0 +1,621 @@
+---
+title: Adapter route language
+description: Write Adapter routes and route templates, with the exchange model, expression languages, processors, error handling and components a pack can use.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+An Adapter pack and an Adapter project describe routes in platform YAML.
+The route content follows the structure of Apache Camel's YAML DSL, so a Camel reader recognizes it.
+The engine is a bounded port of Camel's route model, not a Camel runtime: there is no JVM, no Camel YAML file and no Camel library.
+Where the Adapter differs from Camel, the difference exists to keep a route bounded, and this page states it.
+Camel 4.23.0 is the reference for semantics.
+
+This page covers the route language.
+[Configure an Adapter project](../adapter/) covers the artifacts that hold routes, the facade contract and the exchange contract between a route and its profile.
+
+## Exchange and message
+
+{/* Evidence: crates/registry-adapter-engine/src/exchange.rs Exchange */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs transform_replaces_the_body_from_its_expression */}
+
+An exchange follows Camel's `Exchange` and `Message`.
+It has an `exchangeId`, a pattern (always InOut), one message (headers and body), exchange properties and an exception slot.
+Headers are a bounded, case-insensitive map.
+The body is a size-bounded JSON value once unmarshalled.
+The `http` and `graphql` components marshal and unmarshal JSON themselves, so a route has no `marshal` or `unmarshal` step.
+
+Split and loop metadata lives in exchange properties: `CamelSplitIndex`, `CamelSplitSize`, `CamelSplitComplete`, `CamelSplitResult`, `CamelLoopIndex` and `CamelLoopSize`.
+These names have no header aliases, and authored steps or aggregation results cannot overwrite them.
+
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs collection_metadata_properties_are_not_author_writable */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs a_custom_split_strategy_cannot_manufacture_collection_metadata */}
+
+What enters the exchange is declared.
+The `rest` consumer places only the bound operation's validated inputs on it, under the closed names listed in [the exchange contract](../adapter/#exchange-contract).
+The `http` component copies upstream response headers onto it only where the endpoint declares them, and sends exchange headers upstream only where the endpoint's `requestHeaders` allowlist names them.
+Credentials, base URLs and secrets never enter the exchange, and no expression or header can carry them out.
+
+{/* Evidence: crates/registry-adapter/tests/camel_header_filter.rs only_listed_request_headers_are_sent */}
+{/* Evidence: crates/registry-adapter/tests/camel_header_filter.rs only_declared_response_headers_are_copied_under_their_declared_names */}
+{/* Evidence: crates/registry-adapter/tests/camel_header_filter.rs the_outbound_set_never_carries_a_credential_name */}
+
+## Routes
+
+{/* Evidence: crates/registry-adapter-core/src/route.rs RouteDefinition */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs Step */}
+{/* Evidence: crates/registry-adapter/tests/camel_direct.rs an_undeclared_direct_target_is_refused_at_load */}
+
+A step is an externally tagged union keyed by the Camel EIP name, as Camel's YAML DSL writes it.
+This route fetches a tracked entity and then either empties the body or shapes the record:
+
+```yaml
+routes:
+  - id: fetch-tracked-entity
+    from:
+      uri: "direct:fetch-tracked-entity"
+    steps:
+      - to:
+          uri: "http:tracker"
+          parameters:
+            httpMethod: GET
+            path: "/api/tracker/trackedEntities/{{id}}"
+            pathParameters:
+              id:
+                header: recordId
+            query:
+              program:
+                constant: "{{program}}"
+              fields:
+                constant: "*"
+      - choice:
+          when:
+            - jsonpath: "$.inactive"
+              steps:
+                - setBody:
+                    constant: null
+          otherwise:
+            steps:
+              - setBody:
+                  rhai:
+                    file: scripts/tracked-entity.rhai
+                    entrypoint: toRecord
+```
+
+The route language differs from Camel in these bounded ways:
+
+- One route has one `from`.
+- `from` URIs are `direct:` only. The `rest` consumer dispatches to them.
+- The route call graph through `direct:` is acyclic and its depth is bounded.
+- Every `loop` and `split` declares its maximum.
+- Inline code is refused, so `rhai` always names a digest-pinned file.
+
+{/* Evidence: crates/registry-adapter/tests/camel_direct.rs a_direct_chain_past_the_bounded_depth_is_refused_at_run */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs split_refuses_its_shape_and_bound_faults */}
+{/* TODO[evidence]: no test or schema keyed to the refusal of an inline Rhai body; the closed ScriptReference type is the only proof found */}
+
+## Route templates
+
+{/* Evidence: crates/registry-adapter-core/src/route.rs RouteTemplate */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs TemplateParameter */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs TemplatedRoute */}
+
+A pack is a catalog of route templates, the role Kamelets play for Camel.
+A template declares typed parameters (`name`, `type`, `required`, `defaultValue`, `description`) and a route body that references them as `{{name}}` placeholders.
+`{{?name}}` marks an optional parameter.
+Camel parameters are untyped strings; Adapter parameters are typed and checked.
+
+A project instantiates a template with Camel's `templatedRoute` shape: `routeTemplateRef`, `routeId` and `parameters`.
+Placeholders resolve at instantiation, during `adapterctl check` and at startup, never per request.
+A template parameter carries only authored values (field mappings, program identifiers, code-map names), never environment values.
+Environment values reach the engine only through endpoint ids that the runtime config resolves.
+
+A template omits `from`.
+The instantiated route's `from` is `direct:<routeId>`.
+A pack may also carry ordinary internal routes for shared sub-flows, which are the `direct:` targets of `to` and `enrich`.
+A deployment project writes no routes: it instantiates pack templates with `templatedRoutes` and binds them, and the project format has no member for a route body.
+
+## Expression languages
+
+{/* Evidence: crates/registry-adapter-core/src/model.rs Expression */}
+{/* Evidence: crates/registry-adapter-core/src/model.rs Language */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs jsonpath_yields_its_singular_value_or_its_node_list */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs a_non_boolean_predicate_fails_and_a_non_singular_one_never_loads */}
+
+Expressions are externally tagged by language, as in Camel (`setBody: { jsonpath: "$.instances" }`).
+
+- `constant`, `header` and `exchangeProperty` are Camel's built-in languages, written inline.
+- `jsonpath` is RFC 9535 JSONPath, written inline. It follows Camel's `camel-jsonpath` language but uses the IETF standard rather than the Jayway dialect.
+- `rhai` is a digest-pinned script file and entrypoint. It replaces Camel's Simple language, Groovy, JavaScript and `bean`, none of which are ported.
+
+A predicate is an expression whose result is a boolean.
+A non-boolean result is an error; there is no truthiness guess, where Camel coerces.
+
+## Processors
+
+Processors use Camel's defaults unless this section says otherwise.
+
+### Message transformation
+
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs set_header_sets_one_header_from_its_expression */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs script_sets_properties_from_a_returned_map_and_leaves_the_body */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs header_writes_refuse_the_read_only_targets_at_load */}
+
+`setBody`, `transform`, `setHeader`, `setProperty`, `removeHeader` and `removeProperty` behave as in Camel.
+Header names are bounded.
+Engine headers prefixed `Camel` or `Adapter`, and credential headers, cannot be set or removed.
+`script` runs an expression for effect on properties without changing the body, as Camel's `script` EIP does.
+
+### Conversion
+
+{/* Evidence: crates/registry-adapter/tests/camel_conversion.rs the_body_conversion_writes_each_scalar_kind */}
+{/* Evidence: crates/registry-adapter/tests/camel_conversion.rs a_null_body_passes_through_whatever_mandatory_says */}
+{/* Evidence: crates/registry-adapter/tests/camel_conversion.rs a_non_string_body_raises_conversion_unmapped */}
+{/* Evidence: crates/registry-adapter/tests/camel_conversion.rs a_miss_raises_unless_mandatory_is_false */}
+{/* Evidence: crates/registry-adapter/tests/camel_conversion.rs the_lookup_is_exact_and_case_sensitive */}
+{/* Evidence: crates/registry-adapter/tests/camel_conversion.rs rhai_code_map_takes_the_same_lookup */}
+
+`convertBodyTo` and `convertHeaderTo` take Camel's options `type`, `name`, `toName` and `mandatory` (default true).
+`charset` is not ported.
+`convertPropertyTo` takes the same options as `convertHeaderTo`.
+It is an addition: routes carry intermediate values in properties, where Camel 4 uses variables, which are not ported.
+
+`type` names a code map, written `codeMap:<id>`, never a Java type.
+A code map maps an `ExternalId` key to one JSON scalar.
+Lookup is exact and case-sensitive over a string input.
+A null or absent input passes through unchanged whatever `mandatory` says.
+Any other non-string input, or a miss, raises `conversion.unmapped`.
+With `mandatory: false` a miss leaves the target absent.
+Rhai scripts reach the same lookup through `code_map(id, key)`.
+
+Every typed conversion reference is a literal id that resolves.
+`adapterctl check` refuses a declared map that no typed conversion step references.
+A `code_map` call used only inside a script does not exempt a declared map from that refusal.
+
+{/* Evidence: crates/registry-adapter-core/src/pack.rs CodeMap */}
+
+### Routing
+
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs choice_runs_the_first_matching_when_and_otherwise_when_none_matches */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs filter_runs_its_steps_only_on_match_and_records_the_outcome */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs validate_raises_validation_on_a_failing_predicate */}
+{/* Evidence: crates/registry-adapter/tests/camel_processors.rs stop_ends_the_route_without_failing */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs ThrowExceptionStep */}
+
+- `to` sends to an endpoint. The URI is static; there is no `toD`. An `http` send may follow an origin-pinned link through `httpUri`.
+- `choice` with `when` and `otherwise`: the first matching predicate wins.
+- `filter` runs its nested steps only on a match, and the route continues after the filter either way. `statusPropertyName` is absent by default; when set, it names an exchange property that records the boolean outcome.
+- `stop` ends the route.
+- `validate` raises the `validation` class when its predicate fails.
+- `throwException` raises a declared catchable error class with a constant message. There is no message expression.
+
+### Splitting and aggregation
+
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs split_runs_each_piece_under_engine_properties_and_returns_the_original */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs split_item_failures_raise_after_the_split_or_sooner_or_never */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs split_failure_accounting_counts_stops_and_reports */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs a_do_while_loop_tests_its_predicate_before_each_iteration */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs a_loop_at_its_bound_completes_and_one_past_it_raises */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs copy_mode_starts_each_iteration_from_the_original_and_keeps_the_last */}
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs enrich_failure_propagates_unless_it_aggregates_on_exception */}
+
+`split` takes these options:
+
+- `expression`, which must yield a JSON array. Camel also splits maps and strings; the Adapter does not.
+- `aggregationStrategy`, default `use-original` with `propagateException: true`. The original message returns, and an item failure is raised after every item has run, as Camel's `Splitter` does.
+- `stopOnException`, default false.
+- `errorThreshold` (a ratio from 0 to 1, stopping once the failure ratio reaches it) and `maxFailedRecords` (stopping once failures reach it). Each is exclusive with `stopOnException`.
+- `maximumItems`, mandatory.
+
+A split sets `CamelSplitIndex`, `CamelSplitSize` (set before the first item, because the split does not stream) and `CamelSplitComplete`.
+It sets `CamelSplitResult` only when `errorThreshold` or `maxFailedRecords` is configured.
+`CamelSplitResult` carries the three counts only, and the per-item failure map is dropped so the result stays value-free.
+A piece whose failure the accounting counted is left out of the merged result, where Camel folds it with its exception cleared.
+`parallelProcessing`, `streaming`, `timeout`, `group` and `onPrepare` are not ported.
+
+`loop` takes an `expression` count or a `doWhile` predicate, and `copy` (default false).
+`maximumIterations` is mandatory.
+A count loop sets `CamelLoopIndex` and `CamelLoopSize`.
+The `doWhile` predicate is evaluated on the current exchange before every iteration, the first included, so a false predicate runs no iteration.
+A count of zero or less runs none either.
+Under `copy`, an error restores the exchange as it stood before the failed iteration, where Camel copies the failed iteration's own results back.
+
+`enrich` takes a `uri`, an `aggregationStrategy` (default: replace the body with the resource reply) and `aggregateOnException` (default false).
+A failure propagates to the error handler, so a record is never served without its enrichment unless the pack handles the failure.
+The URI is static, and there is no `pollEnrich` on a facade route.
+Strategies merge bodies and named `properties` only.
+
+Aggregation strategies are compiled in and named after Camel's built-ins:
+
+- `use-latest`.
+- `use-original`, with `propagateException` (default true).
+- `grouped-body`, which skips null bodies and yields an empty array for an empty split.
+- `json-array-append`, an addition for JSON bodies, with `from`, `into` and `uniqueBy`. A duplicate `uniqueBy` value raises `aggregation.duplicate`.
+- `json-merge`, an addition for JSON bodies, with `from` and `into`.
+
+A custom strategy is a `rhai` entrypoint over the old and new bodies, named `oldExchange` and `newExchange`.
+
+{/* Evidence: crates/registry-adapter/tests/camel_split_loop.rs split_json_array_append_merges_a_named_property_and_refuses_duplicates */}
+{/* Evidence: crates/registry-adapter-core/src/model.rs AggregationStrategy */}
+
+### Resilience
+
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs default_breaker_enforces_one_hundred_call_minimum_and_window */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs the_throttler_paces_requests_over_the_period */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs ThrottleStep */}
+
+`circuitBreaker` follows resilience4j semantics and defaults; the options are listed under [circuit breaker](#circuit-breaker).
+`throttle` takes Camel 4's options: `mode` (`TotalRequests`, the default, or `ConcurrentRequests`), a limit expression, `timePeriodMilliseconds` (default 1000) and `rejectExecution` (default false).
+A waiting exchange waits at most until its deadline and then raises `throttle.rejected`.
+A send nested inside `throttle` runs bare from the route's redelivery policy.
+
+State belongs to the EIP node and is shared by every bound operation and `direct:` call that reaches that node, for the process lifetime.
+Replicas have independent state.
+A pack must not use either processor as a per-caller quota, and must not assume a deployment-wide shared state.
+
+### Idempotency
+
+`idempotentConsumer` is described in [Adapter writes](../adapter/#writes-and-idempotency).
+
+### Pagination
+
+Pagination is not an EIP and gets none.
+The route reads `AdapterContinuation` and sets `AdapterNextContinuation`; the engine owns the caller-facing cursor, as [the exchange contract](../adapter/#continuation) describes.
+Two upstream shapes are covered.
+
+One facade page per upstream page is the default and the cheapest bound.
+Use one `to` whose query or `httpUri` comes from `AdapterContinuation`, then a `setProperty` of `AdapterNextContinuation` from the upstream's cursor, offset or next link.
+Leave it absent on the last page.
+
+Several upstream pages per facade page uses a `loop` with `doWhile` over a property that holds the upstream cursor.
+Seed the property before the loop so the predicate holds before the first fetch.
+Use an `enrich` per page with `json-array-append`, `uniqueBy` and `properties`, which carries the next cursor or link out of the reply.
+Duplicate and shifting pages then fail the exchange instead of merging silently.
+The loop's `maximumIterations` bounds the calls.
+Reaching it raises `loop.maximum-iterations-reached`, unless the route stops earlier and hands the remainder back as `AdapterNextContinuation`.
+
+{/* Evidence: crates/registry-adapter/tests/upstream_faults.rs pagination_transcripts_refuse_duplicates_and_shifts_but_accept_an_empty_page */}
+{/* Evidence: crates/registry-adapter/tests/adapter_continuation.rs a_sealed_continuation_opens_to_the_same_value */}
+
+## Error handling
+
+Error handling follows Camel's error handler, redelivery policy, exception clauses and `doTry`.
+Camel's Java exception hierarchy becomes a closed hierarchy of error classes.
+One failed exchange carries one failure class.
+The closest declared ancestor of that class wins, and `onWhen` narrows a clause.
+This single-class failure is a bounded divergence from Camel's cause-chain match.
+
+### Error classes
+
+{/* Evidence: crates/registry-adapter-core/src/model.rs ErrorClass */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs an_uncatchable_class_matches_no_clause */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs the_cluster_refuses_its_unservable_shapes_at_load */}
+
+Class names are kebab-case segments joined by dots.
+The catchable hierarchy is:
+
+```text
+upstream
+  upstream.http                      status outside okStatusCodeRange
+  upstream.timeout
+  upstream.connection
+  upstream.malformed                 body not JSON, or over the depth bound
+  upstream.too-large
+  upstream.redirect                  redirects are never followed
+breaker.open
+throttle.rejected
+loop.maximum-iterations-reached      a doWhile loop still true at maximumIterations
+validation
+conversion.unmapped                  a code map has no entry
+aggregation.duplicate
+script                               script error inside its budget
+outcome                              raised by a pack (throwException), never by the engine
+  outcome.not-found                  the source has no such record
+  outcome.conflict                   the source refused the write as conflicting
+  outcome.invalid-request            the source refused the request as malformed for it
+  outcome.rejected                   the source refused the write for its own reasons
+```
+
+The `outcome` branch is how a pack says what a source meant in profile-neutral terms: a 404, or an import summary with status ERROR inside a 200.
+The profile decides the problem a caller sees, as [the exchange contract](../adapter/#errors-become-problems) describes.
+
+Five classes are uncatchable, terminal and journaled: `budget.exhausted`, `credential.rejected`, `disclosure.violation`, `egress.refused` and `script.budget-exceeded`.
+`credential.rejected` means the upstream refused the deployment's credential after the single token refresh.
+It sits outside `upstream`, so no clause for `upstream` matches it.
+No `onException` or `doCatch` may name an uncatchable class, and `adapterctl check` refuses a clause that does.
+A failure carrying one of them fires no clause.
+
+Ten facade classes are raised by the `rest` consumer outside any route, so a route can neither catch nor raise them:
+
+- `facade.unauthenticated`
+- `facade.forbidden`
+- `facade.invalid-request`, for contract validation
+- `facade.invalid-cursor`, for a cursor that fails validation, answered 400
+- `facade.not-found`, when no record path matched
+- `facade.method-not-allowed`
+- `facade.unsupported-media-type`, for a request `Content-Type` the operation does not accept
+- `facade.not-acceptable`, when no acceptable response media type is in `Accept`
+- `facade.conflict`, for an idempotency key in flight
+- `facade.idempotency-mismatch`, for the same key with a different body
+
+They exist so the profile maps them like every other class: every response a caller receives is in the profile's shape.
+
+### Error handler and redelivery
+
+{/* Evidence: crates/registry-adapter-core/src/route.rs DefaultErrorHandler */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs NoErrorHandler */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs RedeliveryOptions */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs the_default_error_handler_redelivers_under_its_policy */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs the_error_handler_shapes_the_attempts_and_clause_reach */}
+
+`errorHandler` is `defaultErrorHandler` (Camel's default: no redelivery, and the error propagates to the caller) or `noErrorHandler`.
+The Dead Letter Channel is not a configurable endpoint: every exhausted exchange is journaled, and the journal is the fixed dead letter.
+
+The redelivery policy applies on the error handler or on an `onException` clause.
+Its options and defaults are:
+
+- `maximumRedeliveries`: default 0, so attempts are one plus this value.
+- `retryDelaySeconds`: Camel's `redeliveryDelay`, default 1 second.
+- `useExponentialBackOff`: default false.
+- `backOffMultiplier`: default 2.
+- `maximumRetryDelaySeconds`: Camel's `maximumRedeliveryDelay`, default 60 seconds.
+- `useCollisionAvoidance`: default false.
+- `collisionAvoidanceFactor`: default 0.15.
+
+The delay computation is Camel's `RedeliveryPolicy`.
+The multiplier applies only with `useExponentialBackOff` and a multiplier above 1.
+Collision avoidance varies the delay by plus or minus the factor.
+The first delay is `retryDelaySeconds`.
+Each later delay is the previous delay (times the multiplier when backing off), then the collision variance, then the `maximumRetryDelaySeconds` cap, so the cap bounds the varied delay.
+`delayPattern` is not ported.
+
+During redelivery the exchange carries `CamelRedelivered`, `CamelRedeliveryCounter` and `CamelRedeliveryMaxCounter`.
+`retryWhile` and `onWhen` can read them.
+They are sent upstream only if listed in `requestHeaders` like any engine header.
+
+Redelivery is per failing top-level endpoint send.
+It reaches only an `http` or `graphql` `to` that is a direct child of the route's step list.
+Token requests sit outside it.
+A `to: direct:` send is never redelivered.
+An endpoint send inside a nested processor body runs once and bubbles its failure to the enclosing top-level step.
+A matching clause may still handle that bubbled failure, except for the bare breaker block described under [circuit breaker](#circuit-breaker).
+Camel retries from the point of failure without either restriction.
+
+`retryWhile` is an option of an `onException` clause and of the default error handler, as in Camel, not of the redelivery policy.
+Redelivery continues while the predicate is true.
+`maximumRedeliveries` remains the hard cap, where Camel lets `retryWhile` replace it, so the maximum number of upstream calls stays a check-time guarantee.
+`adapterctl check` refuses `retryWhile` with `maximumRedeliveries` 0.
+A `retryWhile` that raises ends redelivery, as in Camel.
+
+`adapterctl check` refuses `maximumRedeliveries` above 0 over a `to` whose `httpMethod` is not safe, unless that endpoint operation declares `idempotentUpstream: true`.
+That declaration is a reviewed claim, for example DHIS2 creates with client-supplied UIDs.
+
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs retry_while_narrows_redelivery_without_raising_the_cap */}
+{/* Evidence: crates/registry-adapter/tests/camel_direct.rs a_direct_send_is_never_redelivered */}
+{/* Evidence: crates/registry-adapter-core/src/pack.rs EndpointOperation */}
+
+### Exception clauses
+
+{/* Evidence: crates/registry-adapter-core/src/route.rs OnExceptionStep */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs the_closest_exception_clause_wins_and_on_when_narrows_ties */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs handled_ends_continued_resumes_and_default_propagates */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs a_clause_error_replaces_the_failure_and_keeps_the_original */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs an_output_bearing_clause_without_policy_disables_handler_redelivery */}
+{/* Evidence: crates/registry-adapter/tests/camel_direct.rs an_unhandled_target_error_reaches_the_callers_clauses */}
+
+`onException` takes `exception` (classes), `onWhen`, `handled`, `continued`, the redelivery options and nested steps.
+`handled` and `continued` are booleans, where Camel takes predicates.
+
+The clause whose class is the closest ancestor of the raised class wins.
+Equally specific clauses keep declaration order.
+A subclass clause never matches a superclass failure.
+An `onWhen` that raises means the clause does not match.
+Clauses are route-scoped; Camel's global and `routeConfiguration` scopes are not ported.
+
+Without an explicit clause policy, a clause with nested output steps uses zero redeliveries.
+An outputless clause inherits the route policy.
+
+`handled: true` ends the exchange successfully with the clause's result.
+That result is validated against the operation's result schema like any route output, for example an empty search page or a fallback record.
+`continued: true` resumes the route at the step after the failure.
+An unhandled error surfaces as the profile's problem for its class, with no upstream content.
+The profile's mapping for the `upstream` root is the catch-all for source failures.
+
+To translate an error instead, end the clause with `throwException`.
+As in Camel, an error raised inside an exception clause is not handled again and becomes the exchange's failure, which the profile maps to a problem.
+The returned failure carries only the clause's error, while the journal records the original handling event and the final class.
+A `direct:` route called from a clause is inside the clause, so its errors are not handled again either.
+Camel lets the callee's own error handler fire the clause a second time.
+A clause never builds a problem body or sets `CamelHttpResponseCode`.
+
+### Try, catch and finally
+
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs do_try_catches_its_block_and_resumes_the_route */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs a_do_catch_on_when_narrows_or_fails */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs do_finally_runs_on_every_path_and_yields_to_a_pending_failure */}
+{/* Evidence: crates/registry-adapter/tests/camel_error_cluster.rs the_route_error_handler_does_not_wrap_a_do_try_block */}
+
+`doTry`, `doCatch` (with `onWhen`) and `doFinally` behave as in Camel.
+A `doTry` without a catch or a finally clause is refused before serving; an explicitly empty finally clause is valid.
+
+Inside a `doTry` block the route error handler is not in use: no `onException` clause and no redelivery applies to the block's steps.
+An error that no `doCatch` matches, or one raised in a `doCatch` or `doFinally`, leaves the `doTry` and fails the exchange.
+An error raised in `doFinally` while another is pending is kept as suppressed, and the original wins.
+A `doCatch` `onWhen` that raises fails the exchange with that error, and the original is journaled separately as suppressed.
+A `to: direct:` inside the block calls a route that keeps its own error handling.
+
+An uncatchable authority, audit, budget or cryptographic failure bypasses `doFinally`, so cleanup steps cannot issue source effects after a terminal boundary.
+Ordinary pending failures still execute `doFinally`.
+
+### Circuit breaker
+
+{/* Evidence: crates/registry-adapter-core/src/route.rs CircuitBreakerStep */}
+{/* Evidence: crates/registry-adapter-core/src/route.rs OnFallback */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs a_failure_storm_opens_the_breaker_and_refuses_without_calling */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs successful_slow_calls_open_at_the_authored_duration_and_rate */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs an_open_breaker_recovers_through_half_open_trials */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs on_fallback_answers_on_failure_and_on_rejection */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs record_exception_matches_descendants_and_only_recorded_failures_use_fallback */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs ignore_exception_wins_overlap_and_never_uses_fallback */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs boundary_failure_is_recorded_and_propagates_past_filters_and_fallback */}
+{/* Evidence: crates/registry-adapter/tests/camel_resilience.rs the_route_error_handler_does_not_wrap_a_breaker_block */}
+
+`circuitBreaker` has resilience4j semantics and defaults.
+State is per EIP node and process-local, as in Camel, so replicas have independent breakers.
+The options and defaults are:
+
+- `failureRateThreshold`: 50.
+- `slidingWindowType`: count-based.
+- `slidingWindowCalls` (resilience4j `slidingWindowSize`): 100.
+- `minimumNumberOfCalls`: 100.
+- `openStateWaitSeconds` (resilience4j `waitDurationInOpenState`): 60.
+- `maximumHalfOpenCalls` (resilience4j `permittedNumberOfCallsInHalfOpenState`): 10.
+- `automaticTransitionFromOpenToHalfOpenEnabled`: false.
+- `slowCallRateThreshold`: 100.
+- `slowCallDurationThresholdSeconds`: 60.
+
+With automatic transition disabled, an elapsed open wait stays OPEN until the next guarded call.
+When enabled, passive state observation reflects HALF_OPEN without admitting a trial.
+The breaker derives the elapsed transition when observed; it starts no timer task.
+
+`recordException` and `ignoreException` are optional, unique, non-empty lists from the closed error-class hierarchy.
+A named parent covers its descendants.
+With `recordException`, a non-matching catchable failure counts as success and continues the exchange.
+An `ignoreException` match takes precedence, counts as neither success nor failure, and continues the exchange.
+Neither continuation runs `onFallback`, and both journal the consumed failure.
+Boundary and facade-only classes are refused in either list, so an uncatchable failure always counts as failure and propagates.
+
+A rejected call always raises `breaker.open`.
+Camel's default (`throwExceptionWhenHalfOpenOrOpenState: false`) lets the message continue unchanged, which would answer with the request echoed.
+`onFallback` runs on a recorded failure and on rejection, and its output is validated like any route output.
+
+The guarded steps and the fallback run bare: the route error handler does not wrap the breaker block or its steps.
+A recorded error that escapes a breaker without `onFallback` reaches no `onException` clause and no route redelivery.
+It surfaces as the profile's problem for its class.
+
+## Components
+
+### direct
+
+{/* Evidence: crates/registry-adapter/tests/camel_direct.rs a_direct_call_shares_the_exchange_and_its_changes */}
+{/* Evidence: crates/registry-adapter/tests/camel_direct.rs a_direct_chain_at_the_bounded_depth_completes */}
+
+`direct` is a synchronous in-process call to another route, with Camel's semantics and a bounded depth.
+
+### rest
+
+{/* Evidence: crates/registry-adapterctl/tests/compile.rs the_maintained_example_compiles_under_breg_records */}
+
+`rest` is the facade consumer, ported from Camel's contract-first REST DSL (`rest().openApi()`).
+The generated OpenAPI document is the specification.
+Every concrete operation dispatches to its bound route.
+`clientRequestValidation` is always on.
+Unmatched requests answer 404 or 405, as in Camel.
+A missing route fails startup; Camel's `ignore` and `mock` options for `missingOperation` are not ported.
+The engine owns authentication and authorization, using shared OIDC verification, and the envelope is the profile's template, filled by the engine.
+
+### http
+
+{/* Evidence: crates/registry-adapter-core/src/route.rs ToParameters */}
+{/* Evidence: crates/registry-adapter/tests/camel_http_uri.rs a_next_link_under_the_base_path_is_pinned */}
+{/* Evidence: crates/registry-adapter/tests/camel_origin_link.rs a_link_off_the_endpoint_origin_is_refused_without_a_send */}
+{/* Evidence: crates/registry-adapter/tests/camel_http_uri.rs a_link_over_the_url_bound_is_refused */}
+{/* Evidence: crates/registry-adapter/tests/camel_header_filter.rs an_allowlist_over_the_transport_header_bound_is_refused */}
+{/* Evidence: crates/registry-adapter-core/src/pack.rs Endpoint */}
+
+`uri: "http:<endpointId>"` names an endpoint declared in the pack and bound to a base URL in the runtime config.
+The producer sends on the platform's fixed-destination transport.
+Its parameters are:
+
+- `httpMethod`.
+- `path`, an origin-relative template that starts with `/` and is appended to the endpoint's base path. Its `{{name}}` segments are filled from `pathParameters` expressions and percent-encoded by the engine as single segments. Every placeholder must be bound and every binding must be used.
+- `httpUri`, used instead of `path`: an expression that yields an absolute link the source returned, pinned to the endpoint's origin (see [origin-pinned links](../adapter/#origin-pinned-links)).
+- `query`, a map from name to expression, encoded by the engine. It is not allowed with `httpUri`.
+- `body`, an expression marshalled to JSON. A `POST` send carries a body, and one without a body is refused.
+- `throwExceptionOnFailure`, default true.
+- `okStatusCodeRange`, default `200-299`: a comma-separated list of status codes and inclusive ranges inside 100 to 599, as Camel writes it.
+
+Camel builds dynamic requests from the `CamelHttpPath`, `CamelHttpQuery` and `CamelHttpUri` headers or from `toD`.
+The Adapter's requests are structured and encoded by the engine, and the one dynamic form, `httpUri`, is checked against the origin.
+No expression can change the origin or inject a path.
+
+Request headers go out only through the endpoint's `requestHeaders` allowlist.
+Upstream authentication is one of the closed kinds listed in [Authorization and secrets](../adapter/#authorization-and-secrets), declared on the endpoint and injected at send time, after the header allowlist has been applied.
+
+Every `http` and `graphql` endpoint declares two bounds, with no default:
+
+- `attemptTimeoutMilliseconds`, from 1 to 10000, covers the whole outbound attempt. A value above the ceiling is refused, never shortened.
+- `maximumResponseBytes`, from 1 to 1048576.
+
+The runtime binding may lower either, never raise it.
+Camel's `connectTimeout`, `responseTimeout`, `soTimeout` and `connectionRequestTimeout` collapse into the one attempt timeout, and the facade deadline still bounds the total.
+For an ingestion job, the job profile resolves these ceilings under the platform caps, as [Adapter ingestion jobs](../adapter-jobs/#job-profile) describes.
+
+A send's safety comes from its method.
+A `POST` whose endpoint operation declares `safeUpstream: true` counts as safe for the write-safety rules.
+That declaration is a reviewed claim, as for FHIR `POST _search`.
+A read operation (a facade `get` or `search` binding) reaches only safe sends: `adapterctl check` refuses a non-safe `http` send, or a GraphQL mutation, anywhere in its route closure.
+
+Responses behave this way:
+
+- A body over the bound raises `upstream.too-large`.
+- A 3xx raises `upstream.redirect` whatever `okStatusCodeRange` says, and is never followed.
+- `upstream.http` covers every other status outside the range.
+- A failed response keeps its status in `CamelHttpResponseCode`, and keeps its body as the exchange body when that body is JSON within the bound, so a clause can read a source's error detail. The `Location` value and the status text are not kept.
+- An empty body is JSON `null`.
+- A non-JSON body raises `upstream.malformed`, also under `throwExceptionOnFailure: false`.
+- A `path` whose filled and encoded destination exceeds the URL bound fails before a send as `outcome.not-found`, so a caller-supplied record identifier does not become an internal egress problem.
+- An evaluated `httpUri` over the same bound is the uncatchable `egress.refused`, because it is a source-supplied absolute destination.
+
+### graphql
+
+{/* Evidence: crates/registry-adapter/tests/camel_graphql.rs an_errors_array_fails_the_exchange_as_upstream_http */}
+{/* Evidence: crates/registry-adapter-core/src/pack.rs GraphQlOperationKind */}
+
+`graphql` is a producer in the shape of Camel's `camel-graphql` component, over the same transport as `http`.
+It takes `query` as a digest-pinned `queryFile`, `operationName` and a `variables` expression.
+It has no `httpMethod`, `path`, `pathParameters` or `query`.
+`adapterctl check` parses the query file and requires the named operation.
+
+A send is safe only when the named operation is a GraphQL `query`.
+A `mutation` is non-safe under every write-safety rule.
+The reply's `data` member is the body.
+A GraphQL `errors` array fails the exchange with an `upstream.http`-class error that carries the declared detail only.
+Camel leaves errors in the body; the Adapter fails the exchange even when partial data came back.
+
+### Components that are not ported
+
+Every other Camel component is not ported, including `log` (it would leak values) and `mock` outside the test harness.
+
+### What is not ported
+
+{/* Evidence: crates/registry-adapter-core/src/route.rs Step */}
+
+The route language is a closed set of steps, so `adapterctl check` refuses a route that uses a construct outside it.
+These Camel features are deliberately not ported:
+
+- the Java and XML DSLs, the code-first REST DSL and Simple;
+- `bean`, `process` and `toD`;
+- the EIPs `wireTap`, `multicast`, `recipientList`, `routingSlip`, `dynamicRouter`, `loadBalance`, `resequencer`, `delay`, `sample` and `saga`;
+- the stateful `aggregate` EIP and aggregation repositories;
+- `log`;
+- transactions and UnitOfWork;
+- `threads` and parallel processing;
+- streaming;
+- brokers and the rest of the component library;
+- route controllers, hot reload and JMX;
+- Camel K, Quarkus and Spring runtimes.
+
+`pollEnrich` is not on this list for ingestion jobs: a job route's read step is bounded and static-URI only, and the facade never polls.
+FTPS stays out until a named adopter needs it, and plain FTP is unsupported.
+
+## Next
+
+- [configure an adapter project](../adapter/)
+- [adapter ingestion jobs](../adapter-jobs/)

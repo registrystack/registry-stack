@@ -17,7 +17,7 @@ as "ask a reviewer, wait for the decision, then send the applicant a notice" has
 without a person or a script holding it open.
 
 {/* Evidence: products/coordinator/README.md;
-    products/coordinator/PRODUCT-CONTRACT.md, Execution and authority. */}
+    crates/registry-coordinator/src/definition.rs, seal_revisions. */}
 
 Coordinator is optional. An application can prepare a Base Registry Engine (BReg) Proposal, obtain an exact Casework
 review, and apply it through BReg without running Coordinator. Use the
@@ -48,8 +48,9 @@ applicant, and never reverses an effect a product accepted.
 When Coordinator cannot tell whether a call took effect, it holds the run for an operator rather
 than sending the call again.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, Execution and authority, Governed Actions,
-    Observation and uncertainty. */}
+{/* Evidence: crates/registry-coordinator/src/contracts.rs, coordinator.operation.proposal-action;
+    crates/registry-coordinator/src/breg_action.rs; crates/registry-coordinator/src/adapters.rs;
+    crates/registry-coordinator/src/store/recovery.rs, uncertain. */}
 
 ## When to look elsewhere
 
@@ -57,7 +58,8 @@ Coordinator has no SQL steps, no loops, no number of calls decided at run time, 
 methods, no automatic compensation, and no distributed rollback. It is an optional service and
 pre-1.0: use the binaries and documentation of one source version together.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, Compatibility and verification. */}
+{/* Evidence: crates/registry-coordinator/src/definition.rs, seal_revisions;
+    crates/registry-coordinator/src/authoring.rs, CoordinatorProject. */}
 
 ## Next
 

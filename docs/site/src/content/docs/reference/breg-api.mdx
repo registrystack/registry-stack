@@ -139,6 +139,32 @@ Each Record type's generated JSON Schema carries these encodings.
     crates/registry-breg/src/compiler.rs, reserved_logical_name();
     products/breg/acceptance/registry-record-conformance/registry.yaml. */}
 
+### Response shapes
+
+Generated and caller-filtered OpenAPI documents declare each route's response shape and a closed schema per media type.
+A route family maps to a shape as follows:
+
+| Route family | Response shape |
+| --- | --- |
+| Get, lookup, create, patch, tombstone | `RegistryRecordSingleV1` |
+| List, relationship traversal | `RegistryRecordCollectionV1` |
+| Revision detail | `BRegRevisionRecordV1`, a shared record with closed BReg history metadata |
+| Revision list | `BRegRevisionCollectionV1`, a shared collection of revision records |
+| Snapshot query | `BRegSnapshotCollectionV1`, a shared collection with snapshot selection metadata |
+| Batch mutation | `BRegAtomicBatchMutationResponseV1` |
+| Actions and Proposals | Their operation-specific BReg response shapes |
+| GeoJSON get and list | `BRegGeoJsonFeatureV1` and `BRegGeoJsonFeatureCollectionV1` |
+
+An operation that also serves GeoJSON carries `x-registry-responseShapes`, which assigns a shape to every media type.
+The singular `x-registry-responseProfile` marker governs only the `application/json` and `application/ld+json` branches.
+The GeoJSON branch keeps its named BReg shape in the `x-registry-responseShapes` map.
+`ETag` values and idempotency request identity include the negotiated response representation.
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs operation_response_shape,
+    geojson_operation_response_shape, x-registry-responseShapes, x-registry-responseProfile;
+    crates/registry-breg/src/api/mod.rs negotiated_json_representation,
+    negotiated_record_representation. */}
+
 ## Collections and paging
 
 A collection read returns `items`, `pageInfo`, and the same `meta` as a single record. Collection
@@ -580,8 +606,145 @@ transaction.
     openapi_action_condition_request_schema(), and openapi_action_condition_response_schema();
     crates/registry-breg/tests/postgres_mutation.rs; crates/registry-breg/tests/postgres_immediate_action_requirements.rs;
     crates/registry-breg/tests/postgres_multi_reference_action_authority.rs;
-    products/breg/immediate-actions.md;
     crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs. */}
+
+## Registry metadata
+
+`GET /v1/registry?accessProfile=<profile>` describes the active BReg contract under the selected caller and profile.
+Discovery grants no authority: execution rechecks current package identity, verified claims, fields, rows, and operation grants.
+Unknown and ungranted work remains concealed.
+Discard metadata, Records, ETags, cursors, and drafts when the caller or profile identity changes.
+
+The served format is `metadataVersion: "2"`.
+Clients refuse version 1 before interpreting its shape, and there are no aliases for retired members.
+Unknown optional extensions remain ignorable within the validated version-2 grammar.
+
+{/* Evidence: crates/registry-breg-client/src/metadata.rs metadata_version;
+    crates/registry-breg/src/api/metadata.rs;
+    crates/registry-breg-client/src/metadata_tests.rs. */}
+
+### Record types and operations
+
+Runtime metadata describes configured Record operations, their exact method and path, selected access profile, fields, request contract, query capabilities, and required capabilities.
+Use the served operation descriptor instead of constructing a path from a Record label.
+
+Field IDs are stable authored identities, and `apiName` is the exact wire property, so never derive it by changing case or punctuation.
+Requiredness, nullability, readability, writability, removability, value schema, and native storage validation are separate properties.
+PostgreSQL regular-expression validation is not a JavaScript validator.
+Preserve int64 values and fixed-scale decimals without lossy conversion.
+
+Display labels and safe instance titles help applications present the contract, so render them as plain text.
+A title exposes only fields the current profile can read.
+Reference descriptors and bounded forward and inverse navigation reuse normal Record authority, and a link or relationship never grants target disclosure.
+
+Use the advertised `$filter`, `$orderby`, `$select`, `$top`, and `$count` query capabilities and bounds.
+Filters reduce a permitted collection; they do not supply authorization.
+Continuation uses the opaque cursor and selected profile.
+References, spatial reads, historical reads, and statistical datasets expose only their declared capability variants.
+
+Record routes use the shared Registry Record v1 envelope.
+Its independently versioned `recordTypeIdentifier` names the Record type; it is not a BReg authoring key.
+Action receipts and Proposals have separate response contracts.
+All responses use `Cache-Control: no-store`.
+
+`requiredCapabilities` is a must-understand execution gate, and an unsupported capability disables its operation.
+Unknown optional object members remain ignorable within the client's validated grammar.
+Malformed required members, duplicate identities, resource bounds, and broken references refuse selection.
+A descriptor alone never permits an operation under another profile.
+
+### Event records
+
+A Record type that declares an event record descriptor carries an `eventRecord` member, filtered for the caller and profile.
+It holds `descriptorVersion`, `label`, `recordedTime`, and only those subjects, sources, summary, correction, source event identifier, and time mappings whose fields the profile can read.
+BReg omits withheld and undeclared members rather than sending `null`.
+A native `target` is kept only when that Record type is visible to the caller.
+The member is additive and ignorable within `metadataVersion: "2"`, and it grants nothing.
+[Event records](../../configure/breg-event-records/) describes the declaration.
+
+{/* Evidence: crates/registry-breg-client/src/metadata.rs event_record;
+    crates/registry-breg/src/event_record.rs. */}
+
+### Actions in metadata
+
+One Action descriptor carries a fixed `mode`: `immediate` or `proposal`.
+It includes stable identity and revision, public names, typed inputs, reference inputs, bounds, permitted results, required capabilities, and the promoted route for Invoke or Start.
+Selection validates the descriptor before producing an opaque client binding.
+Every input requires the compiler-emitted JSON Schema; clients do not reconstruct a partial schema from a field type.
+The MCP gateway copies that schema exactly, and the caller cannot change an Action's execution mode.
+
+Request metadata for the intended `accessProfile`, select the Action from that caller-filtered document, and prepare from the resulting binding.
+Do not discover profiles by probing an Action route: an omitted profile when no default exists, an unknown profile, and a profile unusable by the caller all return the same concealed 404, with no list of alternatives.
+
+For an immediate Action, `required` means the value must be present at Invoke.
+For a Proposal Action, Start, Edit, Revise, and Rebase can retain an incomplete draft, and Submit enforces required inputs before any plan runs.
+Supplied values are always typed and remain subject to the selected profile's input authority.
+Immediate Invoke commits one atomic plan, and Proposal Start returns a durable Proposal with its own locator and revision.
+Generated TypeScript and Python project types come from the same compiled contract, and generic metadata clients remain available.
+
+For build-time form generation, `bregctl generate actions PROJECT --output DIR` writes the public `action-contracts/v1` document and its schema under `generated/`.
+Check the format version and each Action's revision when consuming it.
+This export is a build artifact, not an activated-package discovery endpoint.
+It describes the authored contract without a caller's grants, so use runtime metadata and promoted Proposal links for current permissions and availability.
+Regenerate it when the authored Action changes.
+
+A caller-visible Proposal Action includes declared `attachments` summaries: slot `id`, `required`, `contentTypes`, and `maximumBytes`.
+A starter can explain document requirements before creating a draft.
+A Get-only Action description includes only that profile's readable slots.
+These summaries disclose no bytes or lifecycle links and grant no upload, download, or delete authority.
+
+`proposals.actions` is a read-only inventory of each visible `actionId` and `accessProfile` pair, its `operations`, and its `readableInputs`.
+Rust exposes `proposal_actions()`, Node exposes `proposalActions`, and Python exposes `proposal_actions`, all from one validated client model.
+Profiles are never unioned.
+Start does not imply Get, and List or Apply can be advertised without a Start route.
+Hosts can use the exact inventory to choose their UI, while per-Proposal links still determine currently available lifecycle operations.
+
+{/* Evidence: crates/registry-breg/src/artifacts.rs "action-contracts/v1", public_action_metadata_entry;
+    crates/registry-breg-client/src/metadata_tests.rs;
+    crates/registry-breg-client/src/metadata.rs proposal_actions;
+    crates/registry-breg-client-node/client.d.ts proposalActions;
+    crates/registry-breg-client/src/actions.rs. */}
+{/* TODO[evidence]: no named test shows that an omitted, unknown, and unusable profile return the same concealed 404 on an Action route, or the Python proposal_actions name. */}
+
+### Proposals and promoted links in metadata
+
+Proposal representations are distinct from Registry Record envelopes.
+An ordinary authorized Get carries `id`, `actionId`, `actionRevision`, `submissionVersion`, `revision`, `state`, the frozen `effectDigest` when known, and caller-authorized links.
+Disclosed inputs, attachments, application evidence, and `applicationStatus` follow their independent permissions and retention.
+
+Keep the exact Action revision, submission version, and effect digest while observing progress.
+Revise or Rebase makes the earlier frozen binding stale, and a consumer must not silently follow the successor.
+`applicationStatus` reports local application state, a safe blocked reason and recovery hint, and bounded automatic retry information where applicable.
+Applied work exposes retained application evidence.
+Get does not aggregate another product's live status or reconcile an uncertain Start or Submit.
+
+Promote links only through a client-bound Proposal.
+Validate origin, registry base, method, selected profile, operation binding, and the strong lifecycle condition.
+Never substitute a Record ETag, invent a lifecycle URL, or follow a credential-bearing redirect.
+Refetch after a transition and select a new link.
+List requires explicit List authority and conceals inaccessible work before filtering or counting, and Get alone does not permit collection discovery.
+
+Attachments expose only granted slots and operations.
+Respect each slot's byte bound, content types, required-for-submit rule, verification status, and current revision.
+Submission binds content digest and verification, so changed bytes cannot inherit an earlier approval.
+BReg sends review context, not raw attachment bytes, to the review authority.
+
+{/* Evidence: crates/registry-breg-client/src/proposal.rs;
+    crates/registry-breg/src/api/proposals.rs;
+    crates/registry-breg/src/api/attachments.rs. */}
+
+### Prepare, execute, and recover
+
+Retain the original prepared command with its input, target conditions, selected binding, and idempotency key until its outcome is known.
+Replay of that exact command recovers a retained result without replanning or reacquiring Evidence.
+A changed command returns `409 idempotency.key-reused`, the only wire code for a key bound to another request.
+Keep portable keys at 128 bytes or fewer for intermediaries and client stores.
+Expired or erased receipts refuse execution and keep the key spent.
+An accepted-submission observation is not proof that an earlier uncertain command executed.
+[Idempotency](#idempotency) states the key rules.
+
+{/* Evidence: crates/registry-breg/src/idempotency.rs resolve_binding;
+    crates/registry-breg/tests/postgres_mutation.rs
+    real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent. */}
 
 ## Problem documents
 

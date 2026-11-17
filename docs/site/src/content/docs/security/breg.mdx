@@ -1,0 +1,707 @@
+---
+title: Base Registry Engine security model
+description: "What Base Registry Engine (BReg) is trusted for and not defended against, the obligations that stay with the operator, and the residual risks a deployment accepts, each with its stable identifier."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-17"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+This page states what the Base Registry Engine (BReg) security invariants assume, what you must do
+for them to hold, and which limits a deployment accepts.
+The operator obligations are numbered 1 to 20, and each accepted residual risk carries a stable
+identifier from `BREG-RES-01` to `BREG-RES-22`.
+The invariants themselves, each with its threat, enforcement point, refusal, and negative test, are
+the rows of the machine-checked BReg security invariant matrix in the registry-stack repository.
+This page does not repeat those rows; it names them by identifier (`BREG-SEC-NN`).
+Deployment steps are in [Deploy and serve](../../operate/breg/).
+
+{/* Evidence: products/breg/contracts/security-invariant-matrix.yaml, invariants. */}
+
+## Scope and trust boundaries
+
+BReg is trusted to keep a registry's Records inside the row boundary of the caller's access
+profile, to refuse rather than guess, and to leave an audit trace of what it released.
+It is not trusted to defend against the parties in this table, who hold more authority than the
+product can take back.
+
+| Party | Trusted for | Not defended against |
+| --- | --- | --- |
+| Holder of the migration credential | Applying a reviewed package and running operator commands (`bregctl apply`, `adopt`, `hook discard`, erasure). | Applying any valid successor of the active package. Packages are unsigned (`BREG-SEC-02`). |
+| Holder of the runtime credential | Serving reads and writes through the generated row-level security policies. | In split-role mode, nothing beyond what the grants allow (`BREG-SEC-04`, `BREG-SEC-118`, `BREG-SEC-119`); the grants include reading any row by setting the transaction context the policies read (see [Read boundary](#read-boundary)). In single-role mode, rewriting the activation ledger. |
+| Database superuser | Nothing is withheld from a superuser. | Editing the ledger, the instance claim, or any row. The activation audit stream is the independent trace. |
+| Operator who writes the runtime file | Naming the issuer, JWKS source, listeners, secret references, and destinations. | Naming a private-network issuer or an HTTP issuer when `allowInsecureHttp` is set. |
+| Token issuer | Authenticating callers and signing the claims the access profiles map to authority. | An issuer that signs wrong claims. BReg verifies signature, issuer, audience, and lifetime; it does not second-guess the claims. |
+| Review, evidence, and function providers | Their own decisions, within the exact bindings BReg freezes. | A provider that decides wrongly. BReg binds the result to the frozen request but does not judge it (`BREG-SEC-34`). |
+| Host users who can write audit files | Nothing. | Rewriting or removing lines of a local audit file. Ship the stream to append-only storage (obligation 2). |
+| Package authors | Authoring the project under review. | A reviewed package that is wrong. Deployment-only values (environment, instance, database) are refused in a package, so the same bytes are promoted unchanged (`BREG-SEC-01`). |
+
+{/* Evidence: products/breg/contracts/security-invariant-matrix.yaml, invariants;
+    crates/registry-breg/tests/compiler_contract.rs,
+    deployment_identity_keys_in_the_project_are_refused_as_unknown_fields;
+    crates/registry-breg/tests/postgres_package.rs,
+    real_postgres_package_startup_apply_failure_and_old_process_are_closed;
+    crates/registry-breg/tests/postgres_kernel.rs,
+    real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation;
+    crates/registry-breg/tests/postgres_startup.rs,
+    split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing;
+    crates/registry-breg/tests/postgres_proposal_review_delivery.rs,
+    first_acceptance_refuses_wrong_policy_id_or_exact_pin. */}
+
+### Supply chain
+
+Packages are verified by the SHA-256 of `SHA256SUMS`, with every listed file re-hashed before the
+digest is trusted.
+No signature or trust anchor is consulted.
+The Wasmtime build that runs WASM hook handlers is pinned and built without its default features.
+No automated check pins that feature set, so a change that unifies a default feature back on is
+not caught by CI.
+
+{/* Evidence: crates/registry-breg/src/package.rs, verify_shared_package, bind_shared_file,
+    package_digest; crates/registry-platform-script/Cargo.toml, wasmtime. */}
+
+### Applicant review progress
+
+A current caller-owned status grant can opt in to a provider-authored code (`BREG-SEC-208`).
+BReg authorizes and audits the read before using the configured Review producer credential for a
+single bounded lookup.
+It compares the whole accepted review binding, then rechecks Proposal visibility and the live
+round before the response audit and release.
+Failure to observe the exact round yields the authorized local status with progress omitted.
+A code is display data.
+It grants no approval or application authority.
+
+{/* Evidence: crates/registry-breg/tests/postgres_proposal_security.rs,
+    applicant_progress_rechecks_withdrawal_and_audit_before_release;
+    crates/registry-breg/src/contract.rs, readable_review_progress. */}
+
+### Read boundary
+
+Row-level security on the Record tables is the single read boundary, and
+`FORCE ROW LEVEL SECURITY` is on for every one.
+Record source views are created `security_invoker=true` and deliberately without
+`security_barrier`, so a list page can be served from an index.
+That does not let a row the caller cannot read reach a predicate: PostgreSQL applies a table's
+policies as security conditions before any predicate that is not leakproof, whether or not a view
+over the table is a barrier, and every read policy carries `record_lifecycle = 'active'` itself.
+The runtime also sends only SQL the engine generates (`BREG-SEC-143`).
+An executed proof reads the view through a non-leakproof predicate that raises on a hidden Record
+and shows it is never shown one.
+The view options are part of the managed schema fingerprint, so a database that regains
+`security_barrier` or loses `security_invoker` is drift and startup refuses it.
+Derived views and the spatial candidate view keep their barrier.
+The generated policies defend against application mistakes and pooled-context leakage.
+They do not constrain a party holding the runtime database credential, which can set the same
+transaction context the policies read; that credential's custody and rotation are operator controls.
+See `BREG-RES-16` for what remains.
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs, security_invoker, security_barrier,
+    record_lifecycle; crates/registry-breg/tests/postgres_compiled_schema.rs,
+    a_source_view_never_shows_a_predicate_a_record_that_row_security_hides;
+    crates/registry-breg/src/derived_sql.rs,
+    raw_node_allowlist_refuses_unreviewed_sql_json_xml_and_hidden_descendants;
+    crates/registry-breg/tests/postgres_package/fingerprint.rs. */}
+
+## Operator obligations
+
+For the invariants to hold, a deployment must do the following.
+The residuals refer to these obligations by number.
+
+1. Run split database roles in production.
+   `bregctl init` writes a split runtime file.
+   Startup refuses a runtime role that is a superuser, has `BYPASSRLS`, `CREATEDB`, `CREATEROLE`,
+   or database `CREATE`, owns any registry object, is a member of the migration role, or holds a
+   write privilege on a registry schema.
+   A write privilege, ownership, superuser, or migration-role membership is answered with a pointer
+   to `bregctl apply --package DIR`, which names the object and the fix.
+   The other refusals (`BYPASSRLS`, `CREATEDB`, `CREATEROLE`, database or schema `CREATE`) answer
+   only that the database is not ready for this package, so check those role attributes first when
+   startup refuses.
+   Single-role mode (used by `bregctl dev` and the quickstarts) catches mistakes, not a holder of
+   the credential (`BREG-RES-02`).
+   {/* Evidence: crates/registry-breg/src/startup.rs, verify_configured_runtime_role,
+        verify_runtime_grants; crates/registry-breg/src/postgres/roles.rs,
+        find_runtime_write_authority; crates/registry-breg/tests/postgres_migration.rs,
+        real_postgres_split_apply_names_the_fix_for_every_runtime_write_authority;
+        crates/registry-breg/tests/postgres_startup.rs,
+        split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing. */}
+2. Ship audit to append-only storage.
+   The audit stream is not tamper-evident on the host.
+   Ship the `file` or `stdout` stream, including the activation audit stream, to storage the host
+   users cannot rewrite.
+   BReg's retention is the platform audit writer's rotation and `retentionDays`; BReg adds no prune
+   or export of its own.
+   {/* Evidence: crates/registry-breg/src/runtime_config.rs, AuditDestination, retention_days;
+        crates/registry-platform-audit/src/writer.rs, MAX_AUDIT_RETAIN_DAYS. */}
+3. Treat a restore as a security event.
+   A restore rewinds every row, including erasures, deliveries, and closed import authorities.
+   After a physical restore, run `bregctl instance-claim adopt` before the copy serves, and fence
+   the original first.
+   After any restore, re-run the erasures and discards done since the backup, reopen only the
+   import authorities you still need, and resume held timers with an audited timer-operator resume.
+   A logical restore is refused at startup until adopted.
+   `adopt --acknowledge-original-retired` raises the claim epoch, supersedes every open import
+   authority, and moves native Record timers into adoption hold in one transaction.
+   [Back up, restore, and drill recovery](../../operate/advanced/back-up-and-restore/#restore-base-registry-engine)
+   gives the steps.
+   {/* Evidence: crates/registry-breg/src/instance_claim.rs, adopt_in;
+        crates/registry-breg/src/import_authority.rs, supersede_every_open;
+        crates/registry-bregctl/src/lib.rs, acknowledge_original_retired;
+        crates/registry-breg/tests/postgres_startup.rs, a_restored_copy_refuses_to_serve_until_adopted;
+        crates/registry-breg/tests/postgres_import_authority.rs,
+        adopting_a_restored_copy_supersedes_every_open_authority. */}
+4. Pin the digest you reviewed.
+   Pass `--expected-digest` to `bregctl apply` and `plan`, and set `package.expectedDigest` in the
+   runtime file.
+   Without the flag, apply activates whichever verified package `--package` names.
+   The digest binds bytes, not authorship; check provenance of cross-organization packages (for
+   example a cosign signature) in the deploy step.
+   {/* Evidence: crates/registry-bregctl/src/lib.rs, parse_expected_digest;
+        crates/registry-bregctl/tests/cli.rs,
+        apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_database_contact;
+        crates/registry-breg/tests/postgres_startup.rs,
+        instance_claim_refuses_a_package_root_its_expected_digest_does_not_pin. */}
+5. Rehearse on a restored copy.
+   The migration rehearsal runs over empty tables and does not compare the PostgreSQL major
+   version.
+   A timeout that only real rows reach is found by your own rehearsal and by `apply`.
+   A destructive reviewed migration needs backup evidence at most 31 days old.
+   {/* Evidence: crates/registry-breg/src/migration.rs, MAX_BACKUP_AGE_SECONDS. */}
+6. Choose the production identity.
+   Set `canonicalBaseIri` to a hostname you control before packaging.
+   Only the reserved `.invalid` namespace is refused.
+   {/* Evidence: crates/registry-breg/src/compiler.rs, reserved_production_iri,
+        deployment_diagnostics. */}
+7. Use TLS to PostgreSQL and an HTTPS issuer.
+   `database.testOnlyPlaintext` is refused in release builds.
+   Loopback HTTP is accepted for an issuer; anything else needs
+   `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
+   `bregctl doctor` (`BREG-RES-17`).
+   {/* Evidence: crates/registry-breg/src/runtime_config.rs, PlaintextDatabase;
+        crates/registry-breg/tests/runtime_config.rs,
+        non_loopback_http_issuer_refusal_names_the_opt_in;
+        crates/registry-bregctl/src/doctor.rs, insecure_http_warning. */}
+8. Keep the metrics listener private.
+   `metricsListener.bind` must be a loopback or private address; it carries no authentication.
+   {/* Evidence: crates/registry-breg/src/runtime_config.rs, InvalidMetricsListener,
+        MetricsListenerConfig. */}
+9. Run the idempotency sweep.
+   `bregctl idempotency-retention erase-expired` is the only thing that clears raw caller and key
+   values from spent rows; the engine schedules nothing.
+   Resolve uncertain writes and finish or cancel open ingestion runs before changing
+   `authentication.oidc.issuer` or the principal claim (`BREG-RES-05`).
+   {/* Evidence: crates/registry-breg/tests/postgres_mutation.rs,
+        real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key,
+        real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent;
+        crates/registry-bregctl/tests/idempotency_retention.rs. */}
+10. Provision the identities your profiles name.
+    The activation guard checks the compiled permission shape.
+    It does not prove that a real identity satisfies a profile's claims and row bounds.
+    A Proposal grant without `writableInputs` leaves every declared Action input writable; name the
+    inputs on every grant that is not meant to set all of them.
+    A Proposal grant's `ownership: caller` restricts which Proposal documents the caller may touch,
+    not the target Records, which stay bounded by the grant's `rowBoundaries`.
+    Enable `readableReviewProgress` only on the applicant grants intended to receive it.
+    Choose public stage codes at the review provider with the applicant audience in mind.
+    A change in code presence can reveal a transition, so assign the same coarse code across stages
+    whose distinction you mean to keep private.
+    [Configure Proposals](../../configure/breg-proposals/#limit-the-inputs-a-profile-writes) shows
+    the grant settings.
+    {/* Evidence: crates/registry-breg/src/contract.rs, writable_inputs, readable_review_progress,
+         ProposalOwnership; crates/registry-breg/tests/postgres_proposal.rs,
+         standing_officer_grant_revises_only_named_inputs_and_withdraws_exact_review;
+         crates/registry-breg/tests/postgres_proposal_security.rs,
+         applicant_progress_rechecks_withdrawal_and_audit_before_release. */}
+11. Keep delegated agent review context disabled until the institution has approved the reviewer
+    population and source ceiling for the standing-agent profile that holds `get-review-context`.
+    {/* Evidence: crates/registry-breg/src/compiler.rs, requesterClients. */}
+12. Review statistical releases as a disclosure decision.
+    Review the population, dimensions, cadence, and release policy of every dataset (`BREG-RES-07`).
+    [Publish a statistical series](../../configure/breg-statistics/#review-what-a-release-discloses)
+    lists what a release discloses.
+    {/* Evidence: crates/registry-breg/tests/compiler_statistics.rs,
+         statistical_dataset_core_refusals_are_stable_and_actionable. */}
+13. Plan backups for retention.
+    Expiry sweeps for Evidence and terminal webhook metadata are bounded work, not immediate
+    erasure.
+    Backup retention is yours.
+    {/* Evidence: crates/registry-breg/src/action_evidence_retention.rs,
+         MAX_EXPIRY_BATCHES_PER_TICK, EXPIRY_BATCH_ROWS_PER_TABLE;
+         crates/registry-breg/src/hooks.rs, MAX_RETENTION_BATCHES_PER_TICK. */}
+14. Handle destructive recovery deliberately.
+    `bregctl hook discard` permanently closes one delivery and is not audited when refused before
+    the request is recorded.
+    `bregctl hook drain` runs reviewed handlers in the `bregctl` process and needs the destination
+    and audit secrets, handler assets, and any field-encryption keys.
+    Retained local hook work (pending, leased, or operator-replayable dead-lettered Rhai and Wasm
+    deliveries with unexpired payloads) blocks both `bregctl plan` and `bregctl apply` until a
+    drain settles it.
+    If catalog verification refuses a policy whose expression was altered but whose comment
+    matches, a database administrator clears that policy's comment and applies the exact target
+    package again.
+    {/* Evidence: crates/registry-bregctl/src/hook_lifecycle.rs;
+         crates/registry-breg/tests/support/hook_activation.rs,
+         retained_local_hooks_refuse_plan_and_apply_before_maintenance;
+         crates/registry-breg/src/postgres/interlock.rs, retained_local_hook_deliveries;
+         crates/registry-breg/tests/support/immediate_action_review_regressions.rs,
+         tamper_immediate_action_policy_with_stale_marker. */}
+15. Upgrade one release at a time, finishing each release's upgrade steps before the next.
+    {/* Evidence: crates/registry-breg/src/startup.rs, UnrecognizedDatabase;
+         crates/registry-breg/tests/postgres_startup.rs,
+         startup_refuses_an_unrecognised_registry_state_and_writes_nothing. */}
+16. Resume a blocked application deliberately.
+    `bregctl review-recovery retry-application` requeues only an application job that is blocked
+    with attempts left and a last error of `dependency-outage`, `source-unavailable`, or
+    `lease-expired`, for the current submitted Proposal.
+    Run it after the cause is fixed; it refuses a withdrawn, unsubmitted, or detail-erased Proposal
+    and one blocked as `package-changed` or `application-refused`.
+    {/* Evidence: crates/registry-breg/src/review_recovery.rs, retry_application_in_transaction,
+         ReviewRecoveryRefusal; crates/registry-bregctl/tests/review_recovery.rs. */}
+17. Grant write access to a link's `fromField` only to identities trusted to assert that link.
+    Whoever can set that field on a root chooses the outside subject BReg asks the source for, under
+    the deployment's source grant, and which subject's values readers of that root then see.
+    Review a change to it as you would review a disclosure.
+    See [Operate indexed external projections](../../configure/breg-external-projections/).
+    {/* Evidence: crates/registry-breg/src/postgres/external_runtime.rs, from_field. */}
+18. Keep the external projection cache out of logical backups.
+    Dump with the seven `--exclude-table-data` options for the `registry_external_projection_*`
+    and `registry_external_refresh_*` tables, so a restore starts with no source values, old
+    bindings, queued selectors, or refresh receipts.
+    Physical backups and storage snapshots cannot exclude them and need a separately approved
+    erasure and restore procedure
+    ([back up logically](../../configure/breg-external-projections/#back-up-logically)).
+    {/* Evidence: crates/registry-breg/src/postgres/external_projection.rs,
+         BACKUP_EXCLUDED_TABLES, backup_policy_excludes_every_projection_table,
+         projection_expiry_purge_and_excluded_backup_restore_are_closed. */}
+19. Withdraw a source grant in deployment configuration.
+    Remove the binding and restart; that is the only cutoff for acquisition.
+    `bregctl external-projection withdraw` purges retained values and refresh receipts but does not
+    stop acquisition, and a binding that stays configured acquires again at the next start.
+    Record the withdrawal in deployment configuration or at the source authority so it also holds
+    after a restore
+    ([stop acquisition](../../configure/breg-external-projections/#stop-acquisition-withdraw-and-renew)).
+    {/* Evidence: crates/registry-bregctl/src/lib.rs, ExternalProjectionCommand;
+         crates/registry-bregctl/tests/external_projection.rs. */}
+20. Give each refresh plan a scoped service identity.
+    Match the configured requester client, principal, profile and relevant row claims against the
+    verified token before acquiring external values.
+    Give a change notifier a separate service client and scope.
+    It may submit an approved selector for a configured projection.
+    A queued hint grants no right to read a root or disclose a source value.
+    Verify signed webhook deliveries before forwarding their selectors.
+    See
+    [managed refresh](../../configure/breg-external-projections/#schedule-refresh-and-inspect-coverage).
+    The refresh path extends `BREG-SEC-204` to `BREG-SEC-207`.
+    Its proofs cover worker and notifier separation, identical admission for an eligible and a
+    protected selector, current-scope reconciliation, row policy before a targeted lookup can
+    settle no match, and queue generations and leases beside the per-key publication proofs.
+    A restore from a backup that excluded the projection tables also starts with empty refresh
+    tables.
+    {/* Evidence: crates/registry-breg/src/postgres/external_runtime.rs,
+         managed_refresh_resumes_sweeps_and_rereads_only_the_notified_subject;
+         crates/registry-breg/src/postgres/external_runtime/targeted.rs,
+         selector_lookup_skips_a_large_excluded_prefix_and_exhausts_no_witness;
+         crates/registry-breg/src/postgres/external_refresh_queue.rs,
+         durable_queue_fences_newer_enqueues_and_authority_changes;
+         crates/registry-breg/src/postgres/external_projection.rs,
+         projection_expiry_purge_and_excluded_backup_restore_are_closed. */}
+
+## Accepted residuals
+
+The residuals are ordered by operator impact.
+Each lists the condition, the consequence, the mitigation, and the related matrix identifiers.
+
+### `BREG-RES-01`: physical copies are not detected (instance claim)
+
+- Condition: the database is restored by point-in-time recovery, a storage snapshot, a base backup,
+  or a promoted replica.
+- Consequence: these keep the system identifier and database oid, so the copy matches the claim and
+  serves without adoption.
+  A physical restore serves without the adopt that supersedes reopened authorities, so an import
+  authority closed after the backup point is open again.
+  Nothing enforces the adopt.
+  Where the system identifier is unreadable (a managed service), the claim compares the database
+  oid alone, which is weaker.
+- Mitigation: fence the original, run `bregctl instance-claim adopt` on the copy before it serves
+  (obligation 3).
+- Related: `BREG-SEC-114`, `BREG-SEC-115`, `BREG-SEC-116`, `BREG-SEC-117`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_startup.rs,
+    a_restored_copy_refuses_to_serve_until_adopted;
+    crates/registry-breg/tests/postgres_import_authority.rs,
+    the_runtime_role_cannot_rewrite_or_remove_the_instance_claim,
+    adopting_a_restored_copy_supersedes_every_open_authority;
+    crates/registry-breg/tests/postgres_migration.rs,
+    real_postgres_an_activation_keeps_a_claim_that_names_another_database. */}
+
+### `BREG-RES-02`: single-role mode does not separate the credentials
+
+- Condition: `database.roles.migration` equals `database.roles.runtime`.
+- Consequence: a holder of the runtime credential can write the ledger and change which package the
+  runtime serves.
+  `bregctl doctor` and the startup log (`startup.role_mode.single`) say so.
+- Mitigation: run split roles in production.
+- Related: `BREG-SEC-04`, `BREG-SEC-118`, `BREG-SEC-119`.
+
+{/* Evidence: crates/registry-breg/src/startup.rs, startup.role_mode.single;
+    crates/registry-breg/tests/postgres_kernel.rs,
+    real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation;
+    crates/registry-breg/tests/postgres_startup.rs,
+    split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing. */}
+
+### `BREG-RES-03`: the migration credential authorizes any valid successor
+
+- Condition: a holder of the migration credential applies a package whose
+  `migrationPlan.fromPackageDigest` names the active digest.
+- Consequence: review is a process step before apply, not a cryptographic gate.
+  A database restored to an earlier activation names that activation's package as active, so the
+  successor applied after it applies again; it is the same transition.
+- Mitigation: guard the migration credential, pin `--expected-digest`, and check release provenance
+  in the deploy step.
+- Related: `BREG-SEC-02`, `BREG-SEC-120`, `BREG-SEC-121`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_package.rs,
+    real_postgres_package_startup_apply_failure_and_old_process_are_closed;
+    crates/registry-breg/tests/support/hook_activation.rs,
+    retained_hook_refusal_audit_failures_preserve_ready_state;
+    crates/registry-breg/tests/postgres_migration.rs,
+    real_postgres_an_operator_reference_is_recorded_only_as_its_keyed_hash. */}
+
+### `BREG-RES-04`: a database superuser can edit the ledger
+
+- Condition: anyone with superuser on the database.
+- Consequence: the ledger, the instance claim, and any row can be changed.
+  This is not prevented.
+- Mitigation: the activation audit stream, shipped to append-only storage, is the independent
+  trace.
+- Related: `BREG-SEC-04`, `BREG-SEC-120`.
+
+{/* Evidence: products/breg/contracts/security-invariant-matrix.yaml, invariants;
+    crates/registry-breg/tests/postgres_kernel.rs,
+    real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation. */}
+
+### `BREG-RES-05`: idempotency keys and run ownership are scoped to issuer and principal
+
+- Condition: `authentication.oidc.issuer` or the principal claim changes; an operator never runs
+  the sweep; a first response is lost and the retry arrives past the receipt horizon (seven days by
+  default).
+- Consequence: after a mapping change, a retry is another caller's fresh request and an open
+  ingestion run belongs to no current caller.
+  Spent rows are never deleted: the digest row is kept for provenance, and its raw issuer,
+  principal, and key stay until the sweep clears them.
+  A late retry cannot recover a lost body and must read the Record or its history.
+  Ingestion run creator values stay as long as the run row; there is no run retention.
+- Mitigation: resolve uncertain writes and finish or cancel runs before a mapping change; run
+  `erase-expired` on a schedule.
+- Related: `BREG-SEC-12`, `BREG-SEC-162` to `BREG-SEC-167`.
+
+{/* Evidence: crates/registry-breg/src/idempotency.rs, DEFAULT_RECEIPT_RETENTION_DAYS;
+    crates/registry-breg/tests/postgres_mutation.rs,
+    real_postgres_exact_retry_after_audit_key_rotation_replays_and_never_reexecutes,
+    real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent,
+    real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key;
+    crates/registry-breg/tests/postgres_ingestion_runs.rs,
+    an_audit_key_rotation_keeps_every_run_with_its_verified_creator. */}
+
+### `BREG-RES-06`: import authorities bound volume, not content
+
+- Condition: a holder of an import grant runs an import.
+- Consequence: the input digest is computed and announced by the client; the server never receives
+  the file and does not recompute it, so a pinned digest names what the operator expects, not what
+  was sent.
+  Admission reserves no volume and import is create only, so re-running committed lines creates
+  their Records again.
+  The runtime role can lower `committed_items` (its column grant checks volume bounds, not monotonic
+  growth), which is treated as equivalent to its existing `INSERT` power over Records.
+  `--operator-reference` and `--reason` are argv values visible on the local host while the
+  command runs.
+- Mitigation: grant import narrowly; follow [Move data in bulk](../../operate/breg-data/) for
+  duplicates; treat the runtime credential as able to write Records.
+- Related: `BREG-SEC-116`.
+
+{/* Evidence: crates/registry-breg/src/data.rs, committed_items;
+    crates/registry-breg/tests/postgres_import_authority.rs,
+    adopting_a_restored_copy_supersedes_every_open_authority. */}
+
+### `BREG-RES-07`: statistical datasets give no confidentiality guarantee
+
+- Condition: a dataset is published with threshold suppression and rounding.
+- Consequence: independent suppression and rounding do not prevent reconstruction.
+  With `minimumCount` 5 and `roundingBase` 5, two suppressed positive cells and a rounded total of
+  10 force both cells to 4; seven suppressed cells and a rounded total of 5 force all seven to 1.
+  Zero cells disclose group attributes.
+  Deterministic rounding supports differencing across releases, overlapping datasets and external
+  knowledge amplify disclosure, and no privacy budget limits repeated observation.
+  Withdrawal erases the engine's stored content, not copies a reader already obtained; release
+  headers and withdrawal reasons remain.
+- Mitigation: institutions review population, dimensions, cadence, and release policy.
+  Cell key perturbation is not implemented.
+- Related: `BREG-SEC-150` to `BREG-SEC-160`.
+
+{/* Evidence: crates/registry-breg/tests/compiler_statistics.rs,
+    statistical_dataset_core_refusals_are_stable_and_actionable;
+    crates/registry-breg/tests/postgres_statistics_http.rs,
+    computation_statement_obeys_the_request_deadline_and_persists_nothing. */}
+
+### `BREG-RES-08`: the instance id is not durably bound
+
+- Condition: `identity.instanceId` is changed.
+- Consequence: the id derives the webhook event source.
+  Startup refuses the change while any pending or leased delivery with an unexpired payload names
+  another source, but the registry state holds no binding of the id once deliveries drain.
+- Mitigation: keep the previous id until deliveries drain, then change it.
+- Related: none; startup refuses the change while deliveries are pending.
+
+{/* Evidence: crates/registry-breg/src/startup.rs, InstanceIdChangedWithPendingDeliveries;
+    crates/registry-breg/tests/postgres_startup.rs,
+    startup_refuses_an_instance_id_change_while_deliveries_are_pending. */}
+
+### `BREG-RES-09`: review close and resubmission rely on the authority
+
+- Condition: an operator closes or resubmits a review.
+- Consequence: `close` sends nothing to the authority, so a reviewer there may still decide, and
+  that late result is refused; `operator-closed` is resubmittable.
+  Resubmission relies on the authority's idempotency: if it no longer honours the original key,
+  resubmitting opens a second review.
+- Mitigation: confirm the authority lost the review before resubmitting.
+- Related: `BREG-SEC-34`, `BREG-SEC-67`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_proposal_review_delivery.rs,
+    first_acceptance_refuses_wrong_policy_id_or_exact_pin;
+    crates/registry-breg/tests/support/hook_activation.rs,
+    classified_proposal_completion_preserves_registry_and_lease_fences. */}
+
+### `BREG-RES-10`: ID-only review policy selection trusts the provider until first acceptance
+
+- Condition: a Proposal selects a review policy by id alone.
+- Consequence: the trusted provider may change its policy, including between human review and
+  automatic assessment, while first acceptance is pending.
+  After acceptance the exact binding is preserved and a replacement is refused.
+  Each submission starts with no accepted binding, so a new submission after changes are requested
+  selects the provider's current policy again unless it is pinned.
+- Mitigation: pin both `version` and `digest` when the version chosen at submission must be the one
+  that decides.
+  A partial pin is invalid.
+  The window for resolving a pending first acceptance is the review authority's `recoveryDays`,
+  which has no default (1 to 3650 days).
+- Related: `BREG-SEC-34`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_proposal_review_delivery.rs,
+    first_acceptance_refuses_wrong_policy_id_or_exact_pin;
+    crates/registry-breg/src/review_store.rs, MAXIMUM_REVIEW_RECOVERY_DAYS. */}
+
+### `BREG-RES-11`: a source can revoke between status observation and commit
+
+- Condition: a Proposal is applied under retained task authority.
+- Consequence: BReg observes the source's status outside the mutation transaction and shares no
+  distributed transaction with it, so a revocation after the observation and before local commit
+  is not seen.
+  Local expiry and submission-binding checks stay enforced.
+- Mitigation: none beyond the source's own revocation latency.
+- Related: `BREG-SEC-169`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_action_task_grants.rs,
+    task_action_scope_subjects_replay_and_fresh_revocation_are_enforced. */}
+
+### `BREG-RES-12`: disclosed Proposal text and actor pseudonyms
+
+- Condition: a reviewer writes a public reason; a holder reads `appliedBy`.
+- Consequence: BReg bounds the public reason's length but cannot judge its content, so personal
+  data written there reaches every Get holder.
+  `appliedBy` is a keyed pseudonym, not anonymous: a holder can link Proposals applied by the same
+  actor within that database and issuer, and a holder of the audit hash key can recompute it for a
+  known issuer and subject.
+- Mitigation: instruct reviewers; grant `get-application-actor` narrowly; protect the audit hash
+  key.
+- Related: `BREG-SEC-58`, `BREG-SEC-174`, `BREG-SEC-179`.
+
+{/* Evidence: crates/registry-breg/src/mutation/proposal.rs,
+    public_application_projection_omits_actor_without_disclosure_and_internal_reason;
+    crates/registry-breg/tests/postgres_proposal.rs,
+    manual_no_review_attachments_cas_concealment_and_exact_receipt,
+    application_actor_requires_its_dedicated_get_grant_and_is_issuer_scoped. */}
+
+### `BREG-RES-13`: advisory answers are not authority
+
+- Condition: an application, reviewer, or operator relies on a preview.
+- Consequence: an Action availability result can be stale as soon as it is returned and covers
+  only the target's declared field guards.
+  Access explanations are review aids; runtime admission is authoritative.
+  The same-engine fingerprint comparison when rehearsing over a predecessor does not stop `test`;
+  the strict final check still catches any effect on the candidate.
+  The deployment identity check guards against accident, not against an operator who means to
+  bypass it: a database initialized for `local` accepts the reserved identity.
+- Mitigation: treat availability as a form hint and handle Invoke refusal.
+- Related: `BREG-SEC-186`.
+
+{/* Evidence: crates/registry-breg/tests/postgres_immediate_action_requirements.rs,
+    immediate_action_availability_preserves_disclosure_and_commit_boundaries;
+    crates/registry-breg/src/startup.rs, database_initialization_environment. */}
+
+### `BREG-RES-14`: a global unique constraint reveals that a value is taken
+
+- Condition: an in-boundary create collides with a hidden row's unique value.
+- Consequence: the value-free `409 mutation.conflict` tells the caller the value is taken
+  somewhere.
+  Nothing is written outside the boundary.
+- Mitigation: avoid unique constraints on values whose existence is itself sensitive, or scope them
+  in the model.
+- Related: `BREG-SEC-09`, `BREG-SEC-180`.
+
+{/* Evidence: crates/registry-breg/src/problem.rs, MutationConflict;
+    crates/registry-breg/tests/postgres_mutation.rs,
+    real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable,
+    real_postgres_row_local_constraint_problems_name_only_readable_declarations. */}
+
+### `BREG-RES-15`: generated identifier reservations are never erased
+
+- Condition: a Record with a generated business identifier is tombstoned or erased.
+- Consequence: the append-only ledger `registry_generated_identifier_reservations` keeps each
+  issued value and its scope values, so a code is never reissued.
+  The compiler limits generated and scope fields to public or internal values, so the ledger holds
+  a category code beside an institution-issued number, not restricted data.
+- Mitigation: do not scope generated codes by sensitive data.
+- Related: `BREG-SEC-189`.
+
+{/* Evidence: crates/registry-breg/src/generated_identifiers.rs,
+    registry_generated_identifier_reservations;
+    crates/registry-breg/tests/generated_identifier_compiler.rs,
+    sequence_scope_fields_cannot_hold_restricted_values_or_references. */}
+
+### `BREG-RES-16`: source views rely on PostgreSQL policy ordering
+
+- Condition: a read policy admits a row that is not active (tombstoned or detail-erased), which
+  the source view's lifecycle condition then drops. Every generated read policy carries
+  `record_lifecycle = 'active'`, so only a policy written to admit non-active rows meets this
+  condition.
+- Consequence: that row may reach an outside predicate before the view's lifecycle condition drops
+  it, for a caller already allowed to get it, and it is absent from every result.
+  The ordering of policy conditions before other predicates is PostgreSQL behaviour the engine
+  relies on and does not enforce itself; the executed proof would fail on a server that broke it.
+  A read policy written to admit more than `record_lifecycle = 'active'` widens what can reach a
+  predicate.
+- Mitigation: run supported PostgreSQL majors; revisit this residual before adding a read policy
+  that admits non-active rows.
+- Related: `BREG-SEC-04`, `BREG-SEC-143`.
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs, security_invoker, record_lifecycle;
+    crates/registry-breg/tests/postgres_compiled_schema.rs,
+    a_source_view_never_shows_a_predicate_a_record_that_row_security_hides;
+    crates/registry-breg/src/derived_sql.rs,
+    raw_node_allowlist_refuses_unreviewed_sql_json_xml_and_hidden_descendants. */}
+
+### `BREG-RES-17`: declared issuer and key endpoints are trusted
+
+- Condition: the runtime file names an issuer or JWKS URI.
+- Consequence: a declared issuer or JWKS URI may name any private address that is not cloud
+  metadata or link-local; the operator who writes the file is trusted to name it.
+  A discovered cross-origin endpoint stays under the strict policy and must use HTTPS, and
+  redirects are disabled.
+  Under `allowInsecureHttp: true`, an on-path attacker can substitute keys.
+  `breg-review` never takes the HTTP opt-in, because it sends client credentials to the token
+  endpoint.
+- Mitigation: use an HTTPS issuer; leave `allowInsecureHttp` off.
+- Related: `BREG-SEC-19`.
+
+{/* Evidence: crates/registry-breg/tests/runtime_config.rs,
+    static_jwks_validation_refuses_unsafe_documents_value_free,
+    non_loopback_http_issuer_refusal_names_the_opt_in;
+    crates/registry-breg-review/src/lib.rs, production_sign_in_refuses_plain_http_beyond_loopback. */}
+
+### `BREG-RES-18`: the metrics listener is unauthenticated
+
+- Condition: a reader reaches `metricsListener.bind`.
+- Consequence: they can read the active package digest, which identifies the deployed bytes and not
+  their content.
+  A scrape holds one runtime pool connection for up to the 5-second statement timeout and takes no
+  row locks.
+- Mitigation: the bind is refused unless loopback or private; firewall it.
+- Related: `BREG-SEC-146`.
+
+{/* Evidence: crates/registry-breg/src/metrics.rs, QUEUE_SAMPLE_STATEMENT_TIMEOUT;
+    crates/registry-breg/src/runtime_config.rs, InvalidMetricsListener. */}
+
+### `BREG-RES-19`: a failing worker stops the process, and readiness does not show it
+
+- Condition: a background worker faults, or faults on every start.
+- Consequence: the process stops with a code that names the worker.
+  A fault that recurs on every start makes the process restart repeatedly and takes reads and
+  writes down between attempts.
+  `/ready` does not reflect worker state, so a load balancer keeps routing until the process exits.
+  The attachment queue is not sampled by `breg_queue_oldest_pending_age_seconds`; alert on
+  `breg_worker_last_success_age_seconds` instead.
+  A failed subject access log retention pass writes a raw error record without a closed `code`.
+- Mitigation: alert on the worker metrics and on restarts.
+- Related: `BREG-SEC-146`.
+
+{/* Evidence: crates/registry-breg/tests/startup_http.rs,
+    a_panicking_background_task_stops_serve_with_a_distinct_error;
+    crates/registry-breg/src/metrics.rs, breg_worker_last_success_age_seconds,
+    breg_queue_oldest_pending_age_seconds. */}
+
+### `BREG-RES-20`: the attachment job table has no row-level security
+
+- Condition: a holder of the runtime credential changes a job row.
+- Consequence: the table holds job keys, states, attempts, and timestamps.
+  A changed row can cause an extra verifier request or stall a verification.
+  It cannot release bytes, because a verdict is written only into the admitted verdict row under a
+  live lease, and a pending row stays quarantined.
+  One attempt can be answered `unfinished` twice (by the worker that wrote it and by the worker
+  recovering its lapsed lease), and a recovering verifier may wait up to an hour, jitter included,
+  before a quarantined file is retried.
+- Mitigation: none needed for integrity; monitor the worker age metric.
+- Related: `BREG-SEC-10`.
+
+{/* Evidence: crates/registry-breg/src/attachment_store.rs, VERIFICATION_JOB_TABLE;
+    crates/registry-breg/src/attachment_verification_worker.rs, MAXIMUM_ATTEMPTS, JOB_TABLE;
+    crates/registry-breg/tests/postgres_mutation.rs,
+    real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable. */}
+
+### `BREG-RES-21`: some requests leave no per-subject trace
+
+- Condition: a caller reads a statistical aggregate, or sends a HEAD request.
+- Consequence: an aggregate read emits no per-subject access-log hit.
+  A HEAD request is refused as a concealed 404; outside `/v1/statistics/` that refusal writes no
+  statistics refusal journal entry, and under it only an authenticated caller's HEAD is journaled.
+- Mitigation: treat statistical output as released content (`BREG-RES-07`); do not rely on the
+  subject access log to show who saw an aggregate.
+- Related: none.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, refuse_head;
+    crates/registry-breg/tests/postgres_statistics_http.rs,
+    head_on_statistical_reads_is_refused_and_journaled_as_head;
+    crates/registry-breg/tests/http_read_only.rs,
+    head_is_refused_on_governed_reads_and_answered_only_by_probes. */}
+{/* TODO[evidence]: no test or symbol found that shows an aggregate statistical read emits no
+    per-subject access-log hit. */}
+
+### `BREG-RES-22`: the standing-agent publish ceiling needs a declared actor kind
+
+- Condition: a profile that holds `publish` on a statistical dataset declares no `actorKind`.
+- Consequence: the ceiling refuses publish and withdraw only for a profile that declares
+  `actorKind: agent` and no `taskGrant`.
+  A profile without an `actorKind` accepts every actor kind by its own declaration, as it does for
+  every other operation, so an agent token can publish through it.
+- Mitigation: declare `actorKind: human` or `actorKind: service` on every profile that holds
+  `publish`.
+- Related: `BREG-SEC-168`.
+
+{/* Evidence: crates/registry-breg/tests/standing_agent_ceiling.rs,
+    standing_agent_cannot_publish_a_statistical_release. */}
+
+## Report a vulnerability
+
+Report a suspected vulnerability through the process in
+[Report a vulnerability](../report-a-vulnerability/).
+
+## Next
+
+- [Security](../)
+- [Deploy and serve](../../operate/breg/)
+- [Back up, restore, and drill recovery](../../operate/advanced/back-up-and-restore/)
+- [Operate indexed external projections](../../configure/breg-external-projections/)
+- [Report a vulnerability](../report-a-vulnerability/)

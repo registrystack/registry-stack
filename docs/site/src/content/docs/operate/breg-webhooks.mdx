@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-18"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 persona:
   - operator
@@ -28,6 +28,124 @@ event after the write that caused it commits, through its
 [outbox](../../reference/glossary/#outbox).
 [Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) shows a
 first delivery on a local registry.
+
+## Declare an event and when it fires
+
+A Record type declares its events under `hooks`.
+An event declares only what changes its meaning:
+
+```yaml
+hooks:
+  - id: case-approved-v1
+    phase: after
+    trigger: patched
+    projection:
+      - status
+      - programme
+    when:
+      type: fields
+      changed:
+        - status
+      beforeEquals:
+        status: pending
+      afterEquals:
+        status: approved
+    handler:
+      type: url
+      destinationId: eligibility-service
+```
+
+{/* Evidence: crates/registry-breg/src/contract.rs HookSource, EventConditionSource;
+    crates/registry-breg/tests/compiler_webhook.rs
+    field_conditions_are_typed_nonempty_and_trigger_compatible. */}
+
+- `id` is the stable external event contract. A breaking payload change uses a new versioned id.
+- `phase` is `after`: the event runs after the triggering transaction commits. The compiler refuses
+  `before`.
+- `trigger` is one of `created`, `patched`, or `tombstoned`.
+- `projection` is the complete set of Record values that may leave the registry. System event
+  metadata does not need to be listed.
+- `when` is optional and narrows which changes fire the event.
+- `handler` is either `type: url` with the logical `destinationId`, or a local kind: `type: rhai`
+  with a reviewed `script` path, or `type: wasm` with a reviewed `module` path. A `url` handler
+  delivers to a bound destination, and a local handler runs its program in the post-commit worker.
+  The delivery row records the digest of the settled answer, never the answer bytes.
+
+A Wasm hook module whose exported memory declares a minimum above the guest-memory budget is refused at validation.
+A negative guest-reported outcome length or pointer is a bounded ABI violation, never an empty success.
+
+{/* Evidence: crates/registry-platform-script/src/wasm.rs check_memory_minimum;
+    crates/registry-platform-script/tests/wasm_executor_wat.rs declared_memory_minimum_at_the_ceiling_is_allowed;
+    crates/registry-platform-hooks/src/executor/wasm.rs */}
+
+{/* Evidence: crates/registry-breg/tests/hook_declaration.rs
+    a_before_phase_hook_still_refuses_the_url_handler_kind,
+    an_after_phase_hook_compiles_a_rhai_handler_into_a_local_delivery;
+    crates/registry-breg/tests/compiler_webhook.rs webhook_projection_is_closed_and_classification_is_derived;
+    crates/registry-breg/src/compiler.rs breg.event.trigger-unavailable. */}
+
+An event has at most one handler.
+If you need fanout, put an external event gateway behind one destination.
+Production compilation refuses an event without a handler (`breg.event.delivery-required`), because
+there is no supported outbox consumer API.
+A Proposal lifecycle hook is declared on the Action under `execution.proposal.hooks`, selects native
+transitions, and uses its own value-free event schema; it is separate from Record field
+projections.
+A module may add hooks to an existing Record type, and it cannot replace an event another module
+owns.
+
+{/* Evidence: crates/registry-breg/tests/compiler_webhook.rs
+    outbox_only_event_is_authoring_only_and_production_requires_delivery,
+    additive_modules_add_nonconflicting_subscriptions_deterministically_and_refuse_conflicts;
+    crates/registry-breg/src/compiler.rs breg.event.delivery-required. */}
+
+### Conditions
+
+`when` uses `type: fields` for Record mutations.
+It takes these tests, all optional and combined with AND:
+
+- `changed`, fields whose value must change
+- `beforeEquals`, field values required before the change
+- `afterEquals`, field values required after the change
+- `beforeIsNull` and `afterIsNull`, fields that must be unset before or after the change
+
+At least one test is required when `when` is present, and every field must be declared on the Record
+type.
+A comparison value is a scalar of the field's declared type; state an unset value with
+`beforeIsNull` or `afterIsNull`, because `null` is refused as a comparison value.
+A condition cannot name an encrypted field.
+Which tests are valid depends on the trigger: `created` accepts `afterEquals` and `afterIsNull`,
+`patched` accepts every test, and `tombstoned` accepts `beforeEquals` and `beforeIsNull`.
+BReg evaluates the condition against the validated before and after snapshots, and an invalid
+combination fails compilation.
+
+{/* Evidence: crates/registry-breg/tests/compiler_webhook.rs
+    field_conditions_are_typed_nonempty_and_trigger_compatible;
+    crates/registry-breg/tests/field_encryption_contract.rs breg.event.when-encrypted;
+    crates/registry-breg/src/compiler.rs validate_event_condition. */}
+
+### Classification and destinations
+
+BReg derives the event classification from the highest-classified field that the projection or a
+condition uses, and you do not restate it.
+A condition can disclose information through whether an event fires, even when its field is not in
+the payload, so activation requires the runtime destination to permit the full derived
+classification.
+The destination can never add to the compiled projection.
+Proposal lifecycle events use a closed value-free binding projection.
+
+Destination URLs, TLS policy, network policy, and HMAC keys are deployment configuration, and the
+project refers only to a logical destination id.
+The runtime configuration must bind the exact compiled destination set.
+It can tighten operational ceilings and can never widen delivery authority.
+If the runtime finds a delivery inventory that differs from the governed source, it refuses the
+Record change with `503 service.unavailable`; that is a package or server fault, not invalid caller
+input.
+
+{/* Evidence: crates/registry-breg/tests/compiler_webhook.rs
+    webhook_projection_is_closed_and_classification_is_derived;
+    crates/registry-breg/tests/postgres_ingestion_runs.rs
+    event_inventory_faults_are_unavailable_for_direct_and_ingestion_writes. */}
 
 ## Bind each destination
 
@@ -361,7 +479,6 @@ When `doctor` or a webhook command refuses, look up its diagnostic code in
 
 - [Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) to see one
   delivery end to end on a local registry.
-- [Author a registry project](../../configure/breg/) for the event declaration, its projection, and
-  its classification.
+- [Author a registry project](../../configure/breg/) for the Record types that declare events.
 - [Base Registry Engine API reference](../../reference/breg-api/#events-and-webhooks) for the
   delivery request, the signing input, and the CloudEvents headers.

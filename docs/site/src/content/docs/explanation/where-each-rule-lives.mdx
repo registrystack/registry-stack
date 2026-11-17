@@ -32,8 +32,8 @@ logic has one home, and each home declares its own interface.
 
 {/* Evidence: products/coordinator/generated/operations/catalog.json;
     products/coordinator/generated/operations/README.md;
-    products/adapter/EFFECTIVE-CONTRACT.md;
-    products/coordinator/PRODUCT-CONTRACT.md (Bounded external command). */}
+    crates/registry-adapter-engine/src/effective_contract.rs EffectiveContract;
+    crates/registry-coordinator/src/external_http.rs. */}
 
 ## Where each kind of logic goes
 
@@ -58,16 +58,16 @@ products hold what happens around a record.
 | Notifications | Registry Messaging: versioned templates with a JSON Schema each, providers and sender profiles | The template's input schema | `generated/authoring/template.schema.json`; `messagingctl generate templates` |
 | Appointments | Registry Scheduling policy: offerings, holds and bookings, with four observer triggers | The policy | `generated/project/project.schema.json`; `schedulingctl explain` |
 
-{/* Evidence: products/breg/native-patterns.md; products/breg/immediate-actions.md;
-    products/breg/generated-identifiers.md; products/breg/README.md (Live derived fields);
-    products/breg/HISTORY.md (temporal); products/coordinator/PRODUCT-CONTRACT.md (Reading the
-    record in force); products/breg/acceptance/person-registration-rhai/README.md (no stored-record
-    API in Rhai);
-    products/breg/record-timers.md; products/breg/EVENTS-AND-WEBHOOKS.md;
-    products/breg/wasm-action-handlers.md; products/breg/proposals.md;
-    products/breg/metadata.md; products/breg/generated/authoring/registry-project.schema.json;
+{/* Evidence: crates/registry-breg/tests/native_patterns.rs; crates/registry-breg/src/immediate_actions.rs;
+    crates/registry-breg/src/generated_identifiers.rs; crates/registry-breg/src/derived_sql.rs (live derived fields);
+    crates/registry-breg/src/postgres/history_read.rs (temporal);
+    crates/registry-coordinator/src/read_in_force.rs (reading the record in force);
+    crates/registry-breg/src/tests/rhai_planner_sandbox_tests.rs (no clock or stored-record API in Rhai);
+    crates/registry-breg/src/contract.rs TimerSource; crates/registry-breg/src/hooks.rs;
+    crates/registry-breg/src/wasm_handler.rs; crates/registry-breg/src/api/proposals.rs;
+    products/breg/generated/authoring/registry-project.schema.json;
     products/breg/generated/event-schemas/proposal-lifecycle.schema.json;
-    products/coordinator/PRODUCT-CONTRACT.md; products/adapter/README.md;
+    crates/registry-coordinator/src/definition.rs; products/adapter/README.md;
     products/evidence/README.md; products/render/README.md; products/documents/README.md;
     products/casework/README.md; products/messaging/README.md; products/scheduling/README.md;
     crates/registry-breg/src/contract.rs (ACTION_PLAN_ABI_V1). */}
@@ -91,8 +91,7 @@ date. If a rule must not be bypassed, withhold the ordinary create profile that 
 same state without the Action. The details are in
 [Actions and Proposals](../../configure/breg-actions/).
 
-{/* Evidence: products/breg/immediate-actions.md (Author one plan);
-    products/breg/wasm-action-handlers.md (What ships);
+{/* Evidence: crates/registry-breg/src/wasm_handler.rs;
     crates/registry-breg/src/immediate_actions.rs (breg.action.handler-abi-invalid). */}
 
 ## Logic outside the stack
@@ -116,8 +115,9 @@ therefore remains the place to see what a workflow can call, and the
 [Adapter product page](https://github.com/registrystack/registry-stack/blob/main/products/adapter/README.md)
 describes packs, profiles and facade routes.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md (Bounded external command);
-    products/adapter/README.md; products/adapter/EFFECTIVE-CONTRACT.md;
+{/* Evidence: crates/registry-coordinator/src/definition.rs;
+    products/adapter/README.md;
+    crates/registry-adapter-engine/src/effective_contract.rs EffectiveContract;
     crates/registry-coordinator/src/external_http.rs. */}
 
 ## Next

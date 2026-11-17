@@ -8,7 +8,7 @@ source_repos:
   - registry-platform
   - registry-breg
   - registry-evidence
-last_reviewed: "2026-10-03"
+last_reviewed: "2026-11-17"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -132,13 +132,56 @@ must keep exchanged token lifetimes short.
 [What the design guarantees](../configure/breg-mcp/#what-the-design-guarantees) states each
 property with its enforcement point.
 
-{/* Evidence: products/breg/TASK_GRANTS.md;
-    crates/registry-breg-mcp/src/gateway.rs; crates/registry-breg-mcp/src/contract.rs;
+{/* Evidence: crates/registry-breg-mcp/src/gateway.rs; crates/registry-breg-mcp/src/contract.rs;
     crates/registry-breg/src/api/proposals.rs; crates/registry-breg/src/compiler.rs;
     crates/registry-breg/src/postgres/proposal_context.rs, authorizes_snapshot;
     crates/registry-breg/src/postgres/context.rs, snapshot_matches_boundaries;
     crates/registry-breg-review/src/registry.rs;
     crates/registry-breg-mcp/clippy.toml; products/breg/scripts/check-mcp-gateway-boundary.sh. */}
+
+## Product security models
+
+Each product's security model states what that product guarantees, what the operator must uphold,
+and which limits a deployment of it accepts.
+
+- [Registry Evidence security model](evidence/)
+- [Base Registry Engine security model](breg/)
+
+<DocsetProduct product="registry-casework">
+
+- [Registry Casework security model](casework/)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-scheduling">
+
+- [Registry Scheduling security model](scheduling/)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-render">
+
+- [Registry Render security model](render/)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-messaging">
+
+- [Registry Messaging security model](messaging/)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-coordinator">
+
+- [Registry Coordinator security model](coordinator/)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-documents">
+
+- [Registry Document Store security model](documents/)
+
+</DocsetProduct>
 
 ## Maintained boundaries
 

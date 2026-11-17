@@ -11,7 +11,7 @@ const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
 const configureReference = 'docs/site/src/content/docs/configure/casework.mdx';
-const operateReference = 'docs/site/src/content/docs/operate/casework.mdx';
+const runtimeReference = 'docs/site/src/content/docs/reference/casework-configuration.mdx';
 
 export const CONTRACTS = [
   { id: 'project', title: 'casework.yaml', file: 'project/project.schema.json', reference: configureReference },
@@ -19,7 +19,7 @@ export const CONTRACTS = [
   { id: 'dev-clients', title: 'dev-clients.yaml', file: 'dev-clients/dev-clients.schema.json', reference: configureReference },
   { id: 'run-source', title: 'run-source.json', file: 'run-source/run-source.schema.json', reference: configureReference },
   { id: 'holiday-set', title: 'holiday-sets/*.yaml', file: 'holiday-set/holiday-set.schema.json', reference: configureReference },
-  { id: 'runtime', title: 'runtime.yaml', file: 'runtime/runtime.schema.json', reference: operateReference },
+  { id: 'runtime', title: 'runtime.yaml', file: 'runtime/runtime.schema.json', reference: runtimeReference },
 ].map((contract) => ({
   ...contract,
   file: `products/casework/generated/${contract.file}`,

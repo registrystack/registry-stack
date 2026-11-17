@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-17"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -27,6 +27,9 @@ bregctl check facility
 
 The template declares three Actions: `register-facility`, `correct-address`, and
 `deactivate-facility`; `bregctl explain actions facility` shows each one compiled.
+The authored `operator-editor` access profile supplies setup authority; tooling never injects a seeding grant.
+
+{/* Evidence: crates/registry-breg/tests/postgres_facility_proposal.rs (exact authored grants, no seeding permission) */}
 
 ## What an Action declares
 
@@ -139,6 +142,7 @@ computed effects and their digest, the target revisions, and the Action revision
 application work on that frozen submission, so a later change to the Plan or policy cannot
 reinterpret it. Revise or Rebase returns it to a new draft, which must be submitted, and
 reviewed, again.
+[Configure Proposals](../breg-proposals/) covers review declaration, grants, turns, and recovery in full.
 
 A Proposal ends in one of three states:
 
@@ -259,8 +263,304 @@ credentials belong to the runtime configuration; BReg inherits no Evidence autho
     crates/registry-breg/src/action_evidence_contracts.rs;
     crates/registry-breg/src/contract.rs (CommitEvidenceSource). */}
 
+## Plan syntax and Rhai limits
+
+A plan fragment looks like this; use the complete facility project for required fields, references, guards, datasets, and grants:
+
+```yaml
+actions:
+  - id: register-facility
+    execution:
+      mode: immediate
+    inputs:
+      - id: name
+        type: string
+        required: true
+        minimumLength: 1
+        maximumLength: 200
+        classification: internal
+    plan:
+      type: fixed
+      effects:
+        - id: facility
+          target:
+            recordType: facility
+          operation: create
+          set:
+            name:
+              fromInput: name
+```
+
+HTTP input names come from `apiName`, and plans address the authored input IDs.
+A literal uses `value`; a reference to an earlier created Record uses `fromEffect`.
+Effect order is authored order, with explicit dependencies.
+A forward reference refuses compilation.
+Aliased writes to one target fold into one revision; conflicting writes or cycles refuse atomically.
+
+For computed effects, declare a named Function and select `plan.type: function` with its `function`, `inputs`, `writes`, and declared `refusals`.
+The write ceiling remains governed configuration.
+A Function's `writes` are a ceiling, not CRUD permission: a profile allowed to invoke the Action gains no ordinary create or patch on the Record types those writes name.
+Rhai uses `registry.action-plan/v1` and `ctx.inputs`, and returns exactly one of two map shapes: `#{effects: [...]}` or `#{refusal: #{code: "...", field: "..."}}`, where `field` is optional.
+[WASM handlers](../breg-wasm-action-handlers/) have their own admitted backend contract.
+
+A Rhai plan has no database, filesystem, network, clock or stored-Record API.
+The host owns the target, operation, IDs, authority, validation and transaction.
+The only exceptions are `today()`, the registry-local date captured once for the evaluation, and `evidence::resolve` where the Action declares Evidence.
+The [person registration example project](https://github.com/registrystack/registry-stack/blob/main/products/breg/acceptance/person-registration-rhai/README.md) shows normalization, coordinated creates and omitted effect slots.
+
+{/* Evidence: crates/registry-breg/src/tests/rhai_planner_sandbox_tests.rs (a_plan_cannot_read_the_clock);
+    crates/registry-breg/src/action_handler.rs today evidence::resolve;
+    products/breg/acceptance/person-registration-rhai/README.md */}
+
+A Function accepts only declared scalar inputs, including Record reference IDs.
+A `decimal` input arrives as its canonical JSON string.
+Compilation refuses a `crs84-point`, `crs84-polygon`, or `structured` input with `breg.action.handler-input-type-unsupported`; use fixed effects for those values.
+A `string` or `text` input must declare a `maximumLength` of at most 4,096 Unicode scalar values, so every value fits the 16,384-byte UTF-8 string budget; a larger bound fails with `breg.action.handler-input-string-bound`.
+Every Function input string, timestamps included, also has a 16,384-byte admission limit.
+An HTTP request exceeding a declared bound or that byte limit returns `400 request.invalid` before the Function runs.
+
+An omitted optional input has no key in `ctx.inputs`; an explicit JSON `null` has a key whose value is the unit value `()`.
+Test membership with `in` when absence matters, and guard both cases before calling a string method:
+
+```rhai
+let family = if "family-name" in ctx.inputs && ctx.inputs["family-name"] != () {
+    ctx.inputs["family-name"]
+} else { "" };
+family.trim();
+```
+
+Calling a string method on an unguarded missing or null value fails the handler.
+Required inputs refuse omission and null before the Function runs, and fixed-effect Actions refuse an explicit null input.
+When an optional input is absent or null, omit the corresponding field from an effect's `set` map.
+Copying `()` or `null` into a required, non-null field is a handler result failure; it does not clear the field.
+
+The Rhai Action ABI provides three bounded date-string helpers:
+
+- `today()` returns the registry-local `YYYY-MM-DD` date captured once for the evaluation.
+- `add_days(date, days)` adds from -365,000 through 365,000 whole days.
+- `add_months(date, months)` adds from -12,000 through 12,000 months, clamping to the target month's last day.
+
+Invalid dates, an out-of-range result, or an offset outside those bounds fails the handler without exposing the supplied value.
+A Function that calls `today()` requires `project.timezone`.
+A caller-selected business date remains a typed input such as `asOfDate` and is caller data.
+Plan logic runs only when that Action is invoked and is not a Record field-validation boundary.
+If a rule must not be bypassed, withhold the ordinary Create profile that could write the same state without the Action.
+
+`bregctl check` performs one narrow source check for literal catalogue mistakes.
+It validates the string literal in a returned root map whose only key has the shape `#{refusal: #{code: "..."}}`.
+It also validates each string-literal `id` in a returned root map whose only key has the shape `#{effects: [#{id: "...", ...}]}` with a literal effects array.
+The walker checks explicit `return` statements anywhere inside the one-argument entrypoint and its final root-level map expression.
+It does not inspect an implicit map result inside a nested `if` branch.
+Helper-returned, computed, or dynamically assembled outcomes remain runtime behavior and need executable branch tests.
+
+A Record timer may invoke a deliberately non-public immediate Action from governed Record fields.
+That timer-only Action remains in compiled inspection but has no caller route, access-profile selection, public metadata entry, portable Action contract, or generated client method.
+See [Schedule Actions with Record timers](../breg-record-timers/).
+
+{/* Evidence: crates/registry-breg/src/rhai_planner.rs add_months;
+    crates/registry-breg/tests/immediate_action_handler.rs add_months;
+    crates/registry-breg/src/action_handler.rs action.handler.result;
+    crates/registry-breg/tests/registry_timezone.rs a_plan_that_calls_today_requires_a_timezone;
+    crates/registry-breg/src/plan.rs order_plan_effects;
+    crates/registry-breg/src/action_outcome.rs exact_members;
+    crates/registry-breg/src/immediate_actions.rs breg.action.handler-input-string-bound;
+    crates/registry-breg/src/action_handler.rs validate_input_value;
+    crates/registry-breg/src/api/actions.rs invalid_action_request;
+    crates/registry-breg/tests/immediate_action_handler.rs handler_compiler_rejects_inputs_outside_the_scalar_abi;
+    crates/registry-breg/tests/immediate_action_handler.rs handler_optional_inputs_preserve_absence_and_explicit_null;
+    products/breg/acceptance/person-registration-rhai/registry.yaml person-registrar. */}
+
+## Authorize and guard an immediate Action
+
+An Action grant uses `permissions.actions`, the Action ID, `operations: [invoke]`, explicit target row boundaries, and permitted result effects.
+It grants no ordinary CRUD.
+Its target row boundaries are runtime-enforced Action authority in addition to any ordinary Record grant held by the same profile.
+Every existing reference target needs current target authority, including link-only references and targets chosen by a function.
+`commitGuards` checks required current facts inside the mutation transaction.
+A Record type's `mutationPolicy` still prevents immediate writes to Proposal-required targets.
+
+`bregctl explain access` reports this authority, whether any direct Record grant also exists, and the compiled write or existing-target role of each Action target use.
+The direct-grant flag does not compare that grant's operations or row boundaries, and Action target authority does not grant ordinary CRUD.
+For a Proposal Action, a `write` use under the Start grant describes an effect the Proposal may apply after approval; it does not grant the Start caller a direct Record write.
+
+An invocation commits Record effects, revisions, history, audit, the idempotency receipt, and outbox together.
+A refused effect leaves no partial Record or event.
+The response discloses only granted result effects.
+Events describe committed work; an external webhook failure cannot roll back the registry transaction.
+The webhook receiver example shows durable acceptance and deduplication for an adopting service.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs permissions.actions;
+    crates/registry-breg/src/mutation/action.rs apply_action_effect_group;
+    crates/registry-breg/src/package/tests/immediate_actions.rs proposal-required. */}
+
+### Shift a date guard by an offset
+
+A date guard may shift the registry-local date by a signed whole-day offset:
+
+```yaml
+commitGuards:
+  targets:
+    - input: licence
+      field: valid-through
+      currentDate: on-or-after
+      currentDateOffsetDays: 30
+```
+
+An absent or zero `currentDateOffsetDays` compares with today.
+The bounded offset applies to the same local date for advisory availability and for commit or Proposal Apply re-evaluation.
+
+A Proposal Plan evaluates `today()` once, when the Proposal starts.
+Its commit guards check `currentDate` again when the Proposal is applied.
+If approval crosses midnight or takes days, the date the Plan used and the date the guard compares against are different days.
+Write the guard offset with that gap in mind.
+
+{/* Evidence: crates/registry-breg/src/model.rs current_date_offset_days;
+    crates/registry-breg/src/immediate_actions.rs current_date_offset_days;
+    crates/registry-breg/tests/immediate_action_requirements.rs current_date_offset_days. */}
+
+### Compare a stored field with an input
+
+A field guard on a reference input compares the target's stored field with a literal (`equals`, or an integer `atLeast` or `atMost`) or with a declared Action input, so the caller never echoes the stored value back:
+
+```yaml
+commitGuards:
+  targets:
+    - input: case
+      field: opened-at
+      atMostFromInput: assigned-at
+    - input: case
+      field: expires-on
+      atLeastFromInput: assigned-on
+inputs:
+  - id: assigned-at
+    type: timestamp
+    required: true
+    classification: internal
+  - id: assigned-on
+    type: date
+    required: true
+    classification: internal
+```
+
+`equalsFromInput`, `atLeastFromInput`, and `atMostFromInput` each name one declared input; a guard carries exactly one comparison.
+The stored field is the subject, and both bounds are inclusive: `atMostFromInput` passes when the stored value is less than or equal to the input, and `atLeastFromInput` when it is greater than or equal to it.
+The two ordered keys accept `int64`, `date`, and `timestamp` fields only, and the input must be a `required` input of the same type.
+
+`bregctl check` refuses a pairing of different types, a field with no order (such as `string` or `decimal`), an undeclared input, and an optional input (`breg.action.commit_guards.targets-value-invalid`).
+A missing input therefore never reaches a guard at commit, and an availability check that lacks it answers `input-required` with `missingInputs`, as for `equalsFromInput`.
+The comparisons use no new operators or expressions.
+
+Dates compare as calendar dates and timestamps compare as instants, not as text, so `2026-10-30T10:00:00Z`, `2026-10-30T10:00:00+00:00`, and `2026-10-30T12:00:00+02:00` are the same instant.
+A stored `timestamp` is an instant that the registry reads back in UTC with a `+00:00` offset (see [Model event records](../breg-event-records/)); a client never needs to match that text.
+A stored value that is absent fails the guard, so an unset optional field is never at least or at most any input.
+A failed guard answers like any other field guard: `412 action.guard_failed` when the guard facts are readable, else `412 precondition.failed`, with no Record changed.
+
+{/* Evidence: crates/registry-breg/src/contract.rs at_least_from_input;
+    crates/registry-breg/src/immediate_actions.rs targets-value-invalid;
+    crates/registry-breg/tests/immediate_action_requirements.rs targets-value-invalid;
+    crates/registry-breg/tests/postgres_proposal_guard_failure.rs submit_names_a_failed_input_comparison_guard. */}
+
+### Check one target's advisory availability
+
+An immediate Action with at least one reference input advertises one `routes.availability` endpoint.
+`targetInput` selects one reference input for that request.
+Send that reference and any other declared input values already available to the application:
+
+```json
+{
+  "targetInput": "itemId",
+  "input": {
+    "itemId": "00000000-0000-0000-0000-000000000001"
+  }
+}
+```
+
+The check evaluates field-based `commitGuards` for that one target under the selected Action profile and its ordinary Get disclosure.
+It returns the observed target revision with `available: true`, or with `available: false` and the reason `guard-not-satisfied`.
+A guard may declare an optional, stable LocalId `reason` of at most 64 characters.
+The response exposes it as `guardReason` only when every guard fact and every row-boundary fact for the selected target is readable.
+The generic `reason` remains `guard-not-satisfied`.
+
+If a declared input needed by a guard is absent, `available` is `null`, the reason is `input-required`, and `missingInputs` names only declared API input names.
+If a guard or row boundary depends on a fact the caller cannot read, or the profile lacks Get authority for the target Record type, the answer is `available: null` with `observedRevision: null`, `not-disclosed`, and no `guardReason` or `missingInputs`:
+
+```json
+{
+  "availability": {
+    "available": null,
+    "observedRevision": null,
+    "reason": "not-disclosed",
+    "recovery": "none"
+  }
+}
+```
+
+A target denied by the ordinary Get boundary and a missing target both use the concealed 404.
+Query reference inputs separately when an Action has several targets.
+A known failed guard takes precedence over missing guard input; correcting that guard may expose an `input-required` result on the next check.
+No availability response names a guard ID or a Record value.
+
+Availability is an observation.
+It does not run a Function, test SQL uniqueness or Evidence, mint a condition token, grant mutation authority, or reserve the observed revision.
+Invoke remains responsible for current authority, concurrency, form completeness, every guard, Functions, and Evidence; all required checks must succeed before effects commit.
+`available: true` means only that this target's field guards are currently satisfied, including the case where it has no field guards.
+
+A safely disclosed field guard that fails at commit answers `412 action.guard_failed` after current-target admission checks pass.
+The code confirms that blocker; effect application, proposed-value authorization, and database constraints run only after guards pass.
+An earlier refusal retains its normal response.
+Stale conditions and guard failures that cannot be disclosed remain `412 precondition.failed`.
+Invoke rechecks the guard during commit.
+If it fails, BReg rolls back and re-observes disclosure before returning `guardReason`; advisory `guardReason` is neither authority nor a reservation.
+
+{/* Evidence: crates/registry-breg/src/api/actions/availability.rs guard-not-satisfied;
+    crates/registry-breg/src/api/actions/availability.rs not-disclosed;
+    crates/registry-breg/tests/postgres_immediate_action_requirements.rs input-required;
+    crates/registry-breg/tests/postgres_immediate_action_requirements.rs guardReason. */}
+
+## Test a Plan function offline
+
+```sh
+bregctl check ./registry
+bregctl --format json explain actions ./registry
+bregctl project action-test ./registry --action <action-id> --input /path/to/input.json --evaluation-date 2026-01-31
+```
+
+`action-test` runs a named Plan function over bounded synthetic JSON using logical input IDs, without a wire envelope.
+A handler that calls `today()` requires the fixed `--evaluation-date`; the command never reads the workstation clock.
+Add `--expect /path/to/expected.json` to check exact effects, a declared refusal, or a handler failure.
+The public `action-plan-branches` fixture carries all three examples.
+A handler result error is asserted as `{"failure":{"code":"action.handler.result"}}`; malformed supplied input remains an input error.
+Runtime handler failures return the bounded value-free 500 problem and log the Action, Plan, phase, slot, field, and failure identity, never an input value.
+This offline check reads no live targets and does not prove runtime authority or commit guards.
+
+{/* Evidence: products/breg/fixtures/action-plan-branches/registry.yaml action-plan-branches;
+    crates/registry-bregctl/src/lib.rs action-test;
+    crates/registry-breg/src/action_handler.rs action.handler.result. */}
+
+## Invoke and recover
+
+Select the Action from caller-filtered metadata.
+Its fixed execution mode and advertised routes distinguish immediate Invoke from Proposal Start.
+Obtain any required target conditions through the selected binding, and use advisory availability to guide the form when the Action advertises it.
+Retain the user's input and conditions, and prepare one invocation with a caller-owned idempotency key.
+The server rechecks package identity, current authority, guards, and concurrency.
+
+An omitted `accessProfile` when the Action route has no default, an unknown profile, and a profile the caller cannot use all return the same concealed 404.
+The response does not list usable profiles.
+Select the profile and Action from caller-filtered metadata, then prepare the invocation from that client binding instead of probing Action URLs.
+
+Recover a lost response using the same prepared request and key.
+A replay returns the retained receipt without replanning or reacquiring Evidence.
+A changed input or binding conflicts; an expired or erased receipt refuses without executing again.
+Refresh stale conditions only after reviewing current input and targets.
+
+[Configure Proposals](../breg-proposals/) covers durable work.
+
+{/* TODO[evidence]: concealed 404 for omitted, unknown and unusable accessProfile on an Action route has no single named test located. */}
+
 ## Next
 
+- [Configure Proposals](../breg-proposals/)
 - [Change a registry with an Action](../../tutorials/change-a-registry-with-an-action/)
 - [Control access and reads](../breg-access/)
 - [Review a Proposal in Casework](../../tutorials/review-breg-changes-in-casework/)
