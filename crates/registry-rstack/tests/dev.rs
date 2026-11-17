@@ -712,7 +712,7 @@ fn casework_text_outside_the_products_list_does_not_require_casework() {
     let tools = SourceTools::new();
     fs::write(
         tools.project.join("dev.yaml"),
-        "# product: casework\nissuer: https://issuer.example\nproducts:\n  - {product: breg, project: breg, audience: \"urn:example:breg\"}\njourney:\n  steps:\n    - name: \"product: casework\"\n",
+        "# product: casework\nissuer: https://issuer.example\nproducts:\n  - {product: breg, project: breg, audience: \"urn:example:breg\"}\nscenarioFile: tests/scenarios.yaml\nnotes:\n  - name: \"product: casework\"\n",
     )
     .unwrap();
     let output = tools

@@ -447,7 +447,7 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
             pool.map(lambda _: dev(bin_dir, env, checkout, "start", "."), range(2))
         )
     a, b = runs
-    assert all(run["journey"]["result"] == "passed" for run in runs)
+    assert all(run["scenarios"][0]["result"] == "passed" for run in runs)
     assert a["run_id"] != b["run_id"]
     assert len(administrator_locks(pg, pg_env) - baseline_locks) == 2
     assert len({url for run in runs for url in run["products"].values()}) == 4
@@ -544,13 +544,8 @@ def exercise_runs(root, bin_dir, pg, checkout, state, env, pg_env):
 def verify_authored_scenarios(root, bin_dir, checkout, state, env):
     project = root / "authored-scenarios"
     shutil.copytree(checkout, project)
-    plan = project / "dev.yaml"
-    prefix, inline = plan.read_text().split("journey:\n", 1)
-    lines = inline.splitlines()
-    assert lines[0].startswith("  id: ")
-    scenario = "  - " + lines[0].lstrip() + "\n"
-    scenario += "\n".join("  " + line for line in lines[1:]) + "\n"
-    scenario = scenario.replace(
+    scenarios = project / "tests/scenarios.yaml"
+    scenario = scenarios.read_text().replace(
         "https://identity.licensing.example.test", "'{{run.issuer}}'"
     )
     scenario += (
@@ -563,13 +558,7 @@ def verify_authored_scenarios(root, bin_dir, checkout, state, env):
         "        path: /v1/records/applications\n"
         "        expect: {status: 200, json: {/items/0/domainData/reference: application-001}}\n"
     )
-    scenarios = project / "tests/scenarios.yaml"
-    scenarios.parent.mkdir(exist_ok=True)
-    scenarios.write_text(
-        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\n"
-        "kind: RStackScenarios\nscenarios:\n" + scenario
-    )
-    plan.write_text(prefix + "scenarioFile: tests/scenarios.yaml\n")
+    scenarios.write_text(scenario)
     assert dev(bin_dir, env, project, "check", ".")["status"] == "complete"
 
     first_revision = "sha256:" + hashlib.sha256(scenarios.read_bytes()).hexdigest()
@@ -611,18 +600,18 @@ def verify_authored_scenarios(root, bin_dir, checkout, state, env):
 def verify_failed_journey(root, bin_dir, checkout, state, env):
     project = root / "failed-journey"
     shutil.copytree(checkout, project)
-    plan = project / "dev.yaml"
-    authored = plan.read_text()
-    expectation = "      expect: {status: 201}"
+    scenarios = project / "tests/scenarios.yaml"
+    authored = scenarios.read_text()
+    expectation = "        expect: {status: 201}"
     assert expectation in authored
-    plan.write_text(authored.replace(expectation, "      expect: {status: 202}", 1))
+    scenarios.write_text(authored.replace(expectation, "        expect: {status: 202}", 1))
     report = dev(bin_dir, env, project, "start", ".", expected=1)
     run = report["run_id"]
     try:
         assert report["schema_version"] == "registry.rstack.dev.v1", report
-        assert report["status"] == "ready" and report["journey"]["result"] == "failed"
+        assert report["status"] == "ready" and report["scenarios"][0]["result"] == "failed"
         status = dev(bin_dir, env, project, "status", run)
-        assert status["status"] == "ready" and status["journey"] == report["journey"]
+        assert status["status"] == "ready" and status["scenarios"] == report["scenarios"]
         assert all(accepts_connections(url) for url in report["products"].values())
     finally:
         assert dev(bin_dir, env, project, "stop", run)["status"] == "stopped"
@@ -1003,11 +992,15 @@ def verify_native_handoff(root, bin_dir, env):
     for product in ("registry", "casework"):
         shutil.copytree(NATIVE_REVIEW / product, checkout / product)
     shutil.copyfile(NATIVE_REVIEW / "dev.yaml", checkout / "dev.yaml")
+    (checkout / "tests").mkdir()
+    shutil.copyfile(
+        NATIVE_REVIEW / "tests/scenarios.yaml", checkout / "tests/scenarios.yaml"
+    )
     before = files(checkout)
     report = dev(bin_dir, env, checkout, "start", ".")
     try:
-        assert report["journey"]["id"] == "native-review-handoff"
-        assert report["journey"]["result"] == "passed"
+        assert report["scenarios"][0]["id"] == "native-review-handoff"
+        assert report["scenarios"][0]["result"] == "passed"
         assert files(checkout) == before
         print(
             "Native review handoff, reviewer context and separately authorized BReg apply passed"
@@ -1055,7 +1048,7 @@ def spatial_project(root, name):
         "issuer": "https://spatial-smoke.example.invalid",
         "products": [{"product": "breg", "project": "registry", "audience": "breg"}],
         "people": people,
-        "journey": {
+        "scenario": {
             "id": "spatial-smoke",
             "steps": [
                 {
@@ -1082,8 +1075,26 @@ def spatial_project(root, name):
             ],
         },
     }
-    (checkout / "dev.yaml").write_text(json.dumps(plan))
+    write_plan(checkout, plan)
     return checkout, registry, bbox
+
+
+def write_plan(checkout, plan):
+    """Write a plan whose `scenario` entry moves into the project's scenarios file."""
+    scenario = plan.pop("scenario")
+    (checkout / "tests").mkdir(exist_ok=True)
+    (checkout / "tests/scenarios.yaml").write_text(
+        json.dumps(
+            {
+                "apiVersion": "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+                "kind": "RStackScenarios",
+                "scenarios": [scenario],
+            }
+        )
+    )
+    (checkout / "dev.yaml").write_text(
+        json.dumps({**plan, "scenarioFile": "tests/scenarios.yaml"})
+    )
 
 
 def verify_spatial_refusal(root, bin_dir, pg, state, env, pg_env):
@@ -1196,7 +1207,7 @@ def encrypted_project(root, name):
             for principal, (alias, jurisdiction) in people.items()
         },
         "schemaTestPeople": schema_test_people,
-        "journey": {
+        "scenario": {
             "id": "encrypted-note",
             "steps": [
                 {
@@ -1235,7 +1246,7 @@ def encrypted_project(root, name):
             ],
         },
     }
-    (checkout / "dev.yaml").write_text(json.dumps(plan))
+    write_plan(checkout, plan)
     return checkout, body
 
 
@@ -1287,7 +1298,7 @@ def verify_field_encryption(root, bin_dir, pg, state, env, pg_env):
     report, printed = dev_output(bin_dir, env, checkout, "start", ".")
     run = report["run_id"]
     try:
-        assert report["journey"]["result"] == "passed", report
+        assert report["scenarios"][0]["result"] == "passed", report
         key = field_key(state, run)
         credential(bin_dir, env, checkout, run, "editor")
         _, token = dev_output(bin_dir, env, checkout, "token", run, "--as", "editor")
@@ -1361,7 +1372,7 @@ def verify_spatial(root, bin_dir, pg, env, pg_env):
     report = dev(bin_dir, env, checkout, "start", ".")
     run = report["run_id"]
     try:
-        assert report["journey"]["result"] == "passed"
+        assert report["scenarios"][0]["result"] == "passed"
         origin = report["products"]["breg"]
         collection = f"{origin}/v1/gis/collections/service-site.map-reader"
         headers = credential(bin_dir, env, checkout, run, "map-reader")
@@ -1454,6 +1465,10 @@ def verify_offline_plan(root, bin_dir, project):
     binding.mkdir()
     for product in ("registry", "casework"):
         shutil.copytree(NATIVE_REVIEW / product, binding / product)
+    (binding / "tests").mkdir()
+    shutil.copyfile(
+        NATIVE_REVIEW / "tests/scenarios.yaml", binding / "tests/scenarios.yaml"
+    )
     authored = (NATIVE_REVIEW / "dev.yaml").read_text()
     audience = 'audience: "urn:journey:breg"'
     assert authored.count(audience) == 1

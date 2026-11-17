@@ -14,12 +14,4 @@ people:
       breg:
         profile: operator
         scopes: [registry:read]
-journey:
-  id: smoke
-  steps:
-    - id: read
-      product: breg
-      as: operator
-      method: GET
-      path: /v1/records/records
-      expect: {status: 200}
+scenarioFile: tests/scenarios.yaml

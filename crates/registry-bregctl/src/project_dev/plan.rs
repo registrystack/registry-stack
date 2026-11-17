@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_platform_yaml::{
     escape_pointer_segment, ApiVersion, BoundedU32, Decoded, EnvelopeRule, Expect, FormatSpec,
-    Identified, LocalId, Reader, Report, Severity, UniqueIdList, UniqueList,
+    Identified, LocalId, Reader, RemovedKey, Report, Severity, UniqueIdList, UniqueList,
 };
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{ExternalId, Url as PlatformUrl};
@@ -32,7 +32,10 @@ pub(crate) const FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/journey",
+        replacement: "Move the inline journey steps into a scenarios file (for example tests/scenarios.yaml, under `scenarios`) and set `scenarioFile` to its project-relative path.",
+    }],
 };
 
 pub(crate) const SCENARIOS_FORMAT: FormatSpec<'static> = FormatSpec {
@@ -46,18 +49,7 @@ pub(crate) const SCENARIOS_FORMAT: FormatSpec<'static> = FormatSpec {
 
 #[cfg(feature = "schema")]
 pub(crate) fn schema() -> schemars::Schema {
-    let mut schema = schemars::schema_for!(Plan);
-    schema
-        .as_object_mut()
-        .expect("Plan schema is an object")
-        .insert(
-            "oneOf".to_owned(),
-            serde_json::json!([
-                { "required": ["journey"] },
-                { "required": ["scenarioFile"] }
-            ]),
-        );
-    schema
+    schemars::schema_for!(Plan)
 }
 
 #[cfg(feature = "schema")]
@@ -203,7 +195,7 @@ impl Product {
     }
 }
 
-/// The development plan: the products to start, the test people who call them, and the journey to run.
+/// The development plan: the products to start, the test people who call them, and the scenarios to run.
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -219,12 +211,8 @@ pub(super) struct Plan {
         schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
     )]
     pub people: BTreeMap<String, TestPerson>,
-    /// One inline journey, retained for existing development plans. Use scenarioFile for authored scenarios.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub journey: Option<Journey>,
-    /// Project-relative path to the authored Stack scenarios file. Exactly one of journey and scenarioFile is required.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scenario_file: Option<PathBuf>,
+    /// Project-relative path to the authored Stack scenarios file. Required: a development run exists to run scenarios.
+    pub scenario_file: PathBuf,
     /// Run-local connections between BReg and Casework. Leave empty when the products do not call each other.
     #[serde(default)]
     pub bindings: super::bindings::Bindings,
@@ -862,11 +850,8 @@ fn validate_plan(root: &Path, decoded: &Decoded<Plan>) -> Result<()> {
         .map_err(|refusal| refusal_report(decoded, &refusal).into())
 }
 
-fn read_scenarios(root: &Path, plan: &Plan) -> Result<(Vec<Journey>, Option<String>)> {
-    let Some(path) = &plan.scenario_file else {
-        return Ok((Vec::new(), None));
-    };
-    let file = root.join(path);
+fn read_scenarios(root: &Path, plan: &Plan) -> Result<(Vec<Journey>, String)> {
+    let file = root.join(&plan.scenario_file);
     let bytes = read(
         &file,
         registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64 + 1,
@@ -894,13 +879,13 @@ fn read_scenarios(root: &Path, plan: &Plan) -> Result<(Vec<Journey>, Option<Stri
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    Ok((std::mem::take(&mut decoded.value.scenarios), Some(revision)))
+    Ok((std::mem::take(&mut decoded.value.scenarios), revision))
 }
 
 pub(super) struct LoadedPlan {
     pub plan: Plan,
     pub scenarios: Vec<Journey>,
-    pub scenario_digest: Option<String>,
+    pub scenario_digest: String,
 }
 
 pub(crate) fn check(root: &Path) -> Result<Report> {
@@ -951,32 +936,23 @@ impl Plan {
     }
 
     fn validate(&self, root: &Path) -> SemanticResult<()> {
+        let path = &self.scenario_file;
         require(
-            self.journey.is_some() != self.scenario_file.is_some(),
+            !path.as_os_str().is_empty()
+                && !path.to_string_lossy().contains('\\')
+                && path
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_))),
             "/scenarioFile",
-            "Specify exactly one inline journey or authored scenario file.",
-            "Set scenarioFile to a project-relative authored file and remove journey, or keep journey alone.",
+            "The scenario file path must be relative to the project without `.`, `..`, or backslashes.",
+            "Use normal relative path components inside the development project.",
         )?;
-        if let Some(path) = &self.scenario_file {
-            require(
-                !path.as_os_str().is_empty()
-                    && !path.to_string_lossy().contains('\\')
-                    && path
-                        .components()
-                        .all(|part| matches!(part, Component::Normal(_))),
-                "/scenarioFile",
-                "The scenario file path must be relative to the project without `.`, `..`, or backslashes.",
-                "Use normal relative path components inside the development project.",
-            )?;
-            require(
-                root.join(path)
-                    .canonicalize()
-                    .is_ok_and(|file| file.starts_with(root) && file.is_file()),
-                "/scenarioFile",
-                "The authored scenario file must be inside the development project.",
-                "Provide the declared scenario file inside the development project.",
-            )?;
-        }
+        require(
+            resolves_to_file_inside(root, path),
+            "/scenarioFile",
+            "The authored scenario file must be inside the development project.",
+            "Provide the declared scenario file inside the development project.",
+        )?;
         require(
             self.issuer == "run" || ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
                 url.scheme() == "https"
@@ -1044,9 +1020,7 @@ impl Plan {
                 )?;
             }
             require(
-                root.join(&application.deployment)
-                    .canonicalize()
-                    .is_ok_and(|path| path.starts_with(root) && path.is_file()),
+                resolves_to_file_inside(root, &application.deployment),
                 "/application/deployment",
                 "The deployment file must be inside the development project.",
                 "Provide the declared deployment file in the development project.",
@@ -1115,10 +1089,7 @@ impl Plan {
                 Product::Casework => "casework.yaml",
             };
             require(
-                root.join(&entry.project)
-                    .join(manifest)
-                    .canonicalize()
-                    .is_ok_and(|path| path.starts_with(root) && path.is_file()),
+                resolves_to_file_inside(root, &entry.project.join(manifest)),
                 &format!("{field}/project"),
                 format!("The product project must contain {manifest} inside the development project directory."),
                 format!("Create {manifest} at this project path inside the development project directory."),
@@ -1276,9 +1247,6 @@ impl Plan {
             )?;
         }
         self.bindings.validate(self)?;
-        if let Some(journey) = &self.journey {
-            journey.validate(self, "/journey")?;
-        }
         Ok(())
     }
 }
@@ -1321,6 +1289,22 @@ impl Journey {
                 "The request path must be a relative product API path starting with /v1/.",
                 "Set path to a bounded /v1/ path without whitespace, control characters, backslashes, or fragments.",
             )?;
+            if step.product == Product::Breg {
+                let grant_profile = &plan.people[&step.person].grants[&Product::Breg].profile;
+                if let Some(named) = path_access_profile(&step.path) {
+                    require(
+                        named == *grant_profile || named.contains("{{"),
+                        &format!("{field}/path"),
+                        format!(
+                            "Step `{}` names the BReg access profile `{named}`, but its test person `{}` has a grant for `{grant_profile}`.",
+                            step.id, step.person
+                        ),
+                        format!(
+                            "Remove `accessProfile={named}` from the path (the scenario takes the profile from the test person's grant), or run the step as a test person whose BReg grant selects `{named}`."
+                        ),
+                    )?;
+                }
+            }
             let statuses = step.expect.status.values();
             require(
                 (1..=16).contains(&statuses.len())
@@ -1587,6 +1571,27 @@ fn pointer(value: &str) -> bool {
     value.is_empty() || value.starts_with('/')
 }
 
+/// The `accessProfile` query value a step path names itself, if any.
+pub(super) fn path_access_profile(path: &str) -> Option<String> {
+    let (_, query) = path.split_once('?')?;
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(name, _)| name == "accessProfile")
+        .map(|(_, value)| value.into_owned())
+}
+
+/// Whether `relative` under `root` resolves, symlinks included, to a file that
+/// is still inside the resolved `root`. Both sides are resolved so a project
+/// reached through a symlinked parent is accepted while a link leading outside
+/// it is refused.
+fn resolves_to_file_inside(root: &Path, relative: &Path) -> bool {
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    root.join(relative)
+        .canonicalize()
+        .is_ok_and(|file| file.starts_with(&root) && file.is_file())
+}
+
 pub(super) fn valid_path(value: &str) -> bool {
     value.len() <= 2048
         && value.starts_with("/v1/")
@@ -1644,14 +1649,44 @@ mod tests {
                 "subject": "operator", "client": "operator-client",
                 "grants": {"breg": {"profile": "operator", "scopes": []}}
             }},
-            "journey": {"id": "smoke", "steps": [step]}
+            "scenarioFile": "tests/scenarios.yaml"
         }))
         .unwrap();
+        write_scenarios(root.path(), json!({"id": "smoke", "steps": [step]}));
         (root, plan)
     }
 
+    /// Writes `tests/scenarios.yaml` holding one scenario.
+    fn write_scenarios(root: &Path, journey: Value) {
+        fs::create_dir_all(root.join("tests")).unwrap();
+        fs::write(
+            root.join("tests/scenarios.yaml"),
+            format!(
+                "apiVersion: {SCENARIOS_API_VERSION}\nkind: {SCENARIOS_KIND}\nscenarios:\n  - {journey}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn scenario_file(root: &Path, plan: &Plan) -> ScenarioFile {
+        let bytes = fs::read(root.join(&plan.scenario_file)).unwrap();
+        Reader::new("scenarios")
+            .with_hook(&mut LiteralText {
+                remedy: WRITE_THE_VALUE,
+            })
+            .decode::<ScenarioFile>(&bytes, &Expect::one(&SCENARIOS_FORMAT))
+            .unwrap()
+            .value
+    }
+
+    /// Validates the plan and then its scenarios file, as `check` does.
+    fn validate_all(root: &Path, plan: &Plan) -> SemanticResult<()> {
+        plan.validate(root)?;
+        scenario_file(root, plan).validate(plan)
+    }
+
     // Exercise the production file readers, not serde_json's independent decoder.
-    fn read_expected_json(inline: bool, expected: &str) -> Result<Expected> {
+    fn read_expected_json(expected: &str) -> Result<Expected> {
         let root = tempfile::tempdir()?;
         fs::write(root.path().join("registry.yaml"), "fixture")?;
         let base = format!(
@@ -1660,43 +1695,33 @@ mod tests {
         let journey = format!(
             r#"{{"id":"smoke","steps":[{{"id":"read","product":"breg","as":"operator","method":"GET","path":"/v1/records/widgets/00000000-0000-4000-8000-000000000001","expect":{expected}}}]}}"#
         );
-        let tail = if inline {
-            format!("journey: {journey}\n")
-        } else {
-            fs::create_dir(root.path().join("tests"))?;
-            fs::write(
-                root.path().join("tests/scenarios.yaml"),
-                format!(
-                    "apiVersion: {SCENARIOS_API_VERSION}\nkind: {SCENARIOS_KIND}\nscenarios:\n  - {journey}\n"
-                ),
-            )?;
-            "scenarioFile: tests/scenarios.yaml\n".to_owned()
-        };
-        fs::write(root.path().join("dev.yaml"), format!("{base}{tail}"))?;
-        let mut decoded = read_plan(root.path())?;
+        fs::create_dir(root.path().join("tests"))?;
+        fs::write(
+            root.path().join("tests/scenarios.yaml"),
+            format!(
+                "apiVersion: {SCENARIOS_API_VERSION}\nkind: {SCENARIOS_KIND}\nscenarios:\n  - {journey}\n"
+            ),
+        )?;
+        fs::write(
+            root.path().join("dev.yaml"),
+            format!("{base}scenarioFile: tests/scenarios.yaml\n"),
+        )?;
+        let decoded = read_plan(root.path())?;
         validate_plan(root.path(), &decoded)?;
-        let mut journeys = if inline {
-            vec![decoded.value.journey.take().unwrap()]
-        } else {
-            read_scenarios(root.path(), &decoded.value)?.0
-        };
+        let mut journeys = read_scenarios(root.path(), &decoded.value)?.0;
         Ok(journeys.remove(0).steps.remove(0).expect)
     }
 
     #[test]
     fn expected_json_reader_accepts_direct_null_values() {
-        for inline in [false, true] {
-            let expected =
-                read_expected_json(inline, r#"{"status":200,"json":{"/data/domainData":null}}"#)
-                    .unwrap();
-            assert_eq!(expected.json["/data/domainData"], Value::Null);
-        }
+        let expected =
+            read_expected_json(r#"{"status":200,"json":{"/data/domainData":null}}"#).unwrap();
+        assert_eq!(expected.json["/data/domainData"], Value::Null);
     }
 
     #[test]
     fn expected_json_reader_accepts_inline_null_values() {
         let expected = read_expected_json(
-            true,
             r#"{"status":200,"json":{"/data/domainData":{"optionalText":null}}}"#,
         )
         .unwrap();
@@ -1708,96 +1733,81 @@ mod tests {
 
     #[test]
     fn expected_json_reader_preserves_null_as_distinct_from_missing_and_text() {
-        for inline in [false, true] {
-            let expected = read_expected_json(
-                inline,
-                r#"{"status":200,"json":{"/data":{"optionalText":null}}}"#,
-            )
-            .unwrap();
-            let asserted = &expected.json["/data"];
-            assert_eq!(asserted.pointer("/optionalText"), Some(&Value::Null));
-            assert_eq!(asserted.pointer("/absent"), None);
-            assert_ne!(asserted, &json!({}));
-            assert_ne!(asserted, &json!({"optionalText": "null"}));
-            assert_ne!(asserted, &json!({"optionalText": null, "extra": true}));
-        }
+        let expected =
+            read_expected_json(r#"{"status":200,"json":{"/data":{"optionalText":null}}}"#).unwrap();
+        let asserted = &expected.json["/data"];
+        assert_eq!(asserted.pointer("/optionalText"), Some(&Value::Null));
+        assert_eq!(asserted.pointer("/absent"), None);
+        assert_ne!(asserted, &json!({}));
+        assert_ne!(asserted, &json!({"optionalText": "null"}));
+        assert_ne!(asserted, &json!({"optionalText": null, "extra": true}));
     }
 
     #[test]
     fn expected_json_reader_accepts_nested_null_and_preserves_exact_typed_values() {
         let value = json!({"optionalText": null, "nested": [null, {"text": "null", "flag": false, "integer": 7, "fraction": 1.5}], "empty": {}});
-        for inline in [false, true] {
-            let source = format!(r#"{{"status":200,"json":{{"/data/domainData":{value}}}}}"#);
-            let expected = read_expected_json(inline, &source).unwrap();
-            assert_eq!(expected.json["/data/domainData"], value);
-            assert_eq!(
-                serde_json::to_value(&expected).unwrap()["json"]["/data/domainData"],
-                value
-            );
-            let expanded =
-                expand_json(&expected.json["/data/domainData"], |_| unreachable!()).unwrap();
-            assert_eq!(expanded, value);
-            assert_ne!(expanded, json!({"optionalText": null}));
-            assert_ne!(
-                expanded,
-                json!({"optionalText": "null", "nested": value["nested"], "empty": {}})
-            );
-        }
+        let source = format!(r#"{{"status":200,"json":{{"/data/domainData":{value}}}}}"#);
+        let expected = read_expected_json(&source).unwrap();
+        assert_eq!(expected.json["/data/domainData"], value);
+        assert_eq!(
+            serde_json::to_value(&expected).unwrap()["json"]["/data/domainData"],
+            value
+        );
+        let expanded = expand_json(&expected.json["/data/domainData"], |_| unreachable!()).unwrap();
+        assert_eq!(expanded, value);
+        assert_ne!(expanded, json!({"optionalText": null}));
+        assert_ne!(
+            expanded,
+            json!({"optionalText": "null", "nested": value["nested"], "empty": {}})
+        );
     }
 
     #[test]
     fn expected_json_reader_keeps_null_scoped_to_each_expected_value() {
-        for inline in [false, true] {
-            for expected in [
-                r#"{"status":200,"json":null}"#,
-                r#"{"json":{"/data":null},"status":null}"#,
-                r#"{"status":200,"json":{"/data":null},"code":null}"#,
-            ] {
-                let error = read_expected_json(inline, expected).err().unwrap();
-                assert!(error.to_string().contains("config.null-value"), "{error}");
-            }
-            assert!(read_expected_json(inline, r#"{"status":200,"json":[]}"#).is_err());
-            for expected in [r#"{"status":200}"#, r#"{"status":200,"json":{}}"#] {
-                assert!(read_expected_json(inline, expected)
-                    .unwrap()
-                    .json
-                    .is_empty());
-            }
+        for expected in [
+            r#"{"status":200,"json":null}"#,
+            r#"{"json":{"/data":null},"status":null}"#,
+            r#"{"status":200,"json":{"/data":null},"code":null}"#,
+        ] {
+            let error = read_expected_json(expected).err().unwrap();
+            assert!(error.to_string().contains("config.null-value"), "{error}");
+        }
+        assert!(read_expected_json(r#"{"status":200,"json":[]}"#).is_err());
+        for expected in [r#"{"status":200}"#, r#"{"status":200,"json":{}}"#] {
+            assert!(read_expected_json(expected).unwrap().json.is_empty());
         }
     }
 
     #[test]
     fn expected_json_reader_retains_unknown_key_and_yaml_syntax_guards() {
-        for inline in [false, true] {
-            for (expected, code) in [
-                (
-                    r#"{"status":200,"json":{"/data":null},"unexpected":true}"#,
-                    "config.unknown-key",
-                ),
-                (
-                    r#"{"status":200,"json":{"/data":null,"/data":{}}}"#,
-                    "yaml.duplicate-key",
-                ),
-                (
-                    r#"{"status":200,"json":{"/data":{"optionalText":null,"optionalText":"text"}}}"#,
-                    "yaml.duplicate-key",
-                ),
-                (
-                    r#"{"status":200,"json":{"/data":{optionalText: &item null}}}"#,
-                    "yaml.anchor",
-                ),
-                (
-                    r#"{"status":200,"json":{"/data":{optionalText: *item}}}"#,
-                    "yaml.alias",
-                ),
-                (
-                    r#"{"status":200,"json":{"/data":{optionalText: !!str null}}}"#,
-                    "yaml.tag",
-                ),
-            ] {
-                let error = read_expected_json(inline, expected).err().unwrap();
-                assert!(error.to_string().contains(code), "{code}: {error}");
-            }
+        for (expected, code) in [
+            (
+                r#"{"status":200,"json":{"/data":null},"unexpected":true}"#,
+                "config.unknown-key",
+            ),
+            (
+                r#"{"status":200,"json":{"/data":null,"/data":{}}}"#,
+                "yaml.duplicate-key",
+            ),
+            (
+                r#"{"status":200,"json":{"/data":{"optionalText":null,"optionalText":"text"}}}"#,
+                "yaml.duplicate-key",
+            ),
+            (
+                r#"{"status":200,"json":{"/data":{optionalText: &item null}}}"#,
+                "yaml.anchor",
+            ),
+            (
+                r#"{"status":200,"json":{"/data":{optionalText: *item}}}"#,
+                "yaml.alias",
+            ),
+            (
+                r#"{"status":200,"json":{"/data":{optionalText: !!str null}}}"#,
+                "yaml.tag",
+            ),
+        ] {
+            let error = read_expected_json(expected).err().unwrap();
+            assert!(error.to_string().contains(code), "{code}: {error}");
         }
     }
 
@@ -1808,18 +1818,16 @@ mod tests {
             "\"{}\"",
             "x".repeat(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES)
         );
-        for inline in [false, true] {
-            let expected = format!(r#"{{"status":200,"json":{{"/data":{deep}}}}}"#);
-            let error = read_expected_json(inline, &expected).err().unwrap();
-            assert!(error.to_string().contains("yaml.too-deep"), "{error}");
-            let expected = format!(r#"{{"status":200,"json":{{"/data":{large}}}}}"#);
-            let error = read_expected_json(inline, &expected).err().unwrap();
-            let detail = format!("{error:#}");
-            assert!(
-                detail.contains("size limit") || detail.contains("yaml.too-large"),
-                "{detail}"
-            );
-        }
+        let expected = format!(r#"{{"status":200,"json":{{"/data":{deep}}}}}"#);
+        let error = read_expected_json(&expected).err().unwrap();
+        assert!(error.to_string().contains("yaml.too-deep"), "{error}");
+        let expected = format!(r#"{{"status":200,"json":{{"/data":{large}}}}}"#);
+        let error = read_expected_json(&expected).err().unwrap();
+        let detail = format!("{error:#}");
+        assert!(
+            detail.contains("size limit") || detail.contains("yaml.too-large"),
+            "{detail}"
+        );
     }
 
     #[cfg(feature = "schema")]
@@ -1864,7 +1872,7 @@ mod tests {
         let mut value = serde_json::to_value(plan).unwrap();
         value["application"]["caseworkSourceCredentialRoles"] = json!(["reviewer"]);
         let plan: Plan = serde_json::from_value(value).unwrap();
-        let refusal = plan.validate(&canonical(&root)).unwrap_err();
+        let refusal = validate_all(&canonical(&root), &plan).unwrap_err();
         assert_eq!(refusal.field, "/application/caseworkSourceCredentialRoles");
     }
 
@@ -1895,11 +1903,10 @@ mod tests {
         let mut value = serde_json::to_value(plan).unwrap();
         value["people"]["operator"]["displayName"] = json!("A person");
         let valid: Plan = serde_json::from_value(value.clone()).unwrap();
-        assert!(valid.validate(&canonical(&root)).is_ok());
+        assert!(validate_all(&canonical(&root), &valid).is_ok());
         value["people"]["operator"]["displayName"] = json!("control\ncharacter");
         let invalid: Plan = serde_json::from_value(value).unwrap();
-        assert!(invalid
-            .validate(&canonical(&root))
+        assert!(validate_all(&canonical(&root), &invalid)
             .unwrap_err()
             .to_string()
             .contains("displayName"));
@@ -1941,10 +1948,7 @@ mod tests {
                 "subject": "operator", "client": "operator-client",
                 "grants": {"breg": {"profile": "operator", "scopes": []}}
             }},
-            "journey": {"id": "smoke", "steps": [{
-                "id": "read", "product": "breg", "as": "operator",
-                "method": "GET", "path": "/v1/records", "expect": {"status": 200}
-            }]}
+            "scenarioFile": "tests/scenarios.yaml"
         });
         for display_name in [
             "unsafe\u{202e}name".to_owned(),
@@ -1980,7 +1984,7 @@ mod tests {
             json!({"profile":"requester","scopes":["casework:request"]});
         value["bindings"] = json!({"bregReviewAuthority":{"id":"casework","producer":"registry","identity":"operator","runIssuerBinding":{"producer":{"expectedIssuer":"https://issuer.example.test","expectedProfile":"requester","expectedSubject":"operator"}}}});
         let valid: Plan = serde_json::from_value(value.clone()).unwrap();
-        valid.validate(&canonical(&root)).unwrap();
+        validate_all(&canonical(&root), &valid).unwrap();
         assert!(valid.application.is_none());
         for mode in [
             "no-binding",
@@ -2009,7 +2013,7 @@ mod tests {
             }
             let result = serde_json::from_value::<Plan>(refused);
             assert!(
-                result.map_or(true, |plan| plan.validate(&canonical(&root)).is_err()),
+                result.map_or(true, |plan| validate_all(&canonical(&root), &plan).is_err()),
                 "{mode}"
             );
         }
@@ -2025,7 +2029,7 @@ mod tests {
         let mut value = serde_json::to_value(plan).unwrap();
         value["issuer"] = json!("run");
         let without_application: Plan = serde_json::from_value(value.clone()).unwrap();
-        assert!(without_application.validate(&canonical(&root)).is_err());
+        assert!(validate_all(&canonical(&root), &without_application).is_err());
         value["application"] = json!({
             "client": "browser-client", "callbackPath": "/callback", "healthPath": "/health",
             "entry": "dist/main.js", "prepare": "dist/prepare.js",
@@ -2034,20 +2038,18 @@ mod tests {
             "prepareVersion": "example-prepare 1.0"
         });
         let valid: Plan = serde_json::from_value(value.clone()).unwrap();
-        assert!(valid.validate(&canonical(&root)).is_ok());
+        assert!(validate_all(&canonical(&root), &valid).is_ok());
         let mut conflicting = value.clone();
         conflicting["people"]["operator"]["grants"]["breg"]["claims"]["registry_scopes"] =
             json!("unreviewed:scope");
         let conflicting: Plan = serde_json::from_value(conflicting).unwrap();
-        assert!(conflicting
-            .validate(&canonical(&root))
+        assert!(validate_all(&canonical(&root), &conflicting)
             .unwrap_err()
             .to_string()
             .contains("reserved"));
         value["application"]["callbackPath"] = json!("//other-host/callback");
         let invalid: Plan = serde_json::from_value(value).unwrap();
-        assert!(invalid
-            .validate(&canonical(&root))
+        assert!(validate_all(&canonical(&root), &invalid)
             .unwrap_err()
             .to_string()
             .contains("callbackPath"));
@@ -2062,7 +2064,7 @@ mod tests {
                 json!("authority-value");
             let plan: Plan = serde_json::from_value(value).unwrap();
 
-            let refusal = plan.validate(&canonical(&root)).unwrap_err();
+            let refusal = validate_all(&canonical(&root), &plan).unwrap_err();
             assert_eq!(refusal.field, "/people/operator/grants/breg/claims");
             assert!(refusal.reason.contains("browser host"));
         }
@@ -2122,7 +2124,7 @@ mod tests {
 
     #[test]
     fn studio_journey_wire_variants_deserialize() {
-        let (_, plan) = plan(json!({
+        let (root, plan) = plan(json!({
             "id": "create.v1", "product": "breg", "as": "operator",
             "method": "POST", "path": "/v1/records",
             "raw": {"contentType": "application/octet-stream", "base64": "YQ=="},
@@ -2144,21 +2146,11 @@ mod tests {
                 }
             }
         }));
-        assert_eq!(
-            plan.journey.as_ref().unwrap().steps[0]
-                .expect
-                .status
-                .first(),
-            200
-        );
-        assert!(plan.journey.as_ref().unwrap().steps[0]
-            .expect
-            .status
-            .contains(201));
-        assert!(matches!(
-            plan.journey.as_ref().unwrap().steps[0].capture["etag"],
-            Capture::Header { .. }
-        ));
+        let scenarios = scenario_file(root.path(), &plan).scenarios;
+        let step = &scenarios[0].steps[0];
+        assert_eq!(step.expect.status.first(), 200);
+        assert!(step.expect.status.contains(201));
+        assert!(matches!(step.capture["etag"], Capture::Header { .. }));
         assert!(!plan.people["operator"].casework_context);
     }
 
@@ -2171,7 +2163,7 @@ mod tests {
             "capture": {"draftEtag": {"type": "pointer", "pointer": "/recordIdentifier"}},
             "poll": {"maximumWaitMilliseconds": 500, "pollIntervalMilliseconds": 50}
         }));
-        let mut value = serde_json::to_value(plan).unwrap();
+        let mut value = serde_json::to_value(&plan).unwrap();
         let person = value["people"]
             .as_object_mut()
             .unwrap()
@@ -2179,22 +2171,68 @@ mod tests {
             .unwrap();
         value["people"]["date_of_birth"] = person;
         value["people"]["date_of_birth"]["grants"]["breg"]["profile"] = json!("date_of_birth");
-        value["journey"]["id"] = json!("review_flow");
-        value["journey"]["steps"][0]["as"] = json!("date_of_birth");
-        value["journey"]["steps"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({
+        let journey = json!({"id": "review_flow", "steps": [
+            {
+                "id": "read.v1", "product": "breg", "as": "date_of_birth",
+                "method": "GET", "path": "/v1/records",
+                "expect": {"status": [200, 202]},
+                "capture": {"draftEtag": {"type": "pointer", "pointer": "/recordIdentifier"}},
+                "poll": {"maximumWaitMilliseconds": 500, "pollIntervalMilliseconds": 50}
+            },
+            {
                 "id": "use.v1", "product": "breg", "as": "date_of_birth",
                 "method": "GET", "path": "/v1/records/{{draftEtag}}",
                 "expect": {"status": 200}
-            }));
+            }
+        ]});
+        write_scenarios(root.path(), journey);
         value["schemaTestPeople"] = json!({
             "review_flow": {"read.v1": "date_of_birth"}
         });
         let plan: Plan = serde_json::from_value(value).unwrap();
 
-        plan.validate(&canonical(&root)).unwrap();
+        validate_all(&canonical(&root), &plan).unwrap();
+    }
+
+    #[test]
+    fn a_project_reached_through_a_symlinked_parent_is_accepted() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let links = tempfile::tempdir().unwrap();
+        let link = links.path().join("parent-link");
+        std::os::unix::fs::symlink(root.path(), &link).unwrap();
+
+        plan.validate(&link).unwrap();
+    }
+
+    #[test]
+    fn a_scenario_file_symlinked_outside_the_project_is_refused() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let outside = tempfile::tempdir().unwrap();
+        fs::copy(
+            root.path().join("tests/scenarios.yaml"),
+            outside.path().join("scenarios.yaml"),
+        )
+        .unwrap();
+        fs::remove_file(root.path().join("tests/scenarios.yaml")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("scenarios.yaml"),
+            root.path().join("tests/scenarios.yaml"),
+        )
+        .unwrap();
+
+        let refusal = plan.validate(root.path()).unwrap_err().to_string();
+
+        assert!(refusal.contains("/scenarioFile"), "{refusal}");
+        assert!(
+            refusal.contains("inside the development project"),
+            "{refusal}"
+        );
     }
 
     #[test]
@@ -2237,7 +2275,9 @@ mod tests {
         }));
         plan.products[0].project = PathBuf::from("../outside");
 
-        let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+        let error = validate_all(&canonical(&root), &plan)
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("/products/0/project"), "{error}");
     }
@@ -2253,7 +2293,9 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.path().join("registry")).unwrap();
         plan.products[0].project = PathBuf::from("registry");
 
-        let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+        let error = validate_all(&canonical(&root), &plan)
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("/products/0/project"), "{error}");
     }
@@ -2266,7 +2308,9 @@ mod tests {
             "expect": {"status": 201},
             "poll": {"maximumWaitMilliseconds": 500, "pollIntervalMilliseconds": 50}
         }));
-        let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+        let error = validate_all(&canonical(&root), &plan)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("supported only for GET"), "{error}");
     }
 
@@ -2278,7 +2322,7 @@ mod tests {
             "expect": {"status": 200},
             "capture": {"later": {"type": "pointer", "pointer": "/recordIdentifier"}}
         }));
-        let error = format!("{:#}", plan.validate(&canonical(&root)).unwrap_err());
+        let error = format!("{:#}", validate_all(&canonical(&root), &plan).unwrap_err());
         assert!(error.contains("earlier capture"), "{error}");
     }
 
@@ -2297,7 +2341,7 @@ mod tests {
                 }
             }
         }));
-        let error = format!("{:#}", plan.validate(&canonical(&root)).unwrap_err());
+        let error = format!("{:#}", validate_all(&canonical(&root), &plan).unwrap_err());
         assert!(error.contains("earlier capture"), "{error}");
         assert!(error.contains("/capture/second/find"), "{error}");
     }
@@ -2310,7 +2354,9 @@ mod tests {
             "expect": {"status": 200},
             "poll": {"maximumWaitMilliseconds": 30000, "pollIntervalMilliseconds": 50}
         }));
-        let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+        let error = validate_all(&canonical(&root), &plan)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("at most 250 attempts"), "{error}");
     }
 
@@ -2321,7 +2367,7 @@ mod tests {
             "method": "GET", "path": "/v1/records", "expect": {"status": 200},
             "poll": {"maximumWaitMilliseconds": 60000, "pollIntervalMilliseconds": 250}
         }));
-        plan.validate(&canonical(&root)).unwrap();
+        validate_all(&canonical(&root), &plan).unwrap();
     }
 
     #[test]
@@ -2333,7 +2379,9 @@ mod tests {
         let mut value = serde_json::to_value(plan).unwrap();
         value["people"]["operator"]["caseworkContext"] = json!(true);
         let plan: Plan = serde_json::from_value(value).unwrap();
-        let error = plan.validate(&canonical(&root)).unwrap_err().to_string();
+        let error = validate_all(&canonical(&root), &plan)
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains("requires /bindings/caseworkContextProvider"),
             "{error}"
@@ -2377,15 +2425,19 @@ mod tests {
                 "bindings": {"caseworkContextProvider": {
                     "id": "registry", "identity": "context-reader", "action": "review-record"
                 }},
-                "journey": {"id": "review", "steps": [{
-                    "id": "read", "product": "breg", "as": "reviewer",
-                    "method": "GET", "path": "/v1/records", "expect": {"status": 200}
-                }]}
+                "scenarioFile": "tests/scenarios.yaml"
             })
         };
+        write_scenarios(
+            root.path(),
+            json!({"id": "review", "steps": [{
+                "id": "read", "product": "breg", "as": "reviewer",
+                "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+            }]}),
+        );
         let shared_scopes = ["casework:review", "registry:read"];
         let valid: Plan = serde_json::from_value(value("north", &shared_scopes)).unwrap();
-        valid.validate(&canonical(&root)).unwrap();
+        validate_all(&canonical(&root), &valid).unwrap();
 
         let mut one_sided_claim = value("north", &shared_scopes);
         one_sided_claim["people"]["reviewer"]["grants"]["breg"]["claims"]["extra"] = json!(true);
@@ -2395,11 +2447,54 @@ mod tests {
             one_sided_claim,
         ] {
             let invalid: Plan = serde_json::from_value(invalid).unwrap();
-            let error = invalid.validate(&canonical(&root)).unwrap_err().to_string();
+            let error = validate_all(&canonical(&root), &invalid)
+                .unwrap_err()
+                .to_string();
             assert!(
                 error.contains("same scopes and additional claims"),
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn validation_accepts_a_step_naming_its_grant_profile() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records?accessProfile=operator",
+            "expect": {"status": 200}
+        }));
+        validate_all(&canonical(&root), &plan).unwrap();
+    }
+
+    #[test]
+    fn validation_refuses_a_step_naming_another_access_profile() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records?accessProfile=applicant",
+            "expect": {"status": 200}
+        }));
+        let error = validate_all(&canonical(&root), &plan)
+            .unwrap_err()
+            .to_string();
+        for part in ["`read`", "`applicant`", "`operator`", "grant"] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_plan_with_an_inline_journey_is_told_to_use_a_scenarios_file() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("registry.yaml"), "fixture").unwrap();
+        fs::write(
+            root.path().join("dev.yaml"),
+            format!(
+                "apiVersion: {API_VERSION}\nkind: {KIND}\nissuer: https://issuer.example.invalid\nproducts:\n  - {{product: breg, project: ., audience: registry}}\npeople:\n  operator:\n    subject: operator\n    client: operator-client\n    grants:\n      breg: {{profile: operator, scopes: []}}\njourney: {{id: smoke, steps: []}}\n"
+            ),
+        )
+        .unwrap();
+        let error = read_plan(root.path()).err().unwrap().to_string();
+        assert!(error.contains("journey"), "{error}");
+        assert!(error.contains("scenarioFile"), "{error}");
     }
 }

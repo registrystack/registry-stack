@@ -305,9 +305,7 @@ mod tests {
                     "grants": {"breg": {"profile": "viewer", "scopes": ["registry.read"],
                         "claims": {"registry_actor_kind": "human", "role": "viewer"}}
                 }}},
-                "journey": {"id": "smoke", "steps": [{"id": "read", "product": "breg",
-                    "as": "person", "method": "GET", "path": "/v1/records",
-                    "expect": {"status": 200}}]}
+                "scenarioFile": "tests/scenarios.yaml"
             },
             "schema_people": [],
             "breg_authority": {"principal": "registry_principal", "purpose": false,
