@@ -1808,7 +1808,7 @@ pub(crate) mod tests {
     fn runtime_loader_accepts_an_owner_writable_file_in_a_private_directory() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
@@ -1822,7 +1822,7 @@ pub(crate) mod tests {
     fn runtime_loader_refuses_a_group_writable_file() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
         let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
@@ -1836,7 +1836,7 @@ pub(crate) mod tests {
     fn runtime_loader_refuses_a_group_writable_ancestor() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let writable = directory.path().join("writable");
         std::fs::create_dir(&writable).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
