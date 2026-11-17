@@ -55,6 +55,25 @@
   `requiresPostgis`. A consumer that pins the earlier versions must accept the
   new `apiVersion` values. See the [explain contract
   policy](https://docs.registrystack.org/reference/bregctl-explain/#schemas-and-compatibility).
+- BREAKING: A statistical dataset's `disclosure` block is tagged by a required
+  `type`. Add `type: minimum-count-and-rounding` to the `disclosure` block of
+  every existing project file; `minimumCount` and `roundingBase` stay members
+  of that method and behave as before. A block without `type` is refused. The
+  definition digest now covers the disclosure method, so every dataset's digest
+  changes once on upgrade. Releases published before the upgrade belong to an
+  earlier series that stays in storage and is no longer served; republish the
+  periods you still need. The released document's `disclosure` member is the
+  existing minimum-count object or exactly `{"method": "exact-public-values"}`.
+  A second method, `type: exact-public-values`, takes no other member and
+  releases exact counts, sums, and means, with cell statuses `exact` or
+  `not-applicable` only. It compiles only when the unit record type, every
+  field the dataset reads, and every source record type of a derived field it
+  reads are classified `public`; otherwise the compiler refuses with
+  `breg.statistical-dataset.exact-release-not-public`, one diagnostic per item
+  to reclassify. A dataset with a sum or a mean can be published only under
+  this method; under `minimum-count-and-rounding` it is still refused with
+  `breg.statistical-dataset.measure-release-unsupported`. The security model
+  gains BREG-SEC-211 and BREG-RES-24.
 - BREAKING: A statistical dataset may declare `measures`, a list of `id` and
   `type` pairs, and every cell names its measure. `count` is the only type. A
   dataset that declares none has one count measure with the id `count`, so no

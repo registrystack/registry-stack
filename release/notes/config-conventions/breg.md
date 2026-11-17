@@ -137,7 +137,7 @@ section gives the v0.39 names they replace.
 | a structured field `maximumBytes` of 0 or above 1048576 | `field.structured.schema_invalid` | `config.out-of-range` at `maximumBytes` |
 | an entity `batch.maximumItems` of 0 or above 100, or `batch.maximumBytes` of 0 or above 2097152 | `entity.batch.bounds_invalid` at the batch | `config.out-of-range` at the member |
 | an attachment slot `maximumBytes` of 0 or above 16777216 | `attachment.maximum_bytes.bounds_invalid` | `config.out-of-range` at `maximumBytes` |
-| a statistical dataset `disclosure.minimumCount` or `roundingBase` below 2 or above 9007199254740991 | `statistical_dataset.disclosure.minimum_count`, `minimum_count_exceeded`, `rounding_base`, or `rounding_base_exceeded` | `config.out-of-range` at the member |
+| a statistical dataset `disclosure` of `type: minimum-count-and-rounding` whose `minimumCount` or `roundingBase` is below 2 or above 9007199254740991 | `statistical_dataset.disclosure.minimum_count`, `minimum_count_exceeded`, `rounding_base`, or `rounding_base_exceeded` | `config.out-of-range` at the member |
 | an action evidence `maximumObservationAgeSeconds` of 0 or above 300 | `action.evidence.capability.invalid` | `config.out-of-range` at the member |
 
 The compile-time codes, under their `breg.*` names below, stay for the

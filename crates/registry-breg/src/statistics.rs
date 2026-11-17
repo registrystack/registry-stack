@@ -32,11 +32,29 @@ pub enum PeriodKind {
     Stock,
 }
 
+/// How a release protects the values it states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DisclosureParameters {
-    pub minimum_count: u64,
-    pub rounding_base: u64,
+#[serde(
+    tag = "method",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum DisclosureMethod {
+    MinimumCountAndRounding {
+        minimum_count: u64,
+        rounding_base: u64,
+    },
+    ExactPublicValues,
+}
+
+impl DisclosureMethod {
+    /// The method name a release document states.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::MinimumCountAndRounding { .. } => "minimum-count-and-rounding",
+            Self::ExactPublicValues => "exact-public-values",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,23 +370,34 @@ pub struct LiveDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DisclosureDocument {
-    pub method: String,
-    pub minimum_count: u64,
-    pub rounding_base: u64,
-    pub rounding_rule: String,
-    pub totals: String,
+#[serde(
+    tag = "method",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum DisclosureDocument {
+    MinimumCountAndRounding {
+        minimum_count: u64,
+        rounding_base: u64,
+        rounding_rule: String,
+        totals: String,
+    },
+    ExactPublicValues,
 }
 
-impl From<DisclosureParameters> for DisclosureDocument {
-    fn from(parameters: DisclosureParameters) -> Self {
-        Self {
-            method: "minimum-count-and-rounding".to_owned(),
-            minimum_count: parameters.minimum_count,
-            rounding_base: parameters.rounding_base,
-            rounding_rule: "nearest-multiple-halves-up".to_owned(),
-            totals: "rounded-independently".to_owned(),
+impl From<DisclosureMethod> for DisclosureDocument {
+    fn from(method: DisclosureMethod) -> Self {
+        match method {
+            DisclosureMethod::MinimumCountAndRounding {
+                minimum_count,
+                rounding_base,
+            } => Self::MinimumCountAndRounding {
+                minimum_count,
+                rounding_base,
+                rounding_rule: "nearest-multiple-halves-up".to_owned(),
+                totals: "rounded-independently".to_owned(),
+            },
+            DisclosureMethod::ExactPublicValues => Self::ExactPublicValues,
         }
     }
 }
@@ -646,9 +675,16 @@ pub fn build_exact_cells(
 
 pub fn apply_disclosure(
     cells: &mut [Cell],
-    parameters: DisclosureParameters,
+    method: DisclosureMethod,
 ) -> Result<(), StatisticsError> {
-    if parameters.minimum_count < 2 || parameters.rounding_base < 2 {
+    let DisclosureMethod::MinimumCountAndRounding {
+        minimum_count,
+        rounding_base,
+    } = method
+    else {
+        return Ok(());
+    };
+    if minimum_count < 2 || rounding_base < 2 {
         return Err(StatisticsError::InvalidDisclosureParameters);
     }
     for cell in cells {
@@ -659,14 +695,11 @@ pub fn apply_disclosure(
         };
         if value == 0 {
             cell.status = CellStatus::Exact;
-        } else if value < parameters.minimum_count {
+        } else if value < minimum_count {
             cell.value = None;
             cell.status = CellStatus::Suppressed;
         } else {
-            cell.value = Some(CellValue::Count(round_halves_up(
-                value,
-                parameters.rounding_base,
-            )?));
+            cell.value = Some(CellValue::Count(round_halves_up(value, rounding_base)?));
             cell.status = CellStatus::Rounded;
         }
     }
@@ -1060,8 +1093,40 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
         .iter()
         .map(|measure| (measure.id(), measure))
         .collect();
+    if matches!(
+        document.disclosure,
+        Some(DisclosureDocument::MinimumCountAndRounding { .. })
+    ) && document
+        .dataset
+        .measures
+        .iter()
+        .any(|measure| !matches!(measure, Measure::Count { .. }))
+    {
+        return Err(StatisticsError::InvalidDocument(
+            "a minimum-count-and-rounding release carries count measures only",
+        ));
+    }
     let mut seen_cells = BTreeSet::new();
     for cell in &document.cells {
+        match (&document.disclosure, cell.status) {
+            (
+                Some(DisclosureDocument::ExactPublicValues),
+                CellStatus::Suppressed | CellStatus::Rounded,
+            ) => {
+                return Err(StatisticsError::InvalidDocument(
+                    "an exact-public-values release carries no suppressed or rounded cell",
+                ))
+            }
+            (
+                Some(DisclosureDocument::MinimumCountAndRounding { .. }),
+                CellStatus::NotApplicable,
+            ) => {
+                return Err(StatisticsError::InvalidDocument(
+                    "a minimum-count-and-rounding release carries no not-applicable cell",
+                ))
+            }
+            _ => {}
+        }
         if !period_codes.contains(cell.period.as_str()) {
             return Err(StatisticsError::InvalidDocument(
                 "a cell names a period outside the document",

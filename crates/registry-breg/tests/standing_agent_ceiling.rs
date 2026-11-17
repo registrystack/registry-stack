@@ -421,7 +421,7 @@ fn with_dataset(clerk: &[&str], assistant: &[&str]) -> Value {
         "id": "notes-by-status", "unit": "note", "population": "open eq true",
         "period": {"type": "flow", "field": "filed", "granularity": "month", "firstPeriod": "2025-01"},
         "dimensions": ["open"],
-        "disclosure": {"minimumCount": 5, "roundingBase": 5}
+        "disclosure": {"type":"minimum-count-and-rounding","minimumCount": 5, "roundingBase": 5}
     }]);
     for (profile, operations) in [(0, clerk), (1, assistant)] {
         let permissions = &mut value["accessProfiles"][profile]["permissions"];

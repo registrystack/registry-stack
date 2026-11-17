@@ -24,7 +24,7 @@ use registry_breg::{
         PostgresRecordReadService, PostgresStatisticsService, RegistryLockKey,
         RegistryStateTestIdentity,
     },
-    statistics::{apply_disclosure, canonical_document, DisclosureParameters, StatisticsDocument},
+    statistics::{apply_disclosure, canonical_document, DisclosureMethod, StatisticsDocument},
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::json;
@@ -62,7 +62,7 @@ async fn million_unit_three_dimension_statistics_measurement() {
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["active","category","region"],
-            "disclosure":{"minimumCount":5,"roundingBase":5}}]
+            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
@@ -184,7 +184,7 @@ async fn million_unit_three_dimension_statistics_measurement() {
     let start = Instant::now();
     apply_disclosure(
         &mut disclosed.cells,
-        DisclosureParameters {
+        DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 5,
             rounding_base: 5,
         },

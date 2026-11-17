@@ -171,7 +171,7 @@ pub struct CompiledStatisticalDataset {
     pub dimensions: Vec<CompiledStatisticalDimension>,
     /// The declared measures, or the one `count` measure when none is declared.
     pub measures: Vec<crate::statistics::Measure>,
-    pub disclosure: crate::statistics::DisclosureParameters,
+    pub disclosure: crate::statistics::DisclosureMethod,
     /// Authentication requirements for every dataset grant, including
     /// release readers which need no entity permission.
     pub access_profiles: BTreeMap<String, AccessProfileSource>,

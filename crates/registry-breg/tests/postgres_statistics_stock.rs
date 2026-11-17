@@ -627,14 +627,14 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
                 "id":"permits-in-force-temporal","unit":"permit","population":"validFrom ne null",
                 "period":{"type":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"},
                 "dimensions":["administrative-boundary"],
-                "disclosure":{"minimumCount":2,"roundingBase":2}
+                "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
             },
             {
                 "id":"permits-in-force-fields","unit":"permit","population":"validFrom ne null",
                 "period":{"type":"stock","granularity":"month","firstPeriod":"2025-01",
                     "validity":{"from":"valid-from","until":"valid-through"}},
                 "dimensions":["administrative-boundary"],
-                "disclosure":{"minimumCount":2,"roundingBase":2}
+                "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
             }
         ]
     });
@@ -685,7 +685,7 @@ fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
             "id":"permits-by-twelve-dimensions","unit":"permit","population":"validFrom ne null",
             "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":dimension_ids,
-            "disclosure":{"minimumCount":2,"roundingBase":2}
+            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
         }]
     });
     let bytes = serde_json::to_vec(&source).expect("twelve-dimension fixture serializes");
@@ -727,7 +727,7 @@ fn cube_registry() -> registry_breg::CompiledRegistry {
             "id":"permits-by-type-and-region","unit":"permit","population":"validFrom ne null",
             "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["permit-type","region"],
-            "disclosure":{"minimumCount":2,"roundingBase":2}
+            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
         }]
     });
     let bytes = serde_json::to_vec(&source).expect("cube fixture serializes");
@@ -769,7 +769,7 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
             "id":"monthly-air-permits","unit":"permit","population":"startswith(permitType,'a')",
             "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["administrative-boundary"],
-            "disclosure":{"minimumCount":2,"roundingBase":2}
+            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":2,"roundingBase":2}
         }]
     });
     let bytes = serde_json::to_vec(&source).expect("partial-text fixture serializes");

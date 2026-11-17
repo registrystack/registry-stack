@@ -14,7 +14,7 @@ standards_referenced: []
 This page states what the Base Registry Engine (BReg) security invariants assume, what you must do
 for them to hold, and which limits a deployment accepts.
 The operator obligations are numbered 1 to 20, and each accepted residual risk carries a stable
-identifier from `BREG-RES-01` to `BREG-RES-22`.
+identifier from `BREG-RES-01` to `BREG-RES-24`.
 The invariants themselves, each with its threat, enforcement point, refusal, and negative test, are
 the rows of the machine-checked BReg security invariant matrix in the registry-stack repository.
 This page does not repeat those rows; it names them by identifier (`BREG-SEC-NN`).
@@ -244,6 +244,8 @@ The residuals refer to these obligations by number.
     {/* Evidence: crates/registry-breg/src/compiler.rs, requesterClients. */}
 12. Review statistical releases as a disclosure decision.
     Review the population, dimensions, cadence, and release policy of every dataset (`BREG-RES-07`).
+    For an exact release, classifying a Record type or field `public` is itself a disclosure decision
+    (`BREG-RES-24`).
     [Publish a statistical series](../../configure/breg-statistics/#review-what-a-release-discloses)
     lists what a release discloses.
     {/* Evidence: crates/registry-breg/tests/compiler_statistics.rs,
@@ -487,7 +489,7 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 
 ### `BREG-RES-07`: statistical datasets give no confidentiality guarantee
 
-- Condition: a dataset is published with threshold suppression and rounding.
+- Condition: a dataset is released under `minimum-count-and-rounding`.
 - Consequence: independent suppression and rounding do not prevent reconstruction.
   With `minimumCount` 5 and `roundingBase` 5, two suppressed positive cells and a rounded total of
   10 force both cells to 4; seven suppressed cells and a rounded total of 5 force all seven to 1.
@@ -763,6 +765,26 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 - Mitigation: keep task-grant tokens short at the exchange issuer; Casework refuses new assertions
   for a revoked grant, so no new token follows.
 - Related: `BREG-SEC-209`, `BREG-SEC-169`.
+
+### `BREG-RES-24`: exact releases trust the declared classification
+
+- Condition: a dataset is released under `exact-public-values`.
+- Consequence: BReg checks the classification labels, not whether the data is in fact public.
+  A Record type or field wrongly classified `public` is released exactly, cells of one included.
+  The release is immutable and readers can copy it. Withdrawal erases only the engine's stored content.
+  BReg trusts a derived relation's SQL to read only the source Record types it declares.
+  The check is per Record type, not per column.
+  So a derived field classified `public` whose SQL reads a restricted field of a public Record type
+  is released exactly.
+- Mitigation: review a classification change as a disclosure decision.
+  Review a derived field's SQL before you classify it `public`.
+  Keep `minimum-count-and-rounding` for any register whose membership is not public.
+- Related: `BREG-SEC-211`, `BREG-RES-07`.
+
+{/* Evidence: crates/registry-breg/src/compiler/statistics.rs,
+    breg.statistical-dataset.exact-release-not-public;
+    crates/registry-breg/tests/compiler_statistics.rs,
+    exact_values_are_refused_per_item_that_is_not_classified_public. */}
 
 ## Report a vulnerability
 

@@ -958,23 +958,40 @@ pub struct StatisticalValidityFieldsSource {
     pub until: Option<String>,
 }
 
+/// How a statistical release protects the values it states.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct StatisticalDisclosureSource {
-    #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "BoundedU64<2, MAX_EXACT_JSON_INTEGER>")
-    )]
-    pub minimum_count: u64,
-    #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "BoundedU64<2, MAX_EXACT_JSON_INTEGER>")
-    )]
-    pub rounding_base: u64,
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum StatisticalDisclosureSource {
+    /// Count cells below `minimumCount` are suppressed and the others are
+    /// rounded to a multiple of `roundingBase`. A release carries counts only.
+    MinimumCountAndRounding {
+        #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU64<2, MAX_EXACT_JSON_INTEGER>")
+        )]
+        minimum_count: u64,
+        #[serde(deserialize_with = "bounded_u64::<_, 2, MAX_EXACT_JSON_INTEGER>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU64<2, MAX_EXACT_JSON_INTEGER>")
+        )]
+        rounding_base: u64,
+    },
+    /// A release states every count, sum, and mean exactly. Admitted only when
+    /// the unit Record type, every field the dataset reads, and every Record
+    /// type a derived field reads from are classified `public`.
+    ExactPublicValues {},
 }
+registry_platform_yaml::tagged_union!(StatisticalDisclosureSource, tag = "type");
+serialize_tagged_union!(StatisticalDisclosureSource, tag = "type");
 
 /// The largest integer a JSON number carries exactly, the bound of a
 /// statistical disclosure parameter.

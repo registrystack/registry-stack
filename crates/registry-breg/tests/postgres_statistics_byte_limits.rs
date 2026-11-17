@@ -51,7 +51,7 @@ async fn authored_multi_period_response_obeys_the_shared_document_byte_limit() {
         "recordTypes":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable","fields":fields}],
         "vocabularies":vocabularies,
         "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{"recordType":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":accessible,"filterableFields":accessible}],"datasets":[{"dataset":"units-by-category","operations":["read-live"]}]}}],
-        "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"eventDate ne null","period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},"dimensions":dimension_ids,"disclosure":{"minimumCount":5,"roundingBase":5}}]
+        "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"eventDate ne null","period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},"dimensions":dimension_ids,"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());

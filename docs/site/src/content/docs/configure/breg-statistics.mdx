@@ -33,9 +33,9 @@ The facility template declares none; add one under the root `statisticalDatasets
 - `granularity` (`day`, `month`, `quarter`, or `year`) and `firstPeriod`, both inside `period`
 - `dimensions`, boolean or vocabulary-code fields of the unit Record type
 - `measures`, optional, a list tagged by `type`: `count`; `sum` with a `field`; `mean` with a `field` and a `scale` from 0 to 38. Omitting the list gives one count measure with the id `count`
-- `disclosure`, with `minimumCount` and `roundingBase`, each at least 2
+- `disclosure`, tagged by a required `type`: `minimum-count-and-rounding` with `minimumCount` and `roundingBase`, each at least 2; or `exact-public-values` with no other member
 
-One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. A sum or a mean needs an unencrypted `int64` or `decimal` field of the unit, readable by every `read-live` profile, and the dataset then cannot be released:
+One period, with every dimension code, every total, and every measure, must fit in 10,000 cells. A dataset declares at most 12 dimensions. A dimension cannot be named `measure`, which is a reserved column name. A sum or a mean needs an unencrypted `int64` or `decimal` field of the unit, readable by every `read-live` profile. Under `minimum-count-and-rounding` the dataset then cannot be released, and sums and means are read live; under `exact-public-values` a release carries them:
 
 ```yaml
 measures:
@@ -48,6 +48,15 @@ measures:
     type: mean
     field: amount
     scale: 2
+```
+
+A dataset's disclosure block names how its releases are protected:
+
+```yaml
+disclosure:
+  type: minimum-count-and-rounding
+  minimumCount: 5
+  roundingBase: 5
 ```
 
 The [configuration reference](../../reference/breg-configuration/#statistical-dataset-declarations) lists every member and the refusals `bregctl check` reports.
@@ -90,9 +99,9 @@ and CSV representation, so a dimension cannot use one of them.
 
 ## Live counts and releases
 
-A live value is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live count is one the profile could already obtain by listing records. A live sum or mean is exact and can reveal one record's value in a small cell, so it is granted only to a profile that can read the records and the field, and it is not disclosure-controlled. Releases carry counts only.
+A live value is computed on request from current data. It is exact, and filtered by the same rules as the profile's ordinary list query, so a live count is one the profile could already obtain by listing records. A live sum or mean is exact and can reveal one record's value in a small cell, so it is granted only to a profile that can read the records and the field, and it is not disclosure-controlled. Under `minimum-count-and-rounding`, releases carry counts only.
 
-A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, measures, and disclosure parameters. Changing who may read a dataset keeps the series; changing what it counts starts another one.
+A release is a stored, numbered version of one ended period, computed against one snapshot and transformed for disclosure. A final release can be corrected by a later final release, and a provisional release is refused once a final exists. Each release carries a definition digest of the population, sources, publisher visibility, dimensions, measures, and the disclosure method and its parameters. Changing who may read a dataset keeps the series; changing what it counts starts another one, and so does changing the disclosure method.
 
 {/* Evidence: crates/registry-breg/src/postgres/statistics.rs;
     crates/registry-breg/src/compiler/statistics.rs, definition_digest. */}
@@ -286,13 +295,15 @@ reconstruct what the registry held on that past date.
 
 ## Review what a release discloses
 
-A release suppresses positive counts below `minimumCount` and rounds the rest to the nearest multiple of `roundingBase`, halves up. Exact zeros stay zero, and each total is transformed on its own, so totals need not equal the sum of visible cells.
+A release is disclosed under the method the dataset's `disclosure.type` names.
+
+### Minimum count and rounding
+
+A release under `minimum-count-and-rounding` suppresses positive counts below `minimumCount` and rounds the rest to the nearest multiple of `roundingBase`, halves up. Exact zeros stay zero, and each total is transformed on its own, so totals need not equal the sum of visible cells.
 
 Suppression does not keep a cell unknown. With minimum five and base five, two suppressed cells under a published total of ten must each be four. The minimum counts records, not people, so a cell can describe fewer subjects than the minimum. A suppressed cell at minimum two holds exactly one. A count below half the rounding base publishes as zero with status `rounded`. BReg applies no privacy budget across versions; dimensions, cadence, and readers remain your institution's disclosure decision.
 
-Live data contains exact counts for the selected profile.
-Released data applies the `minimum-count-and-rounding` method, the only disclosure method BReg
-implements.
+Live data contains exact values for the selected profile.
 For every base cell and every margin, an exact zero stays zero with status `exact`, a positive count
 below `minimumCount` becomes null with status `suppressed`, and every other count rounds to the
 nearest multiple of `roundingBase` with status `rounded`, including a rounded zero.
@@ -324,6 +335,20 @@ grant readers access.
     rounded_zero_exists_only_below_half_of_the_rounding_base,
     accepted_suppression_residual_is_pinned_for_four_plus_four_and_seven_ones;
     crates/registry-breg/src/statistics.rs minimum-count-and-rounding. */}
+### Exact public values
+
+A register of public facts, such as licensed facilities or registered cooperatives, has nothing to protect, and suppression only makes its figures wrong. Declare `type: exact-public-values` and a release carries the exact value of every measure (counts, sums, and means), with no suppression and no rounding:
+
+```yaml
+disclosure:
+  type: exact-public-values
+```
+
+The dataset compiles only when the unit Record type, every field the dataset reads (population, period, dimension, and measure fields), and every source Record type of a derived field it reads are classified `public`. Otherwise `bregctl check` refuses with `breg.statistical-dataset.exact-release-not-public`, one diagnostic per item to reclassify. The Record type's own classification counts because membership of a register is itself disclosed: an exact count of one says a record exists. A derived field's source Record types count because a derived field labelled `public` can read restricted inputs. Reclassifying is a visible, reviewable act; there is deliberately no switch that turns protection off without it.
+
+The publisher rules do not change. Under `exact-public-values` the publisher must also be able to read each sum or mean field.
+
+BReg checks the classification labels, not whether the data is in fact public. A Record type or field wrongly classified `public` is released exactly, including cells of one, and readers can copy the immutable release; withdrawal erases only the engine's stored content. Review a classification change as a disclosure decision, and keep `minimum-count-and-rounding` for any register whose membership is not public.
 
 {/* Evidence: crates/registry-breg/src/statistics.rs, round_halves_up;
     crates/registry-breg/tests/statistics.rs
@@ -375,7 +400,7 @@ bregctl api \
 
 A suppressed value is blank, not zero; a period without a release has no cells. A JSON document lists the declared measures in `dataset.measures`, and each cell names its measure in `measure`, with one cell per period, dimension combination, and measure.
 
-A sum or a mean is read live. Its `value` is a decimal string such as `"1234.50"`, not a JSON number, with exactly the measure's `scale` digits after the point; a count stays an integer. A mean over no values has a null `value` and the status `not-applicable`. The status vocabulary (`exact`, `suppressed`, `rounded`, `not-applicable`) can grow, so treat an unknown status as no usable value.
+A sum or a mean is read live, or in a release under `exact-public-values`. Its `value` is a decimal string such as `"1234.50"`, not a JSON number, with exactly the measure's `scale` digits after the point; a count stays an integer. A mean over no values has a null `value` and the status `not-applicable`. A release under `minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`; one under `exact-public-values` uses `exact` and `not-applicable` only. The status vocabulary can grow, so treat an unknown status as no usable value.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs, routes;
     crates/registry-breg/src/statistics.rs. */}

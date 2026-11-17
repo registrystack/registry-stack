@@ -2798,7 +2798,7 @@ fn dataset_only_claim_source() -> Value {
         ],
         "statisticalDatasets":[{"id":"counts", "unit":"record", "population":"active eq true",
             "period":{"type":"flow", "field":"occurred-on", "granularity":"month", "firstPeriod":"2025-01"},
-            "dimensions":["active"], "disclosure":{"minimumCount":5,"roundingBase":5}}]
+            "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]
     })
 }
 

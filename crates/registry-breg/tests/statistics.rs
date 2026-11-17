@@ -7,9 +7,9 @@ use registry_breg::contract::FieldTypeSource;
 use registry_breg::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
     document_csv, maximum_decimal_characters, period_for_code, period_range, Cell, CellStatus,
-    CellValue, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureParameters,
-    GroupedCell, LiveDocument, Measure, PeriodDocument, PeriodGranularity, PeriodKind,
-    ReleaseDocument, ReleaseStatus, StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
+    CellValue, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureMethod, GroupedCell,
+    LiveDocument, Measure, PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument,
+    ReleaseStatus, StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -392,7 +392,7 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     let mut cells = cells_with_values(&[0, 1, 4, 5, 7, 8]);
     apply_disclosure(
         &mut cells,
-        DisclosureParameters {
+        DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 5,
             rounding_base: 5,
         },
@@ -416,7 +416,7 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     let mut exact_half = cells_with_values(&[6]);
     apply_disclosure(
         &mut exact_half,
-        DisclosureParameters {
+        DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 2,
             rounding_base: 4,
         },
@@ -430,7 +430,7 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     let mut rounded_to_zero = cells_with_values(&[2]);
     apply_disclosure(
         &mut rounded_to_zero,
-        DisclosureParameters {
+        DisclosureMethod::MinimumCountAndRounding {
             minimum_count: 2,
             rounding_base: 10,
         },
@@ -449,7 +449,7 @@ fn disclosure_property_values_are_null_zero_or_a_rounding_multiple() {
             let mut cells = cells_with_values(&(0..=200).collect::<Vec<_>>());
             apply_disclosure(
                 &mut cells,
-                DisclosureParameters {
+                DisclosureMethod::MinimumCountAndRounding {
                     minimum_count,
                     rounding_base,
                 },
@@ -473,7 +473,7 @@ fn rounded_zero_exists_only_below_half_of_the_rounding_base() {
             let mut cells = cells_with_values(&(0..=200).collect::<Vec<_>>());
             apply_disclosure(
                 &mut cells,
-                DisclosureParameters {
+                DisclosureMethod::MinimumCountAndRounding {
                     minimum_count,
                     rounding_base,
                 },
@@ -501,7 +501,7 @@ fn rounded_zero_exists_only_below_half_of_the_rounding_base() {
 
 #[test]
 fn accepted_suppression_residual_is_pinned_for_four_plus_four_and_seven_ones() {
-    let parameters = DisclosureParameters {
+    let parameters = DisclosureMethod::MinimumCountAndRounding {
         minimum_count: 5,
         rounding_base: 5,
     };
@@ -631,13 +631,13 @@ fn cells_with_values(values: &[u64]) -> Vec<Cell> {
 
 fn candidates_consistent_with_published_total(
     cell_count: usize,
-    parameters: DisclosureParameters,
+    parameters: DisclosureMethod,
     published_total: u64,
 ) -> Vec<Vec<u64>> {
     fn recurse(
         current: &mut Vec<u64>,
         cell_count: usize,
-        parameters: DisclosureParameters,
+        parameters: DisclosureMethod,
         published_total: u64,
         found: &mut Vec<Vec<u64>>,
     ) {
@@ -650,7 +650,10 @@ fn candidates_consistent_with_published_total(
             }
             return;
         }
-        for value in 1..parameters.minimum_count {
+        let DisclosureMethod::MinimumCountAndRounding { minimum_count, .. } = parameters else {
+            unreachable!("the candidate search runs under minimum-count-and-rounding");
+        };
+        for value in 1..minimum_count {
             current.push(value);
             recurse(current, cell_count, parameters, published_total, found);
             current.pop();
@@ -705,10 +708,12 @@ fn release_document() -> StatisticsDocument {
             package_digest: "package-sha256".to_owned(),
         }),
         live: None,
-        disclosure: Some(DisclosureDocument::from(DisclosureParameters {
-            minimum_count: 5,
-            rounding_base: 5,
-        })),
+        disclosure: Some(DisclosureDocument::from(
+            DisclosureMethod::MinimumCountAndRounding {
+                minimum_count: 5,
+                rounding_base: 5,
+            },
+        )),
     }
 }
 
@@ -1331,7 +1336,7 @@ fn csv_prints_a_decimal_as_it_is_and_an_empty_value_for_not_applicable() {
 
 #[test]
 fn disclosure_control_refuses_a_cell_that_is_not_a_count() {
-    let parameters = DisclosureParameters {
+    let parameters = DisclosureMethod::MinimumCountAndRounding {
         minimum_count: 5,
         rounding_base: 5,
     };
@@ -1402,5 +1407,134 @@ fn the_widest_decimal_a_measure_can_carry_follows_its_field() {
     assert_eq!(
         maximum_decimal_characters(&sum(0), &FieldTypeSource::Boolean),
         None
+    );
+}
+
+#[test]
+fn exact_public_values_leave_every_cell_as_computed() {
+    let mut cells = vec![
+        measure_cell("count", count(1), CellStatus::Exact),
+        measure_cell("count", count(0), CellStatus::Exact),
+        measure_cell("total", decimal("12.50"), CellStatus::Exact),
+        measure_cell("average", None, CellStatus::NotApplicable),
+        measure_cell("average", decimal("3.25"), CellStatus::Exact),
+    ];
+    let computed = cells.clone();
+    apply_disclosure(&mut cells, DisclosureMethod::ExactPublicValues).unwrap();
+    assert_eq!(cells, computed);
+}
+
+#[test]
+fn both_disclosure_documents_serialize_to_their_exact_bytes() {
+    let minimum = DisclosureDocument::from(DisclosureMethod::MinimumCountAndRounding {
+        minimum_count: 5,
+        rounding_base: 10,
+    });
+    assert_eq!(
+        serde_json::to_string(&minimum).unwrap(),
+        r#"{"method":"minimum-count-and-rounding","minimumCount":5,"roundingBase":10,"roundingRule":"nearest-multiple-halves-up","totals":"rounded-independently"}"#
+    );
+    let exact = DisclosureDocument::from(DisclosureMethod::ExactPublicValues);
+    assert_eq!(
+        serde_json::to_string(&exact).unwrap(),
+        r#"{"method":"exact-public-values"}"#
+    );
+    for document in [minimum, exact] {
+        let read: DisclosureDocument =
+            serde_json::from_str(&serde_json::to_string(&document).unwrap()).unwrap();
+        assert_eq!(read, document);
+    }
+}
+
+fn exact_release_with_measure(measure: Measure, cell: Cell) -> StatisticsDocument {
+    let mut document = release_document();
+    document.dataset.measures = vec![measure];
+    document.cells = vec![cell];
+    document.disclosure = Some(DisclosureDocument::from(
+        DisclosureMethod::ExactPublicValues,
+    ));
+    document
+}
+
+#[test]
+fn an_exact_release_document_carries_exact_values_of_any_measure() {
+    let mut cell = measure_cell("count", count(1), CellStatus::Exact);
+    cell.dimensions = BTreeMap::from([("region".to_owned(), "north".to_owned())]);
+    let counted = exact_release_with_measure(
+        Measure::Count {
+            id: "count".to_owned(),
+        },
+        cell,
+    );
+    canonical_document_and_digest(&counted).expect("an exact count of one is exact");
+
+    let mut summed = exact_release_with_measure(
+        Measure::Sum {
+            id: "total".to_owned(),
+            field: "amount".to_owned(),
+            scale: 2,
+        },
+        measure_cell("total", decimal("12.50"), CellStatus::Exact),
+    );
+    summed.dimensions.clear();
+    canonical_document_and_digest(&summed).expect("an exact sum is exact");
+
+    let mut averaged = exact_release_with_measure(
+        Measure::Mean {
+            id: "average".to_owned(),
+            field: "amount".to_owned(),
+            scale: 2,
+        },
+        measure_cell("average", None, CellStatus::NotApplicable),
+    );
+    averaged.dimensions.clear();
+    canonical_document_and_digest(&averaged).expect("an empty mean is not-applicable");
+}
+
+#[test]
+fn a_release_document_whose_cells_disagree_with_its_method_is_refused() {
+    let invalid = |message: &'static str| Err(StatisticsError::InvalidDocument(message));
+    let canonical =
+        |document: &StatisticsDocument| canonical_document_and_digest(document).map(|_| ());
+
+    let mut rounded = release_document();
+    rounded.disclosure = Some(DisclosureDocument::from(
+        DisclosureMethod::ExactPublicValues,
+    ));
+    assert_eq!(
+        canonical(&rounded),
+        invalid("an exact-public-values release carries no suppressed or rounded cell")
+    );
+
+    let mut suppressed = release_document();
+    suppressed.cells[0].value = None;
+    suppressed.cells[0].status = CellStatus::Suppressed;
+    suppressed.disclosure = Some(DisclosureDocument::from(
+        DisclosureMethod::ExactPublicValues,
+    ));
+    assert_eq!(
+        canonical(&suppressed),
+        invalid("an exact-public-values release carries no suppressed or rounded cell")
+    );
+
+    let mut summed = release_document();
+    summed.dataset.measures = vec![Measure::Sum {
+        id: "total".to_owned(),
+        field: "amount".to_owned(),
+        scale: 2,
+    }];
+    summed.cells = vec![measure_cell("total", decimal("12.50"), CellStatus::Exact)];
+    summed.dimensions.clear();
+    assert_eq!(
+        canonical(&summed),
+        invalid("a minimum-count-and-rounding release carries count measures only")
+    );
+
+    let mut not_applicable = release_document();
+    not_applicable.cells[0].value = None;
+    not_applicable.cells[0].status = CellStatus::NotApplicable;
+    assert_eq!(
+        canonical(&not_applicable),
+        invalid("a minimum-count-and-rounding release carries no not-applicable cell")
     );
 }

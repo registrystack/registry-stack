@@ -7,9 +7,10 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::contract::{
-    AccessProfileSource, ActorKindSource, DatasetOperation, FieldTypeSource, Operation,
-    RegistryProject, StatisticalMeasureSource, StatisticalPeriodGranularitySource,
-    StatisticalPeriodSource, StatisticalValiditySource, MAX_EXACT_JSON_INTEGER,
+    AccessProfileSource, ActorKindSource, Classification, DatasetOperation, FieldTypeSource,
+    Operation, RegistryProject, StatisticalDisclosureSource, StatisticalMeasureSource,
+    StatisticalPeriodGranularitySource, StatisticalPeriodSource, StatisticalValiditySource,
+    MAX_EXACT_JSON_INTEGER,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
@@ -19,7 +20,8 @@ use crate::model::{
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
 use crate::statistics::{
-    maximum_decimal_characters, period_for_code, DisclosureParameters, Measure, PeriodGranularity,
+    maximum_decimal_characters, period_for_code, DisclosureDocument, DisclosureMethod, Measure,
+    PeriodGranularity,
 };
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
@@ -134,13 +136,17 @@ pub(super) fn compile(
                 .chain(&grants.read_releases)
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            if !releasing.is_empty() {
+            let exact = matches!(
+                source.disclosure,
+                Some(StatisticalDisclosureSource::ExactPublicValues {})
+            );
+            if !releasing.is_empty() && !exact {
                 errors.push(error(
                     "breg.statistical-dataset.measure-release-unsupported",
                     &root,
                     &source.id,
                     &format!(
-                        "a release carries counts only and a sum or mean is read live: remove publish and read-releases from {}, or declare count measures only",
+                        "a minimum-count-and-rounding release carries counts only and a sum or mean is read live: remove publish and read-releases from {}, declare count measures only, or release exact values with disclosure type exact-public-values over a register classified public",
                         quoted(&releasing)
                     ),
                 ));
@@ -256,44 +262,49 @@ pub(super) fn compile(
                 "breg.statistical-dataset.disclosure-missing",
                 &format!("{root}.disclosure"),
                 &source.id,
-                "declare minimumCount and roundingBase",
+                "declare disclosure with type minimum-count-and-rounding (minimumCount and roundingBase) or exact-public-values",
             ));
         }
-        if disclosure_source.is_none_or(|disclosure| disclosure.minimum_count < 2) {
-            errors.push(error(
-                "breg.statistical-dataset.disclosure-minimum-count",
-                &format!("{root}.disclosure.minimumCount"),
-                &source.id,
-                "set minimumCount to at least 2",
-            ));
-        }
-        if disclosure_source
-            .is_some_and(|disclosure| disclosure.minimum_count > MAX_EXACT_JSON_INTEGER)
-        {
-            errors.push(error(
-                "breg.statistical-dataset.disclosure-minimum-count-exceeded",
-                &format!("{root}.disclosure.minimumCount"),
-                &source.id,
-                &format!("set minimumCount to at most {MAX_EXACT_JSON_INTEGER}"),
-            ));
-        }
-        if disclosure_source.is_none_or(|disclosure| disclosure.rounding_base < 2) {
-            errors.push(error(
-                "breg.statistical-dataset.disclosure-rounding-base",
-                &format!("{root}.disclosure.roundingBase"),
-                &source.id,
-                "set roundingBase to at least 2",
-            ));
-        }
-        if disclosure_source
-            .is_some_and(|disclosure| disclosure.rounding_base > MAX_EXACT_JSON_INTEGER)
-        {
-            errors.push(error(
-                "breg.statistical-dataset.disclosure-rounding-base-exceeded",
-                &format!("{root}.disclosure.roundingBase"),
-                &source.id,
-                &format!("set roundingBase to at most {MAX_EXACT_JSON_INTEGER}"),
-            ));
+        let rounding = match disclosure_source {
+            Some(StatisticalDisclosureSource::MinimumCountAndRounding {
+                minimum_count,
+                rounding_base,
+            }) => Some((*minimum_count, *rounding_base)),
+            _ => None,
+        };
+        if let Some((minimum_count, rounding_base)) = rounding {
+            if minimum_count < 2 {
+                errors.push(error(
+                    "breg.statistical-dataset.disclosure-minimum-count",
+                    &format!("{root}.disclosure.minimumCount"),
+                    &source.id,
+                    "set minimumCount to at least 2",
+                ));
+            }
+            if minimum_count > MAX_EXACT_JSON_INTEGER {
+                errors.push(error(
+                    "breg.statistical-dataset.disclosure-minimum-count-exceeded",
+                    &format!("{root}.disclosure.minimumCount"),
+                    &source.id,
+                    &format!("set minimumCount to at most {MAX_EXACT_JSON_INTEGER}"),
+                ));
+            }
+            if rounding_base < 2 {
+                errors.push(error(
+                    "breg.statistical-dataset.disclosure-rounding-base",
+                    &format!("{root}.disclosure.roundingBase"),
+                    &source.id,
+                    "set roundingBase to at least 2",
+                ));
+            }
+            if rounding_base > MAX_EXACT_JSON_INTEGER {
+                errors.push(error(
+                    "breg.statistical-dataset.disclosure-rounding-base-exceeded",
+                    &format!("{root}.disclosure.roundingBase"),
+                    &source.id,
+                    &format!("set roundingBase to at most {MAX_EXACT_JSON_INTEGER}"),
+                ));
+            }
         }
         if source.dimensions.len() > MAX_STATISTICAL_DIMENSIONS {
             errors.push(error(
@@ -332,18 +343,48 @@ pub(super) fn compile(
                 &mut errors,
             );
         }
+        let exact = matches!(
+            disclosure_source,
+            Some(StatisticalDisclosureSource::ExactPublicValues {})
+        );
+        if exact {
+            validate_exact_release_is_public(
+                source,
+                unit,
+                entities,
+                &dependency_entities,
+                &referenced_fields,
+                &root,
+                &mut errors,
+            );
+            if let Some(releases) = &releases {
+                validate_measure_fields_readable(
+                    source,
+                    unit,
+                    &releases.publisher,
+                    &measure_fields,
+                    &root,
+                    &mut errors,
+                );
+            }
+        }
         let Some(period) = period else {
             continue;
         };
-        let Some(disclosure_source) = disclosure_source.filter(|disclosure| {
-            (2..=MAX_EXACT_JSON_INTEGER).contains(&disclosure.minimum_count)
-                && (2..=MAX_EXACT_JSON_INTEGER).contains(&disclosure.rounding_base)
-        }) else {
-            continue;
-        };
-        let disclosure = DisclosureParameters {
-            minimum_count: disclosure_source.minimum_count,
-            rounding_base: disclosure_source.rounding_base,
+        let disclosure = match disclosure_source {
+            Some(StatisticalDisclosureSource::ExactPublicValues {}) => {
+                DisclosureMethod::ExactPublicValues
+            }
+            _ => match rounding.filter(|(minimum_count, rounding_base)| {
+                (2..=MAX_EXACT_JSON_INTEGER).contains(minimum_count)
+                    && (2..=MAX_EXACT_JSON_INTEGER).contains(rounding_base)
+            }) {
+                Some((minimum_count, rounding_base)) => DisclosureMethod::MinimumCountAndRounding {
+                    minimum_count,
+                    rounding_base,
+                },
+                None => continue,
+            },
         };
         let longest_decimal = measures
             .iter()
@@ -430,7 +471,7 @@ fn maximum_release_document_bytes(
     period: &CompiledStatisticalPeriod,
     dimensions: &[CompiledStatisticalDimension],
     measures: &[Measure],
-    disclosure: DisclosureParameters,
+    disclosure: DisclosureMethod,
     definition_digest: &str,
     cell_count: usize,
     longest_decimal: Option<usize>,
@@ -501,13 +542,7 @@ fn maximum_release_document_bytes(
             "evaluatedAt": timestamp,
             "accessProfile": "x".repeat(64),
         },
-        "disclosure": {
-            "method": "minimum-count-and-rounding",
-            "minimumCount": disclosure.minimum_count,
-            "roundingBase": disclosure.rounding_base,
-            "roundingRule": "nearest-multiple-halves-up",
-            "totals": "rounded-independently",
-        },
+        "disclosure": DisclosureDocument::from(disclosure),
     }))
     .expect("statistical release size envelope canonicalizes")
     .len();
@@ -1034,6 +1069,63 @@ fn validate_count_grant(
     }
 }
 
+/// An exact release publishes every value it computes, so the unit Record type,
+/// each field the dataset reads, and each other Record type a derived field
+/// reads from must be classified `public`. One diagnostic names each item that
+/// is not.
+fn validate_exact_release_is_public(
+    source: &crate::contract::StatisticalDatasetSource,
+    unit: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+    dependency_entities: &BTreeSet<String>,
+    referenced_fields: &BTreeSet<String>,
+    root: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let mut refuse = |kind: &str, item: &str, classification: Classification| {
+        errors.push(error(
+            "breg.statistical-dataset.exact-release-not-public",
+            &format!("{root}.disclosure.type"),
+            &source.id,
+            &format!(
+                "exact-public-values releases every value, but {kind} `{item}` is classified `{}`: reclassify it as public, or use minimum-count-and-rounding",
+                classification_name(classification)
+            ),
+        ));
+    };
+    if unit.classification != Classification::Public {
+        refuse("record type", &unit.id, unit.classification);
+    }
+    for field_id in referenced_fields {
+        let classification = unit
+            .fields
+            .get(field_id)
+            .map(|field| field.classification)
+            .or_else(|| {
+                unit.derived_fields
+                    .get(field_id)
+                    .map(|field| field.logical.classification)
+            });
+        if let Some(classification) = classification.filter(|c| *c != Classification::Public) {
+            refuse("field", field_id, classification);
+        }
+    }
+    for entity_id in dependency_entities.iter().filter(|id| **id != unit.id) {
+        let classification = entities[entity_id].classification;
+        if classification != Classification::Public {
+            refuse("record type", entity_id, classification);
+        }
+    }
+}
+
+fn classification_name(classification: Classification) -> &'static str {
+    match classification {
+        Classification::Public => "public",
+        Classification::Internal => "internal",
+        Classification::Restricted => "restricted",
+    }
+}
+
 fn validate_publisher_independence(
     source: &crate::contract::StatisticalDatasetSource,
     entities: &BTreeMap<String, CompiledEntity>,
@@ -1152,7 +1244,7 @@ fn definition_digest(
     period: &CompiledStatisticalPeriod,
     dimensions: &[CompiledStatisticalDimension],
     measures: &[Measure],
-    disclosure: &DisclosureParameters,
+    disclosure: &DisclosureMethod,
     dependencies: DefinitionDependencies<'_>,
     publisher: Option<&str>,
 ) -> String {

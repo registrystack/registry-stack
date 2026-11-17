@@ -4304,7 +4304,7 @@ fn statistics_registry_source() -> Value {
         "statisticalDatasets":[{
             "id":"records-by-category","unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
-            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5}
+            "dimensions":["category"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
         }]
     })
 }
@@ -4350,7 +4350,7 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
         "statisticalDatasets":[{
             "id":"daily-by-category","unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},
-            "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5}
+            "dimensions":["category"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
         }]
     });
     let bytes = serde_json::to_vec(&source).expect("cap fixture serializes");

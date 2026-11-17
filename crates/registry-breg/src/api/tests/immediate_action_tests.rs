@@ -1986,7 +1986,7 @@ async fn task_statistics_reads_bind_the_grant_to_the_request_principal_and_purpo
                 "permissions":{"datasets":[{"dataset":"counts","operations":["read-releases"]}]}}],
         "statisticalDatasets":[{"id":"counts","unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"occurred-on","granularity":"month","firstPeriod":"2025-01"},
-            "dimensions":["active"],"disclosure":{"minimumCount":5,"roundingBase":5}}]});
+            "dimensions":["active"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}}]});
     let project =
         crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());

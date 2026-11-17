@@ -368,6 +368,188 @@ fn a_profile_that_cannot_read_the_measure_field_is_refused_at_compile_time() {
     );
 }
 
+/// A register of public facts: every record type and field is public, the
+/// analyst reads it live, the publisher publishes it, and the reader reads releases.
+fn public_register_source(measures: Value) -> Value {
+    let mut source = registry_source(&["category"], measures);
+    source["recordTypes"][0]["classification"] = json!("public");
+    for field in source["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+        field["classification"] = json!("public");
+    }
+    let publisher = json!({
+        "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "recordType":"record","operations":["list"],
+            "readableFields":["subject","active","category","event-date","amount","quantity"],
+            "filterableFields":["subject","active","category","event-date"],"allowCount":true,
+            "rowBoundaries":"unrestricted"
+        }],"datasets":[{"dataset":"records-by-category","operations":["publish","read-releases"]}]}
+    });
+    let reader = json!({
+        "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "datasets":[{"dataset":"records-by-category","operations":["read-releases"]}]
+        }
+    });
+    source["accessProfiles"][0]["permissions"]["datasets"][0]["operations"] =
+        json!(["read-live", "read-releases"]);
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .extend([publisher, reader]);
+    source["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    source
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_public_register_publishes_exact_counts_sums_and_means() {
+    let rows: Vec<Row> = vec![
+        ("a", "2025-03-10", Some("2.50"), Some("5")),
+        ("b", "2025-03-11", Some("1.00"), Some("1")),
+        ("b", "2025-03-12", Some("2.00"), Some("2")),
+    ];
+    let (database, migration_task, app) = fixture_for(
+        public_register_source(json!([
+            {"id":"records","type":"count"},
+            {"id":"amount-sum","type":"sum","field":"amount"},
+            {"id":"amount-mean","type":"mean","field":"amount","scale":2}
+        ])),
+        &rows,
+    )
+    .await;
+
+    let publisher = release_claims("publisher");
+    let published = release_request(
+        &app,
+        "POST",
+        "/v1/statistics/records-by-category/releases/2025-03/versions?accessProfile=publisher",
+        publisher,
+        Some("exact-release"),
+    )
+    .await;
+    assert_eq!(
+        published.status(),
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body_bytes(published).await)
+    );
+
+    let read = release_request(
+        &app,
+        "GET",
+        "/v1/statistics/records-by-category/releases/2025-03/versions/1?accessProfile=reader",
+        release_claims("reader"),
+        None,
+    )
+    .await;
+    assert_eq!(read.status(), StatusCode::OK);
+    let document = body_json(read).await;
+    assert_eq!(
+        document["disclosure"],
+        json!({"method":"exact-public-values"})
+    );
+
+    // One record is stated exactly, never suppressed.
+    let expected: [(&str, [(&str, Value, &str); 3]); 3] = [
+        (
+            "a",
+            [
+                ("records", json!(1), "exact"),
+                ("amount-sum", json!("2.50"), "exact"),
+                ("amount-mean", json!("2.50"), "exact"),
+            ],
+        ),
+        (
+            "b",
+            [
+                ("records", json!(2), "exact"),
+                ("amount-sum", json!("3.00"), "exact"),
+                ("amount-mean", json!("1.50"), "exact"),
+            ],
+        ),
+        (
+            "c",
+            [
+                ("records", json!(0), "exact"),
+                ("amount-sum", json!("0.00"), "exact"),
+                ("amount-mean", Value::Null, "not-applicable"),
+            ],
+        ),
+    ];
+    for (category, measures) in expected {
+        for (measure, value, status) in measures {
+            assert_eq!(
+                cell(&document, "2025-03", Some(category), measure),
+                json!([value, status]),
+                "{category} {measure}"
+            );
+        }
+    }
+    assert_eq!(
+        cell(&document, "2025-03", Some("_T"), "records"),
+        json!([3, "exact"])
+    );
+    assert_eq!(
+        cell(&document, "2025-03", Some("_T"), "amount-sum"),
+        json!(["5.50", "exact"])
+    );
+    assert_eq!(
+        cell(&document, "2025-03", Some("_T"), "amount-mean"),
+        json!(["1.83", "exact"])
+    );
+
+    let stored: Vec<u8> = database
+        .admin
+        .query_one(
+            "SELECT c.document FROM registry_internal.registry_statistical_release_contents c WHERE c.dataset_id = 'records-by-category' AND c.period_code = '2025-03' AND c.release_version = 1",
+            &[],
+        )
+        .await
+        .expect("the published release is stored")
+        .get(0);
+    let stored_text = std::str::from_utf8(&stored).expect("stored release is UTF-8");
+    for withheld in ["suppressed", "rounded", "minimumCount"] {
+        assert!(!stored_text.contains(withheld), "{withheld}");
+    }
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+fn release_claims(profile: &str) -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "principal",
+        &format!("measures-{profile}"),
+        Default::default(),
+        None,
+        Default::default(),
+    )
+    .expect("claims are valid")
+}
+
+async fn release_request(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    claims: VerifiedRequestClaims,
+    idempotency_key: Option<&str>,
+) -> Response<Body> {
+    let mut builder = Request::builder().method(method).uri(uri);
+    let body = match idempotency_key {
+        Some(key) => {
+            builder = builder
+                .header("content-type", "application/json")
+                .header("idempotency-key", key);
+            Body::from(serde_json::to_vec(&json!({"status":"final"})).expect("body serializes"))
+        }
+        None => Body::empty(),
+    };
+    let mut request = builder.body(body).expect("request builds");
+    request.extensions_mut().insert(claims);
+    app.clone()
+        .call(request)
+        .await
+        .expect("router returns a response")
+}
+
 fn april(day: u32) -> &'static str {
     [
         "2025-04-11",
@@ -445,7 +627,7 @@ fn registry_source(dimensions: &[&str], measures: Value) -> Value {
             "id":"records-by-category","unit":"record","population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":dimensions,"measures":measures,
-            "disclosure":{"minimumCount":5,"roundingBase":5}
+            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
         }]
     })
 }
@@ -455,7 +637,13 @@ async fn fixture(
     measures: Value,
     rows: &[Row],
 ) -> (TestDatabase, tokio::task::JoinHandle<()>, axum::Router) {
-    let source = registry_source(dimensions, measures);
+    fixture_for(registry_source(dimensions, measures), rows).await
+}
+
+async fn fixture_for(
+    source: Value,
+    rows: &[Row],
+) -> (TestDatabase, tokio::task::JoinHandle<()>, axum::Router) {
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("parses");
     let compiled =
         Arc::new(compile_project(&project, &[], CompileProfile::Authoring).expect("compiles"));
