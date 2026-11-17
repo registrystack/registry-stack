@@ -80,6 +80,22 @@
   authoring schema bounds `dimensions` at 12 items. PostgreSQL now computes
   every total in the query that counts the cells, and 12 is the most one
   `CUBE` accepts.
+- BREAKING: A statistical dataset may declare two more measure types, served
+  on live reads only. `{id, type: sum, field}` is the sum of a unit entity
+  field over the records in a cell, and `{id, type: mean, field, scale}` is
+  the mean, with `scale` a required integer from 0 to 38. A cell's `value` may
+  be a decimal string such as `"1234.50"` for a sum or a mean, so readers must
+  not assume an integer; a count stays a JSON integer. `dataset.measures` lists
+  `field` and `scale` for these measures. A mean over no values has a null
+  `value` and the new status `not-applicable`; the status vocabulary can grow,
+  and a reader must treat an unknown status as no usable value. The compiler
+  refuses a field that is not integer or decimal
+  (`breg.statistical-dataset.measure-field-type`), a field that a `read-live`
+  profile cannot read
+  (`breg.statistical-dataset.measure-field-not-readable`), and a `publish` or
+  `read-releases` grant on a dataset with a sum or a mean
+  (`breg.statistical-dataset.measure-release-unsupported`). Datasets that
+  declare only counts, and their documents, are unchanged by this entry.
 - A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
   WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and
   an optional `bbox`, and the compiler validates it with PostGIS and generates

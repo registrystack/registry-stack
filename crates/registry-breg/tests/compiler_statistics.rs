@@ -12,7 +12,6 @@ use registry_breg::diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity}
 use registry_breg::package::{
     compiled_registry_change_set, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
 };
-use registry_breg::statistics::MeasureType;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use registry_breg::tooling::{classify_registry_diff, DiffClassification};
 use serde_json::{json, Value};
@@ -2056,12 +2055,9 @@ fn a_statistics_dataset_requires_the_registry_timezone_for_its_current_period() 
     );
 }
 
-fn measures_of(compiled: &registry_breg::CompiledRegistry) -> Vec<(String, MeasureType)> {
-    compiled.statistical_datasets()["records-by-category"]
-        .measures
-        .iter()
-        .map(|measure| (measure.id.clone(), measure.measure_type))
-        .collect()
+fn measures_of(compiled: &registry_breg::CompiledRegistry) -> Value {
+    serde_json::to_value(&compiled.statistical_datasets()["records-by-category"].measures)
+        .expect("measures serialize")
 }
 
 #[test]
@@ -2069,7 +2065,7 @@ fn omitted_measures_compile_to_one_count_measure_named_count() {
     let compiled = compile(&source()).expect("a dataset without measures compiles");
     assert_eq!(
         measures_of(&compiled),
-        [("count".to_owned(), MeasureType::Count)]
+        json!([{"id":"count","type":"count"}])
     );
 }
 
@@ -2080,7 +2076,7 @@ fn declared_measures_compile_in_declared_order_with_their_ids() {
     let compiled = compile(&value).expect("a declared count measure compiles");
     assert_eq!(
         measures_of(&compiled),
-        [("parcels".to_owned(), MeasureType::Count)]
+        json!([{"id":"parcels","type":"count"}])
     );
     let metadata = artifact_json(&compiled, "generated/metadata/registry.json");
     assert_eq!(
@@ -2153,4 +2149,255 @@ fn definition_digest_covers_the_measures_including_the_defaulted_one() {
     let mut renamed = source();
     renamed["statisticalDatasets"][0]["measures"] = json!([{"id":"parcels","type":"count"}]);
     assert_ne!(omitted, digest(&renamed));
+}
+
+/// A dataset served live only, over a decimal and an int64 unit field that the
+/// analyst reads but cannot filter on.
+fn live_measure_source(measures: Value) -> Value {
+    let mut value = source();
+    value["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"id":"amount","type":"decimal","precision":10,"scale":2,"classification":"internal"}),
+            json!({"id":"quantity","type":"int64","classification":"internal"}),
+        ]);
+    value["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("amount"), json!("quantity")]);
+    grant(&mut value, ANALYST, &["read-live"]);
+    grant(&mut value, PUBLISHER, &[]);
+    grant(&mut value, READER, &[]);
+    value["statisticalDatasets"][0]["measures"] = measures;
+    value
+}
+
+fn live_measure_digest(measures: Value) -> String {
+    compile(&live_measure_source(measures))
+        .expect("the live dataset compiles")
+        .statistical_datasets()["records-by-category"]
+        .definition_digest
+        .clone()
+}
+
+fn assert_measure_refused(measures: Value, code: &str) {
+    assert_refused(|value| *value = live_measure_source(measures), code);
+}
+
+#[test]
+fn a_sum_and_a_mean_compile_with_the_scale_their_field_gives() {
+    let compiled = compile(&live_measure_source(json!([
+        {"id":"parcels","type":"count"},
+        {"id":"total-amount","type":"sum","field":"amount"},
+        {"id":"total-units","type":"sum","field":"quantity"},
+        {"id":"average-amount","type":"mean","field":"amount","scale":3},
+        {"id":"average-units","type":"mean","field":"quantity","scale":0}
+    ])))
+    .expect("a live sum and mean compile without a filterable measure field");
+    assert_eq!(
+        measures_of(&compiled),
+        json!([
+            {"id":"parcels","type":"count"},
+            {"id":"total-amount","type":"sum","field":"amount","scale":2},
+            {"id":"total-units","type":"sum","field":"quantity","scale":0},
+            {"id":"average-amount","type":"mean","field":"amount","scale":3},
+            {"id":"average-units","type":"mean","field":"quantity","scale":0}
+        ])
+    );
+    let metadata = artifact_json(&compiled, "generated/metadata/registry.json");
+    assert_eq!(
+        metadata["statisticalDatasets"][0]["measures"],
+        measures_of(&compiled)
+    );
+    let dataset = &compiled.statistical_datasets()["records-by-category"];
+    assert!(dataset.referenced_fields.contains("amount"));
+    assert!(dataset.referenced_fields.contains("quantity"));
+}
+
+#[test]
+fn a_measure_field_is_checked_like_any_field_the_dataset_reads() {
+    assert_measure_refused(
+        json!([{"id":"total","type":"sum","field":"missing"}]),
+        "breg.statistical-dataset.field-unknown",
+    );
+    assert_refused(
+        |value| {
+            *value = live_measure_source(json!([{"id":"total","type":"sum","field":"secret"}]));
+            value["recordTypes"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id":"secret","type":"string","maximumLength":80,"encrypted":true,
+                    "classification":"restricted"
+                }));
+            value["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("secret"));
+        },
+        "breg.statistical-dataset.field-encrypted",
+    );
+    for field in ["category", "active", "event-date"] {
+        assert_measure_refused(
+            json!([{"id":"total","type":"sum","field":field}]),
+            "breg.statistical-dataset.measure-field-type",
+        );
+        assert_measure_refused(
+            json!([{"id":"average","type":"mean","field":field,"scale":1}]),
+            "breg.statistical-dataset.measure-field-type",
+        );
+    }
+}
+
+#[test]
+fn every_live_reader_of_a_sum_or_mean_must_read_its_field() {
+    for measure in [
+        json!({"id":"total","type":"sum","field":"amount"}),
+        json!({"id":"average","type":"mean","field":"amount","scale":1}),
+    ] {
+        let mut value = live_measure_source(json!([measure]));
+        value["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] = json!([
+            "active",
+            "category",
+            "event-date",
+            "valid-from",
+            "valid-to",
+            "quantity"
+        ]);
+        let failure = compile(&value).expect_err("the analyst cannot read the measure field");
+        assert!(
+            failure.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+                    && diagnostic.message.contains("amount")
+                    && diagnostic.message.contains("analyst")
+            }),
+            "{:?}",
+            failure.diagnostics()
+        );
+    }
+
+    // A second live profile that lacks the field is refused as well.
+    let mut second = live_measure_source(json!([{"id":"total","type":"sum","field":"amount"}]));
+    grant(&mut second, READER, &["read-live"]);
+    second["accessProfiles"][READER]["permissions"]["records"] = json!([{
+        "recordType":"record","operations":["list"],
+        "readableFields":["active","category","event-date","valid-from","valid-to"],
+        "filterableFields":["active","category","event-date","valid-from","valid-to"],
+        "allowCount":true,"rowBoundaries":"unrestricted"
+    }]);
+    let failure = compile(&second).expect_err("the second reader cannot read the measure field");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+            && diagnostic.message.contains("`reader`")
+    }));
+
+    // A count needs no readable field.
+    let mut count_only = live_measure_source(json!([{"id":"count","type":"count"}]));
+    count_only["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] =
+        json!(["active", "category", "event-date", "valid-from", "valid-to"]);
+    compile(&count_only).expect("a count reads no measure field");
+}
+
+#[test]
+fn a_dataset_with_a_sum_or_mean_is_refused_any_release_grant() {
+    let measures = json!([
+        {"id":"parcels","type":"count"},
+        {"id":"total","type":"sum","field":"amount"}
+    ]);
+    let mut published = live_measure_source(measures.clone());
+    grant(&mut published, PUBLISHER, &["publish", "read-releases"]);
+    let failure = compile(&published).expect_err("a sum cannot be published");
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
+        })
+        .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
+    assert!(refusal
+        .message
+        .contains("statistical dataset `records-by-category`"));
+    assert!(refusal.message.contains("counts only"));
+    assert!(refusal.message.contains("live"));
+
+    let mean = json!([{"id":"average","type":"mean","field":"amount","scale":2}]);
+    let mut read_releases = live_measure_source(mean);
+    grant(&mut read_releases, ANALYST, &["read-live", "read-releases"]);
+    let failure = compile(&read_releases).expect_err("a mean has no releases to read");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
+    }));
+
+    // The same grants over counts alone still compile.
+    let mut counts = live_measure_source(json!([{"id":"parcels","type":"count"}]));
+    grant(&mut counts, PUBLISHER, &["publish", "read-releases"]);
+    grant(&mut counts, ANALYST, &["read-live", "read-releases"]);
+    compile(&counts).expect("a count dataset is published");
+}
+
+#[test]
+fn a_sum_or_mean_that_is_not_well_formed_does_not_read() {
+    for measures in [
+        json!([{"id":"total","type":"sum"}]),
+        json!([{"id":"total","type":"sum","field":"amount","scale":2}]),
+        json!([{"id":"average","type":"mean","field":"amount"}]),
+        json!([{"id":"average","type":"mean","scale":1}]),
+        json!([{"id":"average","type":"mean","field":"amount","scale":-1}]),
+        json!([{"id":"average","type":"mean","field":"amount","scale":39}]),
+        json!([{"id":"average","type":"mean","field":"amount","scale":"1"}]),
+        json!([{"id":"average","type":"mean","field":"amount","scale":1.5}]),
+        json!([{"id":"average","type":"mean","field":"amount","scale":1,"extra":true}]),
+        json!([{"id":"total","type":"median","field":"amount"}]),
+    ] {
+        let value = live_measure_source(measures.clone());
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(
+            parse_project_json(&bytes).is_err(),
+            "{measures} must not read"
+        );
+    }
+    for scale in [0, 38] {
+        let value = live_measure_source(
+            json!([{"id":"average","type":"mean","field":"amount","scale":scale}]),
+        );
+        compile(&value).expect("the bounds of scale are admitted");
+    }
+}
+
+#[test]
+fn the_definition_digest_covers_the_type_field_and_scale_of_a_measure() {
+    let sum_amount = live_measure_digest(json!([{"id":"m","type":"sum","field":"amount"}]));
+    let sum_quantity = live_measure_digest(json!([{"id":"m","type":"sum","field":"quantity"}]));
+    let mean_two =
+        live_measure_digest(json!([{"id":"m","type":"mean","field":"amount","scale":2}]));
+    let mean_three =
+        live_measure_digest(json!([{"id":"m","type":"mean","field":"amount","scale":3}]));
+    let mean_quantity =
+        live_measure_digest(json!([{"id":"m","type":"mean","field":"quantity","scale":2}]));
+    let digests = BTreeSet::from([
+        sum_amount.clone(),
+        sum_quantity,
+        mean_two,
+        mean_three,
+        mean_quantity,
+    ]);
+    assert_eq!(digests.len(), 5, "every measure change changes the digest");
+    assert_eq!(
+        sum_amount,
+        live_measure_digest(json!([{"id":"m","type":"sum","field":"amount"}])),
+        "the digest is stable"
+    );
+}
+
+#[test]
+fn a_measure_field_type_change_changes_the_definition_digest() {
+    let measures = json!([{"id":"m","type":"sum","field":"amount"}]);
+    let baseline = live_measure_digest(measures.clone());
+    let mut changed = live_measure_source(measures);
+    changed["recordTypes"][0]["fields"][5]["scale"] = json!(3);
+    let digest = compile(&changed).unwrap().statistical_datasets()["records-by-category"]
+        .definition_digest
+        .clone();
+    assert_ne!(baseline, digest);
 }

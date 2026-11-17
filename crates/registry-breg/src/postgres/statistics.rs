@@ -29,10 +29,11 @@ use crate::model::{
 use crate::mutation::BoundValue;
 use crate::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    period_for_code, period_range, Cell, DatasetDocument, DimensionDomain, DisclosureDocument,
-    GroupedCell, LiveDocument, Period, PeriodDocument, PeriodGranularity, PeriodKind,
-    PeriodVersionHeader, ReleaseDocument, ReleaseStatus, ReleaseVersionHeader, StatisticsDocument,
-    StatisticsError, WithdrawalDocument, WithdrawalReason, MAX_CELLS_PER_RESPONSE,
+    maximum_decimal_characters, period_for_code, period_range, Cell, CellValue, DatasetDocument,
+    DimensionDomain, DisclosureDocument, GroupedCell, LiveDocument, Measure, Period,
+    PeriodDocument, PeriodGranularity, PeriodKind, PeriodVersionHeader, ReleaseDocument,
+    ReleaseStatus, ReleaseVersionHeader, StatisticsDocument, StatisticsError, WithdrawalDocument,
+    WithdrawalReason, MAX_CELLS_PER_RESPONSE,
 };
 
 use super::read::{
@@ -637,6 +638,24 @@ impl PostgresStatisticsService {
             .query(&sql, &parameters)
             .await
             .map_err(map_statement_error)?;
+        // The longest text each sum or mean can take; a longer value is a fault.
+        let mut decimal_bounds = Vec::with_capacity(dataset.measures.len());
+        for measure in &dataset.measures {
+            let field = match measure {
+                Measure::Sum { field, .. } | Measure::Mean { field, .. } => field,
+                Measure::Count { .. } => {
+                    decimal_bounds.push(None);
+                    continue;
+                }
+            };
+            let expression = relations
+                .field_expression(entity, field)
+                .map_err(map_read_error)?;
+            decimal_bounds.push(Some(
+                maximum_decimal_characters(measure, &expression.field_type)
+                    .ok_or(StatisticsServiceError::Unavailable)?,
+            ));
+        }
         let mut grouped = Vec::new();
         let mut history_head = None;
         let mut snapshot = None;
@@ -665,13 +684,38 @@ impl PostgresStatisticsService {
                     .ok_or(StatisticsServiceError::Unavailable)?;
                 codes.push(code);
             }
-            let value = row
-                .get::<_, Option<i64>>(offset + 1 + dataset.dimensions.len())
-                .ok_or(StatisticsServiceError::Unavailable)?;
+            let first_value = offset + 1 + dataset.dimensions.len();
+            let mut values = Vec::with_capacity(dataset.measures.len());
+            for (index, (measure, bound)) in
+                dataset.measures.iter().zip(&decimal_bounds).enumerate()
+            {
+                let column = first_value + index;
+                values.push(match (measure, bound) {
+                    (Measure::Count { .. }, _) => {
+                        let count = row
+                            .get::<_, Option<i64>>(column)
+                            .ok_or(StatisticsServiceError::Unavailable)?;
+                        Some(CellValue::Count(
+                            u64::try_from(count)
+                                .map_err(|_| StatisticsServiceError::Unavailable)?,
+                        ))
+                    }
+                    (_, bound) => {
+                        let text = row.get::<_, Option<String>>(column);
+                        if text
+                            .as_ref()
+                            .is_some_and(|text| bound.is_none_or(|bound| text.len() > bound))
+                        {
+                            return Err(StatisticsServiceError::Unavailable);
+                        }
+                        text.map(CellValue::Decimal)
+                    }
+                });
+            }
             grouped.push(GroupedCell {
                 period,
                 codes,
-                value: u64::try_from(value).map_err(|_| StatisticsServiceError::Unavailable)?,
+                values,
             });
         }
         if capture_history && history_head.is_none() {
@@ -2048,6 +2092,8 @@ fn map_statistics_error(error: StatisticsError) -> StatisticsServiceError {
         StatisticsError::DimensionCount { .. }
         | StatisticsError::UnknownPeriod { .. }
         | StatisticsError::DuplicateGroupedCell { .. }
+        | StatisticsError::MeasureValueCount { .. }
+        | StatisticsError::InvalidMeasureValue { .. }
         | StatisticsError::InconsistentTotal { .. }
         | StatisticsError::InvalidDimensionDomain { .. }
         | StatisticsError::CountOverflow
@@ -2102,9 +2148,51 @@ fn grouped_sql(
         .enumerate()
         .map(|(index, expression)| format!("{expression} AS dimension_{index}"))
         .collect::<Vec<_>>();
+    // Each distinct measure field is summed and counted once, however many
+    // measures read it. A field's index is its position in this list.
+    let mut measure_fields: Vec<(&str, String)> = Vec::new();
+    for measure in &dataset.measures {
+        let (Measure::Sum { field, .. } | Measure::Mean { field, .. }) = measure else {
+            continue;
+        };
+        if measure_fields.iter().any(|(known, _)| known == field) {
+            continue;
+        }
+        let expression = relations
+            .field_expression(entity, field)
+            .map_err(map_read_error)?;
+        if expression.encrypted {
+            return Err(StatisticsServiceError::Unavailable);
+        }
+        measure_fields.push((field, expression.sql));
+    }
+    let field_index = |field: &str| {
+        measure_fields
+            .iter()
+            .position(|(known, _)| *known == field)
+            .expect("every measure field was collected")
+    };
     let mut base_select = vec!["periods.code AS period_code".to_owned()];
     base_select.extend(dimension_select);
-    base_select.push("count(*)::bigint AS cell_count".to_owned());
+    if dataset.dimensions.is_empty() {
+        // Without dimensions the base cells are the finished cells.
+        base_select.extend(dataset.measures.iter().enumerate().map(|(index, measure)| {
+            let measure_sql = measure_sql(measure, "count(*)::bigint", |field| {
+                let expression = &measure_fields[field_index(field)].1;
+                (
+                    format!("sum(({expression})::numeric)"),
+                    format!("count({expression})::numeric"),
+                )
+            });
+            format!("{measure_sql} AS measure_{index}")
+        }));
+    } else {
+        base_select.push("count(*)::bigint AS cell_count".to_owned());
+        for (index, (_, expression)) in measure_fields.iter().enumerate() {
+            base_select.push(format!("sum(({expression})::numeric) AS field_sum_{index}"));
+            base_select.push(format!("count({expression}) AS field_count_{index}"));
+        }
+    }
     let mut base_by = vec!["periods.code".to_owned()];
     base_by.extend(dimension_sql);
     let (period_join, period_predicate) = match &dataset.period {
@@ -2162,9 +2250,11 @@ fn grouped_sql(
     let where_sql = period_predicate
         .map(|period| format!("({population_where}) AND ({period})"))
         .unwrap_or_else(|| population_where.to_owned());
-    // One pass over the unit rows counts the base cells. PostgreSQL then returns every
-    // cell as a finished value: the totals (a dimension column of `_T`) are a cube over
-    // the base cells, which sums the counts without a second pass over the rows.
+    // One pass over the unit rows counts the base cells, and sums and counts each
+    // measure field. PostgreSQL then returns every cell as a finished value: the
+    // totals (a dimension column of `_T`) are a cube over the base cells, which adds
+    // the counts and sums, and divides the added sums by the added counts for a
+    // mean, without a second pass over the rows.
     let dimension_count = dataset.dimensions.len();
     let base = format!(
         "periods(code, start_date, end_date, reference_date) AS (VALUES {period_values}),
@@ -2199,10 +2289,26 @@ fn grouped_sql(
             .map(|index| format!("base.dimension_{index}"))
             .collect::<Vec<_>>()
             .join(", ");
+        let measure_select = dataset
+            .measures
+            .iter()
+            .enumerate()
+            .map(|(index, measure)| {
+                let measure_sql = measure_sql(measure, "sum(base.cell_count)::bigint", |field| {
+                    let index = field_index(field);
+                    (
+                        format!("sum(base.field_sum_{index})"),
+                        format!("sum(base.field_count_{index})::numeric"),
+                    )
+                });
+                format!("{measure_sql} AS measure_{index}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         format!(
             "{base},
          grouped AS (
-             SELECT base.period_code, {cube_select}, sum(base.cell_count)::bigint AS cell_count
+             SELECT base.period_code, {cube_select}, {measure_select}
                FROM base
            GROUP BY base.period_code, CUBE({cube_columns})
          )"
@@ -2213,7 +2319,7 @@ fn grouped_sql(
         .collect::<Vec<_>>();
     let result_columns = std::iter::once("grouped.period_code".to_owned())
         .chain(grouped_columns)
-        .chain(std::iter::once("grouped.cell_count".to_owned()))
+        .chain((0..dataset.measures.len()).map(|index| format!("grouped.measure_{index}")))
         .collect::<Vec<_>>()
         .join(", ");
     if capture_history {
@@ -2259,6 +2365,43 @@ fn grouped_sql(
                     .join(", ")
             },
         ))
+    }
+}
+
+/// The SQL of one measure's value over a group of cells, as text for a sum or
+/// mean. `count` is the group's record count; `sum_and_count` gives the group's
+/// sum of a field and the number of records that have a value for it.
+///
+/// A mean is rounded half away from zero by integer arithmetic on exact
+/// `numeric` values: `div` truncates, so `div(2 * abs(S) * 10^s + N, 2 * N)` is
+/// `floor(abs(S) * 10^s / N + 1/2)`. `round(S / N, s)` would divide at a
+/// precision PostgreSQL picks, and `avg` would round the quotient early.
+fn measure_sql(
+    measure: &Measure,
+    count: &str,
+    sum_and_count: impl Fn(&str) -> (String, String),
+) -> String {
+    match measure {
+        Measure::Count { .. } => count.to_owned(),
+        Measure::Sum { field, scale, .. } => {
+            let (sum, _) = sum_and_count(field);
+            format!("round(COALESCE({sum}, 0), {scale})::text")
+        }
+        Measure::Mean { field, scale, .. } => {
+            let (sum, values) = sum_and_count(field);
+            let scale = usize::from(*scale);
+            let power = format!("1{}", "0".repeat(scale));
+            let unscale = if scale == 0 {
+                String::new()
+            } else {
+                format!(" * 0.{}1", "0".repeat(scale - 1))
+            };
+            format!(
+                "CASE WHEN {values} = 0 THEN NULL
+                      ELSE ((sign({sum}) * div(abs({sum}) * 2 * {power} + {values}, 2 * {values})){unscale})::text
+                 END"
+            )
+        }
     }
 }
 

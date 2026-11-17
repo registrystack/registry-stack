@@ -5440,28 +5440,84 @@
       "type": "object"
     },
     "StatisticalMeasureSource": {
-      "additionalProperties": false,
       "description": "One value a statistical dataset publishes.",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/LocalId",
-          "description": "Names the measure on every cell that reports it."
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The number of unit Records in the population.",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "Names the measure on every cell that reports it."
+            },
+            "type": {
+              "const": "count",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
         },
-        "type": {
-          "$ref": "#/$defs/StatisticalMeasureTypeSource",
-          "description": "How the value is computed."
+        {
+          "additionalProperties": false,
+          "description": "The sum of an `int64` or `decimal` unit Record field over the\npopulation, at the field's scale. Records with no value for the field\nare left out. Served on live reads only.",
+          "properties": {
+            "field": {
+              "description": "The unit Record field to add up.",
+              "type": "string"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "Names the measure on every cell that reports it."
+            },
+            "type": {
+              "const": "sum",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The mean of an `int64` or `decimal` unit Record field over the records\nthat have a value for it, rounded half away from zero to `scale`\nfractional digits. Served on live reads only.",
+          "properties": {
+            "field": {
+              "description": "The unit Record field to average.",
+              "type": "string"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "Names the measure on every cell that reports it."
+            },
+            "scale": {
+              "description": "Fractional digits of the reported mean, 0 to 38.",
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "mean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "field",
+            "scale"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "id",
-        "type"
-      ],
-      "type": "object"
-    },
-    "StatisticalMeasureTypeSource": {
-      "const": "count",
-      "description": "The number of unit Records in the population.",
-      "type": "string"
+      ]
     },
     "StatisticalPeriodGranularitySource": {
       "enum": [

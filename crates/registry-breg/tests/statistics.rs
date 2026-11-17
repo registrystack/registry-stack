@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
+use registry_breg::contract::FieldTypeSource;
 use registry_breg::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
-    document_csv, period_for_code, period_range, Cell, CellStatus, DatasetDocument,
-    DimensionDomain, DisclosureDocument, DisclosureParameters, GroupedCell, LiveDocument, Measure,
-    MeasureType, PeriodDocument, PeriodGranularity, PeriodKind, ReleaseDocument, ReleaseStatus,
-    StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
+    document_csv, maximum_decimal_characters, period_for_code, period_range, Cell, CellStatus,
+    CellValue, DatasetDocument, DimensionDomain, DisclosureDocument, DisclosureParameters,
+    GroupedCell, LiveDocument, Measure, PeriodDocument, PeriodGranularity, PeriodKind,
+    ReleaseDocument, ReleaseStatus, StatisticsDocument, StatisticsError, TOTAL_CODE, UNKNOWN_CODE,
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -200,17 +201,17 @@ fn grouped_rows_are_zero_filled_and_totals_are_read_from_total_rows() {
         GroupedCell {
             period: "2025-01".to_owned(),
             codes: vec!["A".to_owned(), "true".to_owned()],
-            value: 2,
+            values: vec![count(2)],
         },
         GroupedCell {
             period: "2025-01".to_owned(),
             codes: vec!["A".to_owned(), "false".to_owned()],
-            value: 3,
+            values: vec![count(3)],
         },
         GroupedCell {
             period: "2025-01".to_owned(),
             codes: vec![UNKNOWN_CODE.to_owned(), "true".to_owned()],
-            value: 4,
+            values: vec![count(4)],
         },
         grouped_row("2025-01", &["A", TOTAL_CODE], 5),
         grouped_row("2025-01", &[UNKNOWN_CODE, TOTAL_CODE], 4),
@@ -256,7 +257,7 @@ fn unknown_code_error_names_dataset_and_dimension_but_not_value() {
         &[GroupedCell {
             period: "2025".to_owned(),
             codes: vec!["secret-new-code".to_owned()],
-            value: 1,
+            values: vec![count(1)],
         }],
     )
     .unwrap_err();
@@ -300,11 +301,11 @@ fn total_rows_are_accepted_in_any_position_and_a_missing_total_is_zero() {
     )
     .unwrap();
     assert_eq!(cells.len(), 3);
-    assert!(cells.iter().all(|cell| cell.value == Some(0)));
+    assert!(cells.iter().all(|cell| cell.value == count(0)));
     let empty =
         build_exact_cells("enrolments", &periods, &dimensions, &count_measures(), &[]).unwrap();
     assert_eq!(empty.len(), 3);
-    assert!(empty.iter().all(|cell| cell.value == Some(0)));
+    assert!(empty.iter().all(|cell| cell.value == count(0)));
 }
 
 #[test]
@@ -400,15 +401,15 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     assert_eq!(
         cells
             .iter()
-            .map(|cell| (cell.value, cell.status))
+            .map(|cell| (cell.value.clone(), cell.status))
             .collect::<Vec<_>>(),
         vec![
-            (Some(0), CellStatus::Exact),
+            (count(0), CellStatus::Exact),
             (None, CellStatus::Suppressed),
             (None, CellStatus::Suppressed),
-            (Some(5), CellStatus::Rounded),
-            (Some(5), CellStatus::Rounded),
-            (Some(10), CellStatus::Rounded),
+            (count(5), CellStatus::Rounded),
+            (count(5), CellStatus::Rounded),
+            (count(10), CellStatus::Rounded),
         ]
     );
 
@@ -422,8 +423,8 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     )
     .unwrap();
     assert_eq!(
-        (exact_half[0].value, exact_half[0].status),
-        (Some(8), CellStatus::Rounded)
+        (exact_half[0].value.clone(), exact_half[0].status),
+        (count(8), CellStatus::Rounded)
     );
 
     let mut rounded_to_zero = cells_with_values(&[2]);
@@ -436,8 +437,8 @@ fn disclosure_threshold_rounding_and_halves_up_are_exact() {
     )
     .unwrap();
     assert_eq!(
-        (rounded_to_zero[0].value, rounded_to_zero[0].status),
-        (Some(0), CellStatus::Rounded)
+        (rounded_to_zero[0].value.clone(), rounded_to_zero[0].status),
+        (count(0), CellStatus::Rounded)
     );
 }
 
@@ -455,9 +456,10 @@ fn disclosure_property_values_are_null_zero_or_a_rounding_multiple() {
             )
             .unwrap();
             for cell in cells {
-                assert!(cell
-                    .value
-                    .is_none_or(|value| value == 0 || value % rounding_base == 0));
+                assert!(cell.value.as_ref().is_none_or(|value| matches!(
+                    value,
+                    CellValue::Count(count) if *count == 0 || count % rounding_base == 0
+                )));
                 assert_eq!(cell.value.is_none(), cell.status == CellStatus::Suppressed);
             }
         }
@@ -479,7 +481,7 @@ fn rounded_zero_exists_only_below_half_of_the_rounding_base() {
             .unwrap();
             let rounded_zeros = (0..=200)
                 .zip(&cells)
-                .filter(|(_, cell)| cell.value == Some(0) && cell.status == CellStatus::Rounded)
+                .filter(|(_, cell)| cell.value == count(0) && cell.status == CellStatus::Rounded)
                 .map(|(true_count, _)| true_count)
                 .collect::<Vec<u64>>();
             assert_eq!(
@@ -580,7 +582,7 @@ fn live_document_uses_the_same_wire_shape_without_disclosure() {
             period: "2025-01".to_owned(),
             dimensions: BTreeMap::new(),
             measure: "count".to_owned(),
-            value: Some(3),
+            value: count(3),
             status: CellStatus::Exact,
         }],
         release: None,
@@ -604,7 +606,14 @@ fn cell_value(cells: &[Cell], codes: &[&str]) -> Option<u64> {
             cell.dimensions.get("region").map(String::as_str) == Some(codes[0])
                 && cell.dimensions.get("eligible").map(String::as_str) == Some(codes[1])
         })
-        .and_then(|cell| cell.value)
+        .and_then(|cell| match &cell.value {
+            Some(CellValue::Count(count)) => Some(*count),
+            _ => None,
+        })
+}
+
+fn count(value: u64) -> Option<CellValue> {
+    Some(CellValue::Count(value))
 }
 
 fn cells_with_values(values: &[u64]) -> Vec<Cell> {
@@ -614,7 +623,7 @@ fn cells_with_values(values: &[u64]) -> Vec<Cell> {
             period: "2025".to_owned(),
             dimensions: BTreeMap::new(),
             measure: "count".to_owned(),
-            value: Some(*value),
+            value: count(*value),
             status: CellStatus::Exact,
         })
         .collect()
@@ -636,7 +645,7 @@ fn candidates_consistent_with_published_total(
             let total = current.iter().sum();
             let mut total_cell = cells_with_values(&[total]);
             apply_disclosure(&mut total_cell, parameters).unwrap();
-            if total_cell[0].value == Some(published_total) {
+            if total_cell[0].value == count(published_total) {
                 found.push(current.clone());
             }
             return;
@@ -684,7 +693,7 @@ fn release_document() -> StatisticsDocument {
             period: "2025-01".to_owned(),
             dimensions: BTreeMap::from([("region".to_owned(), "north".to_owned())]),
             measure: "count".to_owned(),
-            value: Some(5),
+            value: count(5),
             status: CellStatus::Rounded,
         }],
         release: Some(ReleaseDocument {
@@ -704,19 +713,15 @@ fn release_document() -> StatisticsDocument {
 }
 
 fn count_measures() -> Vec<Measure> {
-    vec![Measure {
+    vec![Measure::Count {
         id: "count".to_owned(),
-        measure_type: MeasureType::Count,
     }]
 }
 
 fn two_measures() -> Vec<Measure> {
     ["parcels", "holdings"]
         .into_iter()
-        .map(|id| Measure {
-            id: id.to_owned(),
-            measure_type: MeasureType::Count,
-        })
+        .map(|id| Measure::Count { id: id.to_owned() })
         .collect()
 }
 
@@ -724,7 +729,14 @@ fn grouped_row(period: &str, codes: &[&str], value: u64) -> GroupedCell {
     GroupedCell {
         period: period.to_owned(),
         codes: codes.iter().map(|code| (*code).to_owned()).collect(),
-        value,
+        values: vec![count(value)],
+    }
+}
+
+fn two_count_row(codes: &[&str], value: u64) -> GroupedCell {
+    GroupedCell {
+        values: vec![count(value), count(value)],
+        ..grouped_row("2025", codes, value)
     }
 }
 
@@ -768,10 +780,7 @@ fn two_declared_measures_produce_two_cells_per_combination_in_declared_order() {
         &periods,
         &dimensions,
         &two_measures(),
-        &[
-            grouped_row("2025", &["A"], 2),
-            grouped_row("2025", &[TOTAL_CODE], 2),
-        ],
+        &[two_count_row(&["A"], 2), two_count_row(&[TOTAL_CODE], 2)],
     )
     .unwrap();
     let order = cells
@@ -780,19 +789,19 @@ fn two_declared_measures_produce_two_cells_per_combination_in_declared_order() {
             (
                 cell.dimensions["region"].as_str(),
                 cell.measure.as_str(),
-                cell.value,
+                cell.value.clone(),
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         order,
         [
-            ("A", "parcels", Some(2)),
-            ("A", "holdings", Some(2)),
-            ("B", "parcels", Some(0)),
-            ("B", "holdings", Some(0)),
-            (TOTAL_CODE, "parcels", Some(2)),
-            (TOTAL_CODE, "holdings", Some(2)),
+            ("A", "parcels", count(2)),
+            ("A", "holdings", count(2)),
+            ("B", "parcels", count(0)),
+            ("B", "holdings", count(0)),
+            (TOTAL_CODE, "parcels", count(2)),
+            (TOTAL_CODE, "holdings", count(2)),
         ]
     );
 }
@@ -926,4 +935,472 @@ fn the_superseded_singular_measure_shape_does_not_parse() {
         cell.as_object_mut().unwrap().remove("measure");
     }
     assert!(serde_json::from_value::<StatisticsDocument>(value).is_err());
+}
+
+#[test]
+fn the_canonical_bytes_of_a_count_only_document_are_pinned() {
+    let canonical = canonical_document_and_digest(&release_document()).unwrap();
+    assert_eq!(
+        String::from_utf8(canonical.bytes).unwrap(),
+        concat!(
+            r#"{"cells":[{"dimensions":{"region":"north"},"measure":"count","period":"2025-01","status":"rounded","value":5}],"#,
+            r#""dataset":{"definitionDigest":"definition-sha256","granularity":"month","id":"enrolments","measures":[{"id":"count","type":"count"}],"periodKind":"flow","population":"programme eq 'cash-transfer'","unit":"household"},"#,
+            r#""dimensions":[{"codes":["north","_T"],"field":"region","vocabulary":"regions"}],"#,
+            r#""disclosure":{"method":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5,"roundingRule":"nearest-multiple-halves-up","totals":"rounded-independently"},"#,
+            r#""periods":[{"code":"2025-01","end":"2025-02-01","ended":true,"referenceDate":"2025-01-31","start":"2025-01-01"}],"#,
+            r#""release":{"computedAt":"2025-02-01T00:00:00Z","packageDigest":"package-sha256","period":"2025-01","snapshot":"opaque-snapshot","status":"final","version":7}}"#,
+        )
+    );
+}
+
+fn sum_measure() -> Measure {
+    Measure::Sum {
+        id: "total".to_owned(),
+        field: "amount".to_owned(),
+        scale: 2,
+    }
+}
+
+fn mean_measure() -> Measure {
+    Measure::Mean {
+        id: "average".to_owned(),
+        field: "amount".to_owned(),
+        scale: 1,
+    }
+}
+
+fn mixed_measures() -> Vec<Measure> {
+    let mut measures = count_measures();
+    measures.extend([sum_measure(), mean_measure()]);
+    measures
+}
+
+fn decimal(text: &str) -> Option<CellValue> {
+    Some(CellValue::Decimal(text.to_owned()))
+}
+
+fn mixed_row(
+    period: &str,
+    codes: &[&str],
+    count_value: u64,
+    sum: &str,
+    mean: Option<&str>,
+) -> GroupedCell {
+    GroupedCell {
+        period: period.to_owned(),
+        codes: codes.iter().map(|code| (*code).to_owned()).collect(),
+        values: vec![count(count_value), decimal(sum), mean.and_then(decimal)],
+    }
+}
+
+fn mixed_cells(rows: &[GroupedCell]) -> Result<Vec<Cell>, StatisticsError> {
+    let (periods, dimensions) = one_year_one_region();
+    build_exact_cells("enrolments", &periods, &dimensions, &mixed_measures(), rows)
+}
+
+#[test]
+fn each_measure_reads_its_own_value_from_the_grouped_row() {
+    let cells = mixed_cells(&[
+        mixed_row("2025", &["A"], 2, "30.50", Some("15.3")),
+        mixed_row("2025", &[TOTAL_CODE], 2, "30.50", Some("15.3")),
+    ])
+    .unwrap();
+    let order = cells
+        .iter()
+        .map(|cell| {
+            (
+                cell.dimensions["region"].as_str(),
+                cell.measure.as_str(),
+                cell.value.clone(),
+                cell.status,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        [
+            ("A", "count", count(2), CellStatus::Exact),
+            ("A", "total", decimal("30.50"), CellStatus::Exact),
+            ("A", "average", decimal("15.3"), CellStatus::Exact),
+            ("B", "count", count(0), CellStatus::Exact),
+            ("B", "total", decimal("0.00"), CellStatus::Exact),
+            ("B", "average", None, CellStatus::NotApplicable),
+            (TOTAL_CODE, "count", count(2), CellStatus::Exact),
+            (TOTAL_CODE, "total", decimal("30.50"), CellStatus::Exact),
+            (TOTAL_CODE, "average", decimal("15.3"), CellStatus::Exact),
+        ]
+    );
+}
+
+#[test]
+fn a_missing_row_is_zero_for_a_count_zero_at_scale_for_a_sum_and_not_applicable_for_a_mean() {
+    let cells = mixed_cells(&[]).unwrap();
+    assert_eq!(cells.len(), 9);
+    for cell in &cells {
+        let expected = match cell.measure.as_str() {
+            "count" => (count(0), CellStatus::Exact),
+            "total" => (decimal("0.00"), CellStatus::Exact),
+            _ => (None, CellStatus::NotApplicable),
+        };
+        assert_eq!((cell.value.clone(), cell.status), expected, "{cell:?}");
+    }
+}
+
+#[test]
+fn a_zero_scale_sum_has_no_decimal_point_when_missing() {
+    let (periods, dimensions) = one_year_one_region();
+    let measures = vec![Measure::Sum {
+        id: "units".to_owned(),
+        field: "quantity".to_owned(),
+        scale: 0,
+    }];
+    let cells = build_exact_cells("enrolments", &periods, &dimensions, &measures, &[]).unwrap();
+    assert!(cells.iter().all(|cell| cell.value == decimal("0")));
+}
+
+#[test]
+fn a_grouped_value_that_does_not_fit_its_measure_is_refused() {
+    let good = || mixed_row("2025", &["A"], 2, "30.50", Some("15.3"));
+    let total = || mixed_row("2025", &[TOTAL_CODE], 2, "30.50", Some("15.3"));
+    let with = |values: Vec<Option<CellValue>>| {
+        let mut row = good();
+        row.values = values;
+        mixed_cells(&[row, total()])
+    };
+    let refused: Vec<(&str, Vec<Option<CellValue>>)> = vec![
+        ("too few values", vec![count(2), decimal("30.50")]),
+        (
+            "a decimal for a count",
+            vec![decimal("2"), decimal("30.50"), decimal("15.3")],
+        ),
+        (
+            "a count for a sum",
+            vec![count(2), count(30), decimal("15.3")],
+        ),
+        ("a null sum", vec![count(2), None, decimal("15.3")]),
+        (
+            "a null count",
+            vec![None, decimal("30.50"), decimal("15.3")],
+        ),
+        (
+            "a sum at the wrong scale",
+            vec![count(2), decimal("30.5"), decimal("15.3")],
+        ),
+        (
+            "a mean at the wrong scale",
+            vec![count(2), decimal("30.50"), decimal("15.30")],
+        ),
+        (
+            "a leading zero",
+            vec![count(2), decimal("030.50"), decimal("15.3")],
+        ),
+        (
+            "an exponent",
+            vec![count(2), decimal("3e1"), decimal("15.3")],
+        ),
+        (
+            "a plus sign",
+            vec![count(2), decimal("+30.50"), decimal("15.3")],
+        ),
+        (
+            "a trailing point",
+            vec![count(2), decimal("30."), decimal("15.3")],
+        ),
+        (
+            "no integer part",
+            vec![count(2), decimal(".50"), decimal("15.3")],
+        ),
+        (
+            "an empty string",
+            vec![count(2), decimal(""), decimal("15.3")],
+        ),
+    ];
+    for (name, values) in refused {
+        let result = with(values);
+        if name == "too few values" {
+            assert!(
+                matches!(result, Err(StatisticsError::MeasureValueCount { .. })),
+                "{name}: {result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(StatisticsError::InvalidMeasureValue { .. })),
+                "{name}: {result:?}"
+            );
+        }
+    }
+    with(vec![count(2), decimal("-0.50"), decimal("-0.5")]).expect("negative values are grammar");
+    with(vec![count(2), decimal("0.00"), decimal("0.0")]).expect("zero is grammar");
+}
+
+#[test]
+fn only_count_measures_are_totalled_by_the_engine() {
+    // The total of a sum is the database's; a sum total that differs from its
+    // base cells is not an inconsistency the engine can check.
+    mixed_cells(&[
+        mixed_row("2025", &["A"], 2, "30.50", Some("15.3")),
+        mixed_row("2025", &["B"], 1, "1.00", Some("1.0")),
+        mixed_row("2025", &[TOTAL_CODE], 3, "99.00", Some("0.1")),
+    ])
+    .expect("only counts are checked");
+    let error = mixed_cells(&[
+        mixed_row("2025", &["A"], 2, "30.50", Some("15.3")),
+        mixed_row("2025", &[TOTAL_CODE], 3, "30.50", Some("15.3")),
+    ])
+    .unwrap_err();
+    assert_eq!(
+        error,
+        StatisticsError::InconsistentTotal {
+            dataset: "enrolments".to_owned()
+        }
+    );
+}
+
+fn live_document(measures: Vec<Measure>, cells: Vec<Cell>) -> StatisticsDocument {
+    let period = current_period(PeriodGranularity::Month, date(2025, 1, 15)).unwrap();
+    let mut dataset = dataset_document();
+    dataset.measures = measures;
+    StatisticsDocument {
+        dataset,
+        periods: vec![PeriodDocument::from(&period)],
+        dimensions: vec![],
+        cells,
+        release: None,
+        live: Some(LiveDocument {
+            evaluated_at: "2025-01-15".to_owned(),
+            access_profile: "analyst".to_owned(),
+        }),
+        disclosure: None,
+    }
+}
+
+fn measure_cell(measure: &str, value: Option<CellValue>, status: CellStatus) -> Cell {
+    Cell {
+        period: "2025-01".to_owned(),
+        dimensions: BTreeMap::new(),
+        measure: measure.to_owned(),
+        value,
+        status,
+    }
+}
+
+#[test]
+fn a_document_states_a_count_as_an_integer_and_a_sum_or_mean_as_a_string() {
+    let document = live_document(
+        mixed_measures(),
+        vec![
+            measure_cell("count", count(3), CellStatus::Exact),
+            measure_cell("total", decimal("-12.50"), CellStatus::Exact),
+            measure_cell("average", None, CellStatus::NotApplicable),
+        ],
+    );
+    let canonical = canonical_document_and_digest(&document).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&canonical.bytes).unwrap();
+    assert_eq!(
+        value["dataset"]["measures"],
+        serde_json::json!([
+            {"id": "count", "type": "count"},
+            {"id": "total", "type": "sum", "field": "amount", "scale": 2},
+            {"id": "average", "type": "mean", "field": "amount", "scale": 1},
+        ])
+    );
+    assert_eq!(value["cells"][0]["value"], serde_json::json!(3));
+    assert_eq!(value["cells"][1]["value"], serde_json::json!("-12.50"));
+    assert_eq!(value["cells"][2]["value"], serde_json::Value::Null);
+    assert_eq!(value["cells"][2]["status"], "not-applicable");
+    let decoded: StatisticsDocument = serde_json::from_slice(&canonical.bytes).unwrap();
+    assert_eq!(decoded, document);
+}
+
+#[test]
+fn a_cell_value_reads_an_integer_as_a_count_and_a_string_as_a_decimal() {
+    assert_eq!(
+        serde_json::from_str::<CellValue>("5").unwrap(),
+        CellValue::Count(5)
+    );
+    assert_eq!(
+        serde_json::from_str::<CellValue>("\"5\"").unwrap(),
+        CellValue::Decimal("5".to_owned())
+    );
+    for refused in ["-5", "1.5", "true", "[]"] {
+        assert!(
+            serde_json::from_str::<CellValue>(refused).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn a_document_cell_whose_value_or_status_disagrees_with_its_measure_is_refused() {
+    let refused: Vec<(&str, Vec<Cell>)> = vec![
+        (
+            "exact without a value",
+            vec![measure_cell("total", None, CellStatus::Exact)],
+        ),
+        (
+            "not-applicable with a value",
+            vec![measure_cell(
+                "average",
+                decimal("1.0"),
+                CellStatus::NotApplicable,
+            )],
+        ),
+        (
+            "not-applicable on a count",
+            vec![measure_cell("count", None, CellStatus::NotApplicable)],
+        ),
+        (
+            "not-applicable on a sum",
+            vec![measure_cell("total", None, CellStatus::NotApplicable)],
+        ),
+        (
+            "suppressed with a value",
+            vec![measure_cell("count", count(1), CellStatus::Suppressed)],
+        ),
+        (
+            "rounded without a value",
+            vec![measure_cell("count", None, CellStatus::Rounded)],
+        ),
+        (
+            "a decimal on a count",
+            vec![measure_cell("count", decimal("1"), CellStatus::Exact)],
+        ),
+        (
+            "a count on a sum",
+            vec![measure_cell("total", count(1), CellStatus::Exact)],
+        ),
+        (
+            "a count on a mean",
+            vec![measure_cell("average", count(1), CellStatus::Exact)],
+        ),
+        (
+            "a sum at the wrong scale",
+            vec![measure_cell("total", decimal("1.0"), CellStatus::Exact)],
+        ),
+        (
+            "a mean at the wrong scale",
+            vec![measure_cell("average", decimal("1.00"), CellStatus::Exact)],
+        ),
+        (
+            "a value off the grammar",
+            vec![measure_cell("total", decimal("01.00"), CellStatus::Exact)],
+        ),
+    ];
+    for (name, cells) in refused {
+        let document = live_document(mixed_measures(), cells);
+        assert!(
+            matches!(
+                canonical_document_and_digest(&document),
+                Err(StatisticsError::InvalidDocument(_))
+            ),
+            "{name}"
+        );
+        assert!(
+            matches!(
+                document_csv(&document),
+                Err(StatisticsError::InvalidDocument(_))
+            ),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn csv_prints_a_decimal_as_it_is_and_an_empty_value_for_not_applicable() {
+    let document = live_document(
+        mixed_measures(),
+        vec![
+            measure_cell("count", count(3), CellStatus::Exact),
+            measure_cell("total", decimal("-12.50"), CellStatus::Exact),
+            measure_cell("average", None, CellStatus::NotApplicable),
+        ],
+    );
+    let csv = String::from_utf8(document_csv(&document).unwrap()).unwrap();
+    let lines = csv.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines[0],
+        "period,periodStart,periodEnd,measure,value,status"
+    );
+    assert_eq!(lines[1], "2025-01,2025-01-01,2025-02-01,count,3,exact");
+    assert_eq!(lines[2], "2025-01,2025-01-01,2025-02-01,total,-12.50,exact");
+    assert_eq!(
+        lines[3],
+        "2025-01,2025-01-01,2025-02-01,average,,not-applicable"
+    );
+}
+
+#[test]
+fn disclosure_control_refuses_a_cell_that_is_not_a_count() {
+    let parameters = DisclosureParameters {
+        minimum_count: 5,
+        rounding_base: 5,
+    };
+    for cell in [
+        measure_cell("total", decimal("12.50"), CellStatus::Exact),
+        measure_cell("average", None, CellStatus::NotApplicable),
+    ] {
+        let mut cells = vec![
+            measure_cell("count", count(7), CellStatus::Exact),
+            cell.clone(),
+        ];
+        assert!(
+            matches!(
+                apply_disclosure(&mut cells, parameters),
+                Err(StatisticsError::InvalidDocument(_))
+            ),
+            "{cell:?}"
+        );
+    }
+}
+
+#[test]
+fn the_widest_decimal_a_measure_can_carry_follows_its_field() {
+    let decimal_field = FieldTypeSource::Decimal {
+        precision: 10,
+        scale: 2,
+        minimum: None,
+        maximum: None,
+    };
+    let sum = |scale| Measure::Sum {
+        id: "m".to_owned(),
+        field: "f".to_owned(),
+        scale,
+    };
+    let mean = |scale| Measure::Mean {
+        id: "m".to_owned(),
+        field: "f".to_owned(),
+        scale,
+    };
+    // A sum of up to 10^19 rows: p + 19 digits, a point, a sign.
+    assert_eq!(
+        maximum_decimal_characters(&sum(2), &decimal_field),
+        Some(31)
+    );
+    // An int64 sum: 38 digits and a sign, no point.
+    assert_eq!(
+        maximum_decimal_characters(&sum(0), &FieldTypeSource::Int64),
+        Some(39)
+    );
+    // A mean: the field's 8 integer digits, a point, 2 digits, a sign.
+    assert_eq!(
+        maximum_decimal_characters(&mean(2), &decimal_field),
+        Some(12)
+    );
+    // A mean at a coarser scale than the field can round up to one more integer digit.
+    assert_eq!(
+        maximum_decimal_characters(&mean(0), &decimal_field),
+        Some(10)
+    );
+    assert_eq!(
+        maximum_decimal_characters(&mean(3), &FieldTypeSource::Int64),
+        Some(24)
+    );
+    assert_eq!(
+        maximum_decimal_characters(&count_measures()[0], &FieldTypeSource::Int64),
+        None
+    );
+    assert_eq!(
+        maximum_decimal_characters(&sum(0), &FieldTypeSource::Boolean),
+        None
+    );
 }

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::contract::FieldTypeSource;
+
 pub const MAX_CELLS_PER_RESPONSE: usize = 10_000;
 pub const MAX_PERIODS_PER_READ: usize = 366;
 pub const TOTAL_CODE: &str = "_T";
@@ -58,7 +60,8 @@ pub struct DimensionDomain {
 pub struct GroupedCell {
     pub period: String,
     pub codes: Vec<String>,
-    pub value: u64,
+    /// One value per declared measure, in declaration order.
+    pub values: Vec<Option<CellValue>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +70,19 @@ pub enum CellStatus {
     Exact,
     Suppressed,
     Rounded,
+    /// The measure has no value for this cell, and nothing is withheld: a mean
+    /// over no values.
+    #[serde(rename = "not-applicable")]
+    NotApplicable,
+}
+
+/// The value of one cell. A count is a JSON integer; a sum or mean is a decimal
+/// string, which keeps every digit the database computed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CellValue {
+    Count(u64),
+    Decimal(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,7 +92,7 @@ pub struct Cell {
     pub dimensions: BTreeMap<String, String>,
     /// The id of the declared measure this cell reports.
     pub measure: String,
-    pub value: Option<u64>,
+    pub value: Option<CellValue>,
     pub status: CellStatus,
 }
 
@@ -95,19 +111,128 @@ pub enum WithdrawalReason {
     DisclosureRisk,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum MeasureType {
-    Count,
-}
-
 /// One declared measure: its local id and how its value is computed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Measure {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub measure_type: MeasureType,
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum Measure {
+    /// The number of unit Records in the population.
+    Count { id: String },
+    /// The sum of a field over the records that have a value for it, with
+    /// `scale` fractional digits.
+    Sum {
+        id: String,
+        field: String,
+        scale: u8,
+    },
+    /// The mean of a field over the records that have a value for it, rounded
+    /// half away from zero to `scale` fractional digits.
+    Mean {
+        id: String,
+        field: String,
+        scale: u8,
+    },
+}
+
+impl Measure {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Count { id } | Self::Sum { id, .. } | Self::Mean { id, .. } => id,
+        }
+    }
+
+    /// The value of a cell no record falls into: a count and a sum are zero, and
+    /// a mean has none.
+    fn empty_value(&self) -> Option<CellValue> {
+        match self {
+            Self::Count { .. } => Some(CellValue::Count(0)),
+            Self::Sum { scale, .. } => Some(CellValue::Decimal(zero_decimal(*scale))),
+            Self::Mean { .. } => None,
+        }
+    }
+
+    /// True when `value` is a value this measure can report.
+    fn admits(&self, value: &Option<CellValue>) -> bool {
+        match (self, value) {
+            (Self::Count { .. }, Some(CellValue::Count(_))) => true,
+            (Self::Sum { scale, .. }, Some(CellValue::Decimal(text)))
+            | (Self::Mean { scale, .. }, Some(CellValue::Decimal(text))) => {
+                is_decimal_text(text, *scale)
+            }
+            (Self::Mean { .. }, None) => true,
+            _ => false,
+        }
+    }
+}
+
+fn zero_decimal(scale: u8) -> String {
+    if scale == 0 {
+        "0".to_owned()
+    } else {
+        format!("0.{}", "0".repeat(usize::from(scale)))
+    }
+}
+
+/// True when `text` is a plain decimal, `-?(0|[1-9][0-9]*)(\.[0-9]+)?`, with
+/// exactly `scale` fractional digits.
+pub fn is_decimal_text(text: &str, scale: u8) -> bool {
+    let unsigned = text.strip_prefix('-').unwrap_or(text);
+    let (integer, fraction) = match unsigned.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (unsigned, None),
+    };
+    let digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    !integer.is_empty()
+        && digits(integer)
+        && (integer == "0" || !integer.starts_with('0'))
+        && match fraction {
+            Some(fraction) => {
+                usize::from(scale) > 0 && fraction.len() == usize::from(scale) && digits(fraction)
+            }
+            None => scale == 0,
+        }
+}
+
+/// The most characters a sum or mean over a field of `field_type` can take as a
+/// decimal string: every digit, the point when there are fractional digits, and
+/// the sign. A count, and a field that is not `int64` or `decimal`, has none.
+///
+/// - A sum adds at most 10^19 values (one per record, bounded by an `int64` row
+///   count), so it gains 19 integer digits over the field's `p - s` (19 for
+///   `int64`) and keeps the field's `s` fractional digits.
+/// - A mean never exceeds the field's largest value in magnitude, so it keeps the
+///   field's integer digits, plus one when a scale below the field's rounds
+///   99.99 up to 100, and has the measure's `scale` fractional digits.
+///
+/// The compiler sizes its byte bound with this, and the runtime refuses a value
+/// longer than it.
+pub fn maximum_decimal_characters(
+    measure: &Measure,
+    field_type: &FieldTypeSource,
+) -> Option<usize> {
+    let (integer_digits, field_scale) = match field_type {
+        FieldTypeSource::Int64 => (19_usize, 0_usize),
+        FieldTypeSource::Decimal {
+            precision, scale, ..
+        } => (
+            usize::from(*precision).saturating_sub(usize::from(*scale)),
+            usize::from(*scale),
+        ),
+        _ => return None,
+    };
+    let (extra_integer_digits, scale) = match measure {
+        Measure::Count { .. } => return None,
+        Measure::Sum { scale, .. } => (19, usize::from(*scale)),
+        Measure::Mean { scale, .. } => (
+            usize::from(usize::from(*scale) < field_scale),
+            usize::from(*scale),
+        ),
+    };
+    let point = usize::from(scale > 0);
+    Some(integer_digits + extra_integer_digits + scale + point + 1)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +421,12 @@ pub enum StatisticsError {
     InconsistentTotal { dataset: String },
     #[error("the statistical dataset has an invalid dimension domain for `{dimension}`")]
     InvalidDimensionDomain { dimension: String },
+    #[error("the statistical dataset `{dataset}` produced a row with the wrong number of values")]
+    MeasureValueCount { dataset: String },
+    #[error(
+        "the statistical dataset `{dataset}` produced an invalid value for measure `{measure}`"
+    )]
+    InvalidMeasureValue { dataset: String, measure: String },
     #[error("statistical count arithmetic overflowed")]
     CountOverflow,
     #[error("minimumCount and roundingBase must each be at least 2")]
@@ -410,7 +541,7 @@ pub fn build_exact_cells(
     }
 
     // The database returns base cells and total cells alike, each a finished value.
-    let mut returned = BTreeMap::<(String, Vec<String>), u64>::new();
+    let mut returned = BTreeMap::<(String, Vec<String>), &[Option<CellValue>]>::new();
     for row in grouped {
         if !period_codes.contains(row.period.as_str()) {
             return Err(StatisticsError::UnknownPeriod {
@@ -430,8 +561,23 @@ pub fn build_exact_cells(
                 });
             }
         }
+        if row.values.len() != measures.len() {
+            return Err(StatisticsError::MeasureValueCount {
+                dataset: dataset.to_owned(),
+            });
+        }
+        if let Some((measure, _)) = measures
+            .iter()
+            .zip(&row.values)
+            .find(|(measure, value)| !measure.admits(value))
+        {
+            return Err(StatisticsError::InvalidMeasureValue {
+                dataset: dataset.to_owned(),
+                measure: measure.id().to_owned(),
+            });
+        }
         if returned
-            .insert((row.period.clone(), row.codes.clone()), row.value)
+            .insert((row.period.clone(), row.codes.clone()), &row.values)
             .is_some()
         {
             return Err(StatisticsError::DuplicateGroupedCell {
@@ -440,17 +586,36 @@ pub fn build_exact_cells(
         }
     }
 
-    let mut values = BTreeMap::<(String, Vec<String>), u64>::new();
+    // A cell the database returned no row for has no records: its measures take
+    // their empty value.
+    let mut values = BTreeMap::<(String, Vec<String>), Vec<Option<CellValue>>>::new();
     for period in periods {
         for_each_combination(&output_codes, |codes| {
-            let value = returned
-                .get(&(period.code.clone(), codes.clone()))
-                .copied()
-                .unwrap_or(0);
-            values.insert((period.code.clone(), codes), value);
+            let row = match returned.get(&(period.code.clone(), codes.clone())) {
+                Some(row) => row.to_vec(),
+                None => measures.iter().map(Measure::empty_value).collect(),
+            };
+            values.insert((period.code.clone(), codes), row);
         });
     }
-    check_totals(dataset, periods, &base_codes, &output_codes, &values)?;
+    // Only counts add up across totals; a sum has its own database total and a
+    // mean does not add up at all.
+    for (index, measure) in measures.iter().enumerate() {
+        if !matches!(measure, Measure::Count { .. }) {
+            continue;
+        }
+        let mut counts = BTreeMap::new();
+        for (key, row) in &values {
+            let Some(CellValue::Count(count)) = row[index] else {
+                return Err(StatisticsError::InvalidMeasureValue {
+                    dataset: dataset.to_owned(),
+                    measure: measure.id().to_owned(),
+                });
+            };
+            counts.insert(key.clone(), count);
+        }
+        check_totals(dataset, periods, &base_codes, &output_codes, &counts)?;
+    }
 
     let mut cells = Vec::with_capacity(total_cells);
     for period in periods {
@@ -460,21 +625,19 @@ pub fn build_exact_cells(
                 .zip(&codes)
                 .map(|(dimension, code)| (dimension.field.clone(), code.clone()))
                 .collect();
-            let value = values
-                .get(&(period.code.clone(), codes))
-                .copied()
-                .unwrap_or(0);
-            // Every measure is a count, which reads the grouped row counts.
-            for measure in measures {
-                match measure.measure_type {
-                    MeasureType::Count => cells.push(Cell {
-                        period: period.code.clone(),
-                        dimensions: dimensions_map.clone(),
-                        measure: measure.id.clone(),
-                        value: Some(value),
-                        status: CellStatus::Exact,
-                    }),
-                }
+            let row = &values[&(period.code.clone(), codes)];
+            for (measure, value) in measures.iter().zip(row) {
+                cells.push(Cell {
+                    period: period.code.clone(),
+                    dimensions: dimensions_map.clone(),
+                    measure: measure.id().to_owned(),
+                    value: value.clone(),
+                    status: if value.is_some() {
+                        CellStatus::Exact
+                    } else {
+                        CellStatus::NotApplicable
+                    },
+                });
             }
         });
     }
@@ -489,16 +652,21 @@ pub fn apply_disclosure(
         return Err(StatisticsError::InvalidDisclosureParameters);
     }
     for cell in cells {
-        let value = cell.value.ok_or(StatisticsError::InvalidDocument(
-            "disclosure control requires exact input cells",
-        ))?;
+        let Some(CellValue::Count(value)) = cell.value else {
+            return Err(StatisticsError::InvalidDocument(
+                "disclosure control requires exact count cells",
+            ));
+        };
         if value == 0 {
             cell.status = CellStatus::Exact;
         } else if value < parameters.minimum_count {
             cell.value = None;
             cell.status = CellStatus::Suppressed;
         } else {
-            cell.value = Some(round_halves_up(value, parameters.rounding_base)?);
+            cell.value = Some(CellValue::Count(round_halves_up(
+                value,
+                parameters.rounding_base,
+            )?));
             cell.status = CellStatus::Rounded;
         }
     }
@@ -579,16 +747,17 @@ pub fn document_csv(document: &StatisticsDocument) -> Result<Vec<u8>, Statistics
             );
         }
         row.push(cell.measure.clone());
-        row.push(
-            cell.value
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-        );
+        row.push(match &cell.value {
+            Some(CellValue::Count(count)) => count.to_string(),
+            Some(CellValue::Decimal(decimal)) => decimal.clone(),
+            None => String::new(),
+        });
         row.push(
             match cell.status {
                 CellStatus::Exact => "exact",
                 CellStatus::Suppressed => "suppressed",
                 CellStatus::Rounded => "rounded",
+                CellStatus::NotApplicable => "not-applicable",
             }
             .to_owned(),
         );
@@ -724,7 +893,7 @@ fn validate_dimensions(dimensions: &[DimensionDomain]) -> Result<(), StatisticsE
 }
 
 fn validate_measures(measures: &[Measure]) -> Result<(), StatisticsError> {
-    let ids: BTreeSet<&str> = measures.iter().map(|measure| measure.id.as_str()).collect();
+    let ids: BTreeSet<&str> = measures.iter().map(Measure::id).collect();
     if measures.is_empty() || ids.len() != measures.len() || ids.contains("") {
         return Err(StatisticsError::InvalidDocument(
             "measures must be a non-empty list of unique ids",
@@ -885,11 +1054,11 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
         ));
     }
     validate_measures(&document.dataset.measures)?;
-    let measure_ids: BTreeSet<&str> = document
+    let measures: BTreeMap<&str, &Measure> = document
         .dataset
         .measures
         .iter()
-        .map(|measure| measure.id.as_str())
+        .map(|measure| (measure.id(), measure))
         .collect();
     let mut seen_cells = BTreeSet::new();
     for cell in &document.cells {
@@ -908,24 +1077,31 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
                 "each cell must carry exactly the declared dimensions",
             ));
         }
-        if !measure_ids.contains(cell.measure.as_str()) {
+        let Some(measure) = measures.get(cell.measure.as_str()) else {
             return Err(StatisticsError::InvalidDocument(
                 "a cell names a measure the dataset does not declare",
             ));
-        }
+        };
         if !seen_cells.insert((&cell.period, &cell.dimensions, &cell.measure)) {
             return Err(StatisticsError::InvalidDocument(
                 "a period, dimension combination, and measure appears more than once",
             ));
         }
-        match (cell.status, cell.value) {
-            (CellStatus::Suppressed, None) | (CellStatus::Exact | CellStatus::Rounded, Some(_)) => {
-            }
+        match (cell.status, &cell.value) {
+            (CellStatus::Suppressed | CellStatus::NotApplicable, None)
+            | (CellStatus::Exact | CellStatus::Rounded, Some(_)) => {}
             _ => {
                 return Err(StatisticsError::InvalidDocument(
                     "cell value and status disagree",
                 ))
             }
+        }
+        // A suppressed cell withholds a value its measure would admit; any other
+        // cell carries one the measure admits, and only a mean admits none.
+        if cell.status != CellStatus::Suppressed && !measure.admits(&cell.value) {
+            return Err(StatisticsError::InvalidDocument(
+                "a cell value does not fit its measure's type and scale",
+            ));
         }
     }
     Ok(())
