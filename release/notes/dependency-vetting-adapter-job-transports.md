@@ -19,9 +19,9 @@ reads items from two transports that no existing workspace crate provides:
   feature. The host key is pinned before any credential is resolved or sent.
 
 Neither feature is in `default`, and neither is linked by the facade or the
-engine's default build. The selection rationale is in
-`products/adapter/CONCEPT.md` (the job-source decisions); these crates are
-runtime dependencies of the job host only.
+engine's default build. These crates are runtime
+dependencies of the job host only; job sources are described at
+https://docs.registrystack.org/configure/adapter-ingestion-jobs/.
 
 ## Package and source
 

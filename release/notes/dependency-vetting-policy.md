@@ -41,21 +41,11 @@ ignore must be scoped in the relevant `deny.toml` file with:
 - the reason the current release accepts the risk;
 - the trigger for removing or re-reviewing the ignore.
 
-The repository currently carries five `deny.toml` files:
-
-- `deny.toml`;
-- `crates/registry-relay/deny.toml`;
-- `products/platform/deny.toml`;
-- `products/platform/templates/deny.toml`;
-- `products/manifest/deny.toml`.
-
-These files govern different resolved product graphs. Keep common license,
-registry, and ban policy aligned where the product contract is the same, but
-scope advisory exceptions and Git source allowances to dependencies actually
-present in the graph governed by that file. Do not copy an exception or trusted
-source into a product or template pre-emptively. Deliberate differences must be
-documented in the changed file. The platform product policy and its published
-template are byte-aligned by `products/platform/scripts/check-hygiene-alignment.sh`.
+The repository carries one `deny.toml`, at the root, and it governs the locked
+workspace dependency graph. Scope advisory exceptions and Git source allowances
+to dependencies actually present in that graph. Do not copy an exception or
+trusted source into the file pre-emptively. Deliberate differences from common
+license, registry, and ban policy must be documented in the changed file.
 
 ## Git Dependencies
 

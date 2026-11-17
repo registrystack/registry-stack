@@ -80,7 +80,6 @@ require_path "registry-casework core crate" "${stack_root}/crates/registry-casew
 require_path "registry-casework BReg source adapter crate" "${stack_root}/crates/registry-casework-breg"
 require_path "registry-casework runtime crate" "${stack_root}/crates/registry-casework"
 require_path "registry-coordinator runtime and operator crate" "${stack_root}/crates/registry-coordinator"
-require_path "registry-coordinator deployment contract" "${stack_root}/products/coordinator/DEPLOYMENT.md"
 require_path "coordinator service binary source" "${stack_root}/crates/registry-coordinator/src/main.rs"
 require_path "coordinatorctl operator binary source" "${stack_root}/crates/registry-coordinator/src/ctl.rs"
 require_path "registry-coordinator runtime schema" "${stack_root}/products/coordinator/generated/runtime/runtime.schema.json"

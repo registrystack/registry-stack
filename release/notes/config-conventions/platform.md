@@ -295,4 +295,4 @@ there is no released installer or image. Existing citizen operators should keep
 `breg-mcp`. Optional conversion changes the envelope, uses `perPrincipal`, and
 moves BReg blocks into an explicit binding. The generic audit schema, event and
 pseudonym namespaces differ. Preserve the audit key for retry correlation.
-See [the design record](../../../products/platform/MCP-GATEWAY.md).
+See [Configure the MCP gateway](https://docs.registrystack.org/configure/breg-mcp/).
