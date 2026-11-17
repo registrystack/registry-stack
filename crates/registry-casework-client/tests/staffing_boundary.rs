@@ -726,3 +726,105 @@ async fn uuid_paged_reads_refuse_a_nil_cursor() {
     }
     server.abort();
 }
+
+#[tokio::test]
+async fn plain_reads_refuse_non_200_success_in_one_exchange() {
+    // (status, answer with a problem document, answer with a malformed 200 body)
+    let cases: [(u16, bool, bool); 8] = [
+        (201, false, false),
+        (202, false, false),
+        (204, false, false),
+        (206, false, false),
+        (403, true, false),
+        (404, true, false),
+        (500, true, false),
+        (200, false, true),
+    ];
+    for (status, problem, malformed) in cases {
+        for list in [false, true] {
+            let label = format!("status {status} malformed {malformed} list {list}");
+            let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = seen.clone();
+            let app = Router::new().fallback(get(move |uri: Uri| {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let code = StatusCode::from_u16(status).unwrap();
+                    if problem {
+                        let path = "review/future-safe";
+                        let body = format!(
+                            "{{\"type\":\"https://id.registrystack.org/problems/registry-casework/{path}\",\"title\":\"Refused\",\"status\":{status},\"detail\":\"Safe detail.\",\"code\":\"review.future-safe\",\"traceId\":\"0123456789abcdef0123456789abcdef\"}}"
+                        );
+                        return (
+                            code,
+                            [
+                                ("content-type", "application/problem+json"),
+                                ("traceparent", TRACE),
+                            ],
+                            body,
+                        );
+                    }
+                    let value = if malformed {
+                        json!({"unexpected":"shape"})
+                    } else if uri.path().ends_with(&Uuid::from_u128(1).to_string()) {
+                        task()
+                    } else {
+                        json!({"items":[task()],"status":"complete"})
+                    };
+                    (
+                        code,
+                        [("content-type", "application/json"), ("traceparent", TRACE)],
+                        value.to_string(),
+                    )
+                }
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let client = CaseworkClient::new(CaseworkClientConfig::new(
+                Url::parse(&format!("http://{address}")).unwrap(),
+            ))
+            .unwrap();
+            let token = BearerToken::new("synthetic").unwrap();
+            let auth = CaseworkAuth::new(&token, "staff");
+            let error = if list {
+                let query = ReviewStaffingQuery {
+                    ownership: Some(ReviewTaskOwnership::AssignedToMe),
+                    ..Default::default()
+                };
+                client.review_tasks(auth, &query).await.map(|_| ())
+            } else {
+                client
+                    .review_task(auth, Uuid::from_u128(1))
+                    .await
+                    .map(|_| ())
+            }
+            .expect_err(&label);
+            if problem {
+                assert!(
+                    matches!(&error, CaseworkClientError::Problem { status: got, .. } if *got == status),
+                    "{label}: {error:?}"
+                );
+            } else if malformed {
+                assert!(
+                    matches!(
+                        &error,
+                        CaseworkClientError::Protocol {
+                            status: 200,
+                            failure: CaseworkProtocolFailure::Body,
+                            ..
+                        }
+                    ),
+                    "{label}: {error:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&error, CaseworkClientError::Protocol { status: got, .. } if *got == status),
+                    "{label}: {error:?}"
+                );
+            }
+            assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1, "{label}");
+            server.abort();
+        }
+    }
+}

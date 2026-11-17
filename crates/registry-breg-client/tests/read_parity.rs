@@ -354,3 +354,116 @@ async fn read_routes_retain_operation_representation_and_snapshot_identity() {
         .iter()
         .any(|value| value.ends_with(&format!("/companies/{RECORD_ID}"))));
 }
+
+fn problem_for(status: u16) -> Response<Body> {
+    let code = registry_breg_client::BRegProblemCode::ALL
+        .into_iter()
+        .find(|code| code.status() == status)
+        .expect("a registered problem code for the status");
+    let body = json!({
+        "type": format!(
+            "https://id.registrystack.org/problems/registry-breg/{}",
+            code.code().replace('.', "/")
+        ),
+        "title": match status { 403 => "Forbidden", 404 => "Not Found", _ => "Internal Server Error" },
+        "status": status,
+        "detail": "The request was refused.",
+        "code": code.code(),
+        "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+    });
+    let mut reply = response("application/problem+json", body, false, false);
+    *reply.status_mut() = StatusCode::from_u16(status).unwrap();
+    reply
+        .headers_mut()
+        .insert("cache-control", "no-store".parse().unwrap());
+    reply
+}
+
+#[tokio::test]
+async fn plain_reads_refuse_non_200_success_in_one_exchange() {
+    // (status, answer with a problem document, answer with a malformed 200 body)
+    let cases: [(u16, bool, bool); 8] = [
+        (201, false, false),
+        (202, false, false),
+        (204, false, false),
+        (206, false, false),
+        (403, true, false),
+        (404, true, false),
+        (500, true, false),
+        (200, false, true),
+    ];
+    for (status, problem, malformed) in cases {
+        for list in [false, true] {
+            let label = format!("status {status} malformed {malformed} list {list}");
+            let seen = Arc::new(AtomicUsize::new(0));
+            let counter = seen.clone();
+            let app = Router::new().fallback(any(move |request: Request<Body>| {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    if problem {
+                        return problem_for(status);
+                    }
+                    let single = request.uri().path().ends_with(RECORD_ID);
+                    let value = if malformed {
+                        json!({"unexpected":"shape"})
+                    } else if single {
+                        json!({"data":record(),"meta":meta()})
+                    } else {
+                        json!({"items":[record()],"pageInfo":{"nextCursor":null},"meta":meta()})
+                    };
+                    let mut reply = response("application/json", value, true, single);
+                    *reply.status_mut() = StatusCode::from_u16(status).unwrap();
+                    reply
+                }
+            }));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+                Url::parse(&format!("http://{address}/prefix")).unwrap(),
+            ))
+            .unwrap();
+            let error = if list {
+                client
+                    .list_records(
+                        "companies",
+                        &registry_breg_client::BRegListRequest::default(),
+                    )
+                    .await
+                    .map(|_| ())
+            } else {
+                client
+                    .get_record("companies", RECORD_ID, &BRegRecordOptions::default())
+                    .await
+                    .map(|_| ())
+            }
+            .expect_err(&label);
+            if problem {
+                assert!(
+                    matches!(&error, BaseRegistryClientError::Problem { status: got, .. } if *got == status),
+                    "{label}: {error:?}"
+                );
+            } else if malformed {
+                assert!(
+                    matches!(
+                        &error,
+                        BaseRegistryClientError::Protocol {
+                            status: 200,
+                            failure: registry_breg_client::BRegProtocolFailure::Body,
+                            ..
+                        }
+                    ),
+                    "{label}: {error:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&error, BaseRegistryClientError::Protocol { status: got, .. } if *got == status),
+                    "{label}: {error:?}"
+                );
+            }
+            assert_eq!(seen.load(Ordering::SeqCst), 1, "{label}");
+            server.abort();
+        }
+    }
+}
