@@ -2,7 +2,7 @@
 # These retired fields are refused by the current bundle grammar.
 contract: registry.evidence.fixed-http-json-source/v1
 status: retired
-replacement: ../../adapter/CONCEPT.md
+replacement: https://docs.registrystack.org/configure/adapter/
 ownership:
   governed_bundle:
     - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
@@ -309,5 +309,3 @@ named_connections:
 fixtures:
   postures: ../fixtures/conformance/acquisition-postures.yaml
   oauth_credential_redaction: ../fixtures/conformance/oauth-credential-redaction.yaml
-  shapes: ../fixtures/source-shapes/
-  required_shape_outcomes: [zero, one, multiple, missing-fact, error-envelope]

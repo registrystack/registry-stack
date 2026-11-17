@@ -178,9 +178,8 @@ their paths, not their contents.
   runtime's ceiling.
 - Every successful request makes two durable audit appends before the
   response is released. On macOS, `sync_all` is `F_FULLFSYNC`, a real device
-  barrier, so local figures are directional. See
-  `products/evidence/PERFORMANCE.md`, and re-run candidate capacity claims on
-  a representative Linux host before citing them.
+  barrier, so local figures are directional. Re-run candidate capacity claims
+  on a representative Linux host before citing them.
 - The issuer runs in Docker; on macOS that is a VM. It is used only between
   runs, so it does not affect request latency.
 - A 429 in `steady` or `burst` means the offered rate outran the load

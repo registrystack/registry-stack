@@ -286,5 +286,5 @@ products/evidence/.sd-jwt-vc-demo/:
   harness.log               the demo server's own checks
 
 session.env holds only the short-lived synthetic bearer token. Do not paste it
-anywhere. Walkthrough and explanation: products/evidence/SD-JWT-VC-DEMO.md
+anywhere. Each step printed the exact command it ran; rerun the script to replay the sequence.
 SUMMARY

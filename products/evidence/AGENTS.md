@@ -70,29 +70,6 @@ may use its closed generic synthetic-data vocabulary and the authoring-only
 `x-evidencectl-mock` extension. That exception grants no runtime capability and
 permits no source-product-specific behavior. Do not add future-profile stubs.
 
-## Pack acquisition refactor
-
-The acquisition switch replaces authored and compiled source formats with
-reviewed pack/route bindings before the source format is promised for 1.0.
-Use Adapter core and the listener-free engine, never an Adapter facade
-deployment or ingestion job. Preserve Evidence-owned complete grants, subject
-binding, signing, exact-byte disclosure audit and the public verifier contract.
-The legacy fixed-source descriptions below identify the implementation being
-replaced; do not add new integrations to a second source execution language.
-
-A binding governs permitted destinations and auth/trust selections; runtime
-configuration supplies their material and finite operational tuning. Capture
-effective authority for the process lifetime. Reviewed read retries and paging
-share one acquisition budget/deadline; five data operations and 30 seconds are
-configurable defaults. Durable access intent precedes credentials and source
-effects, and terminal audit gates release. Per-send audit is optional.
-
-Migrate maintained consumers manually and remove the legacy executor/contracts
-once retained outcomes pass. Do not build a converter or compatibility runtime.
-Preserve meaningful negative tests and update security traceability when a
-mechanism changes. Keep signed upstream verification and trusted expiry in the
-Evidence host; pack scripts cannot manufacture either.
-
 ## Sources and verification
 
 All commands below run from the monorepo root. Select focused crate tests and
@@ -100,12 +77,12 @@ the gates for the surface changed; CI owns the broader regression matrix.
 
 | Change | Read | Verify |
 |---|---|---|
-| Runtime, HTTP, authorization, response format | [CONCEPT.md](CONCEPT.md), relevant [contracts](contracts/README.md), security invariant and test traceability catalogs there | Focused `registry-evidence` tests; `products/evidence/scripts/check-contracts.sh` for contract changes |
-| Source or Rhai behavior | [ADAPTER-API.md](reference/request-adapter/ADAPTER-API.md), relevant source/selector/ABI contracts, [SOURCE-TESTING.md](SOURCE-TESTING.md) | Relevant source and lifecycle tests; `products/evidence/scripts/check-source-neutrality.sh` |
-| Deployment and configuration | [OPERATOR-CONTRACT.md](OPERATOR-CONTRACT.md), [deployment CONFIG.md](reference/request-adapter/deployment-projects/CONFIG.md), [FIXTURES.md](reference/request-adapter/deployment-projects/FIXTURES.md) | Focused config/fixture tests and `products/evidence/scripts/check-config-key-paths.sh` |
+| Runtime, HTTP, authorization, response format | Relevant [contracts](contracts/README.md), security invariant and test traceability catalogs there | Focused `registry-evidence` tests; `products/evidence/scripts/check-contracts.sh` for contract changes |
+| Source or Rhai behavior | The [derivation script API](https://docs.registrystack.org/reference/evidence-request-adapter-api/) and the relevant source/selector/ABI contracts | Relevant source and lifecycle tests; `products/evidence/scripts/check-source-neutrality.sh` |
+| Deployment and configuration | [OPERATOR-CONTRACT.md](OPERATOR-CONTRACT.md), [deployment CONFIG.md](reference/request-adapter/deployment-projects/CONFIG.md) and the [fixture contract](https://docs.registrystack.org/reference/evidence-fixtures/) | Focused config/fixture tests and `products/evidence/scripts/check-config-key-paths.sh` |
 | Verifier or client | Verifier/client crate documentation and [client guidance](../../crates/CLIENTS.md) | Changed-crate tests; `products/evidence/scripts/check-verifier-portability.sh`; neutrality gate |
-| Credential status ledger or OID4VCI store | [CONCEPT.md](CONCEPT.md) section 15.9 | Changed-crate tests; with `--features postgres-test` and a disposable PostgreSQL server, `registry-evidence` `--test status_ledger --test status_transitions --test status_privacy` (`EVIDENCE_STATUS_TEST_DATABASE_URL`) and `registry-evidence-oid4vci` `--test store_contract` (`EVIDENCE_OID4VCI_TEST_DATABASE_URL`) |
-| Holder-presented channel or OpenID4VP verifier | [CONCEPT.md](CONCEPT.md) section 15.10, [contracts/oid4vp-profile.yaml](contracts/oid4vp-profile.yaml), and the [verifier README](../../crates/registry-evidence-oid4vp/README.md) | Changed-crate tests; with `EVIDENCE_BIN` and `EVIDENCECTL_BIN` built, `registry-evidence-oid4vp` `--test evidence_journey a_presented_credential_becomes_a_verified_assertion` and `--test device_run a_simulated_wallet_completes_the_device_run_harness`, each with `-- --ignored --exact`; `products/evidence/scripts/check-contracts.sh`, `check-verifier-portability.sh`, and the neutrality gate |
+| Credential status ledger or OID4VCI store | `crates/registry-evidence/src/status/` and its `tests/status_*.rs` tests (the version 2 credential status profile is not yet published as a contract) | Changed-crate tests; with `--features postgres-test` and a disposable PostgreSQL server, `registry-evidence` `--test status_ledger --test status_transitions --test status_privacy` (`EVIDENCE_STATUS_TEST_DATABASE_URL`) and `registry-evidence-oid4vci` `--test store_contract` (`EVIDENCE_OID4VCI_TEST_DATABASE_URL`) |
+| Holder-presented channel or OpenID4VP verifier | [contracts/oid4vp-profile.yaml](contracts/oid4vp-profile.yaml), and the [verifier README](../../crates/registry-evidence-oid4vp/README.md) | Changed-crate tests; with `EVIDENCE_BIN` and `EVIDENCECTL_BIN` built, `registry-evidence-oid4vp` `--test evidence_journey a_presented_credential_becomes_a_verified_assertion` and `--test device_run a_simulated_wallet_completes_the_device_run_harness`, each with `-- --ignored --exact`; `products/evidence/scripts/check-contracts.sh`, `check-verifier-portability.sh`, and the neutrality gate |
 | Authoring or editor model | [authoring CONFIG.md](reference/authoring-projects/CONFIG.md) and authoring crate types | Relevant authoring/editor tests; `products/evidence/scripts/check-authoring-schema.sh`, `products/evidence/scripts/check-authoring-no-io.sh`, config-key-path and neutrality gates |
 
 Use `cargo test --locked -p <changed-crate>` with a focused test filter while
@@ -130,10 +107,44 @@ shared authoring diagnostics so a new institutional source does not require a
 product fork, a new service, or repeated configuration.
 
 Source compatibility uses sanitized local mocks. Live demo tests are optional,
-ignored, read-only local checks under `SOURCE-TESTING.md`. Never retain secrets,
+ignored, read-only, non-gating local checks run only after the deterministic
+mocks pass and only with approved synthetic selectors and securely stored
+credentials (see Live public-demo checks below). Never retain secrets,
 tokens, live responses, raw selectors, source values, low-entropy per-field
 hashes, or private subject identifiers in tracked files, logs, errors, or
 snapshots, and do not pass them on command lines.
+
+Evidence must not depend on `registry-notary*`, `registry-platform-oid4vci`,
+`registry-platform-replay`, `registry-platform-sts`, or Registry Manifest.
+
+## Live public-demo checks
+
+Live checks live in the ignored `live_sources` test target of
+`registry-evidence`. Run them in this order, and only after the package suite
+passes:
+
+```sh
+cargo test --locked -p registry-evidence
+cargo test --locked -p registry-evidence --test live_sources dhis2 -- --ignored
+cargo test --locked -p registry-evidence --test live_sources opencrvs -- --ignored --exact
+```
+
+- A live test skips, rather than improvises, when required values or an
+  approved synthetic selector are absent.
+- Live tests are read-only. They may authenticate, request a token and perform
+  a bounded record lookup. They must not create, update, register, certify,
+  print, archive or delete records, and must not use a browser session, a human
+  login or interactive two-factor credentials.
+- OpenCRVS may record the system-client search in its remote audit log. That
+  server-side effect and any request quota are part of the operator's decision
+  to run the test.
+- Selector values and any alternative tracking or national identifier stay
+  local. They never appear in a fixture, test name, snapshot, log, audit
+  record, error or command line.
+- A pass shows only that the selected demo version still accepts the documented
+  authentication and bounded lookup shape. A passing live check must not be
+  described as certification of a complete deployment project; deterministic
+  mocks and executable project fixtures own those contracts.
 
 The existing documentation-only exceptions remain: tutorials may state the
 provider-published shared credentials for the DHIS2 demo at

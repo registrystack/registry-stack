@@ -59,11 +59,11 @@ const TARGET_REMOVED_KEYS: &[RemovedKey<'static>] = &[
         replacement: RETIRED_CONNECTION_BUDGET,
     },
 ];
-const MOVED_ORIGIN: &str = "Move it to connections.<id>.endpoints.<pack endpoint id>.origin, one entry per endpoint the pack declares; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
-const MOVED_AUTHENTICATION: &str = "Move it unchanged to connections.<id>.endpoints.<pack endpoint id>.authentication; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
-const MOVED_TLS_TRUST_PROFILE: &str = "Move it to connections.<id>.endpoints.<pack endpoint id>.tlsTrustProfile; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
-const RETIRED_CONNECTION_CONCURRENCY: &str = "Delete it from the authored target; the operator sets concurrency in the runtime file, at sourceConnections.<id>.endpoints.<id>.maximumConcurrency (1 to 256, default 8). Bound each attempt with connections.<id>.endpoints.<pack endpoint id>.attemptTimeoutMilliseconds and the whole acquisition with sourceAcquisition; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
-const RETIRED_CONNECTION_BUDGET: &str = "Delete it; a connection no longer sets this budget. Bound each attempt with connections.<id>.endpoints.<pack endpoint id>.attemptTimeoutMilliseconds and the whole acquisition with sourceAcquisition; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const MOVED_ORIGIN: &str = "Move it to connections.<id>.endpoints.<pack endpoint id>.origin, one entry per endpoint the pack declares; see https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
+const MOVED_AUTHENTICATION: &str = "Move it unchanged to connections.<id>.endpoints.<pack endpoint id>.authentication; see https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
+const MOVED_TLS_TRUST_PROFILE: &str = "Move it to connections.<id>.endpoints.<pack endpoint id>.tlsTrustProfile; see https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
+const RETIRED_CONNECTION_CONCURRENCY: &str = "Delete it from the authored target; the operator sets concurrency in the runtime file, at sourceConnections.<id>.endpoints.<id>.maximumConcurrency (1 to 256, default 8). Bound each attempt with connections.<id>.endpoints.<pack endpoint id>.attemptTimeoutMilliseconds and the whole acquisition with sourceAcquisition; see https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
+const RETIRED_CONNECTION_BUDGET: &str = "Delete it; a connection no longer sets this budget. Bound each attempt with connections.<id>.endpoints.<pack endpoint id>.attemptTimeoutMilliseconds and the whole acquisition with sourceAcquisition; see https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
 pub const AUTHORITY: FormatSpec<'static> = FormatSpec {
     kind: AUTHORITY_KIND,
     envelope: EnvelopeRule::ApiVersionKind {

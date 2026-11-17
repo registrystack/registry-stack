@@ -1,6 +1,6 @@
 # Registry Evidence OID4VP
 
-`registry-evidence-oid4vp` is a supporting service beside Registry Evidence. It runs the wallet-facing OpenID4VP 1.0 exchange and holds a received presentation in memory until Evidence reads it; Evidence verifies the credential and signs the assertion (`products/evidence/CONCEPT.md` section 15.10).
+`registry-evidence-oid4vp` is a supporting service beside Registry Evidence. It runs the wallet-facing OpenID4VP 1.0 exchange and holds a received presentation in memory until Evidence reads it; Evidence verifies the credential and signs the assertion.
 
 ## Reads consume the result
 

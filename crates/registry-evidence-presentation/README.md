@@ -1,6 +1,6 @@
 # Registry Evidence Presentation
 
-`registry-evidence-presentation` verifies a credential that a holder presented from a wallet, for the Evidence holder-presented credential source (`products/evidence/CONCEPT.md` section 15.10). It performs no I/O and reads no clock: the caller supplies the presentation, the session context, the configured issuer trust, and the evaluation time.
+`registry-evidence-presentation` verifies a credential that a holder presented from a wallet, for the Evidence holder-presented credential source. It performs no I/O and reads no clock: the caller supplies the presentation, the session context, the configured issuer trust, and the evaluation time.
 
 ```rust
 verify_sd_jwt_vc(presentation, &ctx, &trust, &policy, now)

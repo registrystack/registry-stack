@@ -25,7 +25,8 @@ any third-party limitation is a failure. This is why CI does not run these
 networked checks by default and why the repository makes no compatibility
 claim merely because the harness exists.
 
-Run after producing a credential and trusted JWKS with the local demo:
+Run after producing a credential and trusted JWKS with the local demo,
+`products/evidence/scripts/sd-jwt-vc-demo.sh`:
 
 ```sh
 EVIDENCE_WALLET_COMPAT=1 \

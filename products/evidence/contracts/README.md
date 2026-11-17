@@ -79,8 +79,8 @@ The normative source set is:
   rule.
 
 The current trusted derivation ABI is defined in
-[`../reference/request-adapter/ADAPTER-API.md`](../reference/request-adapter/ADAPTER-API.md).
-Source acquisition and extraction use the [Adapter pack contract](../../adapter/CONCEPT.md);
+[derivation script API](https://docs.registrystack.org/reference/evidence-request-adapter-api/).
+Source acquisition and extraction use the [Adapter pack contract](https://docs.registrystack.org/configure/adapter-packs/);
 Evidence retains authorization, input minimization, fact validation, derivation,
 signing, and release audit. The deployment and fixture references under
 [`../reference/request-adapter/`](../reference/request-adapter/) describe the
@@ -93,48 +93,10 @@ and extraction are governed Adapter pack route logic; an Evidence bundle selects
 a pinned pack, route, reviewed connection and authorized selector inputs without
 reproducing that transport program.
 
-## Pre-1.0 definitions discovery migration
+The upgrade rules for the definitions response are in
+[Upgrade and retire a deployment](https://docs.registrystack.org/operate/advanced/upgrade-and-retire/#upgrade-the-evidence-definitions-response).
 
-Registry Stack deliberately retains the `registry.evidence-definitions/v1`
-identity while evolving the closed response before v1.0. The current shape adds
-the effective audience, a stable complete-definition handle, effective response
-formats, stable concept handles, required-output status, and bounded-list form
-metadata. It also makes `maximumHolderBoundBatchSize` explicit, and it states a
-concept's `form` as a mapping named by `type`: `{type: boolean}`, or
-`{type: list, items: string, minimumItems: 1, maximumItems: 8, unique: true}`
-with the list's members beside the tag. This is a pre-1.0
-breaking product improvement. A strict client or validator built against the
-older schema rejects the added members because that schema has
-`additionalProperties: false`.
-
-The governed `bounded-identifier` concept form adds exact, source-owned JSON
-string outputs with an immutable prefix and byte bounds. Its discovery and
-client-contract form is the existing `string`; relying parties that
-compare a request field must compare the complete value exactly. Existing
-controlled categories remain finite reviewed codelists. A deployment using the
-new form needs an Evidence Gateway and authoring-tool version that recognizes
-its bundle declaration.
-
-Upgrade Evidence Gateway and every Evidence client or protocol adapter that
-reads its definitions response together. The ceiling was published as
-`holderBoundBatchMaxSize` before the configuration conventions release and is
-`maximumHolderBoundBatchSize` from it on, with no alias on either side: the
-current Evidence client refuses a response carrying the old member as it
-refuses any unknown member, and an older strict client refuses the new one
-the same way. There is no interoperation window across that rename. The
-current client still reads a response with no ceiling member at all as `1`,
-the only safe inference for a deployment that predates batch-ceiling
-discovery; that default does not make any client able to read a response
-written for the other spelling.
-
-Access-attribution forwarding belongs to the reviewed protected-read host
-protocol selected by a pack endpoint. It requires a provider that explicitly
-trusts the authenticated Evidence service to supply the reserved requester and
-purpose headers. The retired inline `forwardAccessAttribution` Source member
-is not a configuration alias for that protocol.
-
-All schemas use source-neutral identifiers. Names of compatibility targets may
-appear only below `../fixtures/source-shapes/`. Acceptance-case vocabulary is
+All schemas use source-neutral identifiers. Acceptance-case vocabulary is
 confined to test-only bundles below `../fixtures/acceptance/`; it is not core
 Evidence vocabulary.
 
@@ -191,15 +153,14 @@ Evidence vocabulary.
     safe outer problem with no partial results.
 
 Version 1 stops before documents, credential issuance protocols and credential
-lifecycle (except the credential status profile of `CONCEPT.md` section 15.9), replay or nonce state beyond the stateless request-nonce echo and
+lifecycle (except the credential status profile, which is not yet published as a contract), replay or nonce state beyond the stateless request-nonce echo and
 comparison, server-issued challenges, OOTS, delegated agents, federation,
 workflow, a public requester-entitlement or definition catalog, a searchable,
 mutable, aggregate, or federated catalog, runtime bundle mutation, source
 planning, multi-source fulfillment, and a general policy engine. The SD-JWT VC
 response format is a serialization of the same assertion under
 `sd-jwt-vc-profile.yaml`; it introduces no offer, code, nonce, status, or
-persisted credential state; version 2, approved in `CONCEPT.md` section 15.9
-and not yet published, adds the status reference and the ledger, and nothing
+persisted credential state; version 2 adds the status reference and the ledger, and nothing
 else. Authenticated definition discovery is a closed projection of
 existing authority, not an authorization source or catalog. The separately
 packaged public provider advertisement exposes only closed service facts for

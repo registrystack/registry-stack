@@ -461,7 +461,7 @@ Derivation parameters are limited to bounded strings, safe integers, booleans,
 typed canonical decimals shaped as `{type: decimal, value: "..."}`, and arrays
 of typed decimal bucket boundaries. Adapter parameters use their separately
 closed JSON Schema and the narrower conversion described in
-[`ADAPTER-API.md`](../ADAPTER-API.md#inputs). Neither parameter map may contain
+[the derivation script API](https://docs.registrystack.org/reference/evidence-request-adapter-api/#inputs). Neither parameter map may contain
 secrets or runtime authority.
 
 ### Pack-owned provider protocols
@@ -731,7 +731,7 @@ derivation input and do not bound string length or array size individually
 by default). Reviewed-value schemas keep the
 stricter grammar: an exact required property set, with every reachable string,
 array, and number bounded, because they shape what a response may disclose.
-Fixtures use the exact contract in [`FIXTURES.md`](FIXTURES.md).
+Fixtures use the exact contract in [the fixture contract](https://docs.registrystack.org/reference/evidence-fixtures/).
 
 Codelists under `codelists/` open with the `apiVersion` and `kind` envelope,
 name their form with `type`, and use one of two closed YAML shapes:

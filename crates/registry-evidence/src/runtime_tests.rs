@@ -218,6 +218,24 @@ struct CountingAuthenticator {
 ///
 /// This intentionally uses the deterministic acceptance source and a static
 /// test JWKS. Live provider credentials are neither needed nor read here.
+///
+/// Run it from the repository root, then send the curl commands it prints from
+/// a second terminal:
+///
+/// ```text
+/// cargo test --locked -p registry-evidence \
+///   first_curl_exercises_and_verifies_the_evidence_server -- --ignored --nocapture
+/// ```
+///
+/// The harness writes `request.json` and `session.env` (only the short-lived
+/// synthetic bearer token) to the ignored, owner-only
+/// `products/evidence/.first-curl/`. It then waits up to three minutes each for
+/// `definitions.json` (a GET of `/v1/evidence-definitions`) and `response.json`
+/// (a POST of `request.json` to `/v1/evidence` with
+/// `Accept: application/jose+json`). An optional unsigned leg, saved as
+/// `response-unsigned.json` with
+/// `Accept: application/vnd.registrystack.evidence-unsigned+json`, must run
+/// before the signed POST because the harness stops once that one verifies.
 #[tokio::test]
 #[ignore = "operator-driven local curl checkpoint"]
 async fn first_curl_exercises_and_verifies_the_evidence_server() {
@@ -284,8 +302,16 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
         &format!("EVIDENCE_ACCESS_TOKEN={token}\n"),
     );
 
+    let state = "products/evidence/.first-curl";
     println!(
-        "Evidence first-curl server is ready at http://{address}. The ignored session.env contains only the short-lived synthetic bearer token. Use the plain curl command in products/evidence/FIRST-CURL-TEST.md."
+        "Evidence first-curl server is ready at http://{address}. The ignored session.env contains only the short-lived synthetic bearer token. From the repository root in a second terminal, run each step within three minutes:"
+    );
+    println!("  set -a; . {state}/session.env; set +a");
+    println!(
+        "  curl --fail-with-body --header \"Authorization: Bearer ${{EVIDENCE_ACCESS_TOKEN}}\" --header 'Accept: application/json' --output {state}/definitions.json http://{address}/v1/evidence-definitions"
+    );
+    println!(
+        "  curl --fail-with-body --request POST --header \"Authorization: Bearer ${{EVIDENCE_ACCESS_TOKEN}}\" --header 'Content-Type: application/json' --header 'Accept: application/jose+json' --data-binary @{state}/request.json --output {state}/response.json http://{address}/v1/evidence"
     );
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -8042,7 +8068,7 @@ async fn sd_jwt_signing_failure_no_fallback_format() {
     assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
 }
 
-/// Serve the operator-driven SD-JWT VC demo documented in `SD-JWT-VC-DEMO.md`.
+/// Serve the operator-driven SD-JWT VC demo driven by `products/evidence/scripts/sd-jwt-vc-demo.sh`.
 ///
 /// The immutable bundle and the one complete matched grant both enable the
 /// credential format, so one deterministic request is released twice: once as
@@ -8107,7 +8133,7 @@ async fn sd_jwt_vc_demo_serves_a_credential_for_curl() {
         .local_addr()
         .expect("listener address is available");
     println!(
-        "Evidence SD-JWT VC demo server is ready at http://{address}. The ignored session.env contains only the short-lived synthetic bearer token. Use the curl commands in products/evidence/SD-JWT-VC-DEMO.md."
+        "Evidence SD-JWT VC demo server is ready at http://{address}. The ignored session.env contains only the short-lived synthetic bearer token. Load session.env, then send curl requests to http://{address}/v1/evidence with an Authorization: Bearer header and Accept set to application/jose+json or application/dc+sd-jwt; run products/evidence/scripts/sd-jwt-vc-demo.sh for the full sequence."
     );
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();

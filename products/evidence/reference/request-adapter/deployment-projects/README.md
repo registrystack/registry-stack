@@ -28,7 +28,7 @@ resolve deployment credentials, write audit, start HTTP, or contact the source;
 package and HTTP-path tests cover those runtime boundaries. An adopter must run
 the same fixtures with `evidence evaluate` before deployment, and can add
 `--explain` to a run that failed to see how far each case got, described in
-[Explaining a failing run](FIXTURES.md#explaining-a-failing-run).
+[Explain a failing run](https://docs.registrystack.org/reference/evidence-fixtures/#explain-a-failing-run).
 
 ## Projects
 
@@ -105,7 +105,7 @@ distinguish zero, one, and multiple matches in one bounded request is not a
 Version 1 integration even if its JSON can otherwise be mapped by Rhai.
 
 [`CONFIG.md`](CONFIG.md) defines the Version 1 configuration vocabulary,
-ownership split, enumerations, and optionality. [`FIXTURES.md`](FIXTURES.md)
+ownership split, enumerations, and optionality. [The fixture contract](https://docs.registrystack.org/reference/evidence-fixtures/)
 defines the executable fixture vocabulary and exact comparison rules. Those
 two references are normative for these projects; the project READMEs explain
 only deployment-specific choices.

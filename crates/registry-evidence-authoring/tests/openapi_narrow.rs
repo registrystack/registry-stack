@@ -3,8 +3,7 @@
 //!
 //! The inputs are built here as JSON literals rather than loaded through the
 //! OpenAPI stage, so a failure names a narrowing rule and never a loader bug.
-//! Every expectation is checked against the shipped shapes under
-//! `products/evidence/fixtures/source-shapes/*/schemas/response.schema.yaml`:
+//! Every expectation covers a shape a response schema takes in practice:
 //! closed objects, `required` as the spec-guaranteed subset of kept members,
 //! bounded arrays and strings, and the `[T, "null"]` response pair.
 

@@ -1,7 +1,5 @@
 # Evidence Version 1 operator contract
 
-Status: Partially implemented Version 1 operator contract
-
 This document defines the supported native deployment and operator duties for
 the Evidence Version 1 `evidence` binary.
 
@@ -51,9 +49,9 @@ authentication profile admits exactly one token issuer and one set of claim
 names, so a second issuer, or one issuer whose clients carry the same authority
 under different claim names, requires a second deployment even when the
 operators trust each other. Evidence Version 1 has no application database, unless
-status is enabled (`CONCEPT.md` section 15.9), and persists no selector, source,
-evidence, or response data; the status ledger holds keyed pseudonyms and
-digests, never raw values. No runtime can enable status yet. An external durable
+status is enabled, and persists no selector, source, evidence, or response
+data; the status ledger holds keyed pseudonyms and digests, never raw values.
+No runtime can enable status yet. An external durable
 audit service may own its own storage.
 
 A gateway may provide publication, protocol integration, routing, and
@@ -216,9 +214,9 @@ the audit path persistent writable storage while serving, activates target
 authority explicitly through a one-shot service, mounts that activated state
 read-only into the serving process, binds Evidence privately, and
 keeps public TLS and routing operator-controlled. A deployment that enables the
-status module of `CONCEPT.md` section 15.9 adds a PostgreSQL service, and
-exposes the public status list route only through a path-restricted proxy that
-forwards `GET` on the list path and nothing else. The OIDC issuer retains its
+status module adds a PostgreSQL service, and exposes the public status list
+route only through a path-restricted proxy that forwards `GET` on the list path
+and nothing else. The OIDC issuer retains its
 public HTTPS issuer identity and JWKS URI: internal plain-HTTP service
 names do not replace either value. Container images and their provenance are
 operator responsibilities; Version 1 proves this journey with released bare
@@ -226,7 +224,7 @@ binaries, not generated containers or orchestrator manifests.
 
 ### Public certificate check
 
-The public certificate check (`CONCEPT.md` section 15.11) is an unauthenticated
+The public certificate check is an unauthenticated
 Evidence route that reads registry data. It exists only when the
 package declares `publicCheck` and the target authority activates
 `publicCheck.definition`; otherwise `POST /v1/public-check` answers as an
@@ -528,7 +526,7 @@ two cryptographically protected modes and forbidden for unsigned output.
 Enabling `sd-jwt-vc` adds a serialization, not a credential lifecycle. There is
 no issuance session, holder binding ceremony, or presentation verification. A
 status list and revocation exist only for a requirement that declares credential
-status under the version 2 profiles of `CONCEPT.md` section 15.9.
+status under the version 2 profiles.
 `/.well-known/jwt-vc-issuer` publishes no
 per-requester or per-requirement information. The `vct` claim is the
 requirement's declared `isConformantTo` identifier, so the credential type is a
@@ -550,7 +548,6 @@ convenience for whatever presentation layer the operator runs elsewhere.
 Signing failure remains fail-closed for every protected format. A deployment
 that cannot sign returns a safe transient failure and never downgrades an
 SD-JWT VC request to unsigned output or to the signed default.
-[The SD-JWT VC demo](SD-JWT-VC-DEMO.md) exercises this whole path locally.
 
 The multi-subject request-batch route has a separate exact media type,
 `application/vnd.registrystack.evidence.request-batch+json`, and does not
@@ -1141,7 +1138,7 @@ A source-data outage returns `503 source.unavailable` without `Retry-After`
 when no useful recovery interval is known; meaningful rate-limit hints remain.
 The instance stays ready while its own required dependencies are healthy,
 without probing source-data endpoints. See the shared
-[HTTP recovery contract](../platform/HTTP-PROBLEMS.md).
+[HTTP recovery contract](https://docs.registrystack.org/reference/errors/).
 
 One unlabeled gauge is published on the same listener. It carries none of the
 four request-boundary labels, since it reports a process-wide fact rather than
@@ -1486,78 +1483,13 @@ the generic `service.unavailable` problem with HTTP 503 instead. Authentication,
 malformed-request, and invalid-selector failures are operational-only and do not
 create this event.
 
-## Measured throughput
-
-This end-to-end measurement drives the real router over real sockets. Every
-request runs token verification, rate limiting, Rhai request preparation, one
-outbound source call, Rhai extraction, evidence construction, in-process ES256
-signing, and both durable file audit appends. It does not model an external
-Transit deployment's latency or availability.
-
-The test copies `products/evidence/fixtures/acceptance/all-definitions` into a
-temporary deployment and drives its adult-status request. It uses a local
-signer, a preconfigured test authenticator, and the actual file-backed audit
-writer with group commit, writing a temporary `audit.jsonl`. No audit sink is
-injected. The fixed upstream JSON and raised fixture limits below make this a
-controlled local journey, not a production workload.
-
-These figures come from a shared development machine and are directional,
-not deployment capacity claims. Unrelated compilation overlapped this run;
-they do not establish a performance change from earlier measurements.
-
-| Measurement | Value |
-|---|---|
-| Sustained rate | 5,461 requests/second |
-| Audit appends | 10,923 appends/second (two per request, independently rounded) |
-| Latency p50 / p95 / p99 | 20.07 / 44.82 / 64.75 ms |
-| Non-2xx responses and failures | 0 |
-| Offered concurrency | 128 requests in flight, 128 principals |
-| Window | 10 s measured, after a 3 s unmeasured warm-up |
-| Host | Apple M5 Max, 18 logical cores, macOS 26.4.1, optimized build |
-| Host load averages, start / end (1, 5, 15 min) | 31.11, 28.39, 23.68 / 45.46, 32.14, 25.17 |
-| Unrelated compiler processes, start / end | 1 Cargo and 17 rustc / 1 Cargo and 8 rustc |
-| Source revision | `8821b3a67` |
-| Date | 2026-09-25 |
-
-Reproduce with:
-
-```bash
-cargo test --locked --release -p registry-evidence --lib -- \
-  --ignored --nocapture sustained_load_holds_one_thousand_requests_per_second
-```
-
-The release test was compiled before the timed window. The check passed and
-verified one access-attempt and one disclosure-release audit record for every
-released assertion. Absolute rate and latency on this shared host remain
-directional observations, not acceptance gates for the audit simplification.
-
-The harness serves the upstream source from a minimal in-process handler
-returning one constant JSON body. It measures that handler's standalone
-ceiling in the same run, with the same client, worker count, header set, and
-window. The source sustained 130,722 requests/second with no failures, 23.9
-times the Evidence rate. Below five times the Evidence rate, the check reports
-an inconclusive result because the source harness may be the bottleneck.
-
-Latency is a closed-loop consequence of the offered concurrency. A deployment
-with fewer requests in flight sees a different latency and rate. The audit
-writer commits in groups, so concurrent appends can share a write and fsync;
-this measurement does not represent the per-record cost at low concurrency.
-
-The harness raises four defaults only in its temporary fixture bundle: the
-per-principal rate limits, `maximumConcurrentRequests`, each source's outbound
-`maximumConcurrency`, and the audit file's `rotateBytes`. Those values are
-measurement scaffolding, not a recommended deployment posture. Keep the
-shipped defaults and tune from observed traffic.
-
 ## Capacity planning
 
-The rate in the Measured throughput section is one host with one constant
-source. Sizing a real deployment is a matter of finding which ceiling binds
-first, and for most
-deployments it is not Evidence.
+Sizing a real deployment is a matter of finding which ceiling binds first, and
+for most deployments it is not Evidence.
 
 Outbound source concurrency binds first whenever the provider is slower than
-the in-process handler used for measurement. Each runtime endpoint binding's
+Evidence's own in-process handling. Each runtime endpoint binding's
 `maximumConcurrency` is the number of requests one Evidence process may have
 outstanding through that named connection and endpoint at once. Sustained
 throughput through it is therefore about `maximumConcurrency` divided by the
@@ -1608,11 +1540,16 @@ provider and reporting success when the answer arrives; confirming that
 diagnosis needs source latency observed at the provider, which is why the
 `maximumConcurrency` arithmetic is worth doing before traffic rather than
 after. Because the audit sink commits in groups, a deployment held to few
-requests in flight also pays a higher per-record audit cost than the table in
-the Measured throughput section, which is a consequence of the low concurrency
+requests in flight also pays a higher per-record audit cost, which is a consequence of the low concurrency
 rather than a separate problem to tune.
 
-## Verification and release limit
+Nothing else is shared between requests, so per-process throughput is capped by
+the audit sink. The file destination takes an exclusive lock on
+`<audit.path>.lock`, so one process owns one audit path. N processes, each with
+its own `audit.path`, raise that ceiling about N times with no code change,
+provided the sources and their `maximumConcurrency` allow it.
+
+## Verification
 
 A relying party or operator re-verifies a stored signed response offline with
 `evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]`.
@@ -1640,9 +1577,4 @@ Operators must verify a candidate revision with the applicable phase and final
 commands in [AGENTS.md](AGENTS.md). Public-demo source tests are optional,
 ignored, read-only, local, and non-gating. They may run only after deterministic
 mocks pass and only with approved synthetic selectors and securely stored
-credentials under [the source-testing contract](SOURCE-TESTING.md).
-
-Evidence Version 1 is releasable only when all four coequal acceptance
-definitions pass the complete offline and HTTP path, every row of
-`contracts/acceptance-test-traceability.yaml` passes on one revision, generated contracts reproduce exactly, and the
-security acceptance matrix is reviewed.
+credentials.
