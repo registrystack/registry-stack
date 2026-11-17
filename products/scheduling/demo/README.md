@@ -1,15 +1,6 @@
 # Registry Scheduling acceptance demo
 
-`run.sh` proves four acceptance scenarios from the Scheduling functional
-specification against the real binaries and a real PostgreSQL database, over
-the public HTTP contract and under real authentication:
-
-| Scenario | What the demo asserts |
-| --- | --- |
-| AT-01 | Two callers confirm against the last station concurrently. Exactly one appointment is created; the loser receives `capacity.exhausted` (409), and the slot afterwards holds no free unit. |
-| AT-05 | A hold expires. The slot becomes bookable again, and confirming the expired hold fails with `hold.expired` (410). |
-| AT-06 | A confirmation commits but its response is lost. A retry under the same `idempotency-key` returns the original appointment; a changed payload under that key is refused with `idempotency.key-reused` (409). |
-| AT-19 | The New York hall opening across the 2026-11-01 daylight-saving fold serves the grid the morning closure moved (anchored 04:45Z), never the wall-clock match 06:30Z, which is refused with `schedule.unpublished` (422). |
+`run.sh` runs four acceptance scenarios against the real binaries and a real PostgreSQL database, over the public HTTP contract and under real authentication: a concurrent last-station booking, a hold that expires, a confirmation whose response is lost and retried, and an opening across a daylight-saving fold.
 
 ## Running it
 
@@ -43,7 +34,7 @@ never leaves the run directory.
 
 ## What this demo does not cover
 
-The AT-05 row says "while the cleanup worker is stopped". The runtime's
+The expiry scenario does not stop the cleanup worker. The runtime's
 cleanup loop is a fixed internal interval with no operator switch, and the
 store counts a hold only while it is unexpired at the observed now, so a
 stopped or delayed worker cannot keep capacity locked either way. The demo

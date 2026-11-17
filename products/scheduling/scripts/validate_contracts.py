@@ -14,7 +14,7 @@ the shape the product committed to:
 - the traceability document covers exactly the matrix's invariants;
 - every recorded decision cites evidence that exists;
 - every deferral names the tracked file that records it, and that file
-  exists.
+  exists, or a docs.registrystack.org page by URL.
 
 The check is source-mapped, not executed: rows whose tests live in a
 PostgreSQL suite are proven when that suite runs, and the matrix says so
@@ -37,6 +37,14 @@ CONTRACT_API_VERSION = "registry.registrystack.org/product-contract/v1"
 TRACEABILITY_CONTRACT = "registry.scheduling.security-test-traceability/v1"
 SECURITY_ID = re.compile(r"^SCHEDULING-SEC-\d{2}$")
 DEFERRED_ID = re.compile(r"^SCHEDULING-DEF-\d{2}$")
+# A deferral may be recorded on the published documentation site. The URL is
+# never fetched: it is resolved to the page source in this repository, and an
+# anchor must match a heading on that page.
+DOCS_SITE_URL = re.compile(
+    r"^https://docs\.registrystack\.org/(?P<path>[A-Za-z0-9._~/-]+?)/?"
+    r"(?:#(?P<anchor>[A-Za-z0-9._~-]+))?$"
+)
+DOCS_SITE_SOURCE = "docs/site/src/content/docs"
 DECISION_ID = re.compile(r"^SCHEDULING-DEC-\d{2}$")
 
 TextResolver = Callable[[str], str | None]
@@ -44,6 +52,40 @@ TextResolver = Callable[[str], str | None]
 
 def _non_empty(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
+
+
+def _heading_slugs(page: str) -> set[str]:
+    """Anchor slugs of a page's Markdown headings, as the site generates them."""
+    slugs: set[str] = set()
+    in_fence = False
+    for line in page.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if in_fence or heading is None:
+            continue
+        text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", heading.group(1)).lower()
+        slugs.add(re.sub(r"[^\w\- ]", "", text).replace(" ", "-"))
+    return slugs
+
+
+def _docs_site_violations(label: str, url: str, resolve: TextResolver) -> list[str]:
+    """A docs-site URL must name a page in this repository, and its anchor a heading."""
+    match = DOCS_SITE_URL.fullmatch(url)
+    path = match.group("path") if match else ""
+    if match is None or ".." in Path(path).parts:
+        return [f"{label}: recordedIn page {url} is not a docs.registrystack.org page URL"]
+    for candidate in (f"{path}.mdx", f"{path}.md", f"{path}/index.mdx", f"{path}/index.md"):
+        page = resolve(f"{DOCS_SITE_SOURCE}/{candidate}")
+        if page is not None:
+            break
+    else:
+        return [f"{label}: recordedIn page {url} has no source under {DOCS_SITE_SOURCE}"]
+    anchor = match.group("anchor")
+    if anchor is not None and anchor not in _heading_slugs(page):
+        return [f"{label}: recordedIn anchor #{anchor} is not a heading on {url}"]
+    return []
 
 
 def _cited_test_violations(
@@ -123,7 +165,9 @@ def matrix_violations(matrix: dict, resolve: TextResolver) -> list[str]:
             if not _non_empty(row.get(field)):
                 violations.append(f"{label}: {field} is required and empty")
         recorded_in = row.get("recordedIn")
-        if _non_empty(recorded_in):
+        if _non_empty(recorded_in) and recorded_in.startswith("https://docs.registrystack.org/"):
+            violations.extend(_docs_site_violations(label, recorded_in, resolve))
+        elif _non_empty(recorded_in):
             if resolve(recorded_in) is None:
                 violations.append(f"{label}: recordedIn file {recorded_in} does not exist")
     return violations
