@@ -1,15 +1,14 @@
 // The item page the odk-repeats route returns: one repeat entity set
 // (Central exposes each repeat as its own entity set, for example
-// `Submissions.household.member`), the F5 item contract of CONCEPT
-// 17.2.
+// `Submissions.household.member`), the F5 item contract of
+// governed ingestion.
 //
 // The engine evaluates the route's final setBody expression on the
-// exchange (CONCEPT 8.11.3). The reply body is one page of the
-// deployment's repeat entity set, shaped like any OData page. The
-// route asks for `$orderby=$root/Submissions/__system/submissionDate
-// asc` (repeat rows ordered by their parent submission's date) and
-// `$skip` from the cursor's offset; the reply's `@odata.nextLink` is
-// never read.
+// exchange. The reply body is one page of the deployment's repeat
+// entity set, shaped like any OData page. The route asks for
+// `$orderby=$root/Submissions/__system/submissionDate asc` (repeat
+// rows ordered by their parent submission's date) and `$skip` from
+// the cursor's offset; the reply's `@odata.nextLink` is never read.
 //
 // Item mapping (probe-gated, see the pack README): key = the repeat
 // row's own `__id`, which Central derives from the parent instance and

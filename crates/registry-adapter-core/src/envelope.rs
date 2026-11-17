@@ -2,8 +2,7 @@
 
 //! The envelope template reader: one parse of a profile envelope text into
 //! JSON, shared by the result-schema derivation, the checks, and the
-//! runtime renderer so the three read a template the same way
-//! (`products/adapter/CONCEPT.md` section 7).
+//! runtime renderer so the three read a template the same way.
 
 use crate::checks::{is_placeholder_name, split_slot_form};
 use serde_json::Value;

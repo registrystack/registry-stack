@@ -2,9 +2,9 @@
 #
 # The odk-central pack: ODK Central submission acquisition for the
 # governed-ingestion job mode over the Central OData endpoints, two
-# source routes, one page per run (CONCEPT 17.1 and 17.2). Unproved
-# state, stated plainly: no ODK Central server has been reached. Every
-# upstream shape here is synthesized from the published documentation
+# source routes, one page per run. Unproved state, stated plainly: no
+# ODK Central server has been reached. Every upstream shape here is
+# synthesized from the published documentation
 # (https://docs.getodk.org/central-api-odata-endpoints/ and
 # https://docs.getodk.org/central-api-authentication/), and every
 # fixture beside this pack is synthetic and `documented`, never
@@ -12,9 +12,8 @@
 # pack was exercised against, and none was. The Central documentation
 # names feature versions (`$orderby` since v2024.1, which this pack
 # needs) but pins no server version this pack was run against; the
-# acceptance row of CONCEPT 17.7 lists every behavior resting on
-# documentation as unproved, and the pack README carries the probe
-# questions.
+# Adapter acceptance rows list every behavior resting on documentation
+# as unproved, and the pack README carries the probe questions.
 #
 # What the pack covers: the Submissions entity set of one form's OData
 # service (`GET /v1/projects/{projectId}/forms/{xmlFormId}.svc/Submissions`)
@@ -35,14 +34,14 @@
 # Deployment scoping: the project, form, and entity set a job reads are
 # deployment values, and a source route carries no template
 # parameters. The deployment-owned slot is the endpoint binding's
-# `baseUrl`: the engine pins the origin plus its base path (CONCEPT
-# 8.11.5) and every send stays under it, so the runtime config binds
-# `odk-odata` to the entity-set URL of the deployment's own form (see
+# `baseUrl`: the engine pins the origin plus its base path and every send
+# stays under it, so the runtime config binds `odk-odata` to the
+# entity-set URL of the deployment's own form (see
 # products/adapter/examples/odk-central-job/job-runtime.example.yaml) and
 # this pack sends `path: /`. A job on the odk-repeats route binds the
 # endpoint to the repeat entity set's URL instead. If the job compiler
-# grows a parameters block on the job definition, these bindings
-# should move there.
+# grows a parameters block on the job definition, these bindings should
+# move there.
 #
 # Authentication (cited choice): Central accepts Basic auth over
 # HTTPS - its own docs call it "allowed, but strongly discouraged"
@@ -111,9 +110,9 @@ sourceRoutes:
             retryDelaySeconds: 2
       # The position this run fetches: the engine restores the job
       # cursor into the AdapterJobCursor property, absent on the first
-      # run (CONCEPT 17.2). scripts/cursor.rhai turns it into the
-      # `$filter` on the submission date, or null on the first run,
-      # which leaves the parameter out of the send.
+      # run. scripts/cursor.rhai turns it into the `$filter` on the
+      # submission date, or null on the first run, which leaves the
+      # parameter out of the send.
       - setProperty:
           name: odkFilter
           value:
@@ -139,7 +138,7 @@ sourceRoutes:
       # `{submissionDate, seen}` cursor of the last rows, the incoming
       # cursor back on an empty page (scripts/shape-page.rhai). This
       # body is the whole route output; the job entry validates it
-      # against the item contract and the job profile (CONCEPT 17.2).
+      # against the item contract and the job profile.
       - setBody:
           rhai:
             file: scripts/shape-page.rhai
@@ -184,11 +183,11 @@ sourceRoutes:
             entrypoint: shape_repeats
 scripts:
   - path: scripts/cursor.rhai
-    digest: sha256:76d65d62275743d5778e123bdfbd9bd1ff0348907a51e8b0ad85390046543b3d
+    digest: sha256:dcd0f20be13c9d0970d022688d3aed14930e12258f81472d3adf1f456d27a30e
   - path: scripts/shape-page.rhai
-    digest: sha256:2e3a51062ea8989fabdc13a95dd7d221381c92788e1a632f06064c741cd7f9b0
+    digest: sha256:5263a1b3adc24b1cc8bebbbbb51f33c13c5e40d03a65d58021cc8080c3a667c7
   - path: scripts/shape-repeats.rhai
-    digest: sha256:7058e76ef036769e473f03af385d4faa6cd667e2eab987b789629e675b7f7472
+    digest: sha256:d2b14fdb612356b4104ad8a288c92f5f7396c69683b57ead678b7948e8b2e6a0
 capabilities:
   components:
     - http

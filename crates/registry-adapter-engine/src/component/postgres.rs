@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The read-only `postgres` source of the governed-ingestion mode
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 17.2), the bounded
+//! The read-only `postgres` source of the governed-ingestion mode, the bounded
 //! port of camel-sql's parameterized read
 //! (camel-4.23.0:components/camel-sql/src/main/java/org/apache/camel/component/sql/SqlConsumer.java,
 //! whose parameter binding and bounded consumption this keeps, and

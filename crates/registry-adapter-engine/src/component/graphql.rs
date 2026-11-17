@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `graphql` producer (`products/adapter/CONCEPT.md` section 8.8):
+//! The `graphql` producer:
 //! Camel's `camel-graphql` shape over the same transport as `http`. One
 //! endpoint carries one digest-pinned `queryFile`, one `operationName`,
 //! and one `variables` expression; a send posts the query text with the

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Origin-pinned links: the `httpUri` parameter on an `http` send
-//! (`products/adapter/CONCEPT.md` section 8.11.5).
+//! Origin-pinned links: the `httpUri` parameter on an `http` send.
 //!
 //! Camel follows a source-returned link through the `CamelHttpUri`
 //! header, which replaces the endpoint URI wholesale

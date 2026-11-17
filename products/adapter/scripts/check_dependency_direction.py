@@ -6,8 +6,7 @@ The Adapter's engine and facade stay source-neutral: `registry-adapter-engine`,
 `registry-adapter`, `registry-adapter-core`, `registry-adapter-job`, and
 `registry-adapterctl` reach shared platform primitives and nothing else
 of the workspace, and no Adapter crate links a Coordinator crate. The
-one product-surface exception is the direct BReg connector crate
-(`products/adapter/CONCEPT.md` section 17.5):
+one product-surface exception is the direct BReg connector crate:
 `registry-adapter-connectors` reaches exactly `registry-breg-client`
 behind the job host's exact off-by-default `direct-breg` feature, is linked
 by no facade or engine crate, and never reaches a product runtime, adopter tooling,

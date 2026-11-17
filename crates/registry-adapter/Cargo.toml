@@ -25,7 +25,7 @@ postgres-test = [
     "registry-adapter-engine/postgres-test",
     "registry-platform-httputil/test-support",
 ]
-# The governed-ingestion job sources (CONCEPT.md sections 17.1 and 17.2),
+# The governed-ingestion job sources,
 # each off by default: `cargo build -p registry-adapter` compiles neither.
 # Cargo unifies features across one build, so a build that includes
 # registry-adapterctl (which turns both on), a workspace build among them,
@@ -37,7 +37,7 @@ job-file = ["registry-adapter-engine/job-file"]
 job-postgres = ["registry-adapter-engine/job-postgres"]
 
 [dependencies]
-# The continuation cursor codec (CONCEPT.md section 8.11.2): XChaCha20-Poly1305
+# The continuation cursor codec: XChaCha20-Poly1305
 # with its zeroize feature, so the cipher wipes its copy of the key on drop.
 base64.workspace = true
 chacha20poly1305 = { workspace = true, features = ["zeroize"] }

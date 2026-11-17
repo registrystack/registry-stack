@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The item table and the job state row
-//! (`products/adapter/CONCEPT.md` section 17.2): the PostgreSQL store of
+//! The item table and the job state row: the PostgreSQL store of
 //! the governed-ingestion job host. One row per item carries identity
 //! and progress and no payload; one row per job carries the opaque
 //! source position, the lease, and the schedule counters. Every write is

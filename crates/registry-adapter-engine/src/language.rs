@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The expression languages, externally tagged by language as in Camel
-//! (`products/adapter/CONCEPT.md` section 8.5): `constant`, `header`,
+//! The expression languages, externally tagged by language as in Camel: `constant`, `header`,
 //! and `exchangeProperty` inline; `jsonpath`, RFC 9535, inline, on the
 //! IETF standard rather than Jayway's dialect; and `rhai`, a
 //! digest-pinned script file and entrypoint through
@@ -12,13 +11,13 @@
 //! result is an error, never a truthiness guess. A singular JSONPath
 //! query (RFC 9535 section 2.3.5) yields its one value, or absent when
 //! nothing matches; any other query yields the node list as a JSON
-//! array, empty when nothing matches (section 8.11.8).
+//! array, empty when nothing matches.
 //!
 //! # Selector bounds
 //!
 //! A `jsonpath` selector is digest-pinned authored pack content, not
 //! runtime attacker input, but the runtime never assumes it was checked
-//! first (`CONCEPT.md` section 5.5). [`compile_selector`] enforces the
+//! first. [`compile_selector`] enforces the
 //! declared length and nesting bounds on the raw selector text before
 //! any parse, because pest 2.8.x, held below 2.9 by the workspace's
 //! steering pin, carries no stack-overflow guard of its own and a
@@ -30,7 +29,7 @@
 //! # Code maps
 //!
 //! Code maps convert an upstream's own code values through an explicit
-//! table (`CONCEPT.md` section 8.6); [`CodeMapIndex`] resolves a map's
+//! table; [`CodeMapIndex`] resolves a map's
 //! literal id against a pack's inventory, the resolving half of the
 //! `code_map(id, key)` helper Rhai scripts and `convertBodyTo` share.
 //! The value lookup is core's single `CodeMap::lookup`: a miss or a
@@ -40,7 +39,7 @@
 //!
 //! # Evaluation
 //!
-//! [`JsonPathSelector::evaluate`] applies the section 8.11.8 result
+//! [`JsonPathSelector::evaluate`] applies the result
 //! rules: a singular query yields its one value or absent; any other
 //! query yields the matched nodes as a list, empty when nothing matches.
 //! [`JsonPathSelector::evaluate_predicate`] is the boolean rule: only a
@@ -115,7 +114,7 @@ pub enum LanguageError {
     /// names a caller bug, never pack content.
     CodeMapDuplicateId(String),
     /// No code map entry carries the key, or the input is not a string:
-    /// the `conversion.unmapped` miss rule of `CONCEPT.md` section 8.6.
+    /// the `conversion.unmapped` miss rule.
     /// The upstream value the key came from is not carried; only the
     /// reviewed map id is.
     ConversionUnmapped {
@@ -135,7 +134,7 @@ pub enum LanguageError {
     },
     /// A non-singular query was used as a predicate. `check` refuses
     /// such a route, and the runtime repeats the refusal rather than
-    /// treating a node list as a truthiness answer (CONCEPT 8.11.8).
+    /// treating a node list as a truthiness answer.
     PredicateNotSingular,
     /// A singular predicate yielded a value that is not a boolean. The
     /// value itself is upstream data and is not carried; only its JSON
@@ -225,7 +224,7 @@ pub fn compile_selector(selector: &str) -> Result<JsonPathSelector, LanguageErro
     Ok(JsonPathSelector { query })
 }
 
-/// The result of one evaluation, in the shape section 8.11.8 fixes: a
+/// The result of one evaluation, in a fixed shape: a
 /// singular query yields its one value or absent, any other query yields
 /// the matched nodes as a list, empty when nothing matches. The borrowed
 /// nodes live inside the evaluated body.
@@ -241,7 +240,7 @@ impl JsonPathSelector {
     /// Whether the query is singular (RFC 9535 section 2.3.5): every
     /// segment is a name or an index selector, so it yields at most one
     /// node. A singular query and any other query have different result
-    /// shapes (`CONCEPT.md` section 8.11.8), and `check` refuses a
+    /// shapes, and `check` refuses a
     /// non-singular query used as a predicate.
     #[must_use]
     pub fn is_singular(&self) -> bool {
@@ -272,8 +271,7 @@ impl JsonPathSelector {
 
     /// Evaluates the selector as a predicate under the boolean rule.
     ///
-    /// Absent counts as false, the one place absence has a meaning
-    /// (`CONCEPT.md` section 8.11.8).
+    /// Absent counts as false, the one place absence has a meaning.
     ///
     /// # Errors
     ///
@@ -365,7 +363,7 @@ fn raw_nesting_depth(selector: &str) -> usize {
 /// The id-resolving half of the `code_map(id, key)` seam.
 ///
 /// A pack's code maps are stored as a list; every route reference is a
-/// literal id that resolves (`CONCEPT.md` section 8.6). The index binds
+/// literal id that resolves. The index binds
 /// each map's id once, at route-compile time, so the per-exchange path
 /// is one slice lookup and never a linear scan. The value lookup is not
 /// reimplemented here: once core's `CodeMap::lookup` lands, the

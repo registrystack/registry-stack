@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The served write's custody: the concrete [`WriteExecutionContext`]
-//! behind the engine's `WriteCustody` seam
-//! (`products/adapter/CONCEPT.md` section 9). The journal transaction,
+//! behind the engine's `WriteCustody` seam. The journal transaction,
 //! the idempotency store, and every terminal resolution stay
 //! facade-side; the engine names this module never, and
 //! the facade installs the concrete arc on each served write's exchange

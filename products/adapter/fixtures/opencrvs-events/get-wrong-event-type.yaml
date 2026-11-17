@@ -2,11 +2,12 @@
 #
 # Documented fixture (hand-derived, NOT a captured exchange):
 # one result of the wrong event type (death) for a birth lookup, a source problem.
-# No exchange was recorded to produce this file. The upstream shapes are derived from the reviewed Evidence
-# reference (products/evidence/reference/request-adapter/
-# opencrvs-event-search/, response-match.json and
-# expected-request-parts.json) and every value is a made-up stand-in. The
-# The expected problem carries no deployment-specific response envelope.
+# No exchange was recorded to produce this file. The upstream request and response
+# envelope follow the reviewed Evidence source recipe
+# (products/evidence/source-recipes/opencrvs-event-search/); the event id, dateOfEvent and an
+# unrelated canary field are added so the mapping and the field filter are
+# exercised, and every value is a made-up stand-in. The
+# expected problem carries no deployment-specific response envelope.
 apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
 kind: AdapterFixture
 id: opencrvs-events-get-wrong-event-type
@@ -14,7 +15,7 @@ pack: opencrvs-events
 upstreamVersion: "unverified"
 provenance:
   type: documented
-  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+  reference: products/evidence/source-recipes/opencrvs-event-search/
 intercepts:
   - type: endpoint
     endpoint: events

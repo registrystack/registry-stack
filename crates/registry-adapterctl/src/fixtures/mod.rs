@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `adapterctl fixtures replay`: replay a project's fixture suites against
-//! the deployment, offline (`products/adapter/CONCEPT.md` section 13.3).
+//! the deployment, offline.
 //!
 //! The command reads the project, profile, pack, and fixtures exactly as
 //! `check` does, refuses any finding `check` would refuse, compiles the
@@ -345,7 +345,7 @@ fn facade_mismatch(
 /// Hold every entry's expectation against the compiled contract: the
 /// expected status must be one the operation's compiled responses declare,
 /// and an expected response body must validate against the schema the
-/// contract carries for that status (CONCEPT 13.3: the facade response
+/// contract carries for that status (the facade response
 /// validates against the generated schema).
 fn replay_contract(
     profile: &AdapterProfile,

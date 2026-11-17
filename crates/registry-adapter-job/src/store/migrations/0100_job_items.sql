@@ -1,5 +1,4 @@
--- The governed-ingestion job host's tables (products/adapter/CONCEPT.md
--- section 17.2): one row per item the job has read, carrying identity and
+-- The governed-ingestion job host's tables: one row per item the job has read, carrying identity and
 -- progress and no payload, and one row per job carrying the source
 -- position and the pass schedule. A dump of the item table identifies
 -- items and answers; it exposes none of the source's data.

@@ -2,8 +2,7 @@
 
 //! The `jsonpath` language's compile-time bounds, singular-query
 //! classification, evaluation result rules, and matched-node budget, and
-//! the code-map id resolution half of the Rhai `code_map(id, key)` seam
-//! (`products/adapter/CONCEPT.md` sections 8.5, 8.6, and 8.11.8).
+//! the code-map id resolution half of the Rhai `code_map(id, key)` seam.
 
 use std::collections::BTreeMap;
 
@@ -195,7 +194,7 @@ fn any_other_query_yields_the_node_list() {
         other => panic!("a non-singular query yields the node list, got {other:?}"),
     }
 
-    // Empty when nothing matches, never absent (CONCEPT 8.11.8).
+    // Empty when nothing matches, never absent.
     let selector = compile_selector("$.z[*]").expect("compiles");
     match selector.evaluate(&body).expect("evaluates") {
         JsonPathResult::List(nodes) => assert!(nodes.is_empty()),

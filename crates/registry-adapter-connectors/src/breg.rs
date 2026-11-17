@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The BReg connector: read and lookup, direct mutation, immediate
 //! Action, Proposal Action, and batch and ingestion runs, over
-//! `registry-breg-client` (`products/adapter/CONCEPT.md` section 17.3).
+//! `registry-breg-client`.
 //!
 //! Each family lands in its own module under `breg/`; [`BregConnector::catalog`]
 //! advertises exactly the implemented, enabled operations.
@@ -35,8 +35,7 @@
 //! The connector implements more operations than an ingestion job may
 //! send. A job sends an item directly to BReg only when the item maps to
 //! exactly one BReg operation with no lookup: an immediate Action, or a
-//! Proposal start and submit (`products/adapter/CONCEPT.md` sections 17.1
-//! and 17.3). Record create, patch, and tombstone, batch, and the
+//! Proposal start and submit. Record create, patch, and tombstone, batch, and the
 //! ingestion run family stay out of a job's direct path: an item that
 //! needs a lookup or a choice goes to Coordinator, and bulk has no job path: its designed
 //! hand-off, a file for `bregctl data import`, is not implemented. The

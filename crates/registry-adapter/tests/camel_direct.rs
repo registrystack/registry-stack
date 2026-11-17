@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `direct:` conformance suite, port-table row 9
-//! (`products/adapter/CONCEPT.md` sections 8.8 and 8.11.7): a synchronous
+//! The `direct:` conformance suite, port-table row 9: a synchronous
 //! in-process call that shares the exchange, the target's clauses handle
 //! the target first, the caller's clauses see what the target did not
 //! handle, and a `to: direct:` send is never redelivered.
@@ -281,7 +280,7 @@ async fn an_unhandled_target_error_reaches_the_callers_clauses() {
 #[tokio::test]
 async fn a_direct_send_is_never_redelivered() {
     // The caller's handler would redeliver a failing endpoint send three
-    // times; a direct send is never redelivered (section 8.11.7), so the
+    // times; a direct send is never redelivered, so the
     // whole call runs once and its single send is all the double sees.
     let lane = Lane::over(
         json!([

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Cross-layer read properties for `CONCEPT.md` section 13.5. The core
+//! Cross-layer read properties. The core
 //! checker discovers the lowest admitted upstream-call budget for each
 //! deterministic route shape, then the real interpreter executes that
 //! same route over loopback HTTP under the admitted budget. A route only

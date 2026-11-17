@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `filter` processor, Camel's Message Filter
-//! (`products/adapter/CONCEPT.md` section 8.6): the nested steps run
+//! The `filter` processor, Camel's Message Filter: the nested steps run
 //! only on a matching predicate, and the route continues after the
 //! filter either way. `statusPropertyName`, when declared, records the
 //! boolean outcome on an exchange property; Camel 4 sets no fixed filter

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The deployment's outbound egress state, built once at startup
-//! (`products/adapter/CONCEPT.md` sections 8.11 and 10.2).
+//! The deployment's outbound egress state, built once at startup.
 //!
 //! Every endpoint binding is compiled exactly once, before any
 //! exchange: the binding's base URL pins one origin ([`PinnedOrigin`]),
@@ -1366,7 +1365,7 @@ impl EndpointEgress {
     ) -> Result<SentReply, EgressError> {
         // A declared attempt above the ceiling the authoring check
         // bounds `attemptTimeoutMilliseconds` with is refused, never
-        // shortened (`products/adapter/CONCEPT.md` section 8.8).
+        // shortened.
         let maximum_attempt = self.timeout_policy.map_or(
             Duration::from_millis(MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS),
             DestinationOperationTimeoutPolicy::maximum,
@@ -1546,7 +1545,7 @@ impl EndpointEgress {
         let out_of_range = !send.ok_status_ranges.contains(status);
         // An empty body is JSON null; a non-JSON body raises
         // `upstream.malformed`, also under `throwExceptionOnFailure:
-        // false` (`products/adapter/CONCEPT.md` section 8.11). Only an
+        // false`. Only an
         // out-of-range status under the throw flag answers
         // `upstream.http` without a decoded body, because the route is
         // ending anyway and the body never decoded.
@@ -1576,7 +1575,7 @@ impl EndpointEgress {
         // Under the throw flag an out-of-range status raises
         // `upstream.http` carrying the decoded body; under
         // `throwExceptionOnFailure: false` the reply returns as it is
-        // and the route reads the status itself (CONCEPT 8.11).
+        // and the route reads the status itself.
         if out_of_range && send.throw_exception_on_failure {
             return Err(EgressError::Upstream(
                 UpstreamFailure::new(

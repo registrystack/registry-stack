@@ -13,7 +13,7 @@ intercepts:
     endpoint: case-api
 entries:
   # A found record: the token request and the case read answer in order.
-  # The token exchange records no credential (CONCEPT 10.2): no
+  # The token exchange records no credential: no
   # authorization header, no request body; the reply's token is a
   # synthetic value, never a captured one.
   - facadeRequest:

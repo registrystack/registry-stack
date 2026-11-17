@@ -5,11 +5,11 @@
       "type": "string"
     },
     "EnvelopeTemplate": {
-      "description": "An envelope template: a JSON template whose string members carry\n`{{slot}}` placeholders from the closed vocabulary\n(`products/adapter/CONCEPT.md` section 7). The template is data; the\nengine fills it.",
+      "description": "An envelope template: a JSON template whose string members carry\n`{{slot}}` placeholders from the closed vocabulary. The template is data; the\nengine fills it.",
       "type": "string"
     },
     "ErrorClass": {
-      "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+      "description": "A closed error class, the port of Camel's Java exception hierarchy (https://docs.registrystack.org/configure/adapter-routes/#error-classes).",
       "enum": [
         "aggregation.duplicate",
         "breaker.open",
@@ -59,7 +59,7 @@
       "type": "string"
     },
     "HttpMethod": {
-      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
+      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not.",
       "enum": [
         "GET",
         "POST",
@@ -75,7 +75,7 @@
     },
     "PaginationParameters": {
       "additionalProperties": false,
-      "description": "The pagination parameters of a search operation: the cursor and\npage-size query parameter names and their bounds\n(`products/adapter/CONCEPT.md` section 7). The engine owns encoding the\ncursor; the profile owns the names.",
+      "description": "The pagination parameters of a search operation: the cursor and\npage-size query parameter names and their bounds. The engine owns encoding the\ncursor; the profile owns the names.",
       "properties": {
         "cursorParameter": {
           "$ref": "#/$defs/ExternalId",
@@ -117,7 +117,7 @@
     },
     "ParameterizedPart": {
       "additionalProperties": false,
-      "description": "One parameterized part: a part of the profile a deployment declares at\nbind time (`products/adapter/CONCEPT.md` sections 6 and 7).",
+      "description": "One parameterized part: a part of the profile a deployment declares at\nbind time.",
       "properties": {
         "description": {
           "description": "What the part means, for review.",
@@ -136,10 +136,10 @@
     },
     "Problem": {
       "additionalProperties": false,
-      "description": "One problem a caller can receive: the profile's own answer shape for\nthe error classes it maps (`products/adapter/CONCEPT.md` sections 7\nand 8.11.6). A pack raises error classes and never names a problem\ncode or builds a problem body; the profile decides what the caller\nsees.",
+      "description": "One problem a caller can receive: the profile's own answer shape for\nthe error classes it maps. A pack raises error classes and never names a problem\ncode or builds a problem body; the profile decides what the caller\nsees.",
       "properties": {
         "classes": {
-          "description": "The error classes this problem answers: a class resolves to the\nentry whose declared class is closest to it, by the rule of\n`products/adapter/CONCEPT.md` section 8.7.",
+          "description": "The error classes this problem answers: a class resolves to the\nentry whose declared class is closest to it, by the\nclosest-class rule of the Adapter error hierarchy.",
           "items": {
             "$ref": "#/$defs/ErrorClass"
           },
@@ -209,7 +209,7 @@
     },
     "ProfileOperation": {
       "additionalProperties": false,
-      "description": "One facade operation, declared by id\n(`products/adapter/CONCEPT.md` sections 6 and 7). The id is a\nprofile-declared bounded string (CFG-ID-5), never an engine enum.",
+      "description": "One facade operation, declared by id. The id is a\nprofile-declared bounded string (CFG-ID-5), never an engine enum.",
       "properties": {
         "asyncCompletion": {
           "$ref": "#/$defs/ProfileAsyncCompletion",
@@ -253,7 +253,7 @@
         },
         "recordTypeParameter": {
           "$ref": "#/$defs/LocalId",
-          "description": "The path parameter the bound record type substitutes into\n(`products/adapter/CONCEPT.md` section 7): one of `pathParameters`,\nchecked at the profile checks. No rule reads meaning from the\nparameter's position."
+          "description": "The path parameter the bound record type substitutes into: one of `pathParameters`,\nchecked at the profile checks. No rule reads meaning from the\nparameter's position."
         },
         "requestEnvelope": {
           "$ref": "#/$defs/EnvelopeTemplate",
@@ -362,7 +362,7 @@
       "description": "The problem envelope template; must carry the `problemCode` slot."
     },
     "problems": {
-      "description": "The problems a caller can receive, each mapping error classes to a\ncode, status, and title. The totality check requires every class of\nthe closed hierarchy, uncatchable and facade classes included, to\nresolve to exactly one entry\n(`products/adapter/CONCEPT.md` sections 7 and 8.11.6).",
+      "description": "The problems a caller can receive, each mapping error classes to a\ncode, status, and title. The totality check requires every class of\nthe closed hierarchy, uncatchable and facade classes included, to\nresolve to exactly one entry.",
       "items": {
         "$ref": "#/$defs/Problem"
       },

@@ -2,7 +2,8 @@
 
 //! The error cluster conformance suite: the error handler, the redelivery
 //! policy, the exception clause, and `doTry`
-//! (`products/adapter/CONCEPT.md` section 8.7, port-table rows 28-31).
+//! (the Default error handler, Redelivery policy, Exception clause and
+//! Try, catch, finally rows of products/adapter/scripts/camel-port-table.yaml).
 //!
 //! Every send goes over the loopback double, so a redelivery is a real
 //! second request the double counts, and the redelivery headers are read
@@ -343,7 +344,7 @@ async fn an_output_bearing_clause_without_policy_disables_handler_redelivery() {
 }
 
 /// `retryWhile` sits on the clause and the default handler, as in Camel,
-/// never on the redelivery policy (section 8.7). It continues redelivery
+/// never on the redelivery policy. It continues redelivery
 /// while it holds, stops early when it does not, and a raising predicate
 /// ends the redelivery; the cap stays `maximumRedeliveries`. A matched
 /// clause's own predicate governs its classes, the handler's every other
@@ -1112,8 +1113,7 @@ async fn the_cluster_refuses_its_unservable_shapes_at_load() {
 }
 
 /// A header the redelivery loop or a catch reads must be spelled exactly
-/// as Camel spells it; the engine headers are read-only to routes
-/// (section 8.11.4).
+/// as Camel spells it; the engine headers are read-only to routes.
 #[tokio::test]
 async fn the_engine_error_headers_stay_read_only() {
     check_servable(&steps(json!([

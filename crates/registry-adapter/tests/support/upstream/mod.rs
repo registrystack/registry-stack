@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! A loopback HTTP/1.1 double for the upstream authentication kinds
-//! (`products/adapter/CONCEPT.md` section 10.2).
+//! A loopback HTTP/1.1 double for the upstream authentication kinds.
 //!
 //! The double is a real TCP server on `127.0.0.1:0` speaking just enough
 //! HTTP/1.1 for the authentication layer: one request per connection,
 //! `Connection: close`, a scripted response queue, and a value-complete
 //! record of every request it received. The record is deliberately
 //! value-complete, credentials included, because the tests' job is to
-//! prove the credential traveled exactly where the concept says and
+//! prove the credential traveled exactly where the authentication kind declares
+//! (https://docs.registrystack.org/configure/adapter/#upstream-authentication) and
 //! nowhere else; nothing outside this directory ever sees a record.
 //!
 //! [`LoopbackSend`] is the client side: an async `TokenSend` over

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The job host's PostgreSQL suite: the item table's no-payload
-//! invariant, the lease, and every pass edge the seven steps carry
-//! (`products/adapter/CONCEPT.md` section 17.2). Every test runs in its
+//! invariant, the lease, and every pass edge the seven steps carry. Every test runs in its
 //! own schema inside the database named by `ADAPTER_TEST_DATABASE_URL`;
 //! a test binary that passes because its database URL is absent is not
 //! database verification, so the variable is required: without it every
@@ -522,7 +521,7 @@ async fn item(pool: &Pool, key: &str) -> Option<store::ItemRecord> {
 
 /// The invariant the table's shape carries: no column can hold a JSON
 /// item body, and the column set is exactly the identity-and-progress
-/// set of `products/adapter/CONCEPT.md` section 17.2.
+/// set of the item contract.
 #[tokio::test]
 async fn the_item_table_holds_no_column_that_can_carry_a_payload() {
     let isolated = isolated().await;

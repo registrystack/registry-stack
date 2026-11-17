@@ -32,7 +32,7 @@
     },
     "EndpointBinding": {
       "additionalProperties": false,
-      "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions (`products/adapter/CONCEPT.md` section 10.2).",
+      "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions.",
       "properties": {
         "anonymousHttps": {
           "$ref": "#/$defs/AnonymousHttpsAcknowledgement",
@@ -363,7 +363,7 @@
     },
     "MtlsIdentity": {
       "additionalProperties": false,
-      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind (`products/adapter/CONCEPT.md` section 10.2). It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
+      "description": "The mTLS client identity of an endpoint, orthogonal to the\nauthentication kind. It is\none way a `none` endpoint reaches a non-loopback source. An operator may\ninstead acknowledge a credential-free HTTPS source on its fixed runtime\nbinding.",
       "properties": {
         "certificateRef": {
           "$ref": "#/$defs/SecretReference",
@@ -382,7 +382,7 @@
     },
     "OutboundTls": {
       "additionalProperties": false,
-      "description": "The private certificate authorities endpoints may trust beside the\nsystem roots (`products/adapter/CONCEPT.md` section 10.2), in the shape\nEvidence ships: a named profile is a process-local PEM file. A CA\nbundle is not a secret, so the profile names a file, never a secret\nreference.",
+      "description": "The private certificate authorities endpoints may trust beside the\nsystem roots, in the shape\nEvidence ships: a named profile is a process-local PEM file. A CA\nbundle is not a secret, so the profile names a file, never a secret\nreference.",
       "properties": {
         "trustProfiles": {
           "additionalProperties": {
@@ -554,7 +554,7 @@
       ]
     },
     "RuntimeCredential": {
-      "description": "The credential binding of one endpoint in the runtime config\n(`products/adapter/CONCEPT.md` section 10.2): Evidence's\n`SourceAuthentication` variant field for field, minus the pack-side\n`headerName` and `scheme`. The kind must match the endpoint's declared\nkind; the checks refuse a mismatch.",
+      "description": "The credential binding of one endpoint in the runtime config: Evidence's\n`SourceAuthentication` variant field for field, minus the pack-side\n`headerName` and `scheme`. The kind must match the endpoint's declared\nkind; the checks refuse a mismatch.",
       "oneOf": [
         {
           "additionalProperties": false,

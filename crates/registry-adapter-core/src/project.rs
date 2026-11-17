@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The adapter project: the deployment artifact that binds a profile to a
-//! pack over a declared record model (`products/adapter/CONCEPT.md`
-//! sections 6, 7, and 10.1).
+//! pack over a declared record model.
 
 use registry_platform_yaml::{Digest, ExternalId, LocalId, UniqueIdList, UniqueList};
 use serde::{Deserialize, Serialize};
@@ -190,8 +189,7 @@ impl registry_platform_yaml::Identified for WriteCollection {
 }
 
 /// A pinned reference to a profile or pack: plain identifier plus the
-/// version and digest `adapterctl check` verifies (CFG-ID-4,
-/// `products/adapter/CONCEPT.md` section 6).
+/// version and digest `adapterctl check` verifies (CFG-ID-4).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -232,8 +230,7 @@ pub enum RecordFieldType {
     DateTime,
 }
 
-/// One declared record type and its fields
-/// (`products/adapter/CONCEPT.md` section 6).
+/// One declared record type and its fields.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -286,8 +283,7 @@ pub const ADAPTER_PROJECT_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'st
         replacement: "Write type: status-link or bounded-wait in its place.",
     }];
 
-/// One binding of a concrete contract operation to a route
-/// (`products/adapter/CONCEPT.md` section 7): one concrete operation per
+/// One binding of a concrete contract operation to a route: one concrete operation per
 /// (profile operation, record type) pair, with the static worst-case
 /// upstream-call budget the checks hold the route to.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -303,7 +299,7 @@ pub struct Binding {
     /// The route the operation dispatches to.
     pub route: ExternalId,
     /// The declared fields of the bound record type a search binding
-    /// filters on (`products/adapter/CONCEPT.md` section 8.11.1); the
+    /// filters on; the
     /// facade offers exactly these as typed equality query parameters.
     /// Every declared filter is required: a call that leaves one out is
     /// refused as an invalid field before any script runs or source is
@@ -344,8 +340,7 @@ impl registry_platform_yaml::Identified for Binding {
 }
 
 /// One access profile: a named binding of scopes to concrete facade
-/// operations and record types, reviewed deployment policy
-/// (`products/adapter/CONCEPT.md` section 10.1).
+/// operations and record types, reviewed deployment policy.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -366,8 +361,7 @@ impl registry_platform_yaml::Identified for AccessProfile {
     }
 }
 
-/// The project identity block: the deployment's own name and version
-/// (`products/adapter/CONCEPT.md` section 10.1). The id is a local
+/// The project identity block: the deployment's own name and version. The id is a local
 /// identifier (CFG-ID-1); the version is text, the same version-as-text
 /// rule as profiles and packs.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -14,7 +14,7 @@ source:
   pack:
     id: kobotoolbox
     version: "1"
-    digest: sha256:77544faac4b11ba7d728d011ae243a49c01817eb9700337538b2a9ba54bd5a46
+    digest: sha256:eac80ff68c6ae0f69e3c76175689250c957bef580c14d36546835de17a594fc8
   route: kobo-submissions
 destination:
   type: signed-coordinator-event

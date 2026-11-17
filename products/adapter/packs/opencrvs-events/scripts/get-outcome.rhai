@@ -1,11 +1,10 @@
 // What a tracking-ID search answered, as two predicates for the lookup
 // route's `choice`.
 //
-// The engine evaluates each predicate on the exchange (CONCEPT 8.11.3),
-// whose body is the search reply (`total` and `results`, the shape of the
-// reviewed Evidence reference, response-match.json). The route reads them
-// in order and treats everything neither one accepts as a source problem,
-// never as a guessed record:
+// The engine evaluates each predicate on the exchange, whose body is the
+// search reply (`total` and `results`, the OpenCRVS v2 events search
+// response shape). The route reads them in order and treats everything
+// neither one accepts as a source problem, never as a guessed record:
 //   - is_missing: total is 0 and no result came back. The source holds no
 //     registered event of this type under that tracking ID.
 //   - is_unique_match: total is 1, exactly one result came back, its

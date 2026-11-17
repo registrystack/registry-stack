@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The connector operation contract (`products/adapter/CONCEPT.md`
-//! section 17.3).
+//! The connector operation contract.
 //!
 //! Every native product operation is described before it runs, prepared
 //! without I/O into an exact persistable form, sent once, and recovered
@@ -319,7 +318,7 @@ pub enum ConnectorFault {
 /// A connector command key. The connector supplies and persists the
 /// key; client libraries never invent one. The runner derives keys
 /// from source identity, revision, mapping closure, and step, so a
-/// restart recomputes the same key (`CONCEPT.md` section 17.2); the
+/// restart recomputes the same key; the
 /// key itself is opaque bytes here.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CommandKey(pub String);

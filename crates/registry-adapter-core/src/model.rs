@@ -2,8 +2,7 @@
 
 //! Vocabulary shared by the Adapter artifacts: envelope kinds, HTTP methods,
 //! expressions, aggregation strategies, the closed error-class hierarchy,
-//! component kinds, and script seams (`products/adapter/CONCEPT.md`
-//! sections 8.5, 8.6, and 8.7).
+//! component kinds, and script seams.
 
 use std::collections::BTreeMap;
 
@@ -108,8 +107,7 @@ pub fn external_id_map_schema<V: schemars::JsonSchema>(
 }
 
 /// The wire envelope an artifact speaks: the closed set of envelope
-/// executors compiled into the engine (`products/adapter/CONCEPT.md`
-/// section 8.8). Executors are named for mechanisms, never products.
+/// executors compiled into the engine. Executors are named for mechanisms, never products.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -144,8 +142,7 @@ impl Envelope {
 }
 
 /// An HTTP method a facade operation or an upstream send may declare. The
-/// method decides send safety: `GET` is safe, the write methods are not
-/// (`products/adapter/CONCEPT.md` sections 8.7 and 9).
+/// method decides send safety: `GET` is safe, the write methods are not.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -163,7 +160,7 @@ impl HttpMethod {
 
     /// Whether the method can repeat without an upstream effect. Redelivery
     /// over a non-safe send needs the endpoint operation to declare
-    /// `idempotentUpstream` (`products/adapter/CONCEPT.md` section 8.7).
+    /// `idempotentUpstream`.
     #[must_use]
     pub const fn is_safe(self) -> bool {
         matches!(self, Self::Get)
@@ -173,8 +170,7 @@ impl HttpMethod {
 /// A script seam: code in its own file beside the pack, referenced by a
 /// relative path and pinned by digest (CFG-EMBED-1). Scripts never carry
 /// credentials and never construct URLs; the `http` component builds every
-/// request from its declared template
-/// (`products/adapter/CONCEPT.md` section 5.6).
+/// request from its declared template.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -186,8 +182,7 @@ pub struct ScriptReference {
 }
 
 /// A Rhai expression reference: the digest-pinned file from the pack's
-/// script inventory and the precompiled entrypoint to call
-/// (`products/adapter/CONCEPT.md` sections 5.6 and 8.5). Inline code is
+/// script inventory and the precompiled entrypoint to call. Inline code is
 /// refused (CFG-EMBED-1).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -200,8 +195,7 @@ pub struct RhaiExpression {
 }
 
 /// An expression in one of the ported languages, externally tagged by
-/// language name as in Camel's YAML DSL (`products/adapter/CONCEPT.md`
-/// section 8.5). `rhai` replaces Simple, Groovy, JavaScript, and `bean`.
+/// language name as in Camel's YAML DSL. `rhai` replaces Simple, Groovy, JavaScript, and `bean`.
 /// A predicate is an expression whose result is a boolean; the runtime
 /// never coerces.
 ///
@@ -226,8 +220,7 @@ pub enum Expression {
 }
 
 /// An aggregation strategy, compiled in and named after Camel's built-ins,
-/// plus two JSON additions marked as such in
-/// `products/adapter/CONCEPT.md` section 8.6. Tagged by `type` on the
+/// plus two JSON additions (`json-array-append` and `json-merge`). Tagged by `type` on the
 /// wire; every variant is a struct variant, the shape
 /// `registry-platform-yaml`'s `tagged_union!` reads.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -266,7 +259,7 @@ pub enum AggregationStrategy {
         unique_by: Option<String>,
         /// Property names carried out of each reply, each naming a
         /// singular `jsonpath` on the reply body; an absent selection
-        /// removes the property (section 8.11.7).
+        /// removes the property.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         properties: BTreeMap<String, String>,
     },
@@ -278,7 +271,7 @@ pub enum AggregationStrategy {
         into: String,
         /// Property names carried out of each reply, each naming a
         /// singular `jsonpath` on the reply body; an absent selection
-        /// removes the property (section 8.11.7).
+        /// removes the property.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         properties: BTreeMap<String, String>,
     },
@@ -303,8 +296,7 @@ fn is_default_true(value: &bool) -> bool {
     *value
 }
 
-/// A closed error class, the port of Camel's Java exception hierarchy
-/// (`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest
+/// A closed error class, the port of Camel's Java exception hierarchy. Clauses match the closest
 /// class across the error and its cause; the five uncatchable classes name
 /// the boundary no `onException` or `doCatch` may handle.
 ///
@@ -449,8 +441,7 @@ impl ErrorClass {
     }
 
     /// Whether no `onException` or `doCatch` may name this class. The five
-    /// uncatchable classes guard the boundary
-    /// (`products/adapter/CONCEPT.md` section 8.7).
+    /// uncatchable classes guard the boundary.
     #[must_use]
     pub const fn is_uncatchable(self) -> bool {
         matches!(
@@ -464,7 +455,7 @@ impl ErrorClass {
     }
 
     /// Whether this class is raised by the `rest` consumer outside any
-    /// route (`products/adapter/CONCEPT.md` section 8.7): neither a clause
+    /// route: neither a clause
     /// may name it nor a pack raise it, and the profile maps it like every
     /// other class.
     #[must_use]
@@ -548,7 +539,7 @@ impl<'de> serde::Deserialize<'de> for ErrorClass {
         Self::from_class(&class).ok_or_else(|| {
             serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
                 "an error class from the closed Adapter hierarchy",
-                "Name one class of the error hierarchy in CONCEPT.md section 8.7.",
+                "Name one class of the closed Adapter error hierarchy: https://docs.registrystack.org/configure/adapter-routes/#error-classes",
             ))
         })
     }
@@ -566,19 +557,17 @@ impl schemars::JsonSchema for ErrorClass {
             .map(|class| class.class())
             .collect::<Vec<_>>();
         schemars::json_schema!({
-            "description": "A closed error class, the port of Camel's Java exception hierarchy (`products/adapter/CONCEPT.md` section 8.7).",
+            "description": "A closed error class, the port of Camel's Java exception hierarchy (https://docs.registrystack.org/configure/adapter-routes/#error-classes).",
             "type": "string",
             "enum": wire_names,
         })
     }
 }
 
-/// A component kind, the ported subset of Camel's component library
-/// (`products/adapter/CONCEPT.md` sections 8.8 and 17.2). `rest` is the
+/// A component kind, the ported subset of Camel's component library. `rest` is the
 /// facade consumer; `direct` calls routes in process; `http`, `graphql`,
 /// `postgres` and `sqlite-extract` are read-only producers; `file`, `rabbitmq`,
-/// and `sftp` are job-only sources a facade route may never reach (section
-/// 17.1).
+/// and `sftp` are job-only sources a facade route may never reach.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -638,7 +627,7 @@ impl ComponentKind {
     /// Whether a pack endpoint may declare this component as a producer
     /// send: `http`, `graphql`, and the read-only database sources. The
     /// job-only `file`, `rabbitmq`, and `sftp` sources are read through the job's
-    /// `pollEnrich` step, never through a send (section 17.1), and
+    /// `pollEnrich` step, never through a send, and
     /// `direct` names routes while `rest` is the engine-owned facade
     /// consumer.
     #[must_use]
@@ -660,8 +649,7 @@ impl ComponentKind {
     }
 }
 
-/// An expression language a pack may require of the engine
-/// (`products/adapter/CONCEPT.md` section 8.5).
+/// An expression language a pack may require of the engine.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -708,7 +696,7 @@ impl Language {
 }
 
 /// An EIP a pack may require of the engine, named after the step union in
-/// `crate::route` (`products/adapter/CONCEPT.md` section 8.6).
+/// `crate::route`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -817,8 +805,7 @@ impl Eip {
 }
 
 /// The destination of a `to` or `enrich` send: a `direct:` route, an
-/// `http:`, `graphql:`, or `postgres:` endpoint declared in the pack
-/// (`products/adapter/CONCEPT.md` sections 8.3, 8.8, and 17.2). The URI is
+/// `http:`, `graphql:`, or `postgres:` endpoint declared in the pack. The URI is
 /// static; no `toD` is ported. A `file:` or `sftp:` URI parses so the
 /// authoring checks can refuse it under its own code
 /// (`adapter.job.send-component-refused`): a job source is read through the
@@ -1019,8 +1006,7 @@ mod tests {
         assert!(!class.unwrap().is_uncatchable());
     }
 
-    /// The outcome branch is a pack-raisable, catchable addition
-    /// (`products/adapter/CONCEPT.md` section 8.7): every outcome class
+    /// The outcome branch is a pack-raisable, catchable addition: every outcome class
     /// resolves under the `outcome` root, is neither uncatchable nor
     /// facade, and a clause naming the root matches its leaves.
     #[test]
@@ -1049,7 +1035,7 @@ mod tests {
     }
 
     /// The facade branch is raised by the `rest` consumer outside any
-    /// route (`products/adapter/CONCEPT.md` section 8.7): every facade
+    /// route: every facade
     /// class resolves under the `facade` root, is facade, catchable by no
     /// clause rule, and the two media classes the profile maps to 415 and
     /// 406 resolve.
@@ -1307,7 +1293,7 @@ mod tests {
     /// A `file:` or `sftp:` URI parses so the authoring checks can refuse a
     /// send to a job source under its own code
     /// (`adapter.job.send-component-refused`): the reader accepts the shape,
-    /// the checks refuse the use (CONCEPT 17.1).
+    /// the checks refuse the use.
     #[test]
     fn job_source_uris_parse_for_the_checks_to_refuse() {
         for uri in ["file:submissions", "sftp:dropbox"] {

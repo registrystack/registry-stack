@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Generated checker/interpreter properties for `CONCEPT.md` section 13.5.
+//! Generated checker/interpreter properties.
 //! The test asks the core checker for the lowest accepted static call bound,
 //! executes that same generated route over real loopback HTTP twice, and
 //! compares the resulting route bytes and observed sends.

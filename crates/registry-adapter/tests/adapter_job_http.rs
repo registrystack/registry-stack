@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `http` component under the job profile
-//! (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): a kobo-shaped
+//! The `http` component under the job profile: a kobo-shaped
 //! paged acquisition over the loopback double, a job-only endpoint's
 //! raised response bound carrying a body the facade ceiling would
 //! refuse, and the profile's upstream-call budget held at the page run.
@@ -18,7 +17,7 @@ mod upstream;
 /// shaped as the item contract, the route's own next cursor carried
 /// through under the engine's property rules.
 const PAGE_SCRIPT: &str = r#"// The fetched submissions page, shaped as the item
-// contract (CONCEPT 17.2): one item per reply entry.
+// contract: one item per reply entry.
 fn page(exchange) {
     let entries = exchange.body.results;
     if entries == () {
@@ -262,7 +261,7 @@ async fn a_paged_http_acquisition_round_trips_the_cursor() {
 }
 
 /// A job-only endpoint may declare its response bound up to the
-/// platform cap (CONCEPT 17.2 and 8.8): a body past the facade's fixed
+/// platform cap: a body past the facade's fixed
 /// ceiling passes the job page and the profile's raised bound, where a
 /// facade deployment would refuse it.
 #[tokio::test]

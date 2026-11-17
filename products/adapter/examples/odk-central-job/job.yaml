@@ -32,7 +32,7 @@ source:
   pack:
     id: odk-central
     version: "1"
-    digest: sha256:070300cfce78200e2d967aebcef76f40348e305ab15de42374049c334993f324
+    digest: sha256:5aed8640633d2b2e8cb9cccfca63bef75b593a3e245efafa6e81131f4215d9b0
   route: odk-submissions
 destination:
   type: signed-coordinator-event

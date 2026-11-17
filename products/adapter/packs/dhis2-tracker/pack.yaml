@@ -76,9 +76,9 @@
 # errors for one object count once, and a missing or malformed report fails
 # closed instead of becoming zero.
 #
-# Error clauses: the pack raises the closed error classes of CONCEPT 8.7
-# and never names a profile's problem codes or writes a problem body
-# (CONCEPT 8.11.6). A clause that translates a source answer ends with
+# Error clauses: the pack raises the closed error classes of the Adapter
+# route language and never names a profile's problem codes or writes a
+# problem body. A clause that translates a source answer ends with
 # `throwException` carrying an `outcome.*` class (the 404 answer raises
 # `outcome.not-found`, the 409 import report raises `outcome.rejected`);
 # redelivery stays a clause of its own and every other error propagates
@@ -88,34 +88,32 @@
 # `outcome.rejected` to its 409.
 #
 # Code maps: a `convert` step over the source's code values returns with
-# the core convert steps (CONCEPT 8.6); this pack declares none until
-# then.
+# the core convert steps; this pack declares none until then.
 #
-# Paging: one facade page per upstream page, the default shape of CONCEPT
-# 8.11.2 and the cheapest bound. The caller's pageSize header (a facade
-# input; the bound profile bounds it) is the DHIS2 page size, and the
-# position is the page number: the route seeds dhis2Page from the
-# AdapterContinuation property the engine restores from the caller's
-# cursor (absent on the first page), fetches that one page, and sets
-# AdapterNextContinuation to the next page number while the reply's pager
-# holds one more. Captured (2.43.2.1): the reply carries the entities
-# under `trackedEntities` and a `pager` object that is always present
-# with `page` and `pageSize`; `totalPages=true` adds `total` and
-# `pageCount`, and without it the pager carries neither. The pager also
-# carries `nextPage` and `prevPage` links, so `pageCount` is not the only
-# another-page signal; the route reads `pageCount` because the count is
-# all it needs, and it still sends `totalPages=true` (flagged expensive
-# in the documentation) so the count is present. A missing pager or
-# pageCount is an unexpected shape and throws; a pageCount of 0 is a
-# legitimate empty result with no cursor. This pack targets 2.43, tested
-# against 2.43.2.1; earlier tracker versions answered different shapes
-# and are not targeted. A pageSize above the server's
-# KeyTrackedEntityMaxLimit system setting, when that setting is non-zero,
-# is refused with a 400 (documentation; the capture kept page sizes at
-# 5, so it never answered one); the bound profile's pageSize maximum
-# must respect the deployment's setting. An absent or null
-# AdapterNextContinuation at the end of the route is the last page, so
-# the engine seals no cursor.
+# Paging: one facade page per upstream page, the default paging shape and
+# the cheapest bound. The caller's pageSize header (a facade input; the
+# bound profile bounds it) is the DHIS2 page size, and the position is
+# the page number: the route seeds dhis2Page from the AdapterContinuation
+# property the engine restores from the caller's cursor (absent on the
+# first page), fetches that one page, and sets AdapterNextContinuation to
+# the next page number while the reply's pager holds one more. Captured
+# (2.43.2.1): the reply carries the entities under `trackedEntities` and
+# a `pager` object that is always present with `page` and `pageSize`;
+# `totalPages=true` adds `total` and `pageCount`, and without it the
+# pager carries neither. The pager also carries `nextPage` and `prevPage`
+# links, so `pageCount` is not the only another-page signal; the route
+# reads `pageCount` because the count is all it needs, and it still sends
+# `totalPages=true` (flagged expensive in the documentation) so the count
+# is present. A missing pager or pageCount is an unexpected shape and
+# throws; a pageCount of 0 is a legitimate empty result with no cursor.
+# This pack targets 2.43, tested against 2.43.2.1; earlier tracker
+# versions answered different shapes and are not targeted. A pageSize
+# above the server's KeyTrackedEntityMaxLimit system setting, when that
+# setting is non-zero, is refused with a 400 (documentation; the capture
+# kept page sizes at 5, so it never answered one); the bound profile's
+# pageSize maximum must respect the deployment's setting. An absent or
+# null AdapterNextContinuation at the end of the route is the last page,
+# so the engine seals no cursor.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: dhis2-tracker
@@ -338,9 +336,8 @@ routeTemplates:
           value:
             constant: "{{attribute_fields}}"
       # The page this run fetches: the engine restores the caller's
-      # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
-      # the first page; scripts/seed-page.rhai turns that into the DHIS2
-      # page number.
+      # continuation into AdapterContinuation, absent on the first page;
+      # scripts/seed-page.rhai turns that into the DHIS2 page number.
       - setProperty:
           name: dhis2Page
           value:
@@ -366,9 +363,9 @@ routeTemplates:
                 constant: ACCESSIBLE
               page:
                 exchangeProperty: dhis2Page
-              # The caller's pageSize header (a facade input, CONCEPT
-              # 8.11.1; the bound profile bounds it) is the DHIS2 page
-              # size. totalPages=true adds total and pageCount to the
+              # The caller's pageSize header (a facade input; the
+              # bound profile bounds it) is the DHIS2 page size.
+              # totalPages=true adds total and pageCount to the
               # always-present pager (which also carries nextPage and
               # prevPage links); scripts/next-continuation.rhai reads
               # pageCount.
@@ -441,9 +438,8 @@ routeTemplates:
           value:
             constant: "{{attribute_fields}}"
       # The page this run fetches: the engine restores the caller's
-      # continuation (CONCEPT 8.11.2) into AdapterContinuation, absent on
-      # the first page; scripts/seed-page.rhai turns that into the DHIS2
-      # page number.
+      # continuation into AdapterContinuation, absent on the first page;
+      # scripts/seed-page.rhai turns that into the DHIS2 page number.
       - setProperty:
           name: dhis2Page
           value:
@@ -468,9 +464,9 @@ routeTemplates:
                 constant: SELECTED
               page:
                 exchangeProperty: dhis2Page
-              # The caller's pageSize header (a facade input, CONCEPT
-              # 8.11.1; the bound profile bounds it) is the DHIS2 page
-              # size. totalPages=true adds total and pageCount to the
+              # The caller's pageSize header (a facade input; the
+              # bound profile bounds it) is the DHIS2 page size.
+              # totalPages=true adds total and pageCount to the
               # always-present pager (which also carries nextPage and
               # prevPage links); scripts/next-continuation.rhai reads
               # pageCount.
@@ -659,25 +655,25 @@ scripts:
   - path: scripts/source-read-page.rhai
     digest: sha256:33189e0206a15aeba67e706b113561b2498c707576cf4164fc937d633c15d55b
   - path: scripts/org-unit-filter.rhai
-    digest: sha256:046a19140b16378433f8afe999c633ec20a68257dffd60a216fba4ebd038ccc4
+    digest: sha256:1ad606b3986e7580b8b56c33d1e8e0aa003a3e321787c5c768f507962da3ced1
   - path: scripts/seed-page.rhai
-    digest: sha256:3d1f10f861171fcff9f21c0e36aa7941d6bc327b5c510cf9127a7e8131c835ed
+    digest: sha256:1a86a8d51c61be9b6545f5a2dd25238484a2b5dcfe23ea9a71edff0fc29d798d
   - path: scripts/next-continuation.rhai
-    digest: sha256:c2ebb867b498a019f6c41190890d91ea61d76833c15bb2567bb2b9d634e959bb
+    digest: sha256:1828501b2f2634d79c5938599c13c04a92b517159cbb2dcd04677ae3904deb7c
   - path: scripts/import-rejected.rhai
-    digest: sha256:ddbb54a6b67c09db81952cf8c5d5c2b54db4e842cb31996ebf8072e30014b104
+    digest: sha256:85ac7aa0978ebcb94f56a7c0f56297dafed110763d3f92c270cfba5b238d6fbe
   - path: scripts/is-not-found.rhai
-    digest: sha256:8f738dc51ecbd1641f8f512ff5d2edcc48408e438814179ea360cd4267dd34b0
+    digest: sha256:d1f7afa50183e51252aa9b4ea80b1ff8e146d7ce71c0887425da200eeea731c1
   - path: scripts/is-bad-request.rhai
-    digest: sha256:ed94136005f93644620028ed7338240a2faad741145f574ba00491b43e606b4b
+    digest: sha256:e2a258176d2576b3dfee4d7431f3d82329e3e200c9007c8effce83f1175a8bfa
   - path: scripts/to-record.rhai
-    digest: sha256:b201599e891920e9263f39f5bcac51b861b6df91321b4531b01ba3630d808fbd
+    digest: sha256:66b1428eae236fd4aed93220ef3b2081a8ef42b64428cc31ce49aa9c49d9ab44
   - path: scripts/shape-records.rhai
-    digest: sha256:be2330179db4cec8995e54574800a7b375ef5bbc8d1d5fef96caef5630234fa2
+    digest: sha256:e7089bcb0b69e1139ca643c89495693e593f50dccb4c961d3633949c99f922f3
   - path: scripts/to-bundle.rhai
-    digest: sha256:04a0d751f54874e4fd8b46b1360f3c1f689d1461b0a967ee6b8784e1ae37793d
+    digest: sha256:5d540860fb4f76ff7e100167a568f4131fc7aa79a7052a2e440d58ce1b5f65ea
   - path: scripts/accepted-record.rhai
-    digest: sha256:37fbf1d1454e3eb3c2112991e8a80189dae40b460188a029ae47a0354e19adea
+    digest: sha256:b6b8fa3b220c59b9d64308e527e19fe9dae6513c84bc78468b4fecd1b7b024c4
   - path: scripts/import-summary.rhai
     digest: sha256:0aceef8cf488ee900de1dccc465d8ed70cbd12bf6cfc8f4139e4e32c87669acd
   - path: scripts/evidence.rhai

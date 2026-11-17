@@ -2,7 +2,7 @@
   "$defs": {
     "AccessProfile": {
       "additionalProperties": false,
-      "description": "One access profile: a named binding of scopes to concrete facade\noperations and record types, reviewed deployment policy\n(`products/adapter/CONCEPT.md` section 10.1).",
+      "description": "One access profile: a named binding of scopes to concrete facade\noperations and record types, reviewed deployment policy.",
       "properties": {
         "id": {
           "$ref": "#/$defs/LocalId",
@@ -43,14 +43,14 @@
     },
     "Binding": {
       "additionalProperties": false,
-      "description": "One binding of a concrete contract operation to a route\n(`products/adapter/CONCEPT.md` section 7): one concrete operation per\n(profile operation, record type) pair, with the static worst-case\nupstream-call budget the checks hold the route to.",
+      "description": "One binding of a concrete contract operation to a route: one concrete operation per\n(profile operation, record type) pair, with the static worst-case\nupstream-call budget the checks hold the route to.",
       "properties": {
         "asyncCompletion": {
           "$ref": "#/$defs/BindingAsyncCompletion",
           "description": "The asynchronous response policy, absent for every synchronous\nbinding."
         },
         "filters": {
-          "description": "The declared fields of the bound record type a search binding\nfilters on (`products/adapter/CONCEPT.md` section 8.11.1); the\nfacade offers exactly these as typed equality query parameters.\nEvery declared filter is required: a call that leaves one out is\nrefused as an invalid field before any script runs or source is\ncalled.\nEvery entry must name a declared field, checked at the project\nchecks; the list is unique (CFG-ID-6).",
+          "description": "The declared fields of the bound record type a search binding\nfilters on; the\nfacade offers exactly these as typed equality query parameters.\nEvery declared filter is required: a call that leaves one out is\nrefused as an invalid field before any script runs or source is\ncalled.\nEvery entry must name a declared field, checked at the project\nchecks; the list is unique (CFG-ID-6).",
           "items": {
             "$ref": "#/$defs/LocalId"
           },
@@ -279,7 +279,7 @@
     },
     "PinnedRef": {
       "additionalProperties": false,
-      "description": "A pinned reference to a profile or pack: plain identifier plus the\nversion and digest `adapterctl check` verifies (CFG-ID-4,\n`products/adapter/CONCEPT.md` section 6).",
+      "description": "A pinned reference to a profile or pack: plain identifier plus the\nversion and digest `adapterctl check` verifies (CFG-ID-4).",
       "properties": {
         "digest": {
           "$ref": "#/$defs/Digest",
@@ -326,7 +326,7 @@
     },
     "ProjectIdentity": {
       "additionalProperties": false,
-      "description": "The project identity block: the deployment's own name and version\n(`products/adapter/CONCEPT.md` section 10.1). The id is a local\nidentifier (CFG-ID-1); the version is text, the same version-as-text\nrule as profiles and packs.",
+      "description": "The project identity block: the deployment's own name and version. The id is a local\nidentifier (CFG-ID-1); the version is text, the same version-as-text\nrule as profiles and packs.",
       "properties": {
         "id": {
           "$ref": "#/$defs/LocalId",
@@ -428,7 +428,7 @@
     },
     "RecordType": {
       "additionalProperties": false,
-      "description": "One declared record type and its fields\n(`products/adapter/CONCEPT.md` section 6).",
+      "description": "One declared record type and its fields.",
       "properties": {
         "fields": {
           "description": "The declared fields, unique by whole item.",

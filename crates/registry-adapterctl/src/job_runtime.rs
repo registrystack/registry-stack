@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Schema mirror for the ingestion job runtime document
-//! (`AdapterJobRuntimeConfig`, `products/adapter/CONCEPT.md` sections
-//! 10.2 and 17.2). The engine owns the reader,
+//! (`AdapterJobRuntimeConfig`). The engine owns the reader,
 //! `registry_adapter_engine::job_sources::JobRuntimeConfig`, whose crate
 //! carries no schema derive, so the generator describes the document from
 //! these mirror types; this module keeps the generated schema beside the

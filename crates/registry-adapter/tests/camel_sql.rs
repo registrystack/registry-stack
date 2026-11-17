@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The read-only `postgres` source
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 17.2): the query
+//! The read-only `postgres` source: the query
 //! compile refusals over `pg_query`, the send flow over a scripted
 //! source client, and, behind `postgres-test` and a real server, the
 //! read-only authority, the statement bound, and the bounded fetch

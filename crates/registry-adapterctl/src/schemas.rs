@@ -3,8 +3,7 @@
 //! The generated JSON Schemas of the ten Adapter formats, derived from the
 //! source-neutral model in `registry-adapter-core` with `schemars` or from
 //! the runtime's pure effective-contract projection, and
-//! written to `products/adapter/schemas/` (`products/adapter/CONCEPT.md`
-//! sections 6 and 12). The committed files are generated outputs: never
+//! written to `products/adapter/schemas/`. The committed files are generated outputs: never
 //! hand-edited, held to their sources by `adapterctl schemas --check`.
 
 use clap::Args;

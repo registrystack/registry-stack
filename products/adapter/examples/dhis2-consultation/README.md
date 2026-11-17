@@ -92,7 +92,7 @@ upstream exchanges rather than source items, so preview does not read them;
 `fixtures replay` is the end-to-end proof over them.
 
 The supported subset is the one in
-[`VISUAL-MAPPING.md`](../../VISUAL-MAPPING.md): copy, keyed-array selection,
+[field mapping page](https://docs.registrystack.org/configure/adapter/#field-mapping): copy, keyed-array selection,
 and `integer`, `text` and `date` conversions. A mapping does not establish
 programme membership or enable an API operation; the collection, bindings and
 `bindingTransforms` in `project.yaml` do.

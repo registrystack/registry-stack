@@ -75,7 +75,7 @@ in a template body,
 `/routes/{id}` otherwise, so every member refuses with exactly one
 finding per code. The corpus holds 191 members.
 
-`base-job/` is the clean governed-ingestion control (CONCEPT section 17):
+`base-job/` is the clean governed-ingestion control:
 a pack whose source route polls a bounded `file` endpoint through
 `pollEnrich`, beside a matching `AdapterJob` definition and job runtime.
 The workspace passes `adapterctl check` with zero findings and the job
@@ -186,7 +186,7 @@ and deployment custody aligned. Each refuses with its directory's exact code.
 | `adapter.pack.projection-invalid` | An `exact` projection selects by `urn:example:person-number` but keys its records by `urn:example:tax-number` | `adapter.pack.projection-invalid` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
 | `adapter.pack.script-uncompilable` | A pinned script does not parse (missing closing brace; its pin matches the broken bytes) | `adapter.pack.script-uncompilable` | tool |
-| `adapter.pack.entrypoint-parameter` | A pinned script's entrypoint takes `record`, not the `exchange` the slot passes (CONCEPT 8.11.3); the script parses and hashes to its pin | `adapter.pack.entrypoint-parameter` | tool |
+| `adapter.pack.entrypoint-parameter` | A pinned script's entrypoint takes `record`, not the `exchange` the slot passes; the script parses and hashes to its pin | `adapter.pack.entrypoint-parameter` | tool |
 | `adapter.pack.graphql-query-invalid` | The pinned query file does not parse as a GraphQL document (its pin matches the broken bytes) | `adapter.pack.graphql-query-invalid` | tool |
 | `adapter.pack.graphql-operation-unknown` | The graphql endpoint names operation `FindCases`, which its pinned query file does not declare | `adapter.pack.graphql-operation-unknown` | tool |
 | `adapter.pack.graphql-operation-required` | A graphql endpoint pins a query file but omits `operationName` | `adapter.pack.graphql-operation-required` | checks |
@@ -332,7 +332,7 @@ Fixture files sit in the member's `fixtures/` directory, which
 | `adapter.fixture.response-schema` | Expected facade response's record violates the derived result schema (`case_type` integer, declared string) | `adapter.fixture.response-schema` | checks |
 | `adapter.fixture.unknown-problem-code` | Expected problem entry carries code `cases.spectre`, which no declared problem of the profile answers by class and code | `adapter.fixture.unknown-problem-code` | checks |
 | `adapter.fixture.unknown-operation` | Entry names operation `nope`, which the profile does not declare | `adapter.fixture.unknown-operation` | checks |
-| `adapter.fixture.credential-recorded` | Recorded read request carries the reserved header `authorization`; a fixture never sees credentials (CONCEPT 10.2), and replay supplies credentials from the runtime configuration | `adapter.fixture.credential-recorded` | checks |
+| `adapter.fixture.credential-recorded` | Recorded read request carries the reserved header `authorization`; a fixture never sees credentials, and replay supplies credentials from the runtime configuration | `adapter.fixture.credential-recorded` | checks |
 | `adapter.fixture.empty-upstream` | Entry records no upstream exchange, so a replay of it would hang on a send nothing answers | `adapter.fixture.empty-upstream` | checks |
 | `adapter.fixture.uncovered-exchange` | Suite declares only the token intercept, so the entry's plain read send to the declared `cases` endpoint is covered by no intercept | `adapter.fixture.uncovered-exchange` | checks |
 

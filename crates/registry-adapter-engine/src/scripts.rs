@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The pack's Rhai entrypoints, digest-verified and compiled at load, and
-//! the call that runs one against an exchange
-//! (`products/adapter/CONCEPT.md` section 8.11.3).
+//! the call that runs one against an exchange.
 //!
 //! An entrypoint takes one `exchange` argument, `#{body, headers,
 //! properties}` with lowercased header names, and returns a value. Each file
@@ -68,15 +67,14 @@ const JOB_MAPPING_PREFIX: &str = "\0job-mapping:";
 const PROJECT_TRANSFORM_PREFIX: &str = "\0project-transform:";
 
 /// A deployment's declared code maps, keyed by id: the one table the
-/// conversion steps and the Rhai `code_map(id, key)` helper read
-/// (`products/adapter/CONCEPT.md` section 8.6). Shared because the Rhai
+/// conversion steps and the Rhai `code_map(id, key)` helper read. Shared because the Rhai
 /// native function cannot borrow the caller's stack: each call clones
 /// the handle, and the maps themselves are never copied per call.
 pub type CodeMaps = Arc<BTreeMap<String, CodeMap>>;
 
 /// The fixed marker a `code_map` miss raises through the engine: the
 /// class name and the map id, so the failure classification can name
-/// the map without carrying the key (section 8.6). A script that raises
+/// the map without carrying the key. A script that raises
 /// the same text itself is classified the same way: the marker is the
 /// contract, and pack scripts are reviewed content.
 const UNMAPPED_MARKER: &str = "conversion.unmapped:";
@@ -288,7 +286,7 @@ impl ScriptSet {
     /// Compile `(file, entrypoint)` as an aggregation strategy entrypoint:
     /// a two-parameter function over the old and new bodies, named for
     /// Camel's own `AggregationStrategy.aggregate(oldExchange, newExchange)`
-    /// (`products/adapter/CONCEPT.md` section 8.11.7; `new` alone is a
+    /// (`new` alone is a
     /// reserved word in the pinned engine, so Camel's full names it is).
     /// The same digest verification as [`ScriptSet::add`] applies.
     pub fn add_aggregation(
@@ -472,7 +470,7 @@ impl ScriptSet {
     }
 
     /// Run one aggregation strategy entrypoint over the old and new
-    /// bodies (section 8.11.7). A split's first call passes a null `old`,
+    /// bodies. A split's first call passes a null `old`,
     /// which the entrypoint sees as `()`.
     pub fn aggregate(
         &self,
@@ -559,7 +557,7 @@ impl ScriptSet {
     }
 
     /// Run a predicate entrypoint. A result that is not a boolean raises
-    /// `script` (section 8.11.3).
+    /// `script`.
     pub fn predicate(
         &self,
         maps: &CodeMaps,
@@ -584,7 +582,7 @@ fn project_transform_key(script: &str) -> String {
 
 /// Register `code_map(id, key)` over the declared maps: the same single
 /// lookup a conversion step takes, with the miss raised as the marker
-/// text (`CONCEPT.md` section 8.6; there is no second key lookup in v1).
+/// text (there is no second key lookup in v1).
 /// An id no declared map carries answers the same miss naming that id:
 /// a script's references are not statically countable, so the run time
 /// is where they resolve.

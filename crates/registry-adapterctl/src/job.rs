@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `adapterctl job check`: the offline validation of one ingestion job
-//! over the same compile the page run uses
-//! (`products/adapter/CONCEPT.md` sections 17.1 and 17.2); and
+//! over the same compile the page run uses; and
 //! `adapterctl job lock`, the rewrite of the job's digest pins from the
 //! bytes of the files beside it.
 //!

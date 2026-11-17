@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `loop` processor, Camel's Loop EIP
-//! (`products/adapter/CONCEPT.md` section 8.6).
+//! The `loop` processor, Camel's Loop EIP.
 //!
 //! The `expression` form repeats for a count and the `doWhile` form
 //! repeats while its predicate holds; `copy` (default false) chooses
@@ -10,7 +9,7 @@
 //! loop still true at the maximum raises
 //! `loop.maximum-iterations-reached`. The several-upstream-pages-per-
 //! facade-page pagination shape runs `doWhile` over a property holding
-//! the upstream cursor, with an `enrich` per page (section 8.11.7).
+//! the upstream cursor, with an `enrich` per page.
 //!
 //! As `LoopProcessor` does: a count is read once before iterating and
 //! `CamelLoopSize` set then; a count of zero or less runs no iteration;
@@ -40,7 +39,7 @@ pub(crate) async fn run(run: &mut Run<'_, '_>, step: &LoopStep) -> Result<Flow, 
         let original = step.copy.then(|| run.exchange.clone());
         // The predicate is tested before every iteration, the first
         // included; a loop still holding at the bound raises instead of
-        // stopping silently (section 8.6).
+        // stopping silently.
         for index in 0..bound.get() {
             yield_within_deadline(run).await?;
             if !run.predicate(&expression)? {

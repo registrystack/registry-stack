@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Type Converter conformance suite, port-table row 35
-//! (`products/adapter/CONCEPT.md` sections 8.6 and 8.10):
+//! The Type Converter conformance suite, the Type Converter row of the Camel port table
+//! (products/adapter/scripts/camel-port-table.yaml):
 //! `convertBodyTo`, `convertHeaderTo`, and the port's `convertPropertyTo`
 //! addition over one declared code map. The lookup is exact and
 //! case-sensitive over a string input; a null or absent input passes

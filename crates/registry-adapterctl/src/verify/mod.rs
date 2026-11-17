@@ -2,8 +2,7 @@
 
 //! `adapterctl verify --live`: drive one constant-determined send per
 //! binding against the destination the runtime names, and judge the
-//! answer against the send's declared range
-//! (`products/adapter/CONCEPT.md` section 13.3).
+//! answer against the send's declared range.
 //!
 //! The command reads the workspace exactly as `check` does (project,
 //! pinned profile and pack, runtime with environment substitution on),

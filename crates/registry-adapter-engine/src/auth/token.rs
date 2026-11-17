@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The OAuth2 machinery of section 10.2: rendering the fixed token
+//! The OAuth2 machinery: rendering the fixed token
 //! request, reading the answer as Evidence reads it, the clamped cache,
 //! the per-exchange budget, and the 401 rule's decisions.
 //!
@@ -88,8 +88,7 @@ pub(crate) const TOKEN_SEND_CEILING: Duration = DEFAULT_REQUEST_TIMEOUT;
 /// no gateway error page can masquerade as a malformed response and no
 /// outage as a rejected credential, and every unusable 2xx (a page, an
 /// unparseable body, unusable token members) is the one credential
-/// fault, which no fallback may mask (`products/adapter/CONCEPT.md`
-/// section 10.2).
+/// fault, which no fallback may mask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenFault {
     /// The token request did not complete on the transport.
@@ -140,8 +139,7 @@ pub enum TokenFault {
     /// out of bounds, not the visible ASCII a header carries, or inside
     /// a 2xx body that is not a JSON object this layer can read. Every
     /// unusable 2xx is this one credential fault, so no fallback can
-    /// mask a refused issuance as a catchable protocol hiccup
-    /// (`products/adapter/CONCEPT.md` section 10.2).
+    /// mask a refused issuance as a catchable protocol hiccup.
     Invalid,
 }
 
@@ -348,8 +346,7 @@ pub trait ClientAssertionSigner: Send + Sync {
     ) -> Result<ProtectedText, AuthError>;
 }
 
-/// What the engine does with one upstream status, by the 401 rule of
-/// section 10.2.
+/// What the engine does with one upstream status, by the 401 rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpstreamStatusAction {
     /// No credential action; the send's own status rules apply.
@@ -707,7 +704,7 @@ const TOKEN_SENDS_PER_EXCHANGE: u8 = 2;
 
 /// The exchange's token budget: at most [`TOKEN_SENDS_PER_EXCHANGE`]
 /// token sends per endpoint per exchange, outside `maximumUpstreamCalls`
-/// and bounded separately (`products/adapter/CONCEPT.md` section 10.2).
+/// and bounded separately.
 /// Keyed by endpoint: one endpoint's refreshes never spend another
 /// endpoint's allowance.
 #[derive(Debug, Default)]
@@ -1054,7 +1051,7 @@ fn read_answer(
         // A 2xx that is not a JSON answer (a WAF page, a captive
         // portal) carries no credential: it is the same credential
         // fault as any other unusable 2xx, uncatchable so a fallback
-        // cannot mask the refused issuance (CONCEPT 10.2).
+        // cannot mask the refused issuance.
         return Err(TokenFault::Invalid);
     }
     let (token, lifetime) = decode_rfc6749_token_response(
@@ -1076,8 +1073,7 @@ fn read_answer(
 
 /// The one total mapping from the platform decode's faults onto this
 /// layer's: an unusable 2xx is always the one credential fault, so no
-/// fallback can mask a refused issuance as a catchable protocol hiccup
-/// (CONCEPT 10.2); only the narrowed scope and the unstated lifetime
+/// fallback can mask a refused issuance as a catchable protocol hiccup; only the narrowed scope and the unstated lifetime
 /// carry their own names.
 fn credential_fault(fault: Rfc6749TokenDecodeError) -> TokenFault {
     match fault {

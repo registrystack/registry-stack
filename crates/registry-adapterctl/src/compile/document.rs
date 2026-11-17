@@ -2,7 +2,7 @@
 
 //! The compiled contract document: the concrete OpenAPI 3.1 description of
 //! one deployment's facade, assembled from the bound pairs of a checked
-//! workspace (`products/adapter/CONCEPT.md` sections 7 and 8.11.1). One
+//! workspace. One
 //! concrete operation per bound (profile operation, record type) pair, the
 //! record type substituted into its path parameter, and nothing for an
 //! operation no binding binds. Assembly is pure over the parsed profile and
@@ -607,8 +607,7 @@ fn field_schema(field_type: registry_adapter_core::RecordFieldType) -> Value {
 
 /// The error responses of a profile's problems list: one response per
 /// distinct status, each answering the shared problem schema and described
-/// by the first problem carrying that status (`products/adapter/CONCEPT.md`
-/// section 8.11.6). The statuses, not the codes, key the responses: two
+/// by the first problem carrying that status. The statuses, not the codes, key the responses: two
 /// problems answering with the same status share one response.
 fn problem_responses(problems: &[Problem]) -> Map<String, Value> {
     let mut responses = Map::new();

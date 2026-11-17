@@ -3,7 +3,7 @@
 //! The `AdapterMapping` authoring model: a closed, declarative description
 //! of how a source value maps onto a target JSON Schema, its pure static
 //! checks, and the deterministic Rhai script generated from it
-//! (`products/adapter/VISUAL-MAPPING.md`).
+//! (<https://docs.registrystack.org/configure/adapter/#field-mapping>).
 //!
 //! The model is the reviewed source of truth; the generated script is the
 //! pinned artifact the sandboxed engine runs. Everything here is pure: the

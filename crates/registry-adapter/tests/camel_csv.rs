@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The CSV decoder of the governed-ingestion read step
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 17.2), over a real
+//! The CSV decoder of the governed-ingestion read step, over a real
 //! scratch file through the job entry. The option behavior adapts
 //! camel-4.23.0's own unmarshal cases; every case names the upstream
 //! test class and method it ports.
@@ -204,7 +203,7 @@ bindings: []
 /// Ports camel-4.23.0:components/camel-csv/src/test/java/org/apache/camel/dataformat/csv/CsvUnmarshalPipeDelimiterTest.java:
 /// the delimiter option reads a pipe-delimited body as maps. (The
 /// upstream case pipes through `unmarshal`; here the decoder rides the
-/// read step, the form CONCEPT 17.2 serves.)
+/// read step, the form a governed ingestion job uses.)
 #[tokio::test]
 async fn the_pipe_delimiter_reads_maps() {
     let fixture = write_fixture(r#" {"delimiter": "|"}"#);

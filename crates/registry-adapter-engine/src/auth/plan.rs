@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The compiled authentication plan of one endpoint
-//! (`products/adapter/CONCEPT.md` section 10.2).
+//! The compiled authentication plan of one endpoint.
 //!
 //! Compilation pairs the pack endpoint's declared
 //! [`EndpointAuthentication`] with the runtime's [`EndpointBinding`] and
-//! refuses everything the concept refuses, before any secret is
+//! refuses everything `adapterctl check` refuses, before any secret is
 //! resolved: a credential kind that does not match the declared kind, a
 //! `none` endpoint reaching past numeric loopback without an mTLS
 //! identity, a scheme or header name out of Evidence's bounds, a
@@ -67,8 +66,8 @@ impl AuthKind {
         }
     }
 
-    /// Whether an upstream 401 triggers the single refresh of
-    /// section 10.2; only the OAuth2 kinds hold a refreshable
+    /// Whether an upstream 401 triggers the single refresh;
+    /// only the OAuth2 kinds hold a refreshable
     /// credential.
     #[must_use]
     pub const fn is_oauth2(self) -> bool {
@@ -470,8 +469,8 @@ impl AuthPlan {
     /// Static kinds resolve their secret on every send. The OAuth2 kinds
     /// acquire a credential through the fixed token endpoint under the
     /// exchange's budget; the acquisition holds the endpoint's cache
-    /// lock until it completes, which is the single-flight refresh of
-    /// section 10.2. The returned generation names the cached issuance
+    /// lock until it completes, which is the single-flight refresh.
+    /// The returned generation names the cached issuance
     /// the header carries; the engine passes it back to
     /// [`AuthPlan::on_upstream_status`] when the send draws a 401. The
     /// future is `Send`, so the engine may poll it on any worker.
@@ -557,7 +556,7 @@ impl AuthPlan {
         })
     }
 
-    /// Apply the 401 rule of section 10.2 to one upstream status.
+    /// Apply the 401 rule to one upstream status.
     ///
     /// The rule holds whatever `okStatusCodeRange` and
     /// `throwExceptionOnFailure` say: an upstream 401 under an OAuth2
@@ -1243,7 +1242,7 @@ mod tests {
         );
     }
 
-    /// Static kinds resolve to the header the concept states: Basic from
+    /// Static kinds resolve to the header the kind declares: Basic from
     /// the pair, the declared scheme with the token (defaulting to
     /// `Bearer`), the declared header with the key; `none` resolves
     /// nothing.

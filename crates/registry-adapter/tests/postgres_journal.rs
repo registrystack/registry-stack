@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The audit journal's PostgreSQL suite: the migration, the runtime-clock
-//! stamp, and the retention index
-//! (`products/adapter/CONCEPT.md` section 11). Every test runs in its own
+//! stamp, and the retention index. Every test runs in its own
 //! schema inside the database named by `ADAPTER_TEST_DATABASE_URL`; a test
 //! binary that passes because its database URL is absent is not database
 //! verification, so the variable is required: without it every test in

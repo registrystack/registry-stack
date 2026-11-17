@@ -329,8 +329,7 @@ fn a_script_without_the_declared_entrypoint_refuses_with_the_compile_code() {
 
 /// A pinned script whose entrypoint takes a parameter by any other name
 /// refuses with the signature code beside the digest-pin code: the script
-/// ABI names the exchange slots' one parameter (`CONCEPT.md` section
-/// 8.11.3), and the refusal never quotes the author's spelling.
+/// ABI names the exchange slots' one parameter, and the refusal never quotes the author's spelling.
 #[test]
 fn an_entrypoint_whose_parameter_is_not_exchange_refuses_with_the_signature_code() {
     let (_root, project) = mutated_project(|root| {
@@ -667,7 +666,7 @@ fn the_human_success_prints_the_verdict_on_stdout() {
 
 /// A passing check says what its fixture pass covered: the contracts
 /// only, never a send-by-send replay, so a green pass is not read as a
-/// route test (CONCEPT 13.3).
+/// route test.
 #[test]
 fn the_check_pass_names_the_fixture_scope() {
     let (_root, project) = mutated_project(|_| {});

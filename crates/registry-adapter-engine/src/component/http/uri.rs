@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Origin-pinned links: the `httpUri` parameter on an `http` send
-//! (`products/adapter/CONCEPT.md` section 8.11.5).
+//! Origin-pinned links: the `httpUri` parameter on an `http` send.
 //!
 //! Sources page and link by absolute URL (FHIR `link[relation=next]`,
 //! HAL, JSON:API). Camel follows such a link through `CamelHttpUri`,
@@ -261,8 +260,8 @@ impl PinnedOrigin {
     ///
     /// # Errors
     ///
-    /// [`LinkRefusal`], class `egress.refused`, for every rule of
-    /// section 8.11.5 the link breaks, and for raw input the parser
+    /// [`LinkRefusal`], class `egress.refused`, for every egress rule
+    /// the link breaks, and for raw input the parser
     /// would repair rather than refuse: dropped tabs and newlines,
     /// trimmed spaces, `\` read as `/`, a collapsed dot segment, a
     /// rewritten query.

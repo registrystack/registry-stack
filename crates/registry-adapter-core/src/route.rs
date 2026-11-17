@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The route definition model: the ported Camel EIPs as reader types
-//! (`products/adapter/CONCEPT.md` sections 8.3 and 8.6, port table 8.10).
+//! (the Camel port table, products/adapter/scripts/camel-port-table.yaml, lists each one).
 //!
 //! A step is an externally tagged union keyed by the Camel EIP name, as
 //! Camel's YAML DSL writes it (CFG-ID-7); every variant refuses unknown
 //! keys. Camel defaults are the house defaults unless the port table says
 //! otherwise. Two bounds Camel leaves open are mandatory here: `split`
-//! carries `maximumItems` and `loop` carries `maximumIterations`
-//! (`products/adapter/CONCEPT.md` section 5.5); the authoring checks in
+//! carries `maximumItems` and `loop` carries `maximumIterations`; the authoring checks in
 //! `crate::checks` refuse their absence.
 
 use crate::job::CsvDecoder;
@@ -23,7 +22,7 @@ use serde::{Deserialize, Serialize};
 /// and that field's type. The operation's binding declares the filters;
 /// the engine compiles them into the effective contract, and the
 /// facade's request template matches a caller's filter values against
-/// them (`products/adapter/CONCEPT.md` sections 8.9 and 9).
+/// them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServedFilter {
     /// The filter's name, as the caller writes it.
@@ -47,7 +46,7 @@ pub const MAXIMUM_ERROR_CLASSES_PER_FILTER: usize = ErrorClass::ALL.len();
 pub const RESUME_PROPERTY_PREFIX: &str = "AdapterResume.";
 
 /// A route as Camel's YAML DSL writes it: one `from`, `direct:` only, and
-/// an ordered step list (`products/adapter/CONCEPT.md` section 8.3). Pack
+/// an ordered step list. Pack
 /// templates carry the same steps without the `from`; the instantiated
 /// route's `from` is `direct:<routeId>`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -64,8 +63,7 @@ pub struct RouteDefinition {
 }
 
 /// The `from` of a route: Camel's route consumer, bounded to `direct:`
-/// (divergence: the `rest` consumer dispatches to `direct:` routes;
-/// section 8.8).
+/// (divergence: the `rest` consumer dispatches to `direct:` routes).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -75,9 +73,7 @@ pub struct RouteFrom {
 }
 
 /// One step of a route body, externally tagged by the Camel EIP name
-/// (CFG-ID-7). Every port-table row for Increments 0 to 3 has a variant,
-/// so the format does not change when a later increment lands
-/// (`products/adapter/CONCEPT.md` section 8.10).
+/// (CFG-ID-7). Every port-table row has a variant.
 ///
 /// Step round-trip forms are pinned one per variant by the tests of this
 /// module; each test names the Camel 4.x page the variant's semantics port
@@ -103,8 +99,7 @@ pub enum Step {
     /// Run an expression for effect on properties without changing the
     /// body, as Camel's `script` EIP.
     Script(Expression),
-    /// Convert the message body through a code map
-    /// (`products/adapter/CONCEPT.md` section 8.6).
+    /// Convert the message body through a code map.
     ConvertBodyTo(ConvertStep),
     /// Convert one message header through a code map.
     ConvertHeaderTo(ConvertStep),
@@ -124,7 +119,7 @@ pub enum Step {
     /// Stop routing the exchange.
     Stop(StopStep),
     /// Raise a closed error class now; the route's clauses handle it like
-    /// any error (`products/adapter/CONCEPT.md` section 8.11.6).
+    /// any error.
     ThrowException(ThrowExceptionStep),
     /// Split a message into pieces and aggregate them.
     Split(SplitStep),
@@ -133,8 +128,7 @@ pub enum Step {
     /// Call a static endpoint and merge its reply.
     Enrich(EnrichStep),
     /// Poll a job source through a static `file:` or `sftp:` URI and merge
-    /// or replace the body with one bounded page
-    /// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2). Job-only:
+    /// or replace the body with one bounded page. Job-only:
     /// the authoring checks refuse the step in every facade-reachable
     /// route.
     PollEnrich(PollEnrichStep),
@@ -143,8 +137,7 @@ pub enum Step {
     /// Throttle sends; a waiting exchange waits at most until its
     /// deadline, then raises `throttle.rejected`.
     Throttle(ThrottleStep),
-    /// Wrap a write route in idempotent consumption
-    /// (`products/adapter/CONCEPT.md` section 9).
+    /// Wrap a write route in idempotent consumption.
     IdempotentConsumer(IdempotentConsumerStep),
     /// The route's error handler: `defaultErrorHandler` or
     /// `noErrorHandler`. The exhausted exchange is always journaled; the
@@ -156,8 +149,7 @@ pub enum Step {
     DoTry(DoTryStep),
 }
 
-/// A `to` send: the static destination and its parameters
-/// (`products/adapter/CONCEPT.md` section 8.8). The `http` component
+/// A `to` send: the static destination and its parameters. The `http` component
 /// builds the request from the declared template; no expression can change
 /// the origin or inject a path segment.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -171,8 +163,7 @@ pub struct ToStep {
     pub parameters: Option<ToParameters>,
 }
 
-/// The parameters of an upstream send, Camel's `http` component options
-/// (`products/adapter/CONCEPT.md` section 8.8). The path template's
+/// The parameters of an upstream send, Camel's `http` component options. The path template's
 /// `{{name}}` segments are filled from `pathParameters` expressions and
 /// percent-encoded by the engine as single segments; query members are
 /// engine-encoded.
@@ -188,8 +179,7 @@ pub struct ToParameters {
     /// The path template, e.g. `/v2/cases/{{type}}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// An origin-pinned link carried as an expression instead of `path`
-    /// (`products/adapter/CONCEPT.md` section 8.11.5): at send time the
+    /// An origin-pinned link carried as an expression instead of `path`: at send time the
     /// engine parses the value as an absolute URL and refuses it with
     /// `egress.refused` unless it stays inside the endpoint's origin and
     /// base path, carries no userinfo or fragment, and fits the URL
@@ -221,7 +211,7 @@ pub struct ToParameters {
     pub query: std::collections::BTreeMap<ExternalId, Expression>,
     /// Named parameter name to expression of a `postgres:` send, each key
     /// a parameter the endpoint's digest-pinned query file declares
-    /// (`products/adapter/CONCEPT.md` section 8.10, the SQL row; CFG-ID-1
+    /// (CFG-ID-1
     /// keys, engine-evaluated expressions). The checks refuse more than
     /// sixteen parameters (`adapter.job.postgres-parameters-unbounded`)
     /// and the member on any non-postgres send.
@@ -246,16 +236,14 @@ pub struct ToParameters {
     /// `200-299`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ok_status_code_range: Option<String>,
-    /// The source-native identifiers a later write-resume step needs
-    /// (`products/adapter/CONCEPT.md` section 9).
+    /// The source-native identifiers a later write-resume step needs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resume_bindings: Vec<ResumeBinding>,
 }
 
 /// One resume binding of a non-safe send: the source-native identifier a
 /// later step needs, read by an RFC 9535 selector and stored typed as an
-/// identifier, never as an arbitrary value
-/// (`products/adapter/CONCEPT.md` section 9).
+/// identifier, never as an arbitrary value.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -383,8 +371,7 @@ pub struct FilterStep {
     pub rhai: Option<RhaiExpression>,
     /// The exchange property that records the boolean outcome, absent by
     /// default: Camel 4's `statusPropertyName`. Camel 4 sets no fixed
-    /// filter property, and neither does the port
-    /// (`products/adapter/CONCEPT.md` section 8.6).
+    /// filter property, and neither does the port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_property_name: Option<String>,
     /// The steps that run only on match.
@@ -442,13 +429,11 @@ pub struct ValidateStep {
 pub struct StopStep {}
 
 /// The longest constant message a `throwException` step may carry
-/// (`products/adapter/CONCEPT.md` section 8.11.6, "bounded"; this is the
-/// number). The profile's `problemDetail` slot carries it to the caller.
+/// (a bounded constant). The profile's `problemDetail` slot carries it to the caller.
 pub const THROW_EXCEPTION_MESSAGE_MAXIMUM_BYTES: usize = 512;
 
 /// A `throwException` step: raise one closed error class, with an
-/// optional bounded constant message
-/// (`products/adapter/CONCEPT.md` section 8.11.6). The checks refuse a
+/// optional bounded constant message. The checks refuse a
 /// boundary or facade class, which never enters a route.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -489,8 +474,7 @@ pub struct SetPropertyStep {
 }
 
 /// One conversion step: `convertBodyTo`, `convertHeaderTo`, and the
-/// `convertPropertyTo` addition (`products/adapter/CONCEPT.md`
-/// section 8.6). Camel's `charset` option is not ported, and `type`
+/// `convertPropertyTo` addition. Camel's `charset` option is not ported, and `type`
 /// names a code map, never a Java type.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -526,7 +510,7 @@ impl ConvertStep {
     }
 }
 
-/// A `split` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).
+/// A `split` step.
 /// `parallelProcessing`, `streaming`, and `timeout` are not ported.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -563,7 +547,7 @@ pub struct SplitStep {
     pub steps: Vec<Step>,
 }
 
-/// A `loop` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).
+/// A `loop` step.
 /// Camel's shape with our bound: the count or predicate is the same flat
 /// single-language-key form as `filter` and `when`, and `doWhile: true`
 /// makes the expression a predicate loop (Camel's boolean flag, default
@@ -666,15 +650,14 @@ pub struct EnrichStep {
     pub parameters: Option<ToParameters>,
 }
 
-/// A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher
-/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2). It reads one
+/// A `pollEnrich` step, the bounded job-only port of Camel's Poll Enricher. It reads one
 /// bounded page from a static `file:`, `rabbitmq:`, or `sftp:` endpoint the pack
 /// declares; no dynamic endpoint expression and no `consumerSendTo` are
 /// ported. Absent a strategy, the page replaces the body, as `enrich`
 /// replaces it. `timeoutMilliseconds` is mandatory: the checks refuse its
 /// absence under `adapter.job.poll-timeout`, and the reader refuses a
-/// value outside 1 to 10000 (the platform-frozen per-attempt ceiling of
-/// `products/adapter/CONCEPT.md` section 8.8 holds for every endpoint). The step never appears in a
+/// value outside 1 to 10000 (the platform-frozen per-attempt ceiling
+/// that holds for every endpoint). The step never appears in a
 /// facade-reachable route (`adapter.job.poll-facade-refused`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -787,8 +770,7 @@ impl PollDecoder {
     }
 }
 
-/// A `circuitBreaker` step: resilience4j semantics and defaults
-/// (`products/adapter/CONCEPT.md` section 8.7), per EIP node,
+/// A `circuitBreaker` step: resilience4j semantics and defaults, per EIP node,
 /// process-local. Divergence: a rejected call always raises
 /// `breaker.open`, and `onFallback` runs on failure and on rejection.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -893,7 +875,7 @@ pub enum ThrottleMode {
     ConcurrentRequests,
 }
 
-/// A `throttle` step (`products/adapter/CONCEPT.md` section 8.6).
+/// A `throttle` step.
 /// Divergence: a waiting exchange waits at most until its deadline, then
 /// raises `throttle.rejected`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -921,7 +903,7 @@ pub struct ThrottleStep {
     pub steps: Vec<Step>,
 }
 
-/// An `idempotentConsumer` step (`products/adapter/CONCEPT.md` section 9).
+/// An `idempotentConsumer` step.
 /// The key is namespaced by caller identity and concrete operation and
 /// bound to the request digest; a duplicate replays the recorded facade
 /// response; `skipDuplicate` is not ported.
@@ -963,7 +945,7 @@ pub struct ErrorHandlerStep {
 
 /// Camel's `defaultErrorHandler`: a redelivery policy nested under
 /// `redeliveryPolicy`, as Camel's YAML DSL writes it
-/// (`products/adapter/CONCEPT.md` section 8.7; CFG-NAME spelling inside).
+/// (CFG-NAME spelling inside).
 /// `delayPattern` is not ported. Redelivery is per failing endpoint send,
 /// as in Camel.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -977,7 +959,7 @@ pub struct DefaultErrorHandler {
     /// Stop redelivering early while this predicate holds (Camel
     /// `retryWhile`, an option of the default error handler as in
     /// Camel's `DefaultErrorHandlerDefinition`, not of the redelivery
-    /// policy; section 8.7). Divergence from Camel: the predicate only
+    /// policy). Divergence from Camel: the predicate only
     /// stops redelivery earlier and `maximumRedeliveries` remains the
     /// hard cap, where Camel lets `retryWhile` override it, so
     /// `maximumUpstreamCalls` stays a check-time guarantee. The checks
@@ -993,8 +975,7 @@ pub struct DefaultErrorHandler {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NoErrorHandler {}
 
-/// An `onException` clause over the closed error-class hierarchy
-/// (`products/adapter/CONCEPT.md` section 8.7). No clause may name an
+/// An `onException` clause over the closed error-class hierarchy. No clause may name an
 /// uncatchable class; `crate::checks` refuses one that does. Redelivery
 /// nests under `redeliveryPolicy`, as Camel's exception clause does in
 /// YAML (`manual/exception-clause.html`, `manual/exception-redelivery.html`).
@@ -1017,8 +998,8 @@ pub struct OnExceptionStep {
     pub continued: Option<bool>,
     /// Stop redelivering early while this predicate holds (Camel
     /// `retryWhile`, an option of the clause as in Camel's
-    /// `OnExceptionDefinition`, not of the redelivery policy; section
-    /// 8.7). Divergence from Camel: the predicate only stops redelivery
+    /// `OnExceptionDefinition`, not of the redelivery policy
+    /// (https://docs.registrystack.org/configure/adapter-routes/#exception-clauses)). Divergence from Camel: the predicate only stops redelivery
     /// earlier and `maximumRedeliveries` remains the hard cap, where
     /// Camel lets `retryWhile` override it, so `maximumUpstreamCalls`
     /// stays a check-time guarantee. The redeliveries behind it are the
@@ -1039,7 +1020,7 @@ pub struct OnExceptionStep {
 }
 
 /// The redelivery option set, shared by the error handler and an
-/// `onException` clause (`products/adapter/CONCEPT.md` section 8.7; the
+/// `onException` clause (the
 /// nesting under `redeliveryPolicy` follows Camel's own YAML DSL,
 /// `manual/exception-clause.html` and `manual/exception-redelivery.html`).
 /// Option spellings stay ours (CFG-NAME); only the nesting is Camel's.
@@ -1164,7 +1145,7 @@ pub struct DoTryStep {
     pub do_finally: Option<DoFinally>,
 }
 
-/// A route template parameter (`products/adapter/CONCEPT.md` section 8.4).
+/// A route template parameter.
 /// Divergence from Camel: typed and checked under CFG-VAL-9, where Camel
 /// parameters are untyped strings.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1202,8 +1183,7 @@ pub enum TemplateParameterType {
     Map,
 }
 
-/// A route template, Camel's `routeTemplate` without its `from`
-/// (`products/adapter/CONCEPT.md` section 8.4): the instantiated route's
+/// A route template, Camel's `routeTemplate` without its `from`: the instantiated route's
 /// `from` is `direct:<routeId>`, bound by the contract.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -1570,8 +1550,7 @@ mod tests {
         );
     }
 
-    /// The `httpUri` parameter of an origin-pinned link
-    /// (`products/adapter/CONCEPT.md` section 8.11.5): an expression whose
+    /// The `httpUri` parameter of an origin-pinned link: an expression whose
     /// value the engine pins to the endpoint origin at send time, instead
     /// of `path`. Exactly one of `path` and `httpUri`, and no `query`
     /// beside an `httpUri`, are authoring checks in `crate::checks` under
@@ -1603,8 +1582,8 @@ mod tests {
         assert_eq!(serde_json::from_str::<Step>(&back).ok(), Some(step));
     }
 
-    /// The named parameters of a `postgres:` send (CONCEPT 8.10, the SQL
-    /// row): parameter name to expression, keys the pinned query file
+    /// The named parameters of a `postgres:` send:
+    /// parameter name to expression, keys the pinned query file
     /// documents. An empty map stays off the wire.
     #[test]
     fn to_parameters_carry_postgres_named_parameters() {
@@ -1830,8 +1809,7 @@ mod tests {
     /// Throw Exception, ported from
     /// <https://camel.apache.org/components/next/eips/throwException-eip.html>;
     /// `exceptionType` names a closed class, not a Java type, and
-    /// `message` is a bounded constant (`products/adapter/CONCEPT.md`
-    /// section 8.11.6). Which classes a step may name and how long the
+    /// `message` is a bounded constant. Which classes a step may name and how long the
     /// message may be are authoring checks in `crate::checks` under
     /// `adapter.route.throw-exception-*`.
     #[test]
@@ -1986,7 +1964,7 @@ mod tests {
 
     /// The Poll Enricher, ported from
     /// <https://camel.apache.org/components/next/eips/pollEnrich-eip.html>
-    /// as the job-only read step of CONCEPT 17.2: a static `file:` or
+    /// as the job-only read step: a static `file:` or
     /// `sftp:` URI, a mandatory timeout, an optional decoder, and the
     /// enrich aggregation strategies. Absent a decoder the read is raw;
     /// absent a strategy the page replaces the body.
@@ -2109,7 +2087,7 @@ mod tests {
         let Step::CircuitBreaker(breaker) = &step else {
             panic!("expected a circuitBreaker step");
         };
-        // resilience4j defaults, as CONCEPT 8.7 pins them.
+        // resilience4j defaults.
         assert_eq!(breaker.failure_rate_threshold.get(), 50);
         assert_eq!(breaker.sliding_window_calls.get(), 100);
         assert_eq!(breaker.minimum_number_of_calls.get(), 100);
@@ -2409,7 +2387,7 @@ mod tests {
 
     /// Route templates and typed parameters, ported from
     /// <https://camel.apache.org/manual/route-template.html>; typed
-    /// parameters and no `from` are divergences CONCEPT 8.4 records.
+    /// parameters and no `from` are recorded divergences.
     #[test]
     fn route_template_and_templated_route_round_trip() {
         let template: RouteTemplate = serde_json::from_str(
@@ -2507,7 +2485,7 @@ mod tests {
         assert!(templated("PageSize").is_err());
     }
 
-    /// Resume bindings for write-resume, CONCEPT 9.
+    /// Resume bindings for write-resume.
     #[test]
     fn resume_bindings_round_trip() {
         let binding: ResumeBinding =

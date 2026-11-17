@@ -23,7 +23,7 @@
 # Upstream-call budgets, under the worst-case rule (route body plus the
 # widest exception-clause body; every send counts one plus the widest
 # declared maximumRedeliveries; token requests are bounded separately and
-# sit outside the budget, CONCEPT 10.2):
+# sit outside the budget):
 #   - birth-search: 1 send x (1 + 1 redelivery) = 2; budget 4 (the check refused a budget of 2).
 #   - birth-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4 (the check refused a budget of 2).
 #
@@ -58,7 +58,7 @@ profile:
 pack:
   id: opencrvs-events
   version: "1"
-  digest: sha256:41138c64e55b756317778b3a4e95673f10559fc99ded22a699791f7913f52f9a
+  digest: sha256:17d685d2fd230b6f389f2941451544b0c7623f73c380c54fe95673d64de7fbb9
 recordTypes:
   - name: birth
     fields:

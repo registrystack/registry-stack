@@ -2,11 +2,10 @@
 
 //! The fixture suite: the facade request, the ordered upstream exchanges
 //! it drives, and the facade response or problem it must produce, with
-//! provenance (`products/adapter/CONCEPT.md` sections 6 and 13.3,
-//! G-FIXTURES).
+//! provenance (G-FIXTURES).
 //!
 //! The fixture declares which sends it intercepts, by endpoint id and by
-//! token endpoint (CONCEPT 10.2: fixture replay intercepts the token
+//! token endpoint (fixture replay intercepts the token
 //! endpoint like any other send), so packs are replayable without a
 //! credential. A route never declares its own test intercepts. Replayed
 //! sends are answered in the order the entry recorded them; the matcher
@@ -92,8 +91,7 @@ where
     deserializer.deserialize_option(RecordedBodyVisitor)
 }
 
-/// Where a fixture's recording came from
-/// (`products/adapter/CONCEPT.md` section 13.3): captured from a live
+/// Where a fixture's recording came from: captured from a live
 /// system, or documented as an authored reconstruction.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -133,8 +131,7 @@ pub enum Intercept {
         /// The pack endpoint id whose sends replay from the fixtures.
         endpoint: ExternalId,
     },
-    /// Intercept the token requests of the named endpoint's OAuth2 kind
-    /// (`products/adapter/CONCEPT.md` section 10.2). Replay runs without
+    /// Intercept the token requests of the named endpoint's OAuth2 kind. Replay runs without
     /// a credential: the recorded token request carries no credential
     /// header or body, and the recorded reply's token is a synthetic
     /// value a captured recording must replace before it is committed.
@@ -198,8 +195,8 @@ crate::model::serialize_tagged_union!(ExpectedFacade, tag = "type");
 pub struct RecordedRequest {
     /// The endpoint the request goes to.
     pub endpoint: ExternalId,
-    /// Whether this request is the endpoint's token request (CONCEPT
-    /// 10.2); only a token intercept answers it.
+    /// Whether this request is the endpoint's token request;
+    /// only a token intercept answers it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub token_request: bool,
     /// The request method.
@@ -314,7 +311,7 @@ pub struct RecordedExchange {
 
 /// One fixture entry: the facade request, the upstream exchanges it
 /// drives in the order the route makes them, and what the facade must
-/// answer (G-FIXTURES, CONCEPT 13.3). At least one exchange is an
+/// answer (G-FIXTURES, https://docs.registrystack.org/configure/adapter/#fixture-replay). At least one exchange is an
 /// authoring invariant the checks refuse a suite without.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -358,7 +355,7 @@ pub struct AdapterFixture {
 pub struct Send<'a> {
     /// The endpoint the send goes to.
     pub endpoint: &'a str,
-    /// Whether the send is the endpoint's token request (CONCEPT 10.2).
+    /// Whether the send is the endpoint's token request.
     pub token_request: bool,
     /// The send's method.
     pub method: crate::model::HttpMethod,
@@ -395,8 +392,7 @@ pub enum ReplayMismatch {
 
 /// Whether the suite's intercepts answer a send of this kind to the
 /// endpoint: an endpoint intercept answers ordinary sends, a token
-/// intercept answers token requests (`products/adapter/CONCEPT.md`
-/// section 10.2). Interception is by send, not by route: the endpoint a
+/// intercept answers token requests. Interception is by send, not by route: the endpoint a
 /// send names decides, however the route built it
 /// (`camel-4.23.0:core/camel-core-engine/src/main/docs/modules/eips/pages/intercept.adoc`).
 #[must_use]
@@ -470,8 +466,7 @@ fn write_canonical(value: &serde_json::Value, out: &mut String) {
 /// exchange at the cursor must name the send's endpoint and kind (token
 /// or ordinary) and match the send's method, path, and, for an ordinary
 /// send, its query and body digest; a token request matches by endpoint,
-/// method, and path alone, because replay runs without a credential
-/// (CONCEPT 10.2, 13.3). Answering consumes the exchange, so the next
+/// method, and path alone, because replay runs without a credential. Answering consumes the exchange, so the next
 /// send matches the next recording. The runtime engine calls this for
 /// every `http` and `graphql` send it is about to make; nothing here
 /// does I/O.
@@ -500,7 +495,7 @@ pub fn answer_send<'a>(
         return Err(ReplayMismatch::Path);
     }
     // A token request matches by endpoint, method, and path alone:
-    // replay runs without a credential (CONCEPT 10.2), so the engine's
+    // replay runs without a credential, so the engine's
     // token send carries no recorded query or body to compare.
     if !send.token_request {
         if request_query != send.query {
@@ -590,8 +585,7 @@ mod tests {
     /// The fixture artifact round-trips with provenance, intercept
     /// declarations, an ordered multi-exchange entry carrying request and
     /// response headers, and a problem expectation by class and code
-    /// (`products/adapter/CONCEPT.md` sections 6, 10.2, and 13.3,
-    /// G-FIXTURES).
+    /// (G-FIXTURES).
     #[test]
     fn fixture_round_trips() {
         let mut facade_headers = RecordedHeaders::new();
@@ -831,8 +825,8 @@ mod tests {
     /// Replay answers sends from the recording in order and refuses every
     /// other send: interception is by endpoint, the exchange at the cursor
     /// must match method, path, query, and body, and a spent recording
-    /// answers nothing (CONCEPT 13.3;
-    /// `camel-4.23.0:core/camel-core-engine/src/main/docs/modules/eips/pages/intercept.adoc`:
+    /// answers nothing
+    /// (`camel-4.23.0:core/camel-core-engine/src/main/docs/modules/eips/pages/intercept.adoc`:
     /// the intercepted send never reaches the original endpoint).
     #[test]
     fn replay_answers_intercepted_sends_in_order() {
@@ -879,7 +873,7 @@ mod tests {
     /// recording, even though an intercept answers the send: the
     /// recording at the cursor belongs to its own endpoint, and a send to
     /// `case-api` must not be answered by a recording made against
-    /// `other-api` (CONCEPT 13.3).
+    /// `other-api`.
     #[test]
     fn a_send_does_not_consume_another_endpoints_recording() {
         let intercepts = [
@@ -907,8 +901,7 @@ mod tests {
 
     /// An ordinary send does not consume a token-request recording, and a
     /// token send does not consume an ordinary recording, however well the
-    /// rest matches: the two kinds answer under different intercepts
-    /// (CONCEPT 10.2).
+    /// rest matches: the two kinds answer under different intercepts.
     #[test]
     fn sends_do_not_cross_the_token_boundary_of_a_recording() {
         let intercepts = [
@@ -1008,7 +1001,7 @@ mod tests {
     }
 
     /// A token request answers only under a token intercept, and an
-    /// ordinary send only under an endpoint intercept (CONCEPT 10.2: the
+    /// ordinary send only under an endpoint intercept (the
     /// token endpoint is a fixed destination, intercepted like any other
     /// send).
     #[test]
@@ -1053,7 +1046,7 @@ mod tests {
     }
 
     /// A token-request send matches its recording by endpoint, method,
-    /// and path only: replay runs without a credential (CONCEPT 10.2),
+    /// and path only: replay runs without a credential,
     /// so the engine's token send carries no recorded query or body to
     /// compare, and neither member decides the answer.
     #[test]

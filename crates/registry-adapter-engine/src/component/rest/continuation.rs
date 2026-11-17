@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The continuation cursor codec (`products/adapter/CONCEPT.md` section
-//! 8.11.2): the route owns the upstream position, the engine owns the
+//! The continuation cursor codec: the route owns the upstream position, the engine owns the
 //! caller's cursor.
 //!
 //! A search route that can return more sets `AdapterNextContinuation`
 //! to a JSON value of at most [`CONTINUATION_MAXIMUM_BYTES`] serialized.
 //! [`ContinuationCodec::seal`] turns it into the opaque `nextCursor`
-//! slot of section 7, and [`ContinuationCodec::open`] turns the cursor
+//! slot, and [`ContinuationCodec::open`] turns the cursor
 //! the caller sends back into the value the `rest` consumer places as
 //! `AdapterContinuation`. An absent or `null` value is the last page and
 //! seals to no cursor at all.
@@ -32,7 +31,7 @@
 //! # Caller obligations
 //!
 //! The codec is a pure library; the `rest` consumer owns the ordering
-//! section 8.11.2 requires and must enforce it:
+//! the cursor contract requires and must enforce it:
 //!
 //! - open the cursor only after authentication and authorization, so an
 //!   unauthenticated caller with a forged cursor gets
@@ -104,8 +103,7 @@
 //! decrypts, which keeps cursors valid across one rotation.
 //!
 //! The codec is security-sensitive (it carries source state through the
-//! caller) and its review notes are recorded with the change that added
-//! it (section 13.7).
+//! caller).
 
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -129,7 +127,7 @@ use crate::replay::ReplayCursorNonce;
 pub const CURSOR_KEY_BYTES: usize = 32;
 
 /// The largest continuation value, as compact JSON, in bytes
-/// (section 8.11.2: at most 2 KiB serialized).
+/// (at most 2 KiB serialized).
 pub const CONTINUATION_MAXIMUM_BYTES: usize = 2_048;
 
 /// The shortest `cursorTtlSeconds` the codec accepts.
@@ -274,7 +272,7 @@ impl fmt::Display for ContinuationConfigError {
 impl std::error::Error for ContinuationConfigError {}
 
 /// SHA-256 over the RFC 8785 canonical JSON of the validated facade
-/// inputs, without the cursor, plus the page size (section 8.11.2).
+/// inputs, without the cursor, plus the page size.
 ///
 /// The digest is opaque: it compares equal or not, and its `Debug`
 /// prints nothing of it, because an unkeyed digest of low-entropy
@@ -303,7 +301,7 @@ impl std::error::Error for FilterDigestError {}
 
 /// Digest the validated facade inputs and the page size.
 ///
-/// `inputs` is the validated facade inputs of section 8.11.1 without the
+/// `inputs` is the validated facade inputs without the
 /// continuation (the record type and the `AdapterFilters` object, as the
 /// `rest` consumer arranges them); `page_size` is the effective page
 /// size, the profile's default when the caller sent none. The digested
@@ -320,7 +318,7 @@ pub fn filter_digest(inputs: &Value, page_size: u32) -> Result<FilterDigest, Fil
     Ok(FilterDigest(Sha256::digest(&canonical).into()))
 }
 
-/// What a cursor is bound to (section 8.11.2).
+/// What a cursor is bound to.
 #[derive(Clone, Copy)]
 pub struct CursorBinding<'a> {
     /// The concrete operation the request resolved to.

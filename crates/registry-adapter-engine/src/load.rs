@@ -261,7 +261,7 @@ pub struct Loaded {
     pub runtime: AdapterRuntimeConfig,
     pub scripts: ScriptSet,
     /// The deployment's declared code maps, shared by the conversion
-    /// steps and the Rhai `code_map` helper (section 8.6).
+    /// steps and the Rhai `code_map` helper.
     pub code_maps: CodeMaps,
     pub endpoints: BTreeMap<String, EndpointRuntime>,
     /// Every route the deployment declares, pack routes and templated
@@ -1403,7 +1403,7 @@ fn compile_binding<S: ArtifactSource + ?Sized>(
             } else if let Some(endpoint) = endpoints.get(&uri.id) {
                 // A send reaches an endpoint of its own component: a
                 // graphql send posts the endpoint's pinned query, an
-                // http send never does (section 8.8).
+                // http send never does.
                 if uri.component == SendComponent::GraphQl && endpoint.graphql.is_none() {
                     refusal.get_or_insert((
                         UnservedReason::SourceComponentMismatch,
@@ -2376,7 +2376,7 @@ mod tests {
     }
 
     /// One profile operation bound to two record types compiles two
-    /// concrete operations (`products/adapter/CONCEPT.md` section 7), so
+    /// concrete operations, so
     /// the runtime serves both rather than refusing the second binding.
     #[test]
     fn one_operation_bound_to_two_record_types_serves_both() {

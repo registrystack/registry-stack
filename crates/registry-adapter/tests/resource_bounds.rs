@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Resource-bound regressions for the route engine. These cover the
-//! bounded-exchange and cooperative-deadline parts of `CONCEPT.md`
-//! sections 5.5, 8.2, and 13.5 without an upstream send.
+//! exchange bounds and the cooperative deadline without an upstream send.
 
 use std::collections::BTreeMap;
 use std::time::Duration;

@@ -2,7 +2,7 @@
 
 //! The `AdapterPreviewExpectations` authoring model: the result each preview
 //! sample of a mapping is meant to give, kept in `expected.yaml` beside the
-//! samples (`products/adapter/VISUAL-MAPPING.md`).
+//! samples (<https://docs.registrystack.org/configure/adapter/#expected-results>).
 //!
 //! A refused sample is a deliberate input, so the file says which samples
 //! the mapping accepts and which it refuses, and optionally the target a

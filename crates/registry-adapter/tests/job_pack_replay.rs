@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The maintained job packs replayed against their own fixtures
-//! (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): the
+//! The maintained job packs replayed against their own fixtures: the
 //! kobotoolbox and odk-central packs, compiled through the job compiler
 //! with their example job, profile, and project, run one page per
 //! fixture entry against the loopback double. Each entry pins the

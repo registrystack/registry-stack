@@ -2,8 +2,7 @@
 
 //! `adapterctl compile`: the deployment's concrete contract, written as an
 //! OpenAPI 3.1 document beside the project (`generated/openapi.json`) and
-//! held byte-identical by `--check` (`products/adapter/CONCEPT.md` sections
-//! 7 and 8.11.1). The command compiles a workspace `adapterctl check`
+//! held byte-identical by `--check`. The command compiles a workspace `adapterctl check`
 //! accepts: it reads the project, profile, and pack the same way, verifies
 //! the pins, and runs the same core checks over the workspace before any
 //! byte is written, so a refused authoring never reaches a contract file.

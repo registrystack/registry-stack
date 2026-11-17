@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The governed-ingestion job host: the item table, the pass, the
-//! interval trigger, and the destination seam
-//! (`products/adapter/CONCEPT.md` section 17: 17.2 for the item
-//! contract, 17.3 for the pass and the destinations).
+//! interval trigger, and the destination seam.
 //!
 //! The host owns identity and progress, never payloads. One row per item
 //! carries the item's key, a plain `sha256:` digest of its projection, a

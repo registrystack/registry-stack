@@ -1,6 +1,6 @@
 # The facade profile the workspace checks run over: the same closed
 # problem map every profile carries, with no operation the job would
-# serve (CONCEPT 17.1: a job serves no facade operation).
+# serve (a job serves no facade operation).
 apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
 kind: AdapterProfile
 id: kobotoolbox

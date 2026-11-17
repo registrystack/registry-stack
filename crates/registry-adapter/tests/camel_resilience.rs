@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The resilience conformance suite: `circuitBreaker` and `throttle`
-//! (`products/adapter/CONCEPT.md` sections 8.6 and 8.7, port-table rows
-//! 32 and 33).
+//! (the Circuit Breaker and Throttler rows of
+//! products/adapter/scripts/camel-port-table.yaml).
 //!
 //! Every send goes over the loopback double, so pacing and breaking are
 //! observed against real requests the double counts, and one lane holds
@@ -582,7 +582,7 @@ async fn an_open_breaker_recovers_through_half_open_trials() {
 /// (<https://camel.apache.org/components/4.23.x/eips/resilience4j-eip.html>).
 async fn the_route_error_handler_does_not_wrap_a_breaker_block() {
     // The clause would answer the guarded failure with a second send;
-    // a breaker and its steps run bare (section 8.7), so neither the
+    // a breaker and its steps run bare, so neither the
     // clause steps nor its handling ever run.
     let route = json!([
         {"onException": {"exception": ["upstream.http"], "steps": [get()]}},

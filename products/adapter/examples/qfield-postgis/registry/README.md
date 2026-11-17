@@ -34,7 +34,7 @@ Conditional display remains a source-form concern in this first example. No
 
 Provision a separate BReg database for the project and follow the normal package activation steps.
 The polygon requires the administrator to provision PostGIS in the BReg database.
-[BReg package activation](../../../../../docs/site/src/content/docs/operate/breg-changes.mdx) and [spatial database requirements](../../../../breg/SPATIAL-QUERIES.md#database-and-upgrades).
+[BReg package activation](../../../../../docs/site/src/content/docs/operate/breg-changes.mdx) and [spatial database requirements](https://docs.registrystack.org/configure/breg-spatial-queries/#prepare-the-database).
 
 ## Look up an applied record
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The origin-pinned link conformance suite, the `httpUri` form of `to`
-//! (`products/adapter/CONCEPT.md` sections 8.8 and 8.11.5, port-table
+//! (port-table
 //! row 15): the one dynamic send, a link the source returned, parsed
 //! once, pinned to the endpoint's origin and base path, and sent as
 //! parsed, never reparsed.

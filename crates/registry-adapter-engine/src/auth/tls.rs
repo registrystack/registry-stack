@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The orthogonal outbound TLS of one endpoint binding
-//! (`products/adapter/CONCEPT.md` section 10.2): the trust profile's
+//! The orthogonal outbound TLS of one endpoint binding: the trust profile's
 //! CA bundle, read from the profile's process-local file, and the mTLS
 //! client identity, resolved from the binding's secret references into
 //! zeroizing buffers, and parsed at load into the two platform
@@ -476,8 +475,7 @@ pub(crate) mod tests {
         assert!(!tls.is_configured());
     }
 
-    /// The token endpoint the credential names rides the same material
-    /// (section 10.2): with the data destination https and the token
+    /// The token endpoint the credential names rides the same material: with the data destination https and the token
     /// endpoint plain, a declared trust profile or client identity
     /// refuses at load, before any secret is read, through either OAuth
     /// credential kind; the https control resolves its material.

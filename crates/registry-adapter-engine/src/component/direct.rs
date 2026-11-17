@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The `direct` component, Camel's synchronous in-process call
-//! (`products/adapter/CONCEPT.md` sections 8.8 and 8.11.7).
+//! The `direct` component, Camel's synchronous in-process call.
 //!
 //! `to: direct:<routeId>` runs the target route on the same exchange:
 //! body, headers, and properties flow in and come back changed. Errors

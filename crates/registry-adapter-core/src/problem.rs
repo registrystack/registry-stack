@@ -5,11 +5,11 @@
 //! The vocabulary is closed on purpose: a caller can enumerate every problem
 //! the facade can ever return, and a problem code outside this list is a
 //! defect, not a compatibility event. The vocabulary carries only what the
-//! engine itself raises (`products/adapter/CONCEPT.md` sections 7 to 9):
+//! engine itself raises:
 //! the request-edge rejections under the `request.*` family, the
-//! authorization pair of section 10.1, the three write outcomes the
-//! idempotency store constructs, the five uncatchable boundary classes of
-//! section 8.7 surfaced as problems, and the fixed catch-all
+//! authorization pair, the three write outcomes the
+//! idempotency store constructs, the five uncatchable boundary classes
+//! surfaced as problems, and the fixed catch-all
 //! `adapter.upstream.unmapped` (502) an unhandled upstream error surfaces
 //! as. Everything a route translates on purpose travels in the profile's
 //! own problem-code list, never here.
@@ -182,7 +182,7 @@ mod tests {
     }
 
     /// The uncatchable boundary classes surface as problems with the same
-    /// trailing name (`products/adapter/CONCEPT.md` section 8.7).
+    /// trailing name.
     #[test]
     fn uncatchable_classes_surface_as_problems() {
         assert_eq!(
@@ -208,7 +208,7 @@ mod tests {
     }
 
     /// The fixed unmapped catch-all keeps the exact code and status
-    /// CONCEPT 8.7 and 9 pin (`adapter.upstream.unmapped`, 502).
+    /// the contract pins (`adapter.upstream.unmapped`, 502).
     #[test]
     fn unmapped_is_pinned() {
         assert_eq!(ProblemCode::UpstreamUnmapped.code(), "upstream.unmapped");
@@ -216,7 +216,7 @@ mod tests {
     }
 
     /// The write outcomes the idempotency store constructs keep the
-    /// statuses CONCEPT 9 pins.
+    /// statuses the contract pins.
     #[test]
     fn write_semantics_are_pinned() {
         assert_eq!(ProblemCode::WriteInProgress.http_status(), 409);

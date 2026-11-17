@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Direct engine conformance for the Idempotent Consumer port-table row
-//! (`products/adapter/CONCEPT.md` sections 8.10 and 9).
+//! Direct engine conformance for the Idempotent Consumer port-table row.
 //!
 //! Camel checks or adds the key before the guarded block according to
 //! `eager`, and runs its completion either when that block ends or when the
@@ -223,7 +222,7 @@ async fn completion_eager_scopes_completion_to_the_guarded_block() {
 
 /// `removeOnFailure=false` is delivered to completion unchanged. The host
 /// decides whether a safe reservation remains, while an attempted effect is
-/// always kept spent by Adapter's section 9 divergence
+/// always kept spent by Adapter's divergence
 /// (`IdempotentConsumerRemoveOnFailureTest.testFailedExchangesNotRemoved` at
 /// the pinned tag).
 #[tokio::test]

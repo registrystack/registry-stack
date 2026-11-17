@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The facade profile: the contract artifact a deployment serves
-//! (`products/adapter/CONCEPT.md` sections 6 and 7).
+//! The facade profile: the contract artifact a deployment serves.
 //!
 //! Nothing about any one target API is compiled in: a profile declares its
 //! operation set by id, its request and response envelope templates over
@@ -115,8 +114,7 @@ pub const MAX_PROBLEM_ERRORS: usize = 16;
 /// The longest JSON Pointer or safe validation message in one problem error.
 pub const MAX_PROBLEM_ERROR_TEXT_BYTES: usize = 512;
 
-/// The closed envelope slot vocabulary the engine fills
-/// (`products/adapter/CONCEPT.md` section 7). A slot outside this set is
+/// The closed envelope slot vocabulary the engine fills. A slot outside this set is
 /// refused by the authoring checks.
 pub const ENVELOPE_SLOTS: &[&str] = &[
     "cursor",
@@ -165,8 +163,7 @@ pub const MAX_ASYNC_STATUS_LINK_BYTES: usize = 2_048;
 const ASYNC_STATUS_ID_BYTES: usize = 32;
 
 /// An envelope template: a JSON template whose string members carry
-/// `{{slot}}` placeholders from the closed vocabulary
-/// (`products/adapter/CONCEPT.md` section 7). The template is data; the
+/// `{{slot}}` placeholders from the closed vocabulary. The template is data; the
 /// engine fills it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,8 +300,7 @@ impl<'de> Deserialize<'de> for ProfileAsyncCompletion {
     }
 }
 
-/// One facade operation, declared by id
-/// (`products/adapter/CONCEPT.md` sections 6 and 7). The id is a
+/// One facade operation, declared by id. The id is a
 /// profile-declared bounded string (CFG-ID-5), never an engine enum.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -324,8 +320,7 @@ pub struct ProfileOperation {
     /// list is unique (CFG-ID-6).
     #[serde(default, skip_serializing_if = "path_parameters_empty")]
     pub path_parameters: UniqueList<LocalId>,
-    /// The path parameter the bound record type substitutes into
-    /// (`products/adapter/CONCEPT.md` section 7): one of `pathParameters`,
+    /// The path parameter the bound record type substitutes into: one of `pathParameters`,
     /// checked at the profile checks. No rule reads meaning from the
     /// parameter's position.
     pub record_type_parameter: LocalId,
@@ -449,8 +444,7 @@ impl registry_platform_yaml::Identified for ProfileOperation {
 }
 
 /// The pagination parameters of a search operation: the cursor and
-/// page-size query parameter names and their bounds
-/// (`products/adapter/CONCEPT.md` section 7). The engine owns encoding the
+/// page-size query parameter names and their bounds. The engine owns encoding the
 /// cursor; the profile owns the names.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -473,7 +467,7 @@ pub struct PaginationParameters {
 }
 
 /// One parameterized part: a part of the profile a deployment declares at
-/// bind time (`products/adapter/CONCEPT.md` sections 6 and 7).
+/// bind time.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -485,8 +479,7 @@ pub struct ParameterizedPart {
 }
 
 /// One problem a caller can receive: the profile's own answer shape for
-/// the error classes it maps (`products/adapter/CONCEPT.md` sections 7
-/// and 8.11.6). A pack raises error classes and never names a problem
+/// the error classes it maps. A pack raises error classes and never names a problem
 /// code or builds a problem body; the profile decides what the caller
 /// sees.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -502,8 +495,8 @@ pub struct Problem {
     /// The problem title the envelope's `problemTitle` slot fills from.
     pub title: String,
     /// The error classes this problem answers: a class resolves to the
-    /// entry whose declared class is closest to it, by the rule of
-    /// `products/adapter/CONCEPT.md` section 8.7.
+    /// entry whose declared class is closest to it, by the
+    /// closest-class rule of the Adapter error hierarchy.
     pub classes: UniqueList<crate::model::ErrorClass>,
     /// The optional closed scalar object this problem may disclose. Every
     /// declared field is required when the object is present; authoring
@@ -560,8 +553,7 @@ pub struct AdapterProfile {
     /// The problems a caller can receive, each mapping error classes to a
     /// code, status, and title. The totality check requires every class of
     /// the closed hierarchy, uncatchable and facade classes included, to
-    /// resolve to exactly one entry
-    /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.6).
+    /// resolve to exactly one entry.
     pub problems: UniqueIdList<Problem>,
     /// The problem envelope template; must carry the `problemCode` slot.
     pub problem_envelope: EnvelopeTemplate,
@@ -699,8 +691,7 @@ mod tests {
     }
 
     /// The retired flat `problemCodes` member is gone: the problems list
-    /// replaced it (`products/adapter/CONCEPT.md` sections 7 and
-    /// 8.11.6), and the reader refuses the old member outright rather
+    /// replaced it, and the reader refuses the old member outright rather
     /// than reading half a contract.
     #[test]
     fn profile_refuses_the_retired_problem_codes_member() {
@@ -732,8 +723,7 @@ mod tests {
     }
 
     /// An operation names the path parameter the bound record type
-    /// substitutes into: the member is required at the reader
-    /// (`products/adapter/CONCEPT.md` section 7), an operation without
+    /// substitutes into: the member is required at the reader, an operation without
     /// one refuses, and a declared member round-trips.
     #[test]
     fn an_operation_requires_its_record_type_parameter() {
@@ -783,8 +773,7 @@ mod tests {
     }
 
     /// The profile artifact round-trips with profile-declared operation
-    /// ids and the problems list (`products/adapter/CONCEPT.md` sections
-    /// 7 and 8.11.6).
+    /// ids and the problems list.
     #[test]
     fn profile_round_trips_with_declared_operation_ids() {
         let profile = AdapterProfile {

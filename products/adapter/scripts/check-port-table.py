@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Hold CONCEPT.md 8.10 (the Camel port table) to the code.
+"""Hold the Camel port table (camel-port-table.yaml) to the code.
 
 Every table row is the contract for one ported Camel concept: the
 camel.apache.org page that defines its semantics, our form, what diverges,
-and the increment that delivers it. This script is the section 13.2 gate:
+and the increment that delivers it. This script is the gate:
 it fails when the table and the code disagree, and reports later-increment
 rows as pending rather than failing them.
 
 What it checks, in order:
 
-1. Table shape. The table under `### 8.10 The Camel port table` parses into
-   five cells per row (concept, reference, our form, divergence, Inc) and
-   one concept per row.
+1. Table shape. `camel-port-table.yaml` beside this script holds a `rows`
+   list; each row carries exactly five cells (concept, reference, form,
+   divergence, inc) and one concept per row.
 2. References. Every backticked span in a row's reference cell must be a
    relative camel.apache.org path: no scheme, no leading slash, no domain,
    and a `.html` page. Camel publishes its manual and component pages as
@@ -70,8 +70,8 @@ whole increment is accepted.
   fixtures_refuse_unknown_intercepts_and_entries; fixture.rs
   fixture_round_trips).
 
-Deterministic and offline: standard library only, no network, no
-timestamps; the same tree always prints the same report. Exit 0 when the
+Deterministic and offline: PyYAML and the standard library only, no
+network, no timestamps; the same tree always prints the same report. Exit 0 when the
 table holds, 1 with one FAIL line per violation.
 """
 
@@ -82,8 +82,10 @@ import re
 import sys
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CONCEPT = REPO_ROOT / "products" / "adapter" / "CONCEPT.md"
+PORT_TABLE = Path(__file__).resolve().with_name("camel-port-table.yaml")
 SCHEMAS = REPO_ROOT / "products" / "adapter" / "schemas"
 CORE_SRC = REPO_ROOT / "crates" / "registry-adapter-core" / "src"
 ENGINE_ROOT = REPO_ROOT / "crates" / "registry-adapter-engine"
@@ -407,8 +409,8 @@ EVIDENCE: dict[str, list[str]] = {
     ],
 }
 
-SECTION = "### 8.10 The Camel port table"
-HEADER_CELLS = ["Camel concept", "Reference (camel.apache.org)", "Our form", "Divergence", "Inc"]
+#: The cells of a row, in column order.
+CELLS = ("concept", "reference", "form", "divergence", "inc")
 
 #: A reference span: a relative Camel documentation path. No scheme, no
 #: leading slash, no domain, a `.html` page.
@@ -417,32 +419,31 @@ REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_/.-]*\.html$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 
 
-def parse_table(text: str) -> tuple[list[tuple[int, list[str]]], list[str]]:
-    """Return the table rows with their line numbers, and any problems."""
-    lines = text.splitlines()
-    start = next((i for i, line in enumerate(lines) if line.strip() == SECTION), None)
-    if start is None:
-        return [], [f"FAIL: {CONCEPT}: section '{SECTION}' not found"]
+def load_rows(path: Path) -> tuple[list[tuple[int, list[str]]], list[str]]:
+    """Return the table rows as (row number, five cells), and any problems.
+
+    Row numbers count from 1 in file order. Cells come back as strings in
+    column order.
+    """
+    if not path.is_file():
+        return [], [f"FAIL: {path}: not found"]
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        return [], [f"FAIL: {path}: not valid YAML: {error}"]
+    entries = document.get("rows") if isinstance(document, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return [], [f"FAIL: {path}: the port table has no rows"]
     rows: list[tuple[int, list[str]]] = []
     problems: list[str] = []
-    header_seen = False
-    for offset in range(start, len(lines)):
-        line = lines[offset]
-        if not line.startswith("|"):
-            if header_seen:
-                break
+    for number, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict) or set(entry) != set(CELLS):
+            problems.append(
+                f"FAIL: {path}: row {number}: a row carries exactly the cells "
+                f"{', '.join(CELLS)}"
+            )
             continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if cells == HEADER_CELLS:
-            header_seen = True
-            continue
-        if all(set(cell) <= {"-"} for cell in cells):
-            continue
-        if not header_seen:
-            continue
-        rows.append((offset + 1, cells))
-    if not rows:
-        problems.append(f"FAIL: {CONCEPT}:{start + 1}: the port table has no rows")
+        rows.append((number, [str(entry[cell]) for cell in CELLS]))
     return rows, problems
 
 
@@ -452,11 +453,11 @@ def check_references(row: int, cells: list[str]) -> list[str]:
     for span in BACKTICKED.findall(cells[1]):
         if "://" in span or span.startswith(("/", "www.")) or ".org" in span or ".com" in span:
             problems.append(
-                f"FAIL: {CONCEPT}:{row}: reference '{span}' is not a relative camel.apache.org path"
+                f"FAIL: {PORT_TABLE}: row {row}: reference '{span}' is not a relative camel.apache.org path"
             )
         elif not REFERENCE.match(span):
             problems.append(
-                f"FAIL: {CONCEPT}:{row}: reference '{span}' is not a Camel documentation page path"
+                f"FAIL: {PORT_TABLE}: row {row}: reference '{span}' is not a Camel documentation page path"
             )
     return problems
 
@@ -517,10 +518,10 @@ def check_evidence(row: int, concept: str, inc: int) -> list[str]:
         if inc > INCREMENT_DELIVERED:
             return []
         return [
-            f"FAIL: {CONCEPT}:{row}: delivered row '{concept}' names no conformance tests"
+            f"FAIL: {PORT_TABLE}: row {row}: delivered row '{concept}' names no conformance tests"
         ]
     return [
-        f"FAIL: {CONCEPT}:{row}: evidence '{relative}' of '{concept}' is not a test function"
+        f"FAIL: {PORT_TABLE}: row {row}: evidence '{relative}' of '{concept}' is not a test function"
         for relative in mapped
         if not function_exists(relative)
     ]
@@ -560,10 +561,7 @@ def accepted_keys(schema: dict) -> tuple[set[str], list[str]]:
 
 def main() -> int:
     problems: list[str] = []
-    if not CONCEPT.is_file():
-        print(f"FAIL: {CONCEPT}: not found")
-        return 1
-    rows, parse_problems = parse_table(CONCEPT.read_text(encoding="utf-8"))
+    rows, parse_problems = load_rows(PORT_TABLE)
     problems.extend(parse_problems)
     if parse_problems:
         for line in problems:
@@ -574,18 +572,15 @@ def main() -> int:
     pending: list[str] = []
     delivered = 0
     for row, cells in rows:
-        if len(cells) != 5:
-            problems.append(f"FAIL: {CONCEPT}:{row}: row has {len(cells)} cells, expected 5")
-            continue
         concept = cells[0].replace("`", "")
         if concept in concepts:
-            problems.append(f"FAIL: {CONCEPT}:{row}: duplicate row for '{concept}'")
+            problems.append(f"FAIL: {PORT_TABLE}: row {row}: duplicate row for '{concept}'")
         concepts.add(concept)
         problems.extend(check_references(row, cells))
         try:
             inc = int(cells[4])
         except ValueError:
-            problems.append(f"FAIL: {CONCEPT}:{row}: Inc '{cells[4]}' is not an increment number")
+            problems.append(f"FAIL: {PORT_TABLE}: row {row}: Inc '{cells[4]}' is not an increment number")
             continue
         problems.extend(check_evidence(row, concept, inc))
         if inc > INCREMENT_DELIVERED:

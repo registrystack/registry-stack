@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Upstream authentication for one endpoint binding: the six closed
-//! kinds of `products/adapter/CONCEPT.md` section 10.2, plus the
+//! kinds, plus the
 //! orthogonal outbound TLS a binding may add.
 //!
 //! The layer is adapter-local over `registry-platform-httputil`
-//! primitives, as section 10.2 requires: destination TLS material, the
+//! primitives: destination TLS material, the
 //! transport failure kinds, and the scope and resource validators come
 //! from the platform; the credential shapes come from
 //! `registry-adapter-core`, which copies them from Evidence's
@@ -59,13 +59,13 @@ pub use token::{
 use registry_platform_httputil::TransportKind;
 use std::fmt;
 
-/// The error class a fault maps to, spelled as
-/// `products/adapter/CONCEPT.md` section 8.7 spells classes. The
+/// The error class a fault maps to, spelled as the Adapter error
+/// hierarchy spells classes. The
 /// `credential.rejected` class is uncatchable: no `onException` clause
 /// and no `doCatch` may name it, and a fallback must not mask it.
 pub const CREDENTIAL_REJECTED_CLASS: &str = "credential.rejected";
 
-/// The uncatchable `budget.exhausted` class of section 8.7, which a
+/// The uncatchable `budget.exhausted` error class, which a
 /// token budget overrun raises.
 pub const BUDGET_EXHAUSTED_CLASS: &str = "budget.exhausted";
 
@@ -93,7 +93,7 @@ pub enum AuthError {
 }
 
 impl AuthError {
-    /// The section 8.7 error class this fault maps to.
+    /// The error class this fault maps to.
     ///
     /// Plan and TLS faults are deployment misconfiguration: both are
     /// refused at startup, so an occurrence here means the deployment
@@ -162,7 +162,7 @@ impl std::error::Error for AuthError {}
 
 /// A value-free record of one auth-layer outcome, what the journal keeps
 /// for a send: the endpoint's kind and token-request outcomes, never a
-/// value (`products/adapter/CONCEPT.md` section 10.2).
+/// value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthEvent {
     /// A token request was sent to the endpoint's fixed token endpoint.
@@ -211,7 +211,7 @@ pub enum AuthEvent {
     /// 401 about an issuance a concurrent refresh already replaced
     /// pushes nothing, because nothing was discarded.
     TokenInvalidatedAfterUnauthorized,
-    /// The uncatchable credential rejection of section 10.2.
+    /// The uncatchable credential rejection.
     CredentialRejected,
     /// The exchange's token budget was spent.
     TokenBudgetExhausted,

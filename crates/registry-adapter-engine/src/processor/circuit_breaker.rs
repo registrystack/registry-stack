@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `circuitBreaker` processor: resilience4j semantics and defaults,
-//! per EIP node with process-local state, as in Camel
-//! (`products/adapter/CONCEPT.md` sections 8.6 and 8.7).
+//! per EIP node with process-local state, as in Camel.
 //!
 //! Defaults: `failureRateThreshold` 50, a count-based sliding window of
 //! `slidingWindowCalls` 100, `minimumNumberOfCalls` 100,
@@ -16,7 +15,7 @@
 //!
 //! The guarded steps and the fallback run bare, the way every nested
 //! body does: the route error handler does not wrap a breaker or its
-//! steps (section 8.7, `inheritErrorHandler` false).
+//! steps (`inheritErrorHandler` false).
 
 use registry_adapter_core::{CircuitBreakerStep, ErrorClass};
 use registry_platform_resilience::circuit_breaker::{Acquired, BreakerState};

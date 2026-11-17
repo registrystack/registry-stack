@@ -22,7 +22,7 @@
 # declared maximumRedeliveries; token requests none, the endpoint is
 # basic):
 #   - person-search: 1 send x (1 + 1 redelivery) = 2; budget 4. The search
-#     answers one facade page from one upstream page (CONCEPT 8.11.2).
+#     answers one facade page from one upstream page.
 #   - person-fetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
 #   - person-create and person-update: 1 send x (1 + 1 redelivery) = 2;
 #     budget 4 each.
@@ -72,7 +72,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:bd1d30fb5b6a363fb9192073648b72e85839d272a7911139d16c9e17ba2f2427
+  digest: sha256:1e20e01e74532ba953673aa30b7adf130f48fa13e346b2d723d070fa52de9fca
 recordTypes:
   - name: person
     fields:

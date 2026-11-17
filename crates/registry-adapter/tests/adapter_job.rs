@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The job compiler and page entry
-//! (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): one http
+//! The job compiler and page entry: one http
 //! send shaped by a pack script into the item contract, the cursor
 //! round trip through the read-only `AdapterJobCursor` property, the
 //! page faults, and the profile's page deadline.
@@ -17,7 +16,7 @@ use serde_json::{json, Value};
 mod upstream;
 
 const PAGE_SCRIPT: &str = r#"// The fetched submissions page, shaped as the item
-// contract (CONCEPT 17.2): one item per reply entry, the route's own
+// contract: one item per reply entry, the route's own
 // next cursor carried through under the engine's property rules.
 fn page(exchange) {
     let entries = exchange.body.data;
@@ -619,7 +618,7 @@ fn write_pack_fixture_with_runtime(pack_text: &str, route: &str, runtime_text: &
 /// The default build compiles no file source: a pack whose source route
 /// reads a file endpoint refuses at compile under
 /// `adapter.job.component-unavailable`, so a facade binary can never
-/// reach the file component (CONCEPT 17.1).
+/// reach the file component.
 #[cfg(not(feature = "job-file"))]
 #[test]
 fn the_default_build_refuses_a_file_job() {
@@ -811,7 +810,7 @@ async fn a_split_keeps_the_job_byte_ceiling() {
         "the reply exceeds the facade's fixed exchange budget"
     );
     let merge_script = r#"// The split's grouped pieces, folded into the item
-// contract (CONCEPT 17.2): the pieces are whole page fragments.
+// contract: the pieces are whole page fragments.
 fn page(exchange) {
     let items = [];
     for part in exchange.body {

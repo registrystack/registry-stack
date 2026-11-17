@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The pure authoring checks over parsed artifacts (`products/adapter/CONCEPT.md`
-//! sections 5.5, 7, 8.7, 8.10, and 10.2). No I/O: every check takes parsed
+//! The pure authoring checks over parsed artifacts. No I/O: every check takes parsed
 //! values and returns [`registry_platform_yaml::Diagnostic`]s carrying
 //! closed `adapter.*` codes. Accept and reject behavior is pinned by the
 //! tests of this module.
@@ -33,12 +32,10 @@ use registry_platform_httputil::destination::{
 use registry_platform_yaml::{Diagnostic, Digest, ExternalId, UniqueList};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// The deepest `direct:` call chain the graph may form
-/// (`products/adapter/CONCEPT.md` section 8.3).
+/// The deepest `direct:` call chain the graph may form.
 pub const MAX_DIRECT_DEPTH: usize = 16;
 
-/// The longest one facade or job outbound attempt may take, in milliseconds
-/// (`products/adapter/CONCEPT.md` section 8.8). Evidence uses its own finite
+/// The longest one facade or job outbound attempt may take, in milliseconds. Evidence uses its own finite
 /// acquisition deadline and may select a longer or shorter attempt within the
 /// remaining acquisition budget.
 pub const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
@@ -51,19 +48,16 @@ const _: () = assert!(
 );
 
 /// The largest response body one outbound send may take in, in bytes: the
-/// ceiling an endpoint's `maximumResponseBytes` may not exceed
-/// (`products/adapter/CONCEPT.md` section 8.8).
+/// ceiling an endpoint's `maximumResponseBytes` may not exceed.
 pub const MAXIMUM_RESPONSE_BYTES: u64 = 1_048_576;
 
 /// The headers the rest consumer places on the exchange before a route
-/// runs; a route reads them, never writes them
-/// (`products/adapter/CONCEPT.md` section 8.11.1). Lowercase; names
+/// runs; a route reads them, never writes them. Lowercase; names
 /// compare without case.
 const FACADE_INPUT_HEADERS: &[&str] = &["idempotency-key", "pagesize", "recordid", "recordtype"];
 
 /// The headers the engine itself places on the exchange; a route reads
-/// them, never writes them (`products/adapter/CONCEPT.md` lines covering
-/// the engine-set Camel headers). Lowercase; names compare without case.
+/// them, never writes them. Lowercase; names compare without case.
 const ENGINE_HEADERS: &[&str] = &[
     "camelduplicatemessage",
     "camelexceptioncaught",
@@ -102,9 +96,8 @@ pub fn is_route_unwritable_property_name(name: &str) -> bool {
 /// Whether a route may write (set or remove) the named header, the one
 /// predicate over the reserved names (`RESERVED_HEADER_NAMES`, whose
 /// `proxy-` prefix rule includes `Proxy-Authorization`), the
-/// engine-owned header prefixes, and the facade inputs
-/// (`products/adapter/CONCEPT.md` section 8.11.4). The port table's
-/// `setHeader` row (section 8.10) is the write contract: a `Camel`- or
+/// engine-owned header prefixes, and the facade inputs. The port table's
+/// `setHeader` row is the write contract: a `Camel`- or
 /// `Adapter`-prefixed engine header and every credential header refuse,
 /// both prefixes compared without case, so a route cannot invent a name
 /// either prefix owns even when the engine never places it.
@@ -131,7 +124,7 @@ pub fn is_engine_header_name(name: &str) -> bool {
 }
 
 /// Whether a header name is a facade input the rest consumer places on
-/// the exchange under a closed name (section 8.11.1), compared without
+/// the exchange under a closed name, compared without
 /// case. A route reads one; a route write and a `responseHeaders`
 /// entry refuse.
 #[must_use]
@@ -371,7 +364,7 @@ pub fn check_workspace(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     findings
 }
 
-/// Profile checks (`products/adapter/CONCEPT.md` section 7): envelope
+/// Profile checks: envelope
 /// grammar, the closed slot vocabulary, and the result, record, and code
 /// slots.
 #[must_use]
@@ -496,8 +489,7 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
     findings
 }
 
-/// The problems-list faults (`products/adapter/CONCEPT.md` sections 7 and
-/// 8.11.6): a class listed by two entries refuses at the later entry, and
+/// The problems-list faults: a class listed by two entries refuses at the later entry, and
 /// a class of the closed hierarchy resolving to no entry refuses at the
 /// list. Closest match resolves a class to the entry whose declared class
 /// is nearest, so declaring a root covers its whole branch, and a
@@ -881,8 +873,7 @@ fn ok_status_code_range_fault(text: &str) -> Option<&'static str> {
 }
 
 /// The status code the engine answers a failed credential with: it
-/// refreshes the credential and retries the send once itself
-/// (`products/adapter/CONCEPT.md` section 10.2), so a route may never
+/// refreshes the credential and retries the send once itself, so a route may never
 /// call this code a success on an endpoint an authentication kind
 /// protects.
 const UNAUTHORIZED_STATUS_CODE: u16 = 401;
@@ -1052,7 +1043,7 @@ fn carries_pack_layer_placeholder(path: &str) -> bool {
 
 /// Every `{name}` in a facade operation path resolves against the
 /// operation's declared path parameters, and every declared parameter
-/// appears in the path (`products/adapter/CONCEPT.md` section 7).
+/// appears in the path.
 fn facade_path_parameter_checks(
     prefix: &str,
     path: &str,
@@ -1097,12 +1088,11 @@ fn facade_path_parameter_checks(
     findings
 }
 
-/// The record-parameter faults of a facade operation
-/// (`products/adapter/CONCEPT.md` sections 7 and 8.11.1): the record-type
+/// The record-parameter faults of a facade operation: the record-type
 /// parameter must name a declared path parameter, a declared
 /// `recordIdParameter` must name one too, and an operation whose declared
 /// path parameters include a record identifier, meaning a parameter
-/// beyond the record type that the get, update, and patch of the concept
+/// beyond the record type that the get, update, and patch operations
 /// fill, must name its `recordIdParameter`. A search or create whose only
 /// declared parameter is the record type fills none. The check keys on
 /// the declared pathParameters member, never the raw template or the
@@ -1149,10 +1139,9 @@ fn record_parameter_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Di
     findings
 }
 
-/// The 8.11.4 allowlist checks over one endpoint header allowlist,
+/// The header allowlist checks (`https://docs.registrystack.org/configure/adapter/#headers-on-the-wire`) over one endpoint header allowlist,
 /// mirroring the refusals the runtime repeats at filter construction so
-/// a pack that passes check never fails at load (`products/adapter/CONCEPT.md`
-/// section 8.11.4): every name is an RFC 9110 token; the
+/// a pack that passes check never fails at load: every name is an RFC 9110 token; the
 /// never-allowlistable set refuses (the reserved header names, this
 /// endpoint's own api-key header name, and, in `responseHeaders` only,
 /// the facade inputs and every `Camel`-prefixed engine header); on
@@ -1376,7 +1365,7 @@ fn envelope_checks(path: &str, envelope: &EnvelopeTemplate) -> Vec<Diagnostic> {
                 CheckCode::ProfileUnknownSlot,
                 path,
                 "the envelope names a slot outside the closed vocabulary",
-                "Use a slot of the closed vocabulary in CONCEPT.md section 7.",
+                "Use a slot of the closed vocabulary: https://docs.registrystack.org/configure/adapter/#envelopes",
             ));
         } else if matches!(name.as_str(), "cursor" | "filters" | "pageSize") {
             findings.push(finding(
@@ -1397,7 +1386,7 @@ fn envelope_checks(path: &str, envelope: &EnvelopeTemplate) -> Vec<Diagnostic> {
     findings
 }
 
-/// Pack checks (`products/adapter/CONCEPT.md` sections 8.8 and 10.2):
+/// Pack checks:
 /// endpoint components, GraphQL query files, the script inventory, and
 /// reserved header names.
 #[must_use]
@@ -1413,7 +1402,7 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
         }
         // A producer component (http, graphql, or the read-only postgres
         // source) names an upstream endpoint; the job-only file and sftp
-        // sources are read through pollEnrich (section 17.1). `direct`
+        // sources are read through pollEnrich. `direct`
         // names routes and `rest` is the facade consumer; neither is an
         // endpoint component.
         if !endpoint.component.is_producer() && !endpoint.component.is_job_component() {
@@ -1694,8 +1683,7 @@ fn read_support_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
     findings
 }
 
-/// The source-route declaration checks of the governed-ingestion mode
-/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): every source
+/// The source-route declaration checks of the governed-ingestion mode: every source
 /// route declares its scan and its `next` recovery semantics, its
 /// edit-finding mode with a well-formed rescan delay beside it, and no
 /// source route id collides with an internal route or template id.
@@ -1762,8 +1750,7 @@ fn source_route_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
     findings
 }
 
-/// The edit-finding declaration of one source route
-/// (`products/adapter/CONCEPT.md` section 17.2): `edits` is
+/// The edit-finding declaration of one source route: `edits` is
 /// mandatory and spelled in the closed set beside `scan` and
 /// `nextRecovery`; a `rescan` route names its
 /// `rescanDelaySeconds`, an `ordered` route names no delay, and the
@@ -1955,8 +1942,7 @@ fn script_reference_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// Route checks over one pack and the project that instantiates it
-/// (`products/adapter/CONCEPT.md` sections 5.5, 8.3, and 8.7): the direct
+/// Route checks over one pack and the project that instantiates it: the direct
 /// graph shape, the two mandatory bounds, endpoint and route references,
 /// uncatchable clauses, redelivery over non-safe sends, and the split
 /// confinement of non-safe sends.
@@ -1970,12 +1956,10 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         .iter()
         .map(|endpoint| endpoint.id.as_str())
         .collect();
-    // The declared code maps a conversion step's `type` may name
-    // (`products/adapter/CONCEPT.md` section 8.6).
+    // The declared code maps a conversion step's `type` may name.
     let code_map_ids: HashSet<&str> = pack.code_maps.iter().map(|map| map.id.as_str()).collect();
     // The endpoints an authentication kind protects: an ok range over
-    // one of these may never cover 401 (`products/adapter/CONCEPT.md`
-    // section 10.2).
+    // one of these may never cover 401.
     let authenticated_endpoints: HashSet<&str> = pack
         .endpoints
         .iter()
@@ -2001,8 +1985,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         .collect();
 
     // A route never writes an endpoint's credential name: the
-    // static-api-key header the injector owns after the filter
-    // (`products/adapter/CONCEPT.md` section 8.11.4).
+    // static-api-key header the injector owns after the filter.
     let api_key_headers: HashSet<String> = pack
         .endpoints
         .iter()
@@ -2563,7 +2546,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             // A retryWhile only stops redelivery earlier; with no
             // redeliveries behind it, it could never fire. The effective
             // policy is the clause's own, or the handler's only when a
-            // clause with no policy also has no output steps (section 8.7).
+            // clause with no policy also has no output steps.
             Step::OnException(clause)
                 if clause.retry_while.is_some()
                     && effective_clause_redelivery_policy(clause, handler_policy)
@@ -2619,8 +2602,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             _ => {}
         });
 
-        // Header writes and reads stay bounded
-        // (`products/adapter/CONCEPT.md` section 8.11.4).
+        // Header writes and reads stay bounded.
         check_route_headers(
             prefix,
             steps,
@@ -2652,8 +2634,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             }
         }
         // Redelivery over a non-safe send needs every non-safe send the
-        // route makes to carry an idempotentUpstream claim
-        // (`products/adapter/CONCEPT.md` section 8.7).
+        // route makes to carry an idempotentUpstream claim.
         if declares_redelivery(steps)
             && !sends
                 .iter()
@@ -2693,8 +2674,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
     findings
 }
 
-/// The governed-ingestion boundary checks over one pack and project
-/// (`products/adapter/CONCEPT.md` sections 17.1 and 17.2): source routes
+/// The governed-ingestion boundary checks over one pack and project: source routes
 /// stay entry points (no facade binding reaches one, no `direct:` send
 /// calls one), the job-only components and the `pollEnrich` step stay out
 /// of every facade-reachable route, a `file:` or `sftp:` URI is never a
@@ -2829,7 +2809,7 @@ pub fn check_job_boundaries(pack: &AdapterPack, project: &AdapterProject) -> Vec
     }
     // A facade-reachable endpoint keeps the facade response ceiling; only
     // an endpoint the facade can never reach may declare up to the
-    // platform cap (`products/adapter/CONCEPT.md` section 8.8).
+    // platform cap.
     let evidence_only_endpoints = evidence_only_endpoint_ids(pack);
     for (index, endpoint) in pack.endpoints.iter().enumerate() {
         if facade_endpoints.contains(endpoint.id.as_str())
@@ -3189,8 +3169,7 @@ fn poll_enrich_checks(
     }
 }
 
-/// A route's header writes and reads stay bounded
-/// (`products/adapter/CONCEPT.md` section 8.11.4): no `setHeader` or
+/// A route's header writes and reads stay bounded: no `setHeader` or
 /// `removeHeader` names a credential, cookie, host, hop-by-hop, engine, or
 /// facade-input header, and every `header` expression reads a facade
 /// input, an engine-placed header, a response header some endpoint
@@ -3290,14 +3269,14 @@ fn is_non_safe_to(to: &crate::route::ToStep, pack: &AdapterPack) -> bool {
 /// Whether a send or enrichment to the component is a non-safe upstream
 /// send: an `http:` destination whose effective method is unsafe, or a
 /// `graphql:` destination whose operation the pack does not declare a
-/// query (`products/adapter/CONCEPT.md` section 8.8). An `http:` send
+/// query. An `http:` send
 /// that declares no method sends a POST body, Camel's default, so it
 /// counts as one; a POST escapes only when the operation it names is
 /// declared `safeUpstream` on its endpoint, the reviewed claim that the
 /// upstream serves that POST as its safe search form. The claim never
 /// rescues a PUT or PATCH, and a graphql send's safety comes from its
 /// declared query kind alone. A `postgres:` send is a read-only query
-/// (section 8.10, the SQL row), so it counts as safe; the `file:` and
+/// so it counts as safe; the `file:` and
 /// `sftp:` job sources are refused as sends outright.
 pub fn is_non_safe_upstream(
     component: SendComponent,
@@ -3328,8 +3307,7 @@ pub fn is_non_safe_upstream(
 
 /// Whether the send names an operation the pack declares on that
 /// endpoint with `safeUpstream`, the reviewed claim that the upstream
-/// serves the operation's POST as its safe search form
-/// (`products/adapter/CONCEPT.md` section 8.8). A send naming no
+/// serves the operation's POST as its safe search form. A send naming no
 /// operation claims nothing.
 fn operation_claims_safe_upstream(
     endpoint: &str,
@@ -3367,8 +3345,7 @@ fn is_declared_graphql_query(
     })
 }
 
-/// The conversion-step findings (`products/adapter/CONCEPT.md` section
-/// 8.6): `type` names a declared code map, the body form carries no
+/// The conversion-step findings: `type` names a declared code map, the body form carries no
 /// `name` or `toName` because the body is both source and target, the
 /// named forms require `name`, and `toName` never stands alone.
 fn push_convert_findings(
@@ -3443,7 +3420,7 @@ fn push_convert_findings(
     }
 }
 
-/// The code-map checks (`products/adapter/CONCEPT.md` section 8.6): every
+/// The code-map checks: every
 /// entry is a JSON scalar, and every declared map is referenced by at
 /// least one conversion step in the pack's routes or route templates. A
 /// Rhai `code_map` call also references a map, but a script's references
@@ -3498,8 +3475,7 @@ fn code_map_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
 }
 
 /// The HTTP-send members a graphql send must not carry: the graphql shape
-/// carries `operation` and the body only
-/// (`products/adapter/CONCEPT.md` section 8.8).
+/// carries `operation` and the body only.
 fn graphql_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'static str> {
     let mut members = Vec::new();
     if parameters.http_method.is_some() {
@@ -3520,8 +3496,7 @@ fn graphql_send_member_faults(parameters: &crate::route::ToParameters) -> Vec<&'
     members
 }
 
-/// The `httpUri` member faults of a send or enrichment
-/// (`products/adapter/CONCEPT.md` section 8.11.5): an `http` send carries
+/// The `httpUri` member faults of a send or enrichment: an `http` send carries
 /// exactly one of `path` and `httpUri`, with no `pathParameters` or `query`
 /// beside an `httpUri` (the source-provided link is the complete request
 /// target), and no other component carries the member at all. Each fault
@@ -4311,8 +4286,7 @@ pub fn check_project_pins(
     findings
 }
 
-/// The role a Rhai script site plays (`products/adapter/CONCEPT.md`
-/// section 8.11.3): the role fixes the script's return contract and,
+/// The role a Rhai script site plays: the role fixes the script's return contract and,
 /// derived from it, how many exchange arguments the runtime passes the
 /// entrypoint.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -4655,8 +4629,7 @@ fn longest_chain(edges: &HashMap<&str, Vec<&str>>) -> usize {
 
 /// Project checks over the composed workspace: reference resolution, the
 /// duplicated instantiated route ids, the write-route rules, and the
-/// static worst-case upstream call count against each binding's budget
-/// (`products/adapter/CONCEPT.md` sections 5.5, 7, and 9).
+/// static worst-case upstream call count against each binding's budget.
 #[must_use]
 pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
@@ -4775,7 +4748,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
             ));
         }
         // A search binding filters on declared fields of its bound record
-        // type (`products/adapter/CONCEPT.md` section 8.11.1): the facade
+        // type: the facade
         // offers exactly the declared list as typed equality query
         // parameters, so a filter naming no declared field refuses at the
         // entry. Duplicates are the reader's concern (CFG-ID-6). The check
@@ -4802,8 +4775,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
             }
         }
         // A filter never reuses a caller-facing parameter name the bound
-        // operation already fills (`products/adapter/CONCEPT.md` section
-        // 8.11.1): the cursor, the page size, and the declared path
+        // operation already fills: the cursor, the page size, and the declared path
         // parameters are taken, and one name must not mean two things at
         // the facade, a filter beside a same-named pagination or path
         // parameter. The check stays off while the operation itself is
@@ -4913,8 +4885,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                         "Remove resumeBindings; they are served only by the closed linear multi-effect write form.",
                     ));
                 }
-                // A read operation reaches only safe sends
-                // (`products/adapter/CONCEPT.md` section 8.8): every
+                // A read operation reaches only safe sends: every
                 // non-safe send its route can reach refuses at the send.
                 for send in
                     collect_non_safe_sends(route_steps, &bodies, &body_prefixes, body_prefix, pack)
@@ -5982,7 +5953,7 @@ pub fn facade_path_shape(path: &str) -> String {
     shaped
 }
 
-/// The write-route rules of `products/adapter/CONCEPT.md` section 9: every
+/// The write-route rules: every
 /// non-safe send sits inside an `idempotentConsumer`. More than one is served
 /// only by the closed resumable form: one outer consumer whose body is a flat
 /// sequence of HTTP sends, each backed by the source's reviewed
@@ -6237,15 +6208,14 @@ fn resume_selector_is_singular(selector: &str) -> bool {
     })
 }
 
-/// The static worst-case upstream call count of a route
-/// (`products/adapter/CONCEPT.md` sections 5.5 and 10.2): the route body
+/// The static worst-case upstream call count of a route: the route body
 /// plus the widest exception-clause body, where a `continued` clause
 /// counts its body once per route-body worst-case send because it
 /// resumes after the failure point; every send counts one plus the
 /// declared `maximumRedeliveries` attempts; and each OAuth endpoint the
 /// route touches adds the single resend after a refreshed 401. Token
-/// requests themselves sit outside `maximumUpstreamCalls` (CONCEPT
-/// section 10.2): the runtime caps them separately.
+/// requests themselves sit outside `maximumUpstreamCalls`; the runtime
+/// caps them separately.
 fn route_worst_case(
     steps: &[Step],
     bodies: &HashMap<&str, &[Step]>,
@@ -6792,12 +6762,10 @@ fn worst_body(
     total
 }
 
-/// The endpoint-binding checks every mode runs
-/// (`products/adapter/CONCEPT.md` sections 10.2 and 17): endpoint
+/// The endpoint-binding checks every mode runs: endpoint
 /// coverage, credential-kind match, `none` confined to the numeric
 /// loopback or `https` with an mTLS identity, and the plain-HTTP
-/// confinement to the loopback exception and the declared private CIDRs
-/// (`products/adapter/CONCEPT.md` section 13.7), the rule load's own destination policy enforces on
+/// confinement to the loopback exception and the declared private CIDRs, the rule load's own destination policy enforces on
 /// resolved addresses. The facade's runtime check adds its own members
 /// to these findings.
 #[must_use]
@@ -6923,8 +6891,7 @@ pub fn check_endpoint_bindings(
     findings
 }
 
-/// Runtime checks (`products/adapter/CONCEPT.md` sections 10.2 and
-/// 13.7): the endpoint-binding checks every mode runs, plus the OIDC
+/// Runtime checks: the endpoint-binding checks every mode runs, plus the OIDC
 /// issuer block that authenticates facade callers, which the facade
 /// alone configures.
 #[must_use]
@@ -6996,7 +6963,7 @@ fn check_token_endpoint(
 ) {
     // The token endpoint is a fixed destination the engine dials with the
     // shared secret in hand, so it answers to the same origin rule as the
-    // binding's base URL (`products/adapter/CONCEPT.md` section 10.2).
+    // binding's base URL.
     let token_endpoint = match credential {
         RuntimeCredential::Oauth2ClientCredentials { token_endpoint, .. } => token_endpoint,
         RuntimeCredential::Oauth2PrivateKeyJwt { token_endpoint, .. } => token_endpoint,
@@ -7059,7 +7026,7 @@ pub fn loopback_exception_origin(url: &registry_platform_yaml::Url) -> bool {
     literal_origin_address(url).is_some_and(|address| address.is_loopback())
 }
 
-/// The one plain-HTTP rule (`products/adapter/CONCEPT.md` section 13.7):
+/// The one plain-HTTP rule:
 /// plain HTTP is the contract inside the loopback exception and the declared private CIDRs, and refused everywhere
 /// else, for every authentication kind. The check evaluates the
 /// binding's host text; the send-time address resolution re-evaluates
@@ -7137,7 +7104,7 @@ fn problem_expectation_check(
     }
 }
 
-/// Fixture checks (`products/adapter/CONCEPT.md` sections 10.2 and 13.3):
+/// Fixture checks:
 /// intercepts and recorded requests name declared endpoints; a route never
 /// declares its own test intercepts, so there is nothing else to refuse.
 #[must_use]
@@ -7179,7 +7146,7 @@ pub fn check_fixtures(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
             // Every recorded exchange names a declared endpoint, and one
             // of the suite's intercepts answers a send of its kind to
             // that endpoint: a recording nothing intercepts can never be
-            // produced by a replay (CONCEPT 13.3, 10.2).
+            // produced by a replay.
             for (exchange_index, exchange) in entry.upstream.iter().enumerate() {
                 let request_pointer =
                     &format!("{prefix}/entries/{entry_index}/upstream/{exchange_index}/request");
@@ -7211,7 +7178,7 @@ pub fn check_fixtures(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     (true, true) => {}
                 }
                 // Credential material never travels in a recording
-                // (CONCEPT 10.2: fixtures never see tokens or secrets, and
+                // (fixtures never see tokens or secrets, and
                 // replay runs without a credential). Reserved header names
                 // and the endpoint's own api-key header are refused on
                 // either side of the exchange; a recorded token response
@@ -7558,8 +7525,7 @@ mod tests {
     }
 
     /// The problems list every other test composes from: one entry per
-    /// root of the closed hierarchy, so every class resolves
-    /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.6).
+    /// root of the closed hierarchy, so every class resolves.
     fn total_problems() -> UniqueIdList<crate::profile::Problem> {
         let class = |name: &str| {
             crate::model::ErrorClass::from_class(name).expect("a class of the hierarchy")
@@ -8301,7 +8267,7 @@ mod tests {
 
     /// Every `{name}` in a facade operation path resolves against the
     /// operation's declared path parameters, and every declared parameter
-    /// appears in the path (CONCEPT section 7); pack-layer `{{name}}`
+    /// appears in the path; pack-layer `{{name}}`
     /// placeholders refuse as the wrong syntax for a facade path.
     #[test]
     fn profile_resolves_facade_path_placeholders_against_declared_parameters() {
@@ -8759,8 +8725,7 @@ mod tests {
         assert_eq!(fault.path, "/routes/1/steps/0/throwException/data");
     }
 
-    /// The problems list covers the whole closed hierarchy
-    /// (`products/adapter/CONCEPT.md` sections 7 and 8.11.6): one entry
+    /// The problems list covers the whole closed hierarchy: one entry
     /// per root resolves every class, uncatchable and facade classes
     /// included, with no problem-class finding.
     #[test]
@@ -8785,8 +8750,7 @@ mod tests {
 
     /// A class no entry answers refuses at the list: dropping the entry
     /// that answers the facade branch leaves facade.unauthenticated and
-    /// its siblings unmapped (`products/adapter/CONCEPT.md` section
-    /// 8.11.6).
+    /// its siblings unmapped.
     #[test]
     fn profile_refuses_a_class_no_problem_answers() {
         let mut profile = profile_builder(vec![]);
@@ -8829,7 +8793,7 @@ mod tests {
     }
 
     /// A class two entries answer refuses at the later entry
-    /// (`products/adapter/CONCEPT.md` section 8.11.6: a class listed
+    /// (a class listed
     /// twice), while a narrower entry overriding a declared parent stays
     /// clean, the closest match winning.
     #[test]
@@ -8885,8 +8849,7 @@ mod tests {
 
     /// A clause naming a facade class refuses under the uncatchable-clause
     /// code: the facade classes are raised outside any route, so no clause
-    /// may name them (`products/adapter/CONCEPT.md` sections 8.7 and
-    /// 8.11.6). Every facade class refuses, in both clause forms.
+    /// may name them. Every facade class refuses, in both clause forms.
     #[test]
     fn a_clause_naming_a_facade_class_refuses() {
         for class in crate::model::ErrorClass::ALL
@@ -9485,8 +9448,7 @@ mod tests {
         }
     }
 
-    /// The record-type parameter names a declared path parameter
-    /// (`products/adapter/CONCEPT.md` section 7): an unknown name refuses
+    /// The record-type parameter names a declared path parameter: an unknown name refuses
     /// at the member, the bound record type substitutes into a declared
     /// parameter, and a correct operation stays clean.
     #[test]
@@ -9503,11 +9465,10 @@ mod tests {
 
     /// `recordIdParameter` is required exactly where the declared path
     /// parameters include a record identifier: the get, update, and patch
-    /// of the concept declare the parameter their `recordId` header fills,
+    /// operations declare the parameter their `recordId` header fills,
     /// while a search or create whose only declared parameter is the
     /// record type fills none. The check keys on the declared
-    /// pathParameters member, never the raw template or the method
-    /// (`products/adapter/CONCEPT.md` section 7).
+    /// pathParameters member, never the raw template or the method.
     #[test]
     fn the_record_id_parameter_is_required_where_a_record_identifier_is_declared() {
         let two_parameters = |record_id_parameter: Option<LocalId>| {
@@ -9900,8 +9861,7 @@ mod tests {
         assert_has(&check_pack(&pack), CheckCode::PackCodeMapUnreferenced);
 
         // A conversion in a route template references the map too: a
-        // Rhai `code_map` call is not statically countable and does not
-        // (section 8.6).
+        // Rhai `code_map` call is not statically countable and does not.
         let mut pack = pack_builder(vec![oauth_endpoint()], vec![]);
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
             read_support: None,
@@ -12275,7 +12235,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         // Ten looped sends plus the single resend after a refreshed 401
-        // for the one OAuth endpoint (CONCEPT 10.2): eleven; token
+        // for the one OAuth endpoint: eleven; token
         // requests sit outside the budget.
         project.bindings = UniqueIdList::new(vec![Binding {
             async_completion: None,
@@ -12497,8 +12457,7 @@ mod tests {
         );
     }
 
-    /// A binding filters on declared record fields only
-    /// (`products/adapter/CONCEPT.md` section 8.11.1): an undeclared field
+    /// A binding filters on declared record fields only: an undeclared field
     /// name refuses at its own list entry, two undeclared names refuse at
     /// both entries, and declared names pass.
     #[test]
@@ -12540,7 +12499,7 @@ mod tests {
     }
 
     /// A filter never reuses a caller-facing parameter name the operation
-    /// already fills (`products/adapter/CONCEPT.md` section 8.11.1): the
+    /// already fills: the
     /// cursor, the page size, and the declared path parameters are taken,
     /// so one caller-facing name never means two things at the facade. A
     /// filter equal to any of them refuses at its own list entry.
@@ -13314,8 +13273,7 @@ mod tests {
             .map(|finding| finding.path.as_str())
     }
 
-    /// A read operation's route reaches only safe sends
-    /// (`products/adapter/CONCEPT.md` section 8.8): a POST send refuses
+    /// A read operation's route reaches only safe sends: a POST send refuses
     /// at the send itself.
     #[test]
     fn project_refuses_a_read_route_reaching_a_post_send_at_the_send() {
@@ -13976,8 +13934,7 @@ mod tests {
         );
     }
 
-    /// The one plain-HTTP rule (`products/adapter/CONCEPT.md` section
-    /// 13.7): a literal outside the declared
+    /// The one plain-HTTP rule: a literal outside the declared
     /// CIDRs refuses, a literal inside them and a loopback origin are
     /// the declared contract, and a named host defers to the send-time
     /// resolution that evaluates the same containment.
@@ -14512,7 +14469,7 @@ mod tests {
 
     /// A graphql send carries only the graphql members: the HTTP-send
     /// members `httpMethod`, `path`, `pathParameters`, and `query` each
-    /// refuse (`products/adapter/CONCEPT.md` section 8.8).
+    /// refuse.
     #[test]
     fn graphql_sends_refuse_the_http_send_members() {
         let graphql_endpoint = || Endpoint {
@@ -14640,11 +14597,10 @@ mod tests {
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
-    // ----- throwException (`products/adapter/CONCEPT.md` section 8.11.6) -----
+    // ----- throwException -----
 
     /// `throwException` names a catchable class: a boundary class and a
-    /// facade class each refuse (`products/adapter/CONCEPT.md` sections
-    /// 8.7 and 8.11.6), and a catchable class passes.
+    /// facade class each refuse, and a catchable class passes.
     #[test]
     fn a_throw_exception_refuses_a_class_no_route_may_raise() {
         let raise = |class| RouteDefinition {
@@ -14677,8 +14633,7 @@ mod tests {
     }
 
     /// The `throwException` message is a bounded constant: 512 bytes fit,
-    /// 513 refuse (`products/adapter/CONCEPT.md` section 8.11.6 names the
-    /// bound "bounded"; this is the number).
+    /// 513 refuse.
     #[test]
     fn a_throw_exception_message_over_the_bound_refuses() {
         let raise = |message: String| RouteDefinition {
@@ -14701,11 +14656,11 @@ mod tests {
         );
     }
 
-    // ----- httpUri (`products/adapter/CONCEPT.md` section 8.11.5) -----
+    // ----- httpUri -----
 
     /// An `http` send carries exactly one of `path` and `httpUri`, with no
     /// `query` beside an `httpUri`, and a graphql send carries no
-    /// `httpUri` at all (`products/adapter/CONCEPT.md` section 8.11.5).
+    /// `httpUri` at all.
     #[test]
     fn sends_refuse_the_http_uri_member_faults() {
         let link = |mutate: fn(&mut ToParameters)| {
@@ -14905,8 +14860,7 @@ mod tests {
     }
 
     /// An `okStatusCodeRange` may never cover 401 on an endpoint an
-    /// authentication kind protects (`products/adapter/CONCEPT.md`
-    /// section 10.2): the engine answers a failed credential with 401
+    /// authentication kind protects: the engine answers a failed credential with 401
     /// and refreshes and retries once itself, so a route that calls 401
     /// a success parses a refusal body as data. A `none` endpoint has
     /// no credential to refresh, so its ok range keeps the source
@@ -15123,7 +15077,7 @@ mod tests {
     /// every name a route may neither set nor remove refuses, compared
     /// without case, by the reserved `proxy-` prefix rule, and by the
     /// port table's write rule over both engine prefixes (`Camel` and
-    /// `Adapter`, section 8.10); a route-owned header stays writable.
+    /// `Adapter`); a route-owned header stays writable.
     #[test]
     fn route_unwritable_header_names() {
         for name in [
@@ -15190,7 +15144,7 @@ mod tests {
     /// engine, or facade-input header, and a `header` expression reads
     /// only a facade input, an engine-placed header, a response header an
     /// endpoint allowlist declares, or a header an earlier step of the
-    /// same body set (`products/adapter/CONCEPT.md` section 8.11.4).
+    /// same body set.
     #[test]
     fn header_writes_and_reads_stay_bounded() {
         let route = |steps: Vec<Step>| RouteDefinition {
@@ -15314,7 +15268,7 @@ mod tests {
 
     /// A header name is an RFC 9110 token at every position: a
     /// `setHeader` name and an endpoint `responseHeaders` entry refuse
-    /// anything else (`products/adapter/CONCEPT.md` section 8.11.4).
+    /// anything else.
     #[test]
     fn header_names_are_rfc_9110_tokens() {
         let route = |steps: Vec<Step>| RouteDefinition {
@@ -15354,8 +15308,7 @@ mod tests {
 
     /// A `static-api-key` endpoint keeps custom Authorization-like header
     /// names but refuses the reserved names, Cookie and Host among them,
-    /// and its header name is an RFC 9110 token
-    /// (`products/adapter/CONCEPT.md` sections 8.11.4 and 10.2).
+    /// and its header name is an RFC 9110 token.
     #[test]
     fn api_key_header_names_refuse_the_reserved_names() {
         let check = |header_name: &str| {
@@ -15373,10 +15326,10 @@ mod tests {
         assert_clean(check("X-Authorization"));
     }
 
-    /// The `requestHeaders` allowlist follows the same 8.11.4 rules as the
+    /// The `requestHeaders` allowlist follows the same header allowlist rules as the
     /// response list: RFC 9110 token names, the never-allowlistable
     /// reserved set, and the endpoint's own api-key header name refused
-    /// in either list (`products/adapter/CONCEPT.md` section 8.11.4).
+    /// in either list.
     #[test]
     fn request_header_allowlists_follow_the_header_rules() {
         // Ordinary request headers a send may want upstream.
@@ -15428,8 +15381,7 @@ mod tests {
     }
 
     /// The allowlists refuse what the runtime's filter build refuses, so
-    /// a pack that passes check never fails at load
-    /// (`products/adapter/CONCEPT.md` section 8.11.4): in
+    /// a pack that passes check never fails at load: in
     /// `responseHeaders` the facade inputs and every `Camel`-prefixed
     /// engine header join the reserved names, and on both sides the
     /// names the platform transport never carries on that side refuse
@@ -15496,7 +15448,7 @@ mod tests {
     /// A repeat the reader cannot see, compared without case, refuses
     /// under its own code at the repeat's position, on either side: the
     /// reader's `uniqueItems` compares exactly, the wire compares
-    /// without case (`products/adapter/CONCEPT.md` section 8.11.4).
+    /// without case.
     #[test]
     fn allowlists_refuse_a_case_only_repeat() {
         let mut endpoint = oauth_endpoint();
@@ -15532,8 +15484,7 @@ mod tests {
 
     /// An allowlist over the transport's 32-name bound refuses at the
     /// first entry past it, under its own code, where the runtime's
-    /// filter build refuses too (`products/adapter/CONCEPT.md` section
-    /// 8.11.4); the bound is the platform constant, not a copy.
+    /// filter build refuses too; the bound is the platform constant, not a copy.
     #[test]
     fn allowlists_refuse_the_transport_header_bound() {
         let names = || {
@@ -15571,8 +15522,7 @@ mod tests {
     /// A route never reads or writes an endpoint's `static-api-key` header name:
     /// the credential injector owns it after the filter, so a
     /// `setHeader` or `removeHeader` naming it refuses under
-    /// `RouteReservedHeaderName`, compared without case
-    /// (`products/adapter/CONCEPT.md` section 8.11.4).
+    /// `RouteReservedHeaderName`, compared without case.
     #[test]
     fn routes_refuse_using_an_api_key_header_name() {
         let route = |steps: Vec<Step>| RouteDefinition {
@@ -15951,7 +15901,7 @@ mod tests {
     /// Every recorded exchange must be answerable by an intercept the
     /// suite declares: an endpoint intercept answers ordinary sends, a
     /// token intercept answers token requests, and neither answers the
-    /// other kind (CONCEPT 10.2, 13.3).
+    /// other kind.
     #[test]
     fn fixtures_refuse_exchanges_no_intercept_answers() {
         let profile = profile_builder(vec![operation("cases-find", HttpMethod::Get)]);
@@ -16029,8 +15979,7 @@ mod tests {
         assert_clean(check_fixtures(&ws));
     }
 
-    /// Credential material never travels in a recording (CONCEPT 10.2:
-    /// fixtures never see tokens or secrets, and replay runs without a
+    /// Credential material never travels in a recording (fixtures never see tokens or secrets, and replay runs without a
     /// credential): reserved header names and the endpoint's own api-key
     /// header are refused on recorded requests and responses both, and a
     /// token request records no body, because replay has no secret to put

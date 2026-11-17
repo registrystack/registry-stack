@@ -51,12 +51,13 @@ from a JSON:API household registry:
 ## Recorded gaps
 
 These were recorded against the authoring model when the shape was written;
-the pack's comments, scripts, and runtime config point here. `CONCEPT.md`
+the pack's comments, scripts, and runtime config point here. The [Adapter configuration page](https://docs.registrystack.org/configure/adapter/)
 holds the current contract for each construct.
 
-1. **Ending the exchange with a problem from a plain step.** CONCEPT section
-   7 validates every final route body against the success schema, and
-   `onFallback` output "is validated like any route output" (8.7). So a
+1. **Ending the exchange with a problem from a plain step.** The Adapter
+   configuration page validates every final route body against the success schema, and
+   `onFallback` output "is validated like any route output"
+   ([Circuit breaker](https://docs.registrystack.org/configure/adapter-routes/#circuit-breaker)). So a
    `choice` branch or a fallback cannot answer `source.not-found` or
    `source.unavailable`; only a handled clause can. Camel's
    `throwException` (https://camel.apache.org/components/next/eips/throwException-eip.html)
@@ -80,7 +81,7 @@ holds the current contract for each construct.
    back to the caller, whose route-scoped `onException` then applies, but
    the exception-clause page (https://camel.apache.org/manual/exception-clause.html)
    does not say so for `direct:`; unverified.
-4. **Paging state across `enrich`.** The CONCEPT's paging pattern
+4. **Paging state across `enrich`.** The documented paging pattern
    (`enrich` per page with `jsonArrayAppend`) cannot carry the offset and
    total back to the loop predicate if the resource exchange is a copy.
    Camel's enrich page (https://camel.apache.org/components/next/eips/enrich-eip.html)

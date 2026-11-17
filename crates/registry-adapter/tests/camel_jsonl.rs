@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The JSONL decoder of the governed-ingestion read step: an addition
-//! under `products/adapter/CONCEPT.md` section 5.4, not a port (Camel
+//! The JSONL decoder of the governed-ingestion read step: an addition,
+//! not a port (Camel
 //! has no JSONL data format). One bounded JSON value per line, a
 //! malformed line counted and skipped with the rest continuing, the
 //! same row bound as CSV, and the same paging contract.

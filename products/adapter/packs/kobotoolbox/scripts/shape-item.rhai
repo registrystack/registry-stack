@@ -1,7 +1,7 @@
-// One F5 item of the kobo-submissions page (CONCEPT 17.2): the
-// route's split runs this script once per submission of the reply's
-// `results`, so each submission gets the full script budget however
-// many answers its form carries.
+// One F5 item of the kobo-submissions page: the route's split runs
+// this script once per submission of the reply's `results`, so each
+// submission gets the full script budget however many answers its
+// form carries.
 //
 // Item mapping (both parts are probe-gated hypotheses, see the pack
 // README): key = the submission's `_id` as text, revision = `_uuid`,

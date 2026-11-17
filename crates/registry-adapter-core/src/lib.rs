@@ -5,8 +5,7 @@
 //! This crate owns the Adapter's source-neutral model: the profile, pack,
 //! project, runtime-config, and fixture artifacts, the bounded Camel route
 //! model their packs carry, the closed `adapter.*` problem vocabulary, and
-//! the pure authoring checks those artifacts must satisfy
-//! (`products/adapter/CONCEPT.md` section 8.1). It contains no I/O: no
+//! the pure authoring checks those artifacts must satisfy. It contains no I/O: no
 //! network, no file access, no clock, and no upstream or product types, so
 //! the runtime, the operator tooling, and the offline `adapterctl check`
 //! read the same contract.

@@ -2,10 +2,11 @@
 #
 # Documented fixture (hand-derived, NOT a captured exchange):
 # first search page: limit 2, offset 0, total 3, so a next cursor carrying offset 2.
-# No exchange was recorded to produce this file. The upstream shapes are derived from the reviewed Evidence
-# reference (products/evidence/reference/request-adapter/
-# opencrvs-event-search/, response-match.json and
-# expected-request-parts.json) and every value is a made-up stand-in. The
+# No exchange was recorded to produce this file. The upstream request and response
+# envelope follow the reviewed Evidence source recipe
+# (products/evidence/source-recipes/opencrvs-event-search/); the event id, dateOfEvent and an
+# unrelated canary field are added so the mapping and the field filter are
+# exercised, and every value is a made-up stand-in. The
 # meta registry and dataset identifiers are deployment values the engine
 # writes at instantiation, so the replay expectation carries this example
 # project's configured values.
@@ -16,7 +17,7 @@ pack: opencrvs-events
 upstreamVersion: "unverified"
 provenance:
   type: documented
-  reference: products/evidence/reference/request-adapter/opencrvs-event-search/response-match.json
+  reference: products/evidence/source-recipes/opencrvs-event-search/
 intercepts:
   - type: endpoint
     endpoint: events

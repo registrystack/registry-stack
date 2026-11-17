@@ -47,7 +47,7 @@ case system behind a static API key:
 ## Recorded gaps
 
 These were recorded against the authoring model when the shape was written;
-the pack's comments and fixture point here. `CONCEPT.md` holds the current
+the pack's comments and fixture point here. The [Adapter configuration page](https://docs.registrystack.org/configure/adapter/) holds the current
 contract for each construct.
 
 1. **Facade inputs.** The variables script assumes the facade cursor and
@@ -56,7 +56,7 @@ contract for each construct.
    record as the body. Nothing defines either.
 2. **Facade `nextCursor`.** `scripts/next-cursor.rhai` computes the Relay
    `endCursor` into the property `nextCursor`, but no construct hands a
-   route value to the envelope's `{{?nextCursor}}` slot. CONCEPT section 7
+   route value to the envelope's `{{?nextCursor}}` slot. The Adapter configuration page
    says the engine owns cursor encoding, and does not say where the value
    it encodes comes from.
 3. **Whether the graphql component unwraps `data`.** The scripts try both
@@ -65,7 +65,7 @@ contract for each construct.
    raises `upstream.http`, `upstream.malformed`, or passes as success.
 4. **Ending the exchange with a problem from a plain step.** The `cases-get`
    missing-node branch builds the `cases.missing` body in a `choice`
-   branch. CONCEPT section 7 validates every final body against the success
+   branch. The Adapter configuration page validates every final body against the success
    schema, so at runtime that branch fails; Camel's `throwException`
    (https://camel.apache.org/components/next/eips/throwException-eip.html)
    is not ported. `check` passes it. The `rest-offset-mtls` source shape
@@ -73,7 +73,7 @@ contract for each construct.
 5. **Problem vocabulary is the profile's.** Every handled clause spells the
    case-api envelope members (`family`, `message`, `httpStatus`) and codes.
    The same pack cannot serve `breg-records` without rewriting every clause,
-   which contradicts CONCEPT section 7 ("A pack knows a source system"). The
+   which contradicts the Adapter configuration page ("A pack knows a source system"). The
    `second-target-profile` source shape probes this from the other side.
 6. **One query per endpoint.** A `graphql` endpoint carries exactly one
    `queryFile`, `operationName`, and `variables`, so two queries over one

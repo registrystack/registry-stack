@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Credential material: the zeroizing buffers and encodings the auth
-//! layer builds (`products/adapter/CONCEPT.md` section 10.2).
+//! layer builds.
 //!
 //! Everything secret the layer holds lives in [`ProtectedText`], a
 //! buffer the `zeroize` crate erases when dropped. Nothing outside

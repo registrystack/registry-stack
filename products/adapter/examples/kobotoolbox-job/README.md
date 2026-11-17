@@ -23,7 +23,7 @@ Choose exactly one job and runtime pair for each form:
   workflow. Its operator bindings are in `job-runtime.coordinator.example.yaml`.
 - `job.hook.yaml` runs the direct job from the same interval and may also be
   woken early by a Basic-authenticated Kobo webhook. Its operator bindings are
-  in `job-runtime.hook.example.yaml`; [HOOKS.md](HOOKS.md) owns the ingress and
+  in `job-runtime.hook.example.yaml`; the [webhook ingress](https://docs.registrystack.org/configure/adapter-jobs/#webhook-ingress) page owns the ingress and
   TLS-proxy instructions.
 
 Do not run more than one job against one form.
@@ -137,6 +137,6 @@ It performs the source endpoint's credential preflight, using synthetic values
 in the maintained contract check, but does not contact an endpoint or activate
 either destination credential.
 
-Follow the [KoboToolbox ingestion job operations runbook](OPERATIONS.md) to
+Follow [Operate the Adapter](https://docs.registrystack.org/operate/adapter/) to
 initialize the store, preview one source page, run bounded passes, and inspect
 outcomes.

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The interval trigger and the rescan gate
-//! (`products/adapter/CONCEPT.md` section 17.2). A trigger decides only when a pass starts
+//! The interval trigger and the rescan gate. A trigger decides only when a pass starts
 //! and carries no data into it. The interval options port Camel's
 //! scheduled polling consumer; the option names, defaults, and skip
 //! semantics are read from `registry-adapter-core`'s [`JobTrigger`]

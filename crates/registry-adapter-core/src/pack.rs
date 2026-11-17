@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The adapter pack: a reviewed catalog of route templates, the role
-//! Kamelets play for Camel (`products/adapter/CONCEPT.md` sections 6, 8.4,
-//! and 8.8). A pack knows one source system and produces records in the
+//! Kamelets play for Camel. A pack knows one source system and produces records in the
 //! project's declared model.
 
 use crate::auth::EndpointAuthentication;
@@ -14,8 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// One endpoint a route may send to: the component, the authentication
 /// kind, the declared response headers, the endpoint operations with their
-/// `idempotentUpstream` claims, and the tested upstream versions
-/// (`products/adapter/CONCEPT.md` sections 6, 8.8, and 10.2).
+/// `idempotentUpstream` claims, and the tested upstream versions.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,7 +23,7 @@ pub struct Endpoint {
     pub id: LocalId,
     /// The producer component: `http`, `graphql`, or the read-only
     /// `postgres` source; or the job-only `file` and `sftp` sources a
-    /// `pollEnrich` step reads (section 17.1).
+    /// `pollEnrich` step reads.
     pub component: ComponentKind,
     /// The upstream authentication kind, with its non-secret parameters.
     pub authentication: EndpointAuthentication,
@@ -40,7 +38,7 @@ pub struct Endpoint {
     /// refused, never shortened. The runtime binding may lower it, never
     /// raise it. A facade-reachable endpoint stays within the facade
     /// ceiling and a source-route-only endpoint may declare up to the
-    /// platform cap (`products/adapter/CONCEPT.md` section 8.8); the checks
+    /// platform cap; the checks
     /// refuse the facade-reachable excess
     /// under `adapter.job.endpoint-response-bound`.
     pub maximum_response_bytes: BoundedU64<1, MAXIMUM_JOB_RESPONSE_BYTES>,
@@ -51,8 +49,10 @@ pub struct Endpoint {
     /// The request headers the engine sends upstream on every send to
     /// this endpoint, Camel's `HeaderFilterStrategy` as an allowlist,
     /// unique (CFG-ID-6). Never allowlistable: the reserved header names
-    /// of `products/adapter/CONCEPT.md` section 8.11.4 and this
-    /// endpoint's own api-key header name.
+    /// (credential, cookie, host and hop-by-hop headers, including every
+    /// `Proxy-` name), this endpoint's own api-key header name, and the
+    /// names the platform transport owns on a request; see
+    /// `https://docs.registrystack.org/configure/adapter/#headers-on-the-wire`.
     #[serde(default, skip_serializing_if = "headers_empty")]
     pub request_headers: UniqueList<ExternalId>,
     /// The operations this endpoint serves, each with its
@@ -165,8 +165,7 @@ impl registry_platform_yaml::Identified for Endpoint {
     }
 }
 
-/// One operation of an endpoint, with the reviewed write claim
-/// (`products/adapter/CONCEPT.md` sections 8.7 and 9): redelivery over a
+/// One operation of an endpoint, with the reviewed write claim: redelivery over a
 /// non-safe send is admitted only when the endpoint operation declares
 /// `idempotentUpstream: true`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -180,15 +179,14 @@ pub struct EndpointOperation {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_upstream: bool,
     /// The reviewed claim that the upstream serves this operation's POST
-    /// as its safe search form, as FHIR servers serve `POST _search`
-    /// (`products/adapter/CONCEPT.md` section 8.8): a route of a read
+    /// as its safe search form, as FHIR servers serve `POST _search`: a route of a read
     /// operation may then reach the send. The claim names POST only; a
     /// PUT, PATCH, or graphql mutation send never reads it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub safe_upstream: bool,
     /// The GraphQL operation kind the pinned query file declares, on a
     /// `graphql` endpoint; a send naming this operation is safe only for
-    /// a query (`products/adapter/CONCEPT.md` section 8.8).
+    /// a query.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<GraphQlOperationKind>,
     /// The source-native asynchronous acceptance and status proof contract.
@@ -269,8 +267,7 @@ pub struct EndpointAsyncCompletion {
 pub const MAX_ASYNC_SOURCE_ID_BYTES: usize = 256;
 
 /// Return a value-free reason when a source-native operation id is not the
-/// bounded opaque identifier section 9 of `products/adapter/CONCEPT.md`
-/// permits. URLs and path/query delimiters are
+/// bounded opaque identifier the idempotency rules permit. URLs and path/query delimiters are
 /// refused, so the host can never follow a source-provided authority.
 #[must_use]
 pub fn async_source_id_fault(id: &str) -> Option<&'static str> {
@@ -333,8 +330,7 @@ pub enum AsyncStatusOutcome {
 }
 
 /// The GraphQL operation kind an endpoint operation declares, as the
-/// pinned query file writes it (`products/adapter/CONCEPT.md` section
-/// 8.8).
+/// pinned query file writes it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -346,7 +342,7 @@ pub enum GraphQlOperationKind {
 }
 
 /// One code map: an explicit conversion table, the port of Camel's type
-/// converter (`products/adapter/CONCEPT.md` sections 8.6 and 8.10). No
+/// converter. No
 /// converter chains; a key with no entry raises `conversion.unmapped`.
 /// The member stays small enough for CFG-YAML-6 so its content can move to
 /// a digest-pinned data file without a format change.
@@ -365,8 +361,8 @@ pub struct CodeMap {
     pub entries: std::collections::BTreeMap<ExternalId, serde_json::Value>,
 }
 
-/// Whether a source route's scan ends: the closed set CONCEPT 17.2 pins
-/// for the item contract.
+/// Whether a source route's scan ends: the closed set the
+/// item contract pins.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -378,7 +374,7 @@ pub enum SourceScan {
 }
 
 /// The recovery semantics of a source route's `next` cursor, the closed
-/// set CONCEPT 17.2 pins.
+/// set the item contract pins.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -392,7 +388,7 @@ pub enum SourceRecovery {
 }
 
 /// The closed edit-finding declarations a source route carries in its
-/// `edits` property (`products/adapter/CONCEPT.md` section 17.2): the
+/// `edits` property: the
 /// position only moves forward, so each source declares how
 /// an edit to an already-read item becomes visible again. The values are
 /// validated by the checks rather than the reader, so a value outside the
@@ -451,9 +447,8 @@ pub struct EvidenceRouteContract {
 /// steps. A source route is never a subroutine: a facade binding naming it,
 /// or a `direct:` send targeting it, refuses
 /// (`adapter.job.source-bound-refused`,
-/// `adapter.job.source-called-refused`). There is no `from`: the
-/// `from: file:` consumer form was rejected with the job's read step
-/// (section 17.2).
+/// `adapter.job.source-called-refused`). There is no `from`; a job reads
+/// through its declared source, not a `from: file:` consumer.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -518,7 +513,7 @@ impl registry_platform_yaml::Identified for CodeMap {
 
 impl CodeMap {
     /// The entry one conversion looks up: exact and case-sensitive over
-    /// a string key (`products/adapter/CONCEPT.md` section 8.6). A key
+    /// a string key. A key
     /// that is not a valid external id matches no entry.
     #[must_use]
     pub fn lookup(&self, key: &str) -> Option<&serde_json::Value> {
@@ -528,8 +523,7 @@ impl CodeMap {
 }
 
 /// The engine capabilities a pack requires: the components, languages, and
-/// EIPs its routes use. The ctl refuses a pack the binary cannot run
-/// (`products/adapter/CONCEPT.md` section 6).
+/// EIPs its routes use. The ctl refuses a pack the binary cannot run.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -697,7 +691,7 @@ mod tests {
     /// timeout; Evidence owns the omitted timeout default. A zero value is
     /// refused. The response bound's
     /// reader ceiling is the platform cap a source-route-only endpoint may
-    /// declare (`products/adapter/CONCEPT.md` section 8.8); a
+    /// declare; a
     /// facade-reachable endpoint stays at the facade
     /// ceiling, which the checks refuse past.
     #[test]
