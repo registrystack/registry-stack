@@ -22,33 +22,30 @@ Preserve these shared boundaries:
   exposing values. Products still validate their own complete closed model.
 - Crypto and canonical JSON have single owners. Preserve exact algorithm,
   key-shape, identifier, and canonical-byte rules; do not add a second hashing
-  or signing interpretation in a consumer.
+  or signing interpretation in a consumer. Protocol-bound payloads are
+  byte-stable: sort sets before hashing or signing, use JCS where JSON byte
+  equality matters, and let issuers generate identifiers such as
+  `credential_id`, `jti`, and `sub_ref` when they take part in verification.
 - Outbound HTTP validates targets and resolved addresses, bounds reads and
   work, and applies the chosen redirect/proxy policy. Structured URL building
   prevents data from changing path or query authority. Explicit deployment
   policies determine the allowed network boundary.
 - Secret-bearing types redact diagnostics and keep key custody and zeroization
-  guarantees. Follow [secret-provider readiness](docs/secret-provider-readiness.md)
-  for signer/secret integrations and [audit reference hashing](docs/audit-reference-hashing.md)
-  for identifier correlation.
+  guarantees. Use the shared `KeyReadiness` and `KeyStatus` gate for signer and secret
+  integrations, and `AuditKeyHasher::audit_reference_hash` for identifier
+  correlation. Tests assert redaction for key structs: an accidental
+  `#[derive(Debug)]` is easy to miss in review.
+- Security logs use stable, low-cardinality field names (`request_id`,
+  `principal_id_hash`, `auth_mode`, `issuer`, `client_id`, `azp`, `scope`,
+  `policy`, `decision`, `audit_envelope_id`, `error_code`) and never include
+  bearer tokens, raw API keys, private key material, full SD-JWTs, or
+  unredacted subject identifiers.
 - Audit primitives provide minimized, fail-closed records with keyed
   references; products decide which operations require durable acceptance
   before source access or release. The local file carries no hash chain, so
   only shipping it to append-only storage proves completeness.
 - SQLite is bounded and read-only. Shared OIDC helpers verify tokens but do
   not replace each product's principal, claim, scope, or authority rules.
-
-## MCP composition service
-
-Integration maintainers own `registry-mcp`, a source-built supporting service.
-Platform owns `registry-mcp-edge`, its neutral protected transport, verified
-caller, per-binding credential and durable audit primitive. BReg citizen,
-Casework staff and experimental Live Adapter consumers own downstream
-authorization and data disclosure. Apply their product guides when changing
-those semantics. The service refuses arbitrary URL/SQL tools, dynamic plugins,
-inherited product authority and mixed citizen/staff resource configurations.
-See [the design record](MCP-GATEWAY.md) for the protocol subset, operator choice,
-source disclosure exception and producer readiness limits.
 
 ## Audit writer
 
@@ -93,8 +90,7 @@ all-feature checks selected by `.github/workflows/ci.yml` and
 `.github/scripts/ci_changes.py`; a selected PR matrix is not a claim that every
 workspace package ran.
 
-Use `products/platform/scripts/check-hygiene-alignment.sh` for shared
-lint/format templates and `cargo deny check` for dependency or advisory policy
+Use `cargo deny check` for dependency or advisory policy
 changes. Run `products/platform/scripts/check-config-conformance.py
 --check-generated` after changing a shared runtime configuration block or a
 runtime that reads `runtime.yaml` through `RuntimeConfigLoader`. Coverage and fuzz definitions live in CI and

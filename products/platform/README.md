@@ -41,28 +41,6 @@ integration-test fixtures.
 | [`registry-platform-x509`](../../crates/registry-platform-x509/README.md) | X.509 chain validation for JOSE `x5c` headers against configured trust anchors, outside TLS. |
 | [`registry-platform-yaml`](../../crates/registry-platform-yaml/README.md) | The shared configuration reader: one YAML subset, typed decoding, and value-free diagnostics with a code, a position, and the fix. |
 
-## Design Principles
-
-- Fail closed on malformed security input.
-- Prefer explicit allowlists over broad defaults.
-- Keep network fetches bounded by URL policy, byte limits, and timeouts.
-- Avoid secret material in debug output and logs.
-- Keep crate APIs small enough that application code can compose them directly.
-- Treat test fixtures as a supported surface for downstream integration tests.
-
-## Compatibility
-
-- Rust edition: 2021.
-- License: Apache-2.0.
-- Publication: crates are private to this workspace (`publish = false`).
-- Versioning: all crates share the workspace version in the root
-  [`Cargo.toml`](../../Cargo.toml).
-- Signing support: the platform supports EdDSA/Ed25519 for platform-owned signing and
-  verification, including a provider abstraction for local JWKs and external
-  signing adapters. OIDC JWT verification is caller-configurable for provider
-  compatibility, but consumers should keep algorithm allowlists as narrow as
-  their provider supports.
-
 ## Consuming the Workspace
 
 Products in this workspace depend on a platform crate through the root
@@ -80,9 +58,9 @@ The `registry-platform-httputil` crate uses `rustls` for outbound HTTPS.
 
 ### Toolchain pins
 
-- Rust: pinned in [`rust-toolchain.toml`](rust-toolchain.toml) (currently `1.95.0`).
+- Rust: pinned in the root [`rust-toolchain.toml`](../../rust-toolchain.toml) (currently `1.95.0`).
 - `cargo-deny`: install `0.19.8` to match CI; older versions (≤ `0.14.x`)
-  cannot parse the `[graph]` syntax used in [`deny.toml`](deny.toml).
+  cannot parse the `[graph]` syntax used in the root [`deny.toml`](../../deny.toml).
 
 ```sh
 cargo install --locked cargo-deny@0.19.8
@@ -99,7 +77,6 @@ cargo clippy --locked -p 'registry-platform-*' --all-targets --all-features -- -
 cargo test --locked -p 'registry-platform-*' --all-targets --all-features
 cargo llvm-cov --locked -p 'registry-platform-*' --all-features --fail-under-lines 80
 cargo deny check
-products/platform/scripts/check-hygiene-alignment.sh
 products/platform/scripts/check-config-conformance.py --check-generated
 gitleaks dir --config .gitleaks.toml --no-banner --redact --timeout 120 .
 ```
@@ -118,26 +95,7 @@ cargo test -p registry-platform-oidc
 
 - [`CHANGELOG.md`](CHANGELOG.md) records release-level changes.
 - The root [`deny.toml`](../../deny.toml) defines dependency, license,
-  advisory, and source policy for the monorepo dependency graph. The platform
-  copy remains a reusable consumer template.
-- [`rustfmt.toml`](rustfmt.toml) and [`clippy.toml`](clippy.toml) define shared
-  Rust hygiene defaults.
-
-## Security Notes
-
-The platform crates are reusable primitives, not a complete application security
-boundary. Consumers remain responsible for service authorization, tenant
-isolation, audit retention, secret provisioning, and deployment configuration.
-
-Secret-provider integrations should follow the
-[`secret-provider-readiness`](docs/secret-provider-readiness.md) contract for
-provider labels, readiness-gated apply, and posture-safe redaction.
-
-Product runtimes own their typed durable correctness state rather than selecting
-a generic platform storage backend.
-
-Report security-sensitive issues privately, following the
-[Registry Stack security policy](../../SECURITY.md), before opening a public issue.
+  advisory, and source policy for the monorepo dependency graph.
 
 ## License
 
@@ -145,6 +103,6 @@ Apache-2.0. See [`LICENSE`](../../LICENSE).
 
 ## Shared HTTP contracts
 
-- [HTTP problems and recovery](HTTP-PROBLEMS.md)
-- [Per-resource access tokens](ACCESS-TOKENS.md)
-- [Signed hook deliveries](DELIVERY-SIGNING.md)
+- [Error and status code reference](https://docs.registrystack.org/reference/errors/)
+- [Request an access token from your own code](https://docs.registrystack.org/configure/request-an-access-token/)
+- [Signed hook deliveries](https://docs.registrystack.org/reference/delivery-signing/)

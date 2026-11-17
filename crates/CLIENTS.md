@@ -85,7 +85,7 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   the Node and Python exports (`eventRecordView`, `event_record_view`, and the
   metadata `eventRecordDescriptor` or `event_record_descriptor` accessor) pass
   JSON through it unchanged and add no semantics. The view shape, its status
-  words and its error codes are documented in `products/breg/event-records.md`
+  words and its error codes are documented in [Event records](https://docs.registrystack.org/configure/breg-event-records/)
   and published as `products/breg/contracts/event-record-view/EventRecordView.schema.json`.
 - Messaging submissions take a caller-chosen idempotency key; a binding never
   generates one. Only the Rust client's bounded same-key retry resends a
@@ -226,10 +226,10 @@ changed runtime authorization or disclosure boundary.
 
 ## Shared protocol references
 
-[HTTP problems and recovery](../products/platform/HTTP-PROBLEMS.md) owns the
+[HTTP problems and recovery](https://docs.registrystack.org/reference/errors/) owns the
 common envelope, deliberate bodyless/concealed states, meaningful Retry-After,
 idempotency guidance and the two pagination families.
-[Access tokens](../products/platform/ACCESS-TOKENS.md) owns the per-resource
+[Access tokens](https://docs.registrystack.org/configure/request-an-access-token/) owns the per-resource
 verification table. Python `registry_client.auth.PrivateKeyJwt` is the same
 canonical provider as the compatibility BReg entry point; configure one
 instance per resource. A facade grants no shared bearer authority.
