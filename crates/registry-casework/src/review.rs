@@ -270,11 +270,15 @@ impl SourceDisclosure {
 }
 
 impl CaseworkService {
+    /// The provider a separate human source bearer is verified against. A
+    /// task or request target names its stored policy's provider, or `None`
+    /// when that policy is submitted-context and reads no source. A collection
+    /// names the project's only current-source provider.
     pub(crate) async fn human_source_provider(
         &self,
         task: Option<Uuid>,
         request: Option<Uuid>,
-    ) -> Result<String, ReviewRuntimeError> {
+    ) -> Result<Option<String>, ReviewRuntimeError> {
         let record = if let Some(task) = task {
             Some(self.store.review_request_for_task(task).await?)
         } else if let Some(request) = request {
@@ -283,12 +287,10 @@ impl CaseworkService {
             None
         };
         if let Some(record) = record {
-            return match record.policy.context {
-                ReviewContextPolicy::CurrentSource { provider, .. } => Ok(provider),
-                ReviewContextPolicy::Submitted => {
-                    Err(ReviewRuntimeError::SourceProfileNotApplicable)
-                }
-            };
+            return Ok(match record.policy.context {
+                ReviewContextPolicy::CurrentSource { provider, .. } => Some(provider),
+                ReviewContextPolicy::Submitted => None,
+            });
         }
         let providers: std::collections::BTreeSet<_> = self
             .project
@@ -302,7 +304,7 @@ impl CaseworkService {
         if providers.len() != 1 {
             return Err(ReviewRuntimeError::SourceProfileNotApplicable);
         }
-        Ok(providers.into_iter().next().expect("one provider"))
+        Ok(Some(providers.into_iter().next().expect("one provider")))
     }
     pub async fn erase_expired_reviews(&self) -> Result<u64, ReviewRuntimeError> {
         self.store.erase_expired_reviews_at(Utc::now()).await
@@ -1640,8 +1642,9 @@ impl CaseworkService {
         // The inbox is a unified queue: a supplied source profile declares
         // the caller's source visibility, it does not select a context
         // strategy, so submitted-context candidates are admitted beside
-        // source-backed ones. The exact single-task routes keep refusing the
-        // mismatched profile.
+        // source-backed ones. The exact single-task routes keep refusing a
+        // source profile sent alone; the HTTP boundary removes a separate
+        // source pair before a submitted-context route reads it.
         if matches!(
             record.policy.context,
             registry_casework_core::ReviewContextPolicy::Submitted

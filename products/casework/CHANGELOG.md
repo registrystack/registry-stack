@@ -34,6 +34,44 @@
   `casework.runtime.invalid-context-provider` sits at the member and names the
   rule it breaks.
 
+- A stage can show the applicant a coarse progress code. Set
+  `publicProgressCode` (a lowercase local identifier such as `identity-check`)
+  on a review stage; the code is part of the frozen policy digest. The admitted
+  producer reads it with `GET /v1/review-requests/{requestId}?include=progress`,
+  and the response carries `progressCode` only while a reviewing request's
+  active stage declares one. Upgrade clients that decode the full policy before
+  activating a policy that sets a code, because an older client may reject the
+  added stage field. A policy that omits the field keeps its earlier digest.
+- A human reviewer's request can carry a separate credential for the
+  source registry. Set `humanSourceAuthentication: {audience: ...}` on a
+  `contextProviders` binding, with an audience that differs from Casework's own.
+  The request then sends exactly one `Registry-Source-Authorization: Bearer ...`
+  beside its Casework `Authorization` and `Registry-Source-Profile`. Both tokens
+  must be human, scalar-audience tokens with the same issuer and `sub`.
+  Casework verifies the source token with its existing issuer trust and creates
+  no new trust; the source registry enforces its own client, profile and
+  disclosure. Once the header is supplied there is no fallback to the Casework
+  token. A task or request under a submitted-context policy reads no source, so
+  Casework ignores the pair there: it neither verifies nor forwards the source
+  token, and the call is decided exactly as without it, so a reviewer app can
+  send the pair on every call. The Rust, Node.js and Python clients take a
+  `HumanSourceCredential` per call and report
+  `humanSourceCredentialContract()` (Python:
+  `human_source_credential_contract`). See
+  [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).
+- `caseworkctl generate run-source PROJECT --binding FILE` prepares a copy of an
+  existing review producer for a synthetic browser run, from a
+  `CaseworkRunSource` v1alpha1 file. It checks the producer's exact issuer,
+  profile and subject, `--output NEW_DIRECTORY` captures the source closure,
+  `--expected-source-digest` refuses drift and `--issuer` changes only the
+  selected loopback issuer. Without `--output` it writes nothing. It does not
+  activate a package; `rstack dev` uses it. See the [example](examples/run-source/run-source.json).
+- `caseworkctl check` refuses a review policy in which a stage offers no
+  advancing outcome. Every stage must offer an outcome whose settlement is
+  `approved` (`answered` for an answer policy), whether it lists `outcomes` or
+  inherits all of them. Add an advancing outcome to a stage that narrows
+  `outcomes` to others only.
+
 ## 0.46.0 - 2026-11-08
 
 - Each access profile may carry an optional `label` and `description`. Neither is matched against a caller, a profile that writes neither reads as before, and rewording them leaves a policy's behavioral binding unchanged. Casework keeps both in the review policy description, which any caller who may read that description, requesters included, can see.

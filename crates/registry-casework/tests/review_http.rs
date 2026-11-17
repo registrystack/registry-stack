@@ -5767,6 +5767,49 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         assert!(headers.contains_key("permissions-policy"));
         assert!(headers.contains_key("traceparent"));
     }
+    /// One call as the primary caller. `source` is the full source
+    /// authorization value, sent with the reviewer source profile. Every call
+    /// carries the same trace, so problem bodies compare byte for byte.
+    async fn exchange(
+        app: &axum::Router,
+        method: &str,
+        path: &str,
+        primary: &BearerToken,
+        source: Option<&str>,
+        headers: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> (StatusCode, String) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("traceparent", TRACE)
+            .header("authorization", primary.authorization_header_value())
+            .header(CASEWORK_PROFILE_HEADER, "staff");
+        if let Some(source) = source {
+            request = request
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .header(SOURCE_AUTHORIZATION_HEADER, source);
+        }
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let body = match body {
+            Some(body) => {
+                request = request.header(CONTENT_TYPE, "application/json");
+                Body::from(serde_json::to_vec(body).unwrap())
+            }
+            None => Body::empty(),
+        };
+        let response = app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        protected(&response);
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 32768).await.unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
     const SOURCE_AUDIENCE: &str = "urn:test:breg-human-source";
     let idp = MockIdp::start().await;
     let (legacy, service, _, _, _, _, database) = app_with_database(&idp).await;
@@ -6028,8 +6071,11 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         )
         .await
         .unwrap();
-    // A supplied invalid source bearer must not reveal whether a task or
-    // request exists before its normal row/source disclosure checks.
+    // A supplied invalid source bearer must not reveal whether a
+    // current-source task or request exists before its normal row/source
+    // disclosure checks. A submitted-context target reads no source, so its
+    // source pair is neither verified nor forwarded, whatever its validity:
+    // the caller gets the response the same call gets without the pair.
     let mut mismatched = source_claims.clone();
     mismatched["sub"] = json!("different-human");
     let mut wrong_signature = idp.mint_token(source_claims.clone());
@@ -6051,18 +6097,22 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         wrong_signature,
         idp.mint_token(source_claims.clone()),
     ] {
-        for (existing, missing) in [
+        let bad_header = format!("Bearer {bad_source}");
+        for (existing, missing, submitted) in [
             (
                 format!("/v1/review-tasks/{task}/context"),
                 format!("/v1/review-tasks/{}/context", Uuid::new_v4()),
+                false,
             ),
             (
                 format!("/v1/review-requests/{}/history", created.request_id),
                 format!("/v1/review-requests/{}/history", Uuid::new_v4()),
+                false,
             ),
             (
                 format!("/v1/review-tasks/{submitted_task}/context"),
                 format!("/v1/review-tasks/{}/context", Uuid::new_v4()),
+                true,
             ),
             (
                 format!(
@@ -6070,30 +6120,23 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
                     submitted_created.request_id
                 ),
                 format!("/v1/review-requests/{}/history", Uuid::new_v4()),
+                true,
             ),
         ] {
             let mut observations = Vec::new();
             let before = calls.load(Ordering::SeqCst);
-            for path in [existing, missing] {
-                let response = app
-                    .clone()
-                    .oneshot(
-                        Request::builder()
-                            .uri(path)
-                            .header("authorization", primary.authorization_header_value())
-                            .header(CASEWORK_PROFILE_HEADER, "staff")
-                            .header(SOURCE_PROFILE_HEADER, "reviewer-source")
-                            .header(SOURCE_AUTHORIZATION_HEADER, format!("Bearer {bad_source}"))
-                            .body(Body::empty())
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                protected(&response);
-                let status = response.status();
-                let body: Value =
-                    serde_json::from_slice(&to_bytes(response.into_body(), 32768).await.unwrap())
-                        .unwrap();
+            for path in [&existing, &missing] {
+                let (status, body) = exchange(
+                    &app,
+                    "GET",
+                    path,
+                    &primary,
+                    Some(bad_header.as_str()),
+                    &[],
+                    None,
+                )
+                .await;
+                let body: Value = serde_json::from_str(&body).unwrap();
                 observations.push((status, body["code"].clone()));
             }
             assert_eq!(
@@ -6101,9 +6144,66 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
                 "source admission disclosed target existence"
             );
             assert_eq!(observations[0].0, StatusCode::NOT_FOUND);
+            if submitted {
+                assert_eq!(
+                    exchange(
+                        &app,
+                        "GET",
+                        &existing,
+                        &primary,
+                        Some(bad_header.as_str()),
+                        &[],
+                        None,
+                    )
+                    .await,
+                    exchange(&app, "GET", &existing, &primary, None, &[], None).await,
+                    "a submitted-context target answered differently with a source pair"
+                );
+            }
             assert_eq!(calls.load(Ordering::SeqCst), before);
         }
     }
+    // The primary credential alone decides a submitted-context target. A
+    // caller it does not admit gets exactly the response the same call gets
+    // without the source pair, including a request-shape refusal that runs
+    // before any task is read.
+    let source_header = source
+        .authorization_header_value()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let submitted_claim = format!("/v1/review-tasks/{submitted_task}/claim");
+    let before = calls.load(Ordering::SeqCst);
+    for (if_match, key) in [
+        (Some("\"1\""), "dual-outsider-claim"),
+        (None, "dual-outsider-unconditional-claim"),
+    ] {
+        let mut observed = Vec::new();
+        for (supplied, idempotency_key) in [
+            (Some(source_header.as_str()), format!("{key}-with-source")),
+            (None, format!("{key}-without-source")),
+        ] {
+            let mut headers = vec![("idempotency-key", idempotency_key.as_str())];
+            headers.extend(if_match.map(|value| ("if-match", value)));
+            observed.push(
+                exchange(
+                    &app,
+                    "POST",
+                    &submitted_claim,
+                    &primary,
+                    supplied,
+                    &headers,
+                    None,
+                )
+                .await,
+            );
+        }
+        assert_eq!(
+            observed[0], observed[1],
+            "a source pair changed what a caller without access learns about a submitted-context task"
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), before);
     database.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('review-team',$1,'reviewer','staff')", &[&idp.issuer()]).await.unwrap();
     assert_eq!(
         client
@@ -6120,6 +6220,57 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         .await
         .unwrap();
     client.review_task_context(auth(), task).await.unwrap();
+    // A current-source task keeps every source check for a caller with
+    // access: a refused source answers as not found, and a missing source is
+    // refused before any source is asked.
+    let mut wrong_audience_claims = source_claims.clone();
+    wrong_audience_claims["aud"] = json!(AUDIENCE);
+    let wrong_audience_header = format!("Bearer {}", idp.mint_token(wrong_audience_claims));
+    let mut other_subject_claims = source_claims.clone();
+    other_subject_claims["sub"] = json!("different-human");
+    let other_subject_header = format!("Bearer {}", idp.mint_token(other_subject_claims));
+    let current_context = format!("/v1/review-tasks/{task}/context");
+    let before = calls.load(Ordering::SeqCst);
+    for (supplied, headers, status, code) in [
+        (
+            Some(wrong_audience_header.as_str()),
+            vec![],
+            StatusCode::NOT_FOUND,
+            "request.not-found",
+        ),
+        (
+            Some(other_subject_header.as_str()),
+            vec![],
+            StatusCode::NOT_FOUND,
+            "request.not-found",
+        ),
+        (
+            None,
+            vec![],
+            StatusCode::BAD_REQUEST,
+            "source-profile.required",
+        ),
+        (
+            None,
+            vec![(SOURCE_AUTHORIZATION_HEADER, source_header.as_str())],
+            StatusCode::BAD_REQUEST,
+            "source-profile.required",
+        ),
+    ] {
+        let (observed, body) = exchange(
+            &app,
+            "GET",
+            &current_context,
+            &primary,
+            supplied,
+            &headers,
+            None,
+        )
+        .await;
+        assert_eq!(observed, status, "{body}");
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["code"], code);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), before);
     let mut denied_claims = source_claims.clone();
     denied_claims["client_id"] = json!("unadmitted-source-client");
     let denied = BearerToken::new(idp.mint_token(denied_claims)).unwrap();
@@ -6196,6 +6347,82 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    // A submitted-context task reads no source. With a valid or a refused
+    // source pair, a reviewer opens and acts on it exactly as without the
+    // pair, and no source is asked.
+    let before = calls.load(Ordering::SeqCst);
+    for supplied in [&source_header, &wrong_audience_header] {
+        for path in [
+            format!("/v1/review-tasks/{submitted_task}"),
+            format!("/v1/review-tasks/{submitted_task}/context"),
+            format!(
+                "/v1/review-requests/{}/history",
+                submitted_created.request_id
+            ),
+            format!(
+                "/v1/review-requests/{}/clocks",
+                submitted_created.request_id
+            ),
+        ] {
+            let without = exchange(&app, "GET", &path, &primary, None, &[], None).await;
+            assert_eq!(without.0, StatusCode::OK, "{path}: {}", without.1);
+            assert_eq!(
+                exchange(
+                    &app,
+                    "GET",
+                    &path,
+                    &primary,
+                    Some(supplied.as_str()),
+                    &[],
+                    None,
+                )
+                .await,
+                without,
+                "{path}"
+            );
+        }
+    }
+    let (status, body) = exchange(
+        &app,
+        "POST",
+        &submitted_claim,
+        &primary,
+        Some(source_header.as_str()),
+        &[
+            ("if-match", "\"1\""),
+            ("idempotency-key", "dual-submitted-claim"),
+        ],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["revision"], 2);
+    let (status, body) = exchange(
+        &app,
+        "POST",
+        &format!("/v1/review-requests/{}/notes", submitted_created.request_id),
+        &primary,
+        Some(source_header.as_str()),
+        &[("idempotency-key", "dual-submitted-note")],
+        Some(&json!({"audience": "reviewers", "note": "checked"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = exchange(
+        &app,
+        "POST",
+        &format!("/v1/review-tasks/{submitted_task}/decisions"),
+        &primary,
+        Some(source_header.as_str()),
+        &[
+            ("if-match", "\"2\""),
+            ("idempotency-key", "dual-submitted-decision"),
+        ],
+        Some(&serde_json::to_value(answer_decision()).unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(calls.load(Ordering::SeqCst), before);
     for (method, path) in [
         ("POST", "/v1/review-requests".into()),
         ("POST", format!("/v1/review-tasks/{task}/release")),
