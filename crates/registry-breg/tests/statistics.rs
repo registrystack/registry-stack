@@ -174,7 +174,7 @@ fn period_codes_keep_the_exclusive_end_in_the_four_digit_date_domain() {
 }
 
 #[test]
-fn grouped_rows_are_zero_filled_and_margins_are_exact_sums() {
+fn grouped_rows_are_zero_filled_and_totals_are_read_from_total_rows() {
     let periods = period_range(
         PeriodGranularity::Month,
         "2025-01",
@@ -212,6 +212,11 @@ fn grouped_rows_are_zero_filled_and_margins_are_exact_sums() {
             codes: vec![UNKNOWN_CODE.to_owned(), "true".to_owned()],
             value: 4,
         },
+        grouped_row("2025-01", &["A", TOTAL_CODE], 5),
+        grouped_row("2025-01", &[UNKNOWN_CODE, TOTAL_CODE], 4),
+        grouped_row("2025-01", &[TOTAL_CODE, "true"], 6),
+        grouped_row("2025-01", &[TOTAL_CODE, "false"], 3),
+        grouped_row("2025-01", &[TOTAL_CODE, TOTAL_CODE], 9),
     ];
     let cells = build_exact_cells(
         "enrolments",
@@ -226,6 +231,7 @@ fn grouped_rows_are_zero_filled_and_margins_are_exact_sums() {
     assert_eq!(cell_value(&cells, &["A", TOTAL_CODE]), Some(5));
     assert_eq!(cell_value(&cells, &[TOTAL_CODE, "true"]), Some(6));
     assert_eq!(cell_value(&cells, &["B", "true"]), Some(0));
+    assert_eq!(cell_value(&cells, &["B", TOTAL_CODE]), Some(0));
     assert!(cells.iter().all(|cell| cell.status == CellStatus::Exact));
     assert_eq!(
         dimensions[0].document().codes,
@@ -265,34 +271,119 @@ fn unknown_code_error_names_dataset_and_dimension_but_not_value() {
 }
 
 #[test]
-fn margins_use_checked_integer_arithmetic() {
-    let periods = vec![current_period(PeriodGranularity::Year, date(2025, 1, 1)).unwrap()];
-    let dimensions = vec![DimensionDomain {
-        field: "region".to_owned(),
-        vocabulary: "regions".to_owned(),
-        codes: vec!["A".to_owned(), "B".to_owned()],
-        include_unknown: false,
-    }];
+fn total_checks_use_checked_integer_arithmetic() {
+    let (periods, dimensions) = one_year_one_region();
     let error = build_exact_cells(
         "enrolments",
         &periods,
         &dimensions,
         &count_measures(),
         &[
-            GroupedCell {
-                period: "2025".to_owned(),
-                codes: vec!["A".to_owned()],
-                value: u64::MAX,
-            },
-            GroupedCell {
-                period: "2025".to_owned(),
-                codes: vec!["B".to_owned()],
-                value: 1,
-            },
+            grouped_row("2025", &["A"], u64::MAX),
+            grouped_row("2025", &["B"], 1),
+            grouped_row("2025", &[TOTAL_CODE], u64::MAX),
         ],
     )
     .unwrap_err();
     assert_eq!(error, StatisticsError::CountOverflow);
+}
+
+#[test]
+fn total_rows_are_accepted_in_any_position_and_a_missing_total_is_zero() {
+    let (periods, dimensions) = one_year_one_region();
+    let cells = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &count_measures(),
+        &[grouped_row("2025", &[TOTAL_CODE], 0)],
+    )
+    .unwrap();
+    assert_eq!(cells.len(), 3);
+    assert!(cells.iter().all(|cell| cell.value == Some(0)));
+    let empty =
+        build_exact_cells("enrolments", &periods, &dimensions, &count_measures(), &[]).unwrap();
+    assert_eq!(empty.len(), 3);
+    assert!(empty.iter().all(|cell| cell.value == Some(0)));
+}
+
+#[test]
+fn a_duplicate_total_row_is_refused() {
+    let (periods, dimensions) = one_year_one_region();
+    let error = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &count_measures(),
+        &[
+            grouped_row("2025", &[TOTAL_CODE], 0),
+            grouped_row("2025", &[TOTAL_CODE], 0),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        StatisticsError::DuplicateGroupedCell {
+            dataset: "enrolments".to_owned()
+        }
+    );
+}
+
+#[test]
+fn a_total_that_differs_from_its_base_cells_is_refused() {
+    let (periods, dimensions) = one_year_one_region();
+    for total in [None, Some(1), Some(3)] {
+        let mut rows = vec![grouped_row("2025", &["A"], 2)];
+        rows.extend(total.map(|value| grouped_row("2025", &[TOTAL_CODE], value)));
+        let error = build_exact_cells(
+            "enrolments",
+            &periods,
+            &dimensions,
+            &count_measures(),
+            &rows,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            StatisticsError::InconsistentTotal {
+                dataset: "enrolments".to_owned()
+            }
+        );
+    }
+}
+
+#[test]
+fn a_total_row_with_an_unknown_code_beside_it_is_still_refused() {
+    let periods = vec![current_period(PeriodGranularity::Year, date(2025, 1, 1)).unwrap()];
+    let dimensions = vec![
+        DimensionDomain {
+            field: "region".to_owned(),
+            vocabulary: "regions".to_owned(),
+            codes: vec!["known".to_owned()],
+            include_unknown: false,
+        },
+        DimensionDomain {
+            field: "sex".to_owned(),
+            vocabulary: "sex".to_owned(),
+            codes: vec!["f".to_owned()],
+            include_unknown: false,
+        },
+    ];
+    let error = build_exact_cells(
+        "enrolments",
+        &periods,
+        &dimensions,
+        &count_measures(),
+        &[grouped_row("2025", &[TOTAL_CODE, "secret"], 1)],
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        StatisticsError::UnknownCode {
+            dataset: "enrolments".to_owned(),
+            dimension: "sex".to_owned()
+        }
+    );
 }
 
 #[test]
@@ -629,6 +720,14 @@ fn two_measures() -> Vec<Measure> {
         .collect()
 }
 
+fn grouped_row(period: &str, codes: &[&str], value: u64) -> GroupedCell {
+    GroupedCell {
+        period: period.to_owned(),
+        codes: codes.iter().map(|code| (*code).to_owned()).collect(),
+        value,
+    }
+}
+
 fn one_year_one_region() -> (Vec<registry_breg::statistics::Period>, Vec<DimensionDomain>) {
     (
         vec![current_period(PeriodGranularity::Year, date(2025, 1, 1)).unwrap()],
@@ -649,11 +748,10 @@ fn every_cell_carries_the_measure_it_reports() {
         &periods,
         &dimensions,
         &count_measures(),
-        &[GroupedCell {
-            period: "2025".to_owned(),
-            codes: vec!["A".to_owned()],
-            value: 2,
-        }],
+        &[
+            grouped_row("2025", &["A"], 2),
+            grouped_row("2025", &[TOTAL_CODE], 2),
+        ],
     )
     .unwrap();
     assert_eq!(cells.len(), 3);
@@ -670,11 +768,10 @@ fn two_declared_measures_produce_two_cells_per_combination_in_declared_order() {
         &periods,
         &dimensions,
         &two_measures(),
-        &[GroupedCell {
-            period: "2025".to_owned(),
-            codes: vec!["A".to_owned()],
-            value: 2,
-        }],
+        &[
+            grouped_row("2025", &["A"], 2),
+            grouped_row("2025", &[TOTAL_CODE], 2),
+        ],
     )
     .unwrap();
     let order = cells

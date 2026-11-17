@@ -75,6 +75,11 @@
   upgrade. Releases published before the upgrade belong to an earlier series
   that stays in storage and is no longer served; republish the periods you
   still need.
+- BREAKING: A statistical dataset declares at most 12 dimensions. The compiler refuses a
+  longer list with `breg.statistical-dataset.dimensions-exceeded`, and the
+  authoring schema bounds `dimensions` at 12 items. PostgreSQL now computes
+  every total in the query that counts the cells, and 12 is the most one
+  `CUBE` accepts.
 - A `crs84-polygon` field stores a bounded `Polygon` or `MultiPolygon` in
   WGS 84 longitude and latitude. It takes `precision`, `maximumPositions` and
   an optional `bbox`, and the compiler validates it with PostGIS and generates

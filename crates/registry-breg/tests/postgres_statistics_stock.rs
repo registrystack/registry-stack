@@ -301,6 +301,205 @@ async fn partial_vocabulary_population_matches_the_authorized_list_count() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_dimension_totals_and_unknown_cells_match_hand_computed_counts() {
+    let database = postgres_harness::TestDatabase::create(3).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(cube_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "statistics-cube-registry",
+            database_id: "statistics-cube-database",
+            label: "package-statistics-cube-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+
+    let today = Utc::now().date_naive();
+    let period = current_period(PeriodGranularity::Month, today).expect("current month resolves");
+    let entity = &compiled.entities()["permit"];
+    let table = quote_stock_identifier(&entity.physical_table);
+    let permit_type = quote_stock_identifier(&entity.fields["permit-type"].physical_name);
+    let from = quote_stock_identifier(&entity.fields["valid-from"].physical_name);
+    let region = quote_stock_identifier(&entity.fields["region"].physical_name);
+    let sql = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, record_revision, record_lifecycle, active_package_revision,
+              {permit_type}, {from}, {region})
+         VALUES ($1::text::uuid, 1, 'active', $5, $2, $3, $4)"
+    );
+    let rows: [(&str, Option<&str>); 7] = [
+        ("air", Some("north")),
+        ("air", Some("north")),
+        ("air", Some("south")),
+        ("air", None),
+        ("water", Some("north")),
+        ("water", None),
+        ("water", None),
+    ];
+    for (index, (kind, jurisdiction)) in rows.iter().enumerate() {
+        let id = format!("00000000-0000-4000-8000-{:012}", index + 1);
+        database
+            .admin
+            .execute(
+                &sql,
+                &[
+                    &id,
+                    kind,
+                    &period.start,
+                    jurisdiction,
+                    &identity.activation_id,
+                ],
+            )
+            .await
+            .expect("cube permit fixture inserts");
+    }
+    let app = partial_text_router(
+        database.runtime_config.build_pool().expect("pool builds"),
+        compiled,
+        identity,
+        RegistryLockKey::derive("statistics-cube-registry").expect("lock key derives"),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x64; 32].into())
+                .expect("audit profile is keyed"),
+        ),
+    );
+    let document = partial_text_json(
+        partial_text_send(
+            &app,
+            Method::GET,
+            &format!(
+                "/v1/statistics/permits-by-type-and-region:live?accessProfile=facility-operator&from={0}&to={0}",
+                period.code
+            ),
+            partial_text_claims(),
+        )
+        .await,
+    )
+    .await;
+    let observed: BTreeMap<(String, String), u64> = document["cells"]
+        .as_array()
+        .expect("statistics cells are an array")
+        .iter()
+        .map(|cell| {
+            (
+                (
+                    cell["dimensions"]["permit-type"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                    cell["dimensions"]["region"].as_str().unwrap().to_owned(),
+                ),
+                cell["value"].as_u64().expect("live cells are exact"),
+            )
+        })
+        .collect();
+    let expected: BTreeMap<(String, String), u64> = [
+        ("air", "north", 2),
+        ("air", "south", 1),
+        ("air", "_U", 1),
+        ("air", "_T", 4),
+        ("water", "north", 1),
+        ("water", "south", 0),
+        ("water", "_U", 2),
+        ("water", "_T", 3),
+        ("_T", "north", 3),
+        ("_T", "south", 1),
+        ("_T", "_U", 3),
+        ("_T", "_T", 7),
+    ]
+    .into_iter()
+    .map(|(kind, jurisdiction, value)| ((kind.to_owned(), jurisdiction.to_owned()), value))
+    .collect();
+    assert_eq!(observed, expected);
+    assert_eq!(document["cells"].as_array().unwrap().len(), 12);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn twelve_dimensions_run_as_one_cube_and_every_total_is_served() {
+    let database = postgres_harness::TestDatabase::create(3).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(twelve_dimension_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "statistics-twelve-registry",
+            database_id: "statistics-twelve-database",
+            label: "package-statistics-twelve-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+
+    let today = Utc::now().date_naive();
+    let period = current_period(PeriodGranularity::Month, today).expect("current month resolves");
+    let entity = &compiled.entities()["permit"];
+    let table = quote_stock_identifier(&entity.physical_table);
+    let from = quote_stock_identifier(&entity.fields["valid-from"].physical_name);
+    let dimension_columns = (0..12)
+        .map(|index| {
+            quote_stock_identifier(&entity.fields[&format!("dimension-{index:02}")].physical_name)
+        })
+        .collect::<Vec<_>>();
+    let sql = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, record_revision, record_lifecycle, active_package_revision, {from}, {})
+         VALUES ($1::text::uuid, 1, 'active', $2, $3, {})",
+        dimension_columns.join(", "),
+        ["'only'"; 12].join(", ")
+    );
+    for index in 1..=3 {
+        let id = format!("00000000-0000-4000-8000-{index:012}");
+        database
+            .admin
+            .execute(&sql, &[&id, &identity.activation_id, &period.start])
+            .await
+            .expect("twelve-dimension fixture inserts");
+    }
+    let app = partial_text_router(
+        database.runtime_config.build_pool().expect("pool builds"),
+        compiled,
+        identity,
+        RegistryLockKey::derive("statistics-twelve-registry").expect("lock key derives"),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x65; 32].into())
+                .expect("audit profile is keyed"),
+        ),
+    );
+    let document = partial_text_json(
+        partial_text_send(
+            &app,
+            Method::GET,
+            &format!(
+                "/v1/statistics/permits-by-twelve-dimensions:live?accessProfile=facility-operator&from={0}&to={0}",
+                period.code
+            ),
+            partial_text_claims(),
+        )
+        .await,
+    )
+    .await;
+    let cells = document["cells"].as_array().expect("cells are an array");
+    assert_eq!(cells.len(), 4096);
+    assert!(cells.iter().all(|cell| cell["value"] == 3));
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stock_counts_a_record_on_its_last_day_whichever_way_the_validity_is_named() {
     let database = postgres_harness::TestDatabase::create(3).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -443,6 +642,98 @@ fn last_day_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(&bytes).expect("last-day fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("last-day statistical datasets compile")
+}
+
+fn twelve_dimension_registry() -> registry_breg::CompiledRegistry {
+    let dimension_ids = (0..12)
+        .map(|index| format!("dimension-{index:02}"))
+        .collect::<Vec<_>>();
+    let mut fields =
+        vec![json!({"id":"valid-from","type":"date","required":true,"classification":"internal"})];
+    let mut vocabularies = Vec::new();
+    for id in &dimension_ids {
+        fields.push(json!({
+            "id":id,"type":"vocabulary-code","vocabulary":id,
+            "required":true,"classification":"internal"
+        }));
+        vocabularies.push(json!({"id":id,"values":["only"]}));
+    }
+    let mut readable = vec!["valid-from".to_owned()];
+    readable.extend(dimension_ids.iter().cloned());
+    let source = json!({"datasets":[{"id": "facility"}],
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{
+            "id":"statistics-twelve-registry","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://statistics-twelve.example.test","timezone":"UTC"
+        },
+        "recordTypes":[{
+            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+            "fields":fields
+        }],
+        "accessProfiles":[{
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"permit","operations":["list"],
+                "readableFields":readable,
+                "filterableFields":readable,
+                "allowCount":true,
+                "rowBoundaries":"unrestricted"
+            }],"datasets":[{"dataset":"permits-by-twelve-dimensions","operations":["read-live"]}]}
+        }],
+        "vocabularies":vocabularies,
+        "statisticalDatasets":[{
+            "id":"permits-by-twelve-dimensions","unit":"permit","population":"validFrom ne null",
+            "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
+            "dimensions":dimension_ids,
+            "disclosure":{"minimumCount":2,"roundingBase":2}
+        }]
+    });
+    let bytes = serde_json::to_vec(&source).expect("twelve-dimension fixture serializes");
+    let project = parse_project_json(&bytes).expect("twelve-dimension fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("twelve-dimension statistical dataset compiles")
+}
+
+fn cube_registry() -> registry_breg::CompiledRegistry {
+    let source = json!({"datasets":[{"id": "facility"}],
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{
+            "id":"statistics-cube-registry","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://statistics-cube.example.test","timezone":"UTC"
+        },
+        "recordTypes":[{
+            "id":"permit","primaryDataset":"facility","route":"permits","mutationMode":"mutable",
+            "fields":[
+                {"id":"permit-type","type":"vocabulary-code","vocabulary":"permit-type","required":true,"classification":"internal"},
+                {"id":"valid-from","type":"date","required":true,"classification":"internal"},
+                {"id":"region","type":"vocabulary-code","vocabulary":"region","required":false,"classification":"internal"}
+            ]
+        }],
+        "accessProfiles":[{
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+                "recordType":"permit","operations":["list"],
+                "readableFields":["permit-type","valid-from","region"],
+                "filterableFields":["permit-type","valid-from","region"],
+                "allowCount":true,
+                "rowBoundaries":"unrestricted"
+            }],"datasets":[{"dataset":"permits-by-type-and-region","operations":["read-live"]}]}
+        }],
+        "vocabularies":[
+            {"id":"permit-type","values":["air","water"]},
+            {"id":"region","values":["north","south"]}
+        ],
+        "statisticalDatasets":[{
+            "id":"permits-by-type-and-region","unit":"permit","population":"validFrom ne null",
+            "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
+            "dimensions":["permit-type","region"],
+            "disclosure":{"minimumCount":2,"roundingBase":2}
+        }]
+    });
+    let bytes = serde_json::to_vec(&source).expect("cube fixture serializes");
+    let project = parse_project_json(&bytes).expect("cube fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("two-dimension statistical dataset compiles")
 }
 
 fn partial_text_registry() -> registry_breg::CompiledRegistry {

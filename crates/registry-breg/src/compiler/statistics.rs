@@ -23,6 +23,8 @@ use crate::statistics::{
 };
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
+/// PostgreSQL accepts at most twelve elements in one `CUBE`, which computes the totals.
+pub const MAX_STATISTICAL_DIMENSIONS: usize = 12;
 
 pub(super) fn compile(
     project: &RegistryProject,
@@ -267,6 +269,14 @@ pub(super) fn compile(
                 &format!("{root}.disclosure.roundingBase"),
                 &source.id,
                 &format!("set roundingBase to at most {MAX_EXACT_JSON_INTEGER}"),
+            ));
+        }
+        if source.dimensions.len() > MAX_STATISTICAL_DIMENSIONS {
+            errors.push(error(
+                "breg.statistical-dataset.dimensions-exceeded",
+                &format!("{root}.dimensions"),
+                &source.id,
+                &format!("declare at most {MAX_STATISTICAL_DIMENSIONS} dimensions"),
             ));
         }
         let cell_count = dimensions
