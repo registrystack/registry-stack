@@ -939,7 +939,7 @@ deferred:
       The policy declares a closed channel set, an undeclared channel is
       refused with a typed code, and every subquota is a ceiling inside the one
       published total, so a mis-chosen channel cannot oversell the window.
-    recordedIn: products/scheduling/SECURITY-MODEL.md
+    recordedIn: https://docs.registrystack.org/security/scheduling/#scheduling-def-04-the-channel-is-not-bound-to-the-verified-caller
   - id: SCHEDULING-DEF-05
     subject: Database backstop under the duplicate-key guard
     state: deferred
@@ -952,7 +952,7 @@ deferred:
       The offering's supply lock serializes the guard and the claim it protects,
       so a concurrent pair cannot straddle it even when their booking intervals
       lie under different published opening revisions.
-    recordedIn: products/scheduling/SECURITY-MODEL.md
+    recordedIn: https://docs.registrystack.org/security/scheduling/#scheduling-def-05-no-database-backstop-under-the-duplicate-key-guard
   - id: SCHEDULING-DEF-06
     subject: Appointment, history, and actionable outbox retention
     state: deferred
@@ -971,4 +971,4 @@ deferred:
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.
-    recordedIn: products/scheduling/RUNTIME-CONFIG.md
+    recordedIn: https://docs.registrystack.org/security/scheduling/#scheduling-def-06-retention-of-committed-scheduling-data

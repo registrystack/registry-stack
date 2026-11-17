@@ -149,6 +149,13 @@ DEFAULT_FILES = {
     "products/scheduling/NOTES.md": RECORDED_IN_FILE,
 }
 
+DOCS_SITE_FILES = {
+    **DEFAULT_FILES,
+    "docs/site/src/content/docs/security/scheduling.mdx": (
+        "---\ntitle: Scheduling\n---\n\n## Deferred controls\n\nText.\n"
+    ),
+}
+
 
 class RunnerValidation(unittest.TestCase):
     def test_nested_integration_module_uses_its_declared_runner_and_features(self) -> None:
@@ -280,6 +287,55 @@ class MatrixValidation(unittest.TestCase):
         self.assertTrue(
             any("recordedIn file" in violation for violation in violations), violations
         )
+
+    def test_a_deferral_recorded_on_the_docs_site_is_accepted(self) -> None:
+        for url in (
+            "https://docs.registrystack.org/security/scheduling/",
+            "https://docs.registrystack.org/security/scheduling/#deferred-controls",
+        ):
+            with self.subTest(url=url):
+                tree = happy_tree()
+                tree["security-invariant-matrix.yaml"]["deferred"][0]["recordedIn"] = url
+                self.assertEqual([], validate_tree(tree, DOCS_SITE_FILES))
+
+    def test_a_deferral_recorded_on_a_missing_docs_page_is_refused(self) -> None:
+        tree = happy_tree()
+        tree["security-invariant-matrix.yaml"]["deferred"][0]["recordedIn"] = (
+            "https://docs.registrystack.org/security/absent/"
+        )
+        violations = validate_tree(tree, DOCS_SITE_FILES)
+        self.assertTrue(
+            any("recordedIn page" in violation for violation in violations), violations
+        )
+
+    def test_a_deferral_recorded_at_a_missing_docs_anchor_is_refused(self) -> None:
+        tree = happy_tree()
+        tree["security-invariant-matrix.yaml"]["deferred"][0]["recordedIn"] = (
+            "https://docs.registrystack.org/security/scheduling/#absent-section"
+        )
+        violations = validate_tree(tree, DOCS_SITE_FILES)
+        self.assertTrue(
+            any("recordedIn anchor" in violation for violation in violations), violations
+        )
+
+    def test_a_deferral_recorded_at_another_url_is_refused(self) -> None:
+        for url in (
+            "https://example.com/security/scheduling/",
+            "http://docs.registrystack.org/security/scheduling/",
+            "https://docs.registrystack.org.example.com/security/",
+            "https://docs.registrystack.org/",
+        ):
+            with self.subTest(url=url):
+                tree = happy_tree()
+                tree["security-invariant-matrix.yaml"]["deferred"][0]["recordedIn"] = url
+                violations = validate_tree(tree, DOCS_SITE_FILES)
+                self.assertTrue(
+                    any(
+                        "recordedIn file" in violation or "recordedIn page" in violation
+                        for violation in violations
+                    ),
+                    violations,
+                )
 
     def test_a_duplicate_invariant_id_is_refused(self) -> None:
         tree = happy_tree()

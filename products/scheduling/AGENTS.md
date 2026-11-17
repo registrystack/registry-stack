@@ -8,8 +8,16 @@ product.
 - Treat `generated/registry-scheduling.openapi.json` as generated output.
   Change `scripts/generate_openapi.py`, then run it and its `--check` mode.
 - Treat `generated/runtime/runtime.schema.json` the same way: it is derived
-  from the strict `RuntimeConfig` types, and the regeneration command is in
-  `RUNTIME-CONFIG.md`.
+  from the strict `RuntimeConfig` types. Regenerate it, then run the drift
+  test:
+
+  ```sh
+  cargo run --locked -p registry-scheduling --features schema \
+    --example runtime-schema -- --output products/scheduling/generated/runtime
+  cargo test --locked -p registry-scheduling --features schema \
+    schema::tests::committed_runtime_schema_matches_generated_bytes
+  ```
+
 - Keep `contracts/security-invariant-matrix.yaml` and
   `contracts/security-test-traceability.yaml` scoped to implemented Scheduling
   behavior. A mapped test is not evidence that the test ran.
@@ -17,8 +25,8 @@ product.
   `contracts/recorded-decisions.yaml`, with the tests that hold it. An entry
   records the behaviour; the reasoning belongs in the pull request description.
 - Changes to authentication, authorization, audit, data minimization, or
-  retention are security-sensitive: update `SECURITY-MODEL.md` in the same
-  change when a trust boundary, operator obligation, or accepted residual
+  retention are security-sensitive: update the security model page
+  (`docs/site/src/content/docs/security/scheduling.mdx`) in the same change when a trust boundary, operator obligation, or accepted residual
   changes, and put the review narrative in the pull request description.
 - Preserve the source-neutral boundary: no scheduling crate, directly or
   through any shared dependency, reaches a Base Registry Engine, Casework,
