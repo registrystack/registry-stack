@@ -233,13 +233,3 @@ idempotency guidance and the two pagination families.
 verification table. Python `registry_client.auth.PrivateKeyJwt` is the same
 canonical provider as the compatibility BReg entry point; configure one
 instance per resource. A facade grants no shared bearer authority.
-
-## Narrow observed read status
-
-The Node BReg `getRecord`/`listRecords` and Casework `reviewTask`/`reviewTasks`
-expose readonly `responseStatus` on read-specific outcome subtypes. It comes
-from the same actual HTTP response after normal validation, not expected status,
-body/page state, completion inference, cached state or another exchange. The
-public read success contracts remain HTTP200. Older packages lacking the field
-provide no observation. Rust observed variants preserve legacy complete outcome
-types; unrelated reads, writes, continuations and Python APIs are unchanged.

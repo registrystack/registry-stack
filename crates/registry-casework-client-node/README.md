@@ -113,12 +113,3 @@ reference, queue, ownership, and `sort` (`due`, `subject`, or `reference`).
 returns a bounded page. Caseload and clock preview/apply calls apply only the
 revision-fenced preview ID. Keep filters and caller profiles unchanged across
 snapshot cursors; after `410 review.result-expired`, start again without one.
-
-## Observed status for selected reads
-
-Only `reviewTask` and `reviewTasks` return a readonly
-`responseStatus` captured from that same HTTP response after all existing
-validation succeeds. This is not a body/page status, inferred200, generic header
-map, or later read. These operations still require HTTP200. Older SDKs without
-this observation cannot supply positive status evidence. Other methods, writes
-and continuations keep their existing results.

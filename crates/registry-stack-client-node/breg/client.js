@@ -32,17 +32,6 @@ class BaseRegistryClientError extends Error {
 }
 
 
-// Only the explicitly observed reads receive this metadata. Never infer it
-// from completion/body, use a default, or retain it on the client.
-function readonlyResponseStatus(result) {
-  if (result === null || typeof result !== 'object' || isProxy(result)) throw new BaseRegistryClientError({kind:'protocol',message:'Observed read result unavailable'});
-  const descriptor = Object.getOwnPropertyDescriptor(result, 'responseStatus');
-  const status = descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
-  if (!Number.isInteger(status) || status < 100 || status > 599) throw new BaseRegistryClientError({kind:'protocol',message:'Observed response status unavailable'});
-  Object.defineProperty(result, 'responseStatus', { value: status, enumerable: true, writable: false, configurable: false });
-  return result;
-}
-
 function normalize(error, fallbackKind) {
   if (error instanceof BaseRegistryClientError) return error;
   if (error instanceof Error && typeof error.message === 'string') {
@@ -278,8 +267,7 @@ function wrapAsync(name, jsonIndexes = [], requiredIndexes = []) {
         }
       }
       const result = original.apply(this, sanitized).catch((error) => { throw normalize(error); });
-      const observed = name === 'getRecord' || name === 'listRecords' ? result.then(readonlyResponseStatus) : result;
-      return listener ? observed.finally(() => listener[Symbol.dispose]()) : observed;
+      return listener ? result.finally(() => listener[Symbol.dispose]()) : result;
     } catch (error) {
       listener?.[Symbol.dispose]();
       throw normalize(error, 'invalid-request');
