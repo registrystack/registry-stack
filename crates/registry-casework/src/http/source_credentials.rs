@@ -105,16 +105,25 @@ pub(super) async fn boundary(
     )
     .await;
     match admitted {
-        Ok(state) => {
+        Ok(Some(state)) => {
             request.extensions_mut().insert(ScopedState(state));
+            next.run(request).await
+        }
+        // A submitted-context target reads no source. The handler sees the
+        // request exactly as if the source pair had not been sent.
+        Ok(None) => {
+            let headers = request.headers_mut();
+            headers.remove(SOURCE_AUTHORIZATION_HEADER);
+            headers.remove(SOURCE_PROFILE_HEADER);
             next.run(request).await
         }
         Err(error) => error.into_response(),
     }
 }
 
-/// Target-dependent admission must preserve the ordinary concealed-row shape.
-/// A bad source credential cannot reveal a stored policy or target's existence.
+/// Target-dependent refusals keep the ordinary concealed-row shape: a refused
+/// source credential on a current-source target, or an unknown target id,
+/// answers as not found.
 fn conceal_target_error(target: Target, error: HttpError) -> HttpError {
     match (target, error) {
         (
@@ -127,12 +136,16 @@ fn conceal_target_error(target: Target, error: HttpError) -> HttpError {
     }
 }
 
+/// Admits one request that carries a separate human source bearer. `None`
+/// means the target is under a submitted-context policy, which reads no
+/// source: the pair is neither verified nor forwarded, and the primary
+/// credential and the handler decide the request alone.
 async fn admit(
     state: &HttpState,
     method: &Method,
     path: &str,
     headers: &HeaderMap,
-) -> Result<HttpState, HttpError> {
+) -> Result<Option<HttpState>, HttpError> {
     let target = target(method, path).ok_or(HttpError::Invalid)?;
     let source = parse_bearer_token(single_header(headers, SOURCE_AUTHORIZATION_HEADER)?)
         .map_err(|_| HttpError::AuthenticationRefused)?;
@@ -151,7 +164,7 @@ async fn admit(
     if actor.role == CaseworkActsAs::Requester {
         return Err(HttpError::ProfileNotAuthorized);
     }
-    let provider = state
+    let Some(provider) = state
         .service
         .human_source_provider(
             match target {
@@ -164,7 +177,10 @@ async fn admit(
             },
         )
         .await
-        .map_err(|error| conceal_target_error(target, error.into()))?;
+        .map_err(|error| conceal_target_error(target, error.into()))?
+    else {
+        return Ok(None);
+    };
     // This fatal verification precedes any inbox observation, even empty pages.
     state
         .authenticator
@@ -185,7 +201,7 @@ async fn admit(
     providers.insert(provider, Arc::new(scoped));
     let mut state = state.clone();
     state.service.providers = Arc::new(providers);
-    Ok(state)
+    Ok(Some(state))
 }
 
 /// Only constructed after cryptographic same-human and exact provider admission.
