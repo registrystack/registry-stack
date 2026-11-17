@@ -31,7 +31,7 @@ release manifests, and docs.
 | Build a writable registry backed by PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Publish an index of registry providers | [Publish and consume a Registry Discovery index](https://docs.registrystack.org/dev/tutorials/publish-and-consume-discovery-index/) |
 | Explore separate and combined product projects | [Individual and combined examples](#explore-individual-and-combined-examples) |
-| Build semantic navigation for an LSP client | [Registry Stack language server](crates/registry-language-server/README.md) |
+| Read how Registry Studio navigates project documents | [Registry Stack language server](crates/registry-language-server/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |
 | Review release evidence | See [Release And External Inputs](#release-and-external-inputs) |

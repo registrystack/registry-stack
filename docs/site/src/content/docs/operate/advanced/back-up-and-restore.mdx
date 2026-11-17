@@ -35,8 +35,8 @@ up these alongside every database backup, on the same schedule:
   ```
 
   When the package declares an indexed external projection, exclude the data of its seven
-  projection and managed-refresh tables. The backup then holds no source values, bindings, or refresh receipts. Keep
-  the tables themselves: use `--exclude-table-data`, never `--exclude-table`.
+  projection and refresh tables. The backup then holds no source values, bindings, refresh work,
+  selectors, or receipts. Keep the tables themselves: use `--exclude-table-data`, never `--exclude-table`.
 
   ```sh
   pg_dump --format=custom \
@@ -50,8 +50,9 @@ up these alongside every database backup, on the same schedule:
     --file=/srv/backup/registry-before-build-2.dump registry
   ```
 
-  A restore then starts with an empty projection cache, as a fresh install does. Authorized refresh
-  rebuilds it under the current binding and source grant; nothing is restored from the backup. See
+  A restore then starts with an empty projection cache and no queued refresh work, as a fresh
+  install does. BReg registers the plans from the runtime file at startup, and authorized refresh
+  rebuilds the cache under the current binding and source grant; nothing is restored from the backup. See
   [Back up logically](../../../configure/breg-external-projections/#back-up-logically)
   in the external projections guide.
 

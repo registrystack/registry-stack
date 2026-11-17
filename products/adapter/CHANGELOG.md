@@ -56,6 +56,22 @@
   previous binary refuses: restore that backup, settle the items with the
   previous binary, then upgrade and run `init-store` again.
 
+- An Adapter job can receive a governed offline QField submission. The
+  [QField PostGIS example](examples/qfield-postgis/README.md) reads a completed
+  submission (a site point, its boundary polygon and repeated contact rows) from
+  the collection database that QFieldSync returns to, and starts a BReg Action
+  or Proposal from it. A reconciliation step authorizes the result written back
+  to the source.
+- A projection pack whose `fieldsSchema` constrains which fields are present is
+  refused when the projection compiles. Remove `required`,
+  `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas` and
+  top-level composition keywords from the schema and describe each field only;
+  each view already requests its own fields and every requested field must be
+  returned.
+- A reviewed projection operation serves BReg's read-only external views. See
+  the BReg changelog and the
+  [external projections pack](examples/external-projections/README.md).
+
 ## 0.46.0 - 2026-11-08
 
 - A host protocol's verified response can carry one opaque attachment
