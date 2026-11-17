@@ -42,7 +42,7 @@ statisticalDatasets:
     population: active eq true
     period: {type: flow, field: recorded-on, granularity: month, firstPeriod: 2025-01}
     dimensions: [active]
-    disclosure: {minimumCount: 5, roundingBase: 5}
+    disclosure: {type: minimum-count-and-rounding, minimumCount: 5, roundingBase: 5}
 
 actions:
   - id: register-entry

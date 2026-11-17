@@ -494,7 +494,7 @@ fn dataset_inventory_includes_dataset_only_profile_authentication() {
     source["project"]["timezone"] = json!("UTC");
     source["statisticalDatasets"] = json!([{"id":"directory-counts", "display":{"label":"Directory counts"}, "unit":"directory-entry", "population":"active eq true",
         "period":{"type":"flow", "field":"event-date", "granularity":"month", "firstPeriod":"2025-01"},
-        "dimensions":["active"], "disclosure":{"minimumCount":5, "roundingBase":5}}]);
+        "dimensions":["active"], "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5, "roundingBase":5}}]);
     source["accessProfiles"].as_array_mut().unwrap().extend([
         json!({"id":"statistics-publisher", "principalClaim":"registry_principal", "requiredScopes":["statistics:publish"],
             "permissions":{"records":[{"recordType":"directory-entry", "operations":["list"], "readableFields":["active","event-date"],

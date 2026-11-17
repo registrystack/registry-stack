@@ -739,6 +739,7 @@
         "has-measured-quantity"
       ],
       "disclosure": {
+        "type": "minimum-count-and-rounding",
         "minimumCount": 5,
         "roundingBase": 5
       }
@@ -758,6 +759,7 @@
         "expiring-soon"
       ],
       "disclosure": {
+        "type": "minimum-count-and-rounding",
         "minimumCount": 5,
         "roundingBase": 5
       }
@@ -780,6 +782,7 @@
         "expiring-soon"
       ],
       "disclosure": {
+        "type": "minimum-count-and-rounding",
         "minimumCount": 5,
         "roundingBase": 5
       }

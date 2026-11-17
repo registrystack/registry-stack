@@ -107,10 +107,16 @@ or a mean must be a declared, unencrypted field of the unit
 (`breg.statistical-dataset.field-unknown`, `breg.statistical-dataset.field-encrypted`) of type `int64` or
 `decimal` (`breg.statistical-dataset.measure-field-type`). Every profile with `read-live` on the dataset must
 be able to read that field (`breg.statistical-dataset.measure-field-not-readable`), and a dataset with a sum
-or a mean cannot have a `publish` or `read-releases` grant
-(`breg.statistical-dataset.measure-release-unsupported`), because a release carries counts only.
-`measure` is a reserved column name, so no dimension may use it. `minimumCount` and
-`roundingBase` are required and take no value below 2. At most one access profile holds `publish`
+or a mean cannot have a `publish` or `read-releases` grant under `minimum-count-and-rounding`
+(`breg.statistical-dataset.measure-release-unsupported`), because that method releases counts only.
+`disclosure` is a union tagged by a required `type`. `type: minimum-count-and-rounding` takes
+`minimumCount` and `roundingBase`, both required, with no value below 2. `type: exact-public-values`
+takes no other member and releases exact values for every measure type. It compiles only when the unit
+Record type, every field the dataset reads, and every source Record type of a derived field it reads are
+classified `public`; otherwise `bregctl check` reports `breg.statistical-dataset.exact-release-not-public`,
+one diagnostic per item to reclassify. The definition digest covers the disclosure method and its
+parameters.
+`measure` is a reserved column name, so no dimension may use it. At most one access profile holds `publish`
 on a dataset. Once one does, it and every `read-live` profile must also hold `read-releases`;
 without one, no profile may hold `read-releases`. See [Publish a statistical
 series](../../configure/breg-statistics/).

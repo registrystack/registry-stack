@@ -366,7 +366,7 @@
   ],
   "registryId": "labelled-directory",
   "reviewAuthorities": [],
-  "revision": "sha256:363b76181baa39cccdbddadb50c9828af702f73cb144ce184f440ced0c37b139",
+  "revision": "sha256:54c0c8ade666bae05e52de43d868bc21d3540a09e0eaacece4aeb954942762af",
   "statisticalDatasets": [
     {
       "accessProfiles": {
@@ -392,7 +392,7 @@
           "writableFields": []
         }
       },
-      "definitionDigest": "sha256:a8b74357a48922ab6a5f4bc2e690d6629248c0e93c59ff6981c880ce48428052",
+      "definitionDigest": "sha256:7207fef3c6e7d92e282b5015cbb95cb67670bb124fcd06ea533d4f4fb0c25a9c",
       "dependencyEntities": [
         "entry"
       ],
@@ -410,6 +410,7 @@
         }
       ],
       "disclosure": {
+        "method": "minimum-count-and-rounding",
         "minimumCount": 5,
         "roundingBase": 5
       },

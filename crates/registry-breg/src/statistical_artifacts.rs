@@ -608,14 +608,23 @@ fn document_schema() -> Value {
                 "properties":{"evaluatedAt":{"type":"string","format":"date"},"accessProfile":{"type":"string"}}
             },
             "disclosure":{
-                "type":"object","additionalProperties":false,
-                "required":["method","minimumCount","roundingBase","roundingRule","totals"],
-                "properties":{
-                    "method":{"const":"minimum-count-and-rounding"},
-                    "minimumCount":{"type":"integer","minimum":2},"roundingBase":{"type":"integer","minimum":2},
-                    "roundingRule":{"const":"nearest-multiple-halves-up"},
-                    "totals":{"const":"rounded-independently"}
-                }
+                "oneOf":[
+                    {
+                        "type":"object","additionalProperties":false,
+                        "required":["method","minimumCount","roundingBase","roundingRule","totals"],
+                        "properties":{
+                            "method":{"const":"minimum-count-and-rounding"},
+                            "minimumCount":{"type":"integer","minimum":2},"roundingBase":{"type":"integer","minimum":2},
+                            "roundingRule":{"const":"nearest-multiple-halves-up"},
+                            "totals":{"const":"rounded-independently"}
+                        }
+                    },
+                    {
+                        "type":"object","additionalProperties":false,
+                        "required":["method"],
+                        "properties":{"method":{"const":"exact-public-values"}}
+                    }
+                ]
             }
         }
     })

@@ -911,7 +911,14 @@ A JSON document lists the declared measures in `dataset.measures`, and each cell
 in `measure`. A count's `value` is a JSON integer. A sum's and a mean's `value` is a decimal string such as
 `"1234.50"` with exactly the measure's `scale` digits after the point, or null for a mean over no values,
 whose status is `not-applicable`. Statuses are `exact`, `suppressed`, `rounded`, and `not-applicable`; the
-vocabulary can grow, so treat an unknown status as no usable value. Sums and means are live only. CSV columns are `period,periodStart,periodEnd,<dimension field IDs...>,measure,value,status`.
+vocabulary can grow, so treat an unknown status as no usable value. A release under
+`minimum-count-and-rounding` uses `exact`, `suppressed`, and `rounded`, and carries counts only; sums and
+means are live only. A release under `exact-public-values` uses `exact` and `not-applicable` only, and
+carries every measure type.
+
+A released document's `disclosure` member has one of two shapes. Under `minimum-count-and-rounding` it is
+an object with `method`, `minimumCount`, `roundingBase`, `roundingRule`, and `totals`. Under
+`exact-public-values` it is exactly `{"method": "exact-public-values"}`. CSV columns are `period,periodStart,periodEnd,<dimension field IDs...>,measure,value,status`.
 A suppressed or null value is blank, and a decimal string is written as it is; a zero stays zero with its status. Totals round independently; see
 [publish statistics](../../configure/breg-statistics/#review-what-a-release-discloses) for the
 inference risks. Unknown datasets and ungranted profiles answer the concealed 404, and invalid

@@ -88,7 +88,7 @@ fn source() -> Value {
             "population":"active eq true",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["category"],
-            "disclosure":{"minimumCount":5,"roundingBase":5}
+            "disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
         }]
     }))
     .expect("fixture is JSON")
@@ -2400,4 +2400,273 @@ fn a_measure_field_type_change_changes_the_definition_digest() {
         .definition_digest
         .clone();
     assert_ne!(baseline, digest);
+}
+
+const EXACT_NOT_PUBLIC: &str = "breg.statistical-dataset.exact-release-not-public";
+
+/// A register whose every record type and field is public, read live by the
+/// analyst and published by the publisher with exact values.
+fn public_register_source(measures: Value) -> Value {
+    let mut value = source();
+    value["recordTypes"][0]["classification"] = json!("public");
+    let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    fields.extend([
+        json!({"id":"amount","type":"decimal","precision":10,"scale":2,"classification":"internal"}),
+        json!({"id":"quantity","type":"int64","classification":"internal"}),
+    ]);
+    for field in fields {
+        field["classification"] = json!("public");
+    }
+    for profile in [ANALYST, PUBLISHER] {
+        value["accessProfiles"][profile]["permissions"]["records"][0]["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .extend([json!("amount"), json!("quantity")]);
+    }
+    value["statisticalDatasets"][0]["measures"] = measures;
+    value["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    value
+}
+
+fn public_register_measures() -> Value {
+    json!([
+        {"id":"facilities","type":"count"},
+        {"id":"total-amount","type":"sum","field":"amount"},
+        {"id":"average-amount","type":"mean","field":"amount","scale":2}
+    ])
+}
+
+fn exact_not_public(failure: &CompileFailure) -> Vec<&Diagnostic> {
+    failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == EXACT_NOT_PUBLIC)
+        .collect()
+}
+
+fn assert_exact_refusal_names(value: &Value, item: &str, classification: &str) {
+    let failure = compile(value).expect_err("a non-public item is refused");
+    let refusals = exact_not_public(&failure);
+    assert_eq!(refusals.len(), 1, "{item}: {:?}", failure.diagnostics());
+    let refusal = refusals[0];
+    assert!(
+        refusal
+            .path
+            .ends_with("statisticalDatasets[id=records-by-category].disclosure.type"),
+        "{}",
+        refusal.path
+    );
+    assert!(
+        refusal.message.contains(&format!("`{item}`"))
+            && refusal.message.contains(&format!("`{classification}`"))
+            && refusal.message.contains("minimum-count-and-rounding"),
+        "{}",
+        refusal.message
+    );
+}
+
+#[test]
+fn an_all_public_dataset_compiles_with_exact_values_and_releases() {
+    let compiled = compile(&public_register_source(public_register_measures()))
+        .expect("an all-public register releases exact values");
+    let dataset = &compiled.statistical_datasets()["records-by-category"];
+    assert!(dataset.releases.is_some());
+    assert_eq!(
+        serde_json::to_value(dataset.disclosure).unwrap(),
+        json!({"method":"exact-public-values"})
+    );
+    assert_eq!(measures_of(&compiled).as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn exact_values_are_refused_per_item_that_is_not_classified_public() {
+    let one = |mutate: &dyn Fn(&mut Value)| {
+        let mut value = public_register_source(public_register_measures());
+        mutate(&mut value);
+        value
+    };
+    let field = |value: &mut Value, id: &str, classification: &str| {
+        for candidate in value["recordTypes"][0]["fields"].as_array_mut().unwrap() {
+            if candidate["id"] == id {
+                candidate["classification"] = json!(classification);
+            }
+        }
+    };
+    assert_exact_refusal_names(
+        &one(&|value| value["recordTypes"][0]["classification"] = json!("internal")),
+        "record",
+        "internal",
+    );
+    assert_exact_refusal_names(
+        &one(&|value| field(value, "category", "internal")),
+        "category",
+        "internal",
+    );
+    assert_exact_refusal_names(
+        &one(&|value| field(value, "amount", "restricted")),
+        "amount",
+        "restricted",
+    );
+    assert_exact_refusal_names(
+        &one(&|value| field(value, "active", "internal")),
+        "active",
+        "internal",
+    );
+    assert_exact_refusal_names(
+        &one(&|value| field(value, "event-date", "internal")),
+        "event-date",
+        "internal",
+    );
+}
+
+#[test]
+fn exact_values_over_an_internal_register_name_every_item_to_reclassify() {
+    let mut value = live_measure_source(json!([
+        {"id":"facilities","type":"count"},
+        {"id":"total-amount","type":"sum","field":"amount"}
+    ]));
+    value["statisticalDatasets"][0]["disclosure"] = json!({"type":"exact-public-values"});
+    let failure = compile(&value).expect_err("an internal register is refused");
+    let named = exact_not_public(&failure)
+        .iter()
+        .map(|diagnostic| {
+            ["record", "active", "amount", "category", "event-date"]
+                .into_iter()
+                .filter(|item| diagnostic.message.contains(&format!("`{item}`")))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    // The dataset is read live only, so the refusal does not depend on a publisher.
+    assert_eq!(
+        named,
+        vec![
+            vec!["active"],
+            vec!["amount"],
+            vec!["category"],
+            vec!["event-date"],
+            vec!["record"]
+        ],
+        "{:?}",
+        failure.diagnostics()
+    );
+}
+
+#[test]
+fn a_derived_dimension_over_a_non_public_source_entity_is_refused() {
+    let mut value = public_register_source(json!([{"id":"facilities","type":"count"}]));
+    value["recordTypes"][0]["derived"] = json!([{
+        "id":"statistics","sql":"sql/statistics.sql","key":"id",
+        "fields":[{"id":"evaluated-category","type":"vocabulary-code","vocabulary":"category","values":["a","b"],"classification":"public"}]
+    }]);
+    value["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"lookup","primaryDataset":"statistics-test","route":"lookups","mutationMode":"mutable",
+        "classification":"internal",
+        "fields":[{"id":"flag","type":"boolean","required":true,"classification":"public"}]
+    }));
+    for profile in [ANALYST, PUBLISHER] {
+        for member in ["readableFields", "filterableFields"] {
+            value["accessProfiles"][profile]["permissions"]["records"][0][member]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("evaluated-category"));
+        }
+    }
+    value["accessProfiles"][PUBLISHER]["permissions"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "recordType":"lookup","operations":["list"],"readableFields":["flag"],
+            "filterableFields":["flag"],"allowCount":true,"rowBoundaries":"unrestricted"
+        }));
+    value["statisticalDatasets"][0]["dimensions"] = json!(["evaluated-category"]);
+    let sql = "SELECT r.id AS id, CASE WHEN l.flag THEN 'a' ELSE 'b' END AS evaluated_category FROM registry_source.record r JOIN registry_source.lookup l ON l.id = r.id";
+    let failure = compile_with_sql(&value, sql).expect_err("an internal source entity is refused");
+    let refusals = exact_not_public(&failure);
+    assert_eq!(refusals.len(), 1, "{:?}", failure.diagnostics());
+    assert!(
+        refusals[0].message.contains("`lookup`") && refusals[0].message.contains("`internal`"),
+        "{}",
+        refusals[0].message
+    );
+
+    value["recordTypes"][1]["classification"] = json!("public");
+    compile_with_sql(&value, sql).expect("a public source entity is admitted");
+}
+
+#[test]
+fn the_publisher_must_read_the_measure_fields_of_an_exact_release() {
+    let mut value = public_register_source(public_register_measures());
+    value["accessProfiles"][PUBLISHER]["permissions"]["records"][0]["readableFields"] = json!([
+        "active",
+        "category",
+        "event-date",
+        "valid-from",
+        "valid-to",
+        "quantity"
+    ]);
+    let failure = compile(&value).expect_err("the publisher cannot read the measure field");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+            && diagnostic.message.contains("amount")
+            && diagnostic.message.contains("publisher")
+    }));
+}
+
+#[test]
+fn minimum_count_and_rounding_still_refuses_a_released_sum_and_names_the_exact_alternative() {
+    let mut value = public_register_source(public_register_measures());
+    value["statisticalDatasets"][0]["disclosure"] =
+        json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5});
+    let failure = compile(&value).expect_err("a sum cannot be released with rounding");
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
+        })
+        .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
+    assert!(refusal.message.contains("exact-public-values"));
+    assert!(exact_not_public(&failure).is_empty());
+}
+
+#[test]
+fn a_disclosure_block_without_a_type_is_refused_when_the_project_is_read() {
+    for disclosure in [
+        json!({"minimumCount":5,"roundingBase":5}),
+        json!({}),
+        json!({"type":"exact-public-values","minimumCount":5}),
+        json!({"type":"minimum-count-and-rounding"}),
+        json!({"type":"public"}),
+    ] {
+        let mut value = source();
+        value["statisticalDatasets"][0]["disclosure"] = disclosure.clone();
+        let refusals = read_refusals(&value);
+        assert!(
+            refusals
+                .iter()
+                .any(|(_, path, _)| path.starts_with("project.statisticalDatasets[0].disclosure")),
+            "{disclosure}: {refusals:?}"
+        );
+    }
+}
+
+#[test]
+fn the_definition_digest_differs_between_disclosure_methods() {
+    let digest = |disclosure: Value| {
+        let mut value = public_register_source(json!([{"id":"count","type":"count"}]));
+        value["statisticalDatasets"][0]["disclosure"] = disclosure;
+        compile(&value).expect("compiles").statistical_datasets()["records-by-category"]
+            .definition_digest
+            .clone()
+    };
+    let exact = digest(json!({"type":"exact-public-values"}));
+    let rounded =
+        digest(json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}));
+    let other =
+        digest(json!({"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":10}));
+    assert_eq!(
+        BTreeSet::from([exact, rounded, other]).len(),
+        3,
+        "the method and its parameters change the digest"
+    );
 }

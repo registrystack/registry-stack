@@ -459,7 +459,7 @@ fn statistical_route_inspection_matches_generated_client_contract() {
     source["statisticalDatasets"] = json!([{
         "id":"contacts-by-active","unit":"contact","population":"active eq true",
         "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
-        "dimensions":["active"],"disclosure":{"minimumCount":5,"roundingBase":5}
+        "dimensions":["active"],"disclosure":{"type":"minimum-count-and-rounding","minimumCount":5,"roundingBase":5}
     }]);
     let bytes = serde_norway::to_string(&source).unwrap();
     let authored = parse_project_yaml(bytes.as_bytes()).unwrap();

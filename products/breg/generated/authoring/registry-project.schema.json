@@ -5418,26 +5418,51 @@
       "type": "object"
     },
     "StatisticalDisclosureSource": {
-      "additionalProperties": false,
-      "properties": {
-        "minimumCount": {
-          "format": "uint64",
-          "maximum": 9007199254740991,
-          "minimum": 2,
-          "type": "integer"
+      "description": "How a statistical release protects the values it states.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Count cells below `minimumCount` are suppressed and the others are\nrounded to a multiple of `roundingBase`. A release carries counts only.",
+          "properties": {
+            "minimumCount": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 2,
+              "type": "integer"
+            },
+            "roundingBase": {
+              "format": "uint64",
+              "maximum": 9007199254740991,
+              "minimum": 2,
+              "type": "integer"
+            },
+            "type": {
+              "const": "minimum-count-and-rounding",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "minimumCount",
+            "roundingBase"
+          ],
+          "type": "object"
         },
-        "roundingBase": {
-          "format": "uint64",
-          "maximum": 9007199254740991,
-          "minimum": 2,
-          "type": "integer"
+        {
+          "additionalProperties": false,
+          "description": "A release states every count, sum, and mean exactly. Admitted only when\nthe unit Record type, every field the dataset reads, and every Record\ntype a derived field reads from are classified `public`.",
+          "properties": {
+            "type": {
+              "const": "exact-public-values",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "minimumCount",
-        "roundingBase"
-      ],
-      "type": "object"
+      ]
     },
     "StatisticalMeasureSource": {
       "description": "One value a statistical dataset publishes.",
