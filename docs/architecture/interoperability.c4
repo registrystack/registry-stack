@@ -5,7 +5,7 @@ model {
     #optional
     technology 'Optional / GeoJSON'
     description 'Reads permitted collections through the in-process /v1/gis adapter with bearer authentication and profile-dependent authorization. Advertised collections require direct list authority, a readable primary CRS84 Point and an explicit bbox capability. The operator supplies publicOrigin; bbox predicates require PostGIS. This interface does not establish full OGC API Features conformance.'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/SPATIAL-QUERIES.md 'Spatial query contract'
+    link https://docs.registrystack.org/configure/breg-spatial-queries/ 'Spatial query contract'
   }
   publicschema = artifact 'PublicSchema snapshot' {
     #optional
@@ -53,7 +53,7 @@ model {
   evidence.acquisition .call breg.api 'Reads a fixed, authorized lookup through a pinned pack route' {
     #optional
     technology 'HTTPS / configured source authentication'
-    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/EVIDENCE.md 'BReg as an Evidence source'
+    link https://docs.registrystack.org/configure/breg-evidence/ 'BReg as an Evidence source'
   }
   breg.writes .call evidence.api 'Consumes a verified assertion (trial)' {
     #optional #trial

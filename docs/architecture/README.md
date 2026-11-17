@@ -84,7 +84,7 @@ subjects; authorization refusals omit unresolved requirement and purpose. BReg a
 records the grant source issuer; Evidence audit has no corresponding source-issuer
 field. Both use their product-specific pseudonyms for identity context.
 
-For exact contracts, use the pinned [BReg task rules][breg-tasks],
+For exact contracts, use the [BReg task rules][breg-tasks],
 [Casework task rules][casework-tasks], [BReg event contract][events],
 [Casework runtime contract][casework-runtime], and [Evidence operator contract][evidence].
 The diagrams link to implementation where a source document is less precise.
@@ -113,8 +113,8 @@ npm run build
 configuration and lockfile. This explorer is separate from the Astro/Starlight site.
 If port 5184 is occupied, use `npm run dev -- --port 5185` and adjust the links above.
 
-[breg-tasks]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/TASK_GRANTS.md
-[casework-tasks]: https://github.com/registrystack/registry-stack/blob/main/products/casework/TASK_GRANTS.md
-[events]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/EVENTS-AND-WEBHOOKS.md
-[casework-runtime]: https://github.com/registrystack/registry-stack/blob/main/products/casework/RUNTIME-CONFIG.md
+[breg-tasks]: https://docs.registrystack.org/reference/breg-task-grants/
+[casework-tasks]: https://docs.registrystack.org/reference/casework-task-grants/
+[events]: https://docs.registrystack.org/operate/breg-webhooks/
+[casework-runtime]: https://docs.registrystack.org/reference/casework-configuration/
 [evidence]: https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/evidence/OPERATOR-CONTRACT.md
