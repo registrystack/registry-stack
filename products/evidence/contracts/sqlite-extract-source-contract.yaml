@@ -2,7 +2,7 @@
 # These retired fields are refused by the current bundle grammar.
 contract: registry.evidence.fixed-sqlite-extract-source/v1
 status: retired
-replacement: ../../adapter/CONCEPT.md
+replacement: https://docs.registrystack.org/configure/adapter/
 ownership:
   governed_bundle:
     - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
@@ -186,5 +186,4 @@ fixtures:
   transport_conformance: The executable tests named by sec-statement-source-bounded in security-test-traceability.yaml, plus the complete project fixture that builds a sanitized extract from reviewed seed SQL and executes the statement in the process that reads it.
   seed_trust: Seed SQL is trusted executable project input and is not sandboxed as untrusted code. Run only reviewed project seeds in an isolated local environment; never import or evaluate a foreign bundle as a fixture.
   postures: ../fixtures/conformance/acquisition-postures.yaml states the posture claims and negatives; its recorded cases execute over the HTTP transport, and the posture rules they fix are transport neutral.
-  shapes: ../fixtures/source-shapes/ holds compatibility shapes for the HTTP transport only.
   reference: ../reference/request-adapter/deployment-projects/CONFIG.md for the deployment-shaped statement configuration and the extract a publisher builds.

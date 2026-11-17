@@ -53,8 +53,8 @@ through the same model and execution path. Source-product names in sanitized
 compatibility fixtures grant no special production behavior.
 
 The maintained runtime contracts include the [operator contract](OPERATOR-CONTRACT.md),
-[source-testing contract](SOURCE-TESTING.md), [wire and security contracts](contracts/README.md)
-and [trusted derivation Function ABI](reference/request-adapter/ADAPTER-API.md). Generated
+[wire and security contracts](contracts/README.md) and the
+[trusted derivation Function ABI](https://docs.registrystack.org/reference/evidence-request-adapter-api/). Generated
 contracts and authoring schemas are reproduced by their documented generators.
 Use the normalized examples below for the current authoring journey.
 
@@ -367,8 +367,7 @@ a certificate can check it without registering as a relying service.
 the evaluation time, unsigned. A wrong number and a wrong code get the same
 `404`. The route exists only when the package declares `publicCheck` and the
 target authority activates it. Evidence does not enforce the path restriction:
-exposing the route only through a path-restricted proxy is the operator's duty. See [the example](examples/public-check/README.md), [section 15.11 of
-the concept](CONCEPT.md#1511-public-certificate-check) and
+exposing the route only through a path-restricted proxy is the operator's duty. See [the example](examples/public-check/README.md) and
 [the operator contract](OPERATOR-CONTRACT.md#public-certificate-check).
 
 ## Requesting evidence
@@ -405,17 +404,13 @@ signed default carries, under the frozen RFC 9901 and SD-JWT VC draft 18 profile
 [the SD-JWT VC profile](contracts/sd-jwt-vc-profile.yaml). It is not a
 credential lifecycle: no issuance session, no holder binding ceremony, and no
 presentation or key-binding verification. There is no status list and no
-revocation. The credential status profile of `CONCEPT.md` section 15.9, approved
-but not served, will add both for a requirement that declares credential status
-under version 2 of the profile. Its codec and status check, its ledger module,
-and a PostgreSQL store for the OID4VCI adapter exist as library code that the
-served runtime does not call; section 15.9 of
-[CONCEPT.md](CONCEPT.md) defines what remains. The shipped verifier checks an SD-JWT VC for exactly what it checks for a signed
+revocation. A credential status profile, approved but not served, will add both
+for a requirement that declares credential status under version 2 of the
+profile. Its codec and status check, its ledger module, and a PostgreSQL store
+for the OID4VCI adapter exist as library code that the served runtime does not
+call. The shipped verifier checks an SD-JWT VC for exactly what it checks for a signed
 JWS, namely issuer authenticity against a pinned key set and the output
 contract, and it never falls back to the credential format when signing fails.
-[The SD-JWT VC demo](SD-JWT-VC-DEMO.md) issues one assertion in both formats and
-uses `curl` to request both formats, then re-verifies the credential offline with the
-`evidence` binary.
 
 ## Current verification
 
@@ -452,8 +447,20 @@ describes.
 
 Generated JSON Schema and OpenAPI artifacts are under `generated/`. The
 contract gate recreates them from Rust in a temporary directory and requires an
-exact diff. The complete workspace and dependency-policy gates remain those in
-[the verification gates](IMPLEMENTATION.md#verification-gates).
+exact diff. The complete workspace and dependency-policy gates are the repository's own
+contributor gates.
+
+Two local demos run entirely against a mock source and need no credentials:
+
+- First curl: `cargo test --locked -p registry-evidence first_curl_exercises_and_verifies_the_evidence_server -- --ignored --nocapture`
+  starts the Evidence server on `127.0.0.1:18080` and writes the synthetic
+  request and `session.env` to the ignored, owner-only `products/evidence/.first-curl/`.
+  The bearer token in `session.env` is short-lived and synthetic; do not paste it anywhere.
+- SD-JWT VC demo: `products/evidence/scripts/sd-jwt-vc-demo.sh` needs `cargo`,
+  `curl` and `jq`, listens on `127.0.0.1:18081`, writes to the ignored
+  `products/evidence/.sd-jwt-vc-demo/` and can be rerun, replacing its artifacts.
+  Only the `PASS:` line it prints counts as a pass. The manual mode is the
+  `sd_jwt_vc_demo_serves_a_credential_for_curl` test.
 
 ## Security
 
@@ -464,30 +471,3 @@ test. Put the notes in the pull request description, and record a new or
 changed invariant in `contracts/security-invariant-matrix.yaml` (threat,
 enforcement, `negative_test`). Report suspected vulnerabilities through the repository process in
 `SECURITY.md`, not a public issue.
-
-### Rhai 1.27 dependency review
-
-The workspace enables Rhai's `compact_str` backend so Evidence's owned-string
-inputs, `ImmutableString` values, identifiers, and map keys do not use
-`smartstring`'s reported unsound conversion. Rhai still declares
-`smartstring` unconditionally, so the unused package remains in the dependency
-and advisory graph; the workspace exception remains until upstream removes
-that edge.
-
-Evidence keeps its 100,000-operation ceiling and every existing string,
-collection, call-depth, expression-depth, source, and output bound. Rhai 1.27
-counts script callbacks invoked by native functions more accurately. Evidence's
-closed ABI exposes neither function pointers nor callback-based collection
-methods, and it registers no native helper that invokes a script callback.
-That accounting change is unreachable through the supported Evidence ABI.
-Governed scripts should pass `evidencectl test` before promotion.
-
-The shared platform regression
-`rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the
-backend choice. Evidence's
-`engine_has_exact_normative_limits_and_disabled_module_syntax`,
-`operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error`,
-`operation_limit_and_fresh_scope_fail_closed`, and
-`all_four_acceptance_script_pairs_run_through_one_runtime` retain the product
-boundary. Existing package and protected CI gates cover the change; no new
-blocking gate is introduced.

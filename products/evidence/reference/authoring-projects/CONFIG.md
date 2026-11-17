@@ -218,7 +218,7 @@ Function to `assertion-derive/v1` does not migrate its behavior.
 
 1. Keep a copy of your authored project and existing fixture outcomes. Choose a
    current source export, or author a reviewed pack using the
-   [Adapter pack contract](../../../adapter/CONCEPT.md#6-artifact-model).
+   [Adapter pack contract](https://docs.registrystack.org/configure/adapter-packs/).
    Put provider requests, paging, preparation and extraction in its routes and
    scripts, with closed input and private-fact schemas.
 2. Replace each retired Source in `evidence.yaml` with its `pack`, `route`,

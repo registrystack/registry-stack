@@ -87,10 +87,10 @@ struct CliError(&'static str);
 
 /// A fixture case `source` that holds a provider response, as the retired
 /// Source form wrote it, rather than a pack acquisition transcript.
-const FIXTURE_SOURCE_RETIRED: &str = "fixture case `source` holds a provider response, the retired Source form; record the pack's exact `intercepts` and `exchanges` instead (products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project)";
+const FIXTURE_SOURCE_RETIRED: &str = "fixture case `source` holds a provider response, the retired Source form; record the pack's exact `intercepts` and `exchanges` instead (https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project)";
 
 /// A fixture case `source` that is a malformed pack acquisition transcript.
-const FIXTURE_SOURCE_INVALID: &str = "fixture case `source` must contain only the pack's exact `intercepts` and `exchanges`; the transcript form is in step 5 of products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project";
+const FIXTURE_SOURCE_INVALID: &str = "fixture case `source` must contain only the pack's exact `intercepts` and `exchanges`; the transcript form is in step 5 of https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project";
 
 impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -6227,7 +6227,7 @@ mod tests {
             "`intercepts`",
             "`exchanges`",
             "retired Source form",
-            "CONFIG.md#migrate-a-retired-source-project",
+            "authoring-form/#migrate-a-retired-source-project",
         ] {
             assert!(retired.0.contains(needle), "{needle}: {}", retired.0);
         }

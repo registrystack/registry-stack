@@ -1,6 +1,6 @@
 contract: registry.evidence.rhai-abi/v1
 status: frozen
-acquisition_contract: ../../adapter/CONCEPT.md
+acquisition_contract: https://docs.registrystack.org/configure/adapter/
 trust_model:
   scripts: Reviewed, trusted, immutable bundle artifacts compiled at startup.
   boundary: Trust permits derivation scripts to implement reviewed requirement semantics, but never grants transport, credential, authorization, signing, audit, or evidence-construction authority. Provider semantics belong to the separate Adapter pack contract.

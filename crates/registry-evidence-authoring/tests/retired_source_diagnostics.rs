@@ -97,7 +97,7 @@ fn unknown_interface_values_and_environment_expressions_keep_their_ordinary_refu
 }
 
 const MIGRATION: &str =
-    "products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project";
+    "https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project";
 
 #[test]
 fn the_retired_guidance_links_the_migration_once_and_points_back_from_later_sites() {

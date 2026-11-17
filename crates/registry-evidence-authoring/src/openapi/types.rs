@@ -179,7 +179,8 @@ pub struct ResolvedResponse {
 /// One selectable leaf of the resolved schema, presented to the user and
 /// mapped one-to-one onto a projection allowlist entry.
 ///
-/// Pointers are in the extended projection form defined by ADAPTER-API.md:
+/// Pointers are in the extended projection form defined by the Adapter API reference
+/// (https://docs.registrystack.org/reference/evidence-request-adapter-api/):
 /// RFC 6901 segments with `~0`/`~1` escapes, and the reserved segment `*`
 /// visiting every element of an array (`/results/*/trackingId`). The emit
 /// stage derives `get_path` pointers from these by substituting a numeric

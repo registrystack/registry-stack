@@ -739,7 +739,7 @@ fn a_retired_flat_target_connection_names_where_each_member_moved() {
         assert!(
             diagnostic
                 .suggested_action
-                .contains("CONFIG.md#migrate-a-retired-source-project"),
+                .contains("authoring-form/#migrate-a-retired-source-project"),
             "{path} does not link the migration: {}",
             diagnostic.suggested_action
         );

@@ -391,10 +391,10 @@ pub const EVIDENCE_BUNDLE_FORMAT: FormatSpec<'static> = FormatSpec {
 
 /// The fix for a bundle compiled before Sources bound pack routes, reported
 /// once at the Source's `type`.
-const RETIRED_SOURCE_FORM: &str = "The tagged Source form is retired: a Source binds a reviewed Adapter pack route with `pack`, `route`, `connection` and `inputs`. Migrate the authoring project and rebuild this package with evidencectl 0.45.0 or later; see products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const RETIRED_SOURCE_FORM: &str = "The tagged Source form is retired: a Source binds a reviewed Adapter pack route with `pack`, `route`, `connection` and `inputs`. Migrate the authoring project and rebuild this package with evidencectl 0.45.0 or later; see https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
 
 /// The fix for each other member of the retired tagged Source form.
-const RETIRED_SOURCE_MEMBER: &str = "Retired with the tagged Source form; the Adapter pack route declares this now. See products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const RETIRED_SOURCE_MEMBER: &str = "Retired with the tagged Source form; the Adapter pack route declares this now. See https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
 
 /// Bundle keys an earlier grammar accepted, each refused with the key that
 /// replaced it. The envelope replaced the `version` member, the access-token
@@ -11161,7 +11161,7 @@ outboundTls:
     /// edits into the case it proves.
     /// Where the retired tagged Source form is migrated to pack Sources.
     const RETIRED_SOURCE_MIGRATION: &str =
-        "products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project";
+        "https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project";
 
     fn acceptance_bundle() -> String {
         String::from_utf8(

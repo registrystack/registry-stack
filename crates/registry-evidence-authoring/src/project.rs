@@ -629,7 +629,7 @@ pub struct SourceInputSelector {
 }
 
 const RETIRED_ACQUISITION_CODE: &str = "evidence.project.source-acquisition-retired";
-const RETIRED_ACQUISITION_ACTION: &str = "Move preparation and extraction into a reviewed Adapter pack, retain assertion-derive/v1 Functions, and replace the Source with pack, route, connection and inputs. Import current exports with evidencectl source import EXPORT --project PROJECT; it does not convert retired projects. See products/evidence/reference/authoring-projects/CONFIG.md#migrate-a-retired-source-project.";
+const RETIRED_ACQUISITION_ACTION: &str = "Move preparation and extraction into a reviewed Adapter pack, retain assertion-derive/v1 Functions, and replace the Source with pack, route, connection and inputs. Import current exports with evidencectl source import EXPORT --project PROJECT; it does not convert retired projects. See https://docs.registrystack.org/products/registry-evidence/authoring-form/#migrate-a-retired-source-project.";
 const RETIRED_ACQUISITION_AGAIN: &str = "Migrate this site with the rest of the project, as the first evidence.project.source-acquisition-retired diagnostic describes.";
 
 /// Project-specific scalar refusals reuse the shared authored-file rules and

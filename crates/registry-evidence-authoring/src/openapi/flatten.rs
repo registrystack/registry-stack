@@ -1,8 +1,10 @@
 //! Flattens a fully-resolved response schema into candidate projection
 //! leaves.
 //!
-//! Every leaf pointer is in the extended projection form ADAPTER-API.md
-//! defines: RFC 6901 segments (`~0`/`~1` escaped) for object members and the
+//! Every leaf pointer is in the extended projection form the Adapter API
+//! reference defines
+//! (https://docs.registrystack.org/reference/evidence-request-adapter-api/):
+//! RFC 6901 segments (`~0`/`~1` escaped) for object members and the
 //! reserved segment `*` for "every array element". Constructs the closed
 //! schema subset cannot express as a selectable leaf (a real union via
 //! `oneOf`/`anyOf`, an `allOf` merging more than one schema, an

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the Evidence configuration key-path parity check."""
 
-import re
 import shutil
 import sys
 import tempfile
@@ -13,7 +12,6 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import evidence_config_key_paths as checker
-import yaml
 
 
 class KeyPathCollectionTests(unittest.TestCase):
@@ -521,21 +519,6 @@ class PerEntryAddressingTests(unittest.TestCase):
 
 
 class PackAcquisitionDocumentationTests(unittest.TestCase):
-    def test_concept_sources_select_pack_routes_instead_of_inline_transports(self):
-        root = checker.repository_root()
-        text = (root / "products/evidence/CONCEPT.md").read_text()
-        section = text.split("## 9. Deployment bundle and source adapters", 1)[1]
-        section = section.split("### 9.3", 1)[0]
-        source_count = 0
-        retired = {"type", "request", "extractScript", "extract_script", "base_url"}
-        for fence in re.findall(r"```yaml\n(.*?)```", section, re.DOTALL):
-            document = yaml.safe_load(fence)
-            for source in document.get("sources", {}).values():
-                source_count += 1
-                self.assertFalse(retired.intersection(source), source)
-                self.assertTrue({"pack", "route", "connection", "inputs"} <= source.keys())
-        self.assertGreaterEqual(source_count, 2)
-
     def test_explanation_functions_match_the_current_authoring_interface(self):
         root = checker.repository_root()
         text = (root / "docs/site/src/content/docs/explanation/how-evidence-works.mdx").read_text()
