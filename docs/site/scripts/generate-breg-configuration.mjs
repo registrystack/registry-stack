@@ -28,9 +28,9 @@ export const CONTRACTS = [
 // products/platform/generated/dev.
 const DEV_CONTRACTS = [
   {
-    id: 'project-dev',
+    id: 'rstack-dev',
     title: 'dev.yaml',
-    file: 'project-dev.v1alpha1.schema.json',
+    file: 'dev.v1alpha1.schema.json',
     reference: 'reference/breg-configuration.mdx',
   },
   {

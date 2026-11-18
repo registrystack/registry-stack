@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: directory-contact
+    steps:
+      - id: create-contact
+        product: breg
+        as: editor
+        method: POST
+        path: /v1/records/contacts
+        headers: {Idempotency-Key: create-contact}
+        body: {data: {name: Example contact, email: contact@example.test, jurisdiction: zone-a}}
+        expect: {status: 201}
+        capture: {contact: {type: pointer, pointer: /data/recordIdentifier}}
+      - id: read-contact
+        product: breg
+        as: editor
+        method: GET
+        path: "/v1/records/contacts/{{contact}}"
+        expect:
+          status: 200
+          json: {/data/domainData/name: Example contact}

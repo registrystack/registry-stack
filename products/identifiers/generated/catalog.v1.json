@@ -4983,24 +4983,6 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "platform",
-      "title": "Registry Stack project development plan",
-      "description": "Development plan and scenario JSON Schemas that `rstack dev` reads.",
-      "source": {
-        "path": "crates/registry-rstack-dev/src/schema.rs",
-        "sha256": "c94d75ab7da04759babceb7b4f8a2f96ffcaa28953eafeb62fd6a1eb7bf63fef"
-      },
-      "artifact": {
-        "path": "products/platform/generated/dev/project-dev.v1alpha1.schema.json",
-        "sha256": "5292882ab58ab7752211b252b2ece252baf54d017e5836848b5afb623e03c5e1",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
       "uri": "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -5973,6 +5955,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/platform/rstack-dev-error/rstack-dev-error.v1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "platform",
+      "title": "rstack error report",
+      "description": "rstack error report JSON Schema.",
+      "source": {
+        "path": "crates/registry-rstack/src/cli.rs",
+        "sha256": "4c84919f396c0a9975814cf80063dec986faa227d663cb11bd111f3c344bf396"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/rstack-dev-error.v1.schema.json",
+        "sha256": "a0d0429e5fbd348f029607c9f6ef6c945a04001ff1d6dc2e86eea237d74674b7",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -6063,6 +6063,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Registry Stack development plan",
+      "description": "Development plan and scenario JSON Schemas that `rstack dev` reads.",
+      "source": {
+        "path": "crates/registry-rstack-dev/src/schema.rs",
+        "sha256": "d48c047ab665b9d09373c7db98ff8ef1b4001aa4af8c3f48bf4613cd9315cd12"
+      },
+      "artifact": {
+        "path": "products/platform/generated/dev/dev.v1alpha1.schema.json",
+        "sha256": "463465176de352e85e82331e894a6172f1e99ad8dd1adbebe4f34ae0a156d6c2",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -6072,7 +6090,7 @@
       "description": "Development plan and scenario JSON Schemas that `rstack dev` reads.",
       "source": {
         "path": "crates/registry-rstack-dev/src/schema.rs",
-        "sha256": "c94d75ab7da04759babceb7b4f8a2f96ffcaa28953eafeb62fd6a1eb7bf63fef"
+        "sha256": "d48c047ab665b9d09373c7db98ff8ef1b4001aa4af8c3f48bf4613cd9315cd12"
       },
       "artifact": {
         "path": "products/platform/generated/dev/scenarios.v1alpha1.schema.json",

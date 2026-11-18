@@ -57,8 +57,8 @@ reviewPolicies:
 trustedProducers:
   requester:
     profile: requester
-    issuer: http://127.0.0.1:8093
-    subject: b75315b2-5854-70f3-8867-511dd771a6da
+    issuer: https://identity.standalone.example.test
+    subject: requester
     sourceNamespaces: [standalone]
     reviewPolicies: [decision]
     retention: {receiptRetentionDays: 30}

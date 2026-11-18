@@ -59,7 +59,9 @@ def resolve_aws_lc_fips_artifacts(lines: list[str]) -> Path:
     unique = sorted(set(candidates))
     if len(unique) != 1:
         raise ResolutionError(
-            f"Cargo messages identified {len(unique)} AWS-LC FIPS build outputs; expected one"
+            f"Cargo messages identified {len(unique)} AWS-LC FIPS build outputs; expected one. "
+            "Pass the same package set you built (for example every -p package "
+            "the binaries you will run come from) in one cargo build."
         )
     artifacts, library = unique[0]
     expected = artifacts / f"lib{library}.dylib"

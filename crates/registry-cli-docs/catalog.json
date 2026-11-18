@@ -25932,33 +25932,6 @@
               "environment": null
             },
             {
-              "display": "--install-root <INSTALL_ROOT>",
-              "description": "Installation generation storage directory",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--bin-dir <BIN_DIR>",
-              "description": "Directory for the single public rstack executable link",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--asset-dir <ASSET_DIR>",
-              "description": "Directory of already downloaded, verified release assets",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
               "always_required": false,
@@ -25998,15 +25971,6 @@
                   "environment": null
                 },
                 {
-                  "display": "--json",
-                  "description": "Emit the check report as JSON",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
                   "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
                   "always_required": false,
@@ -26018,33 +25982,6 @@
                     "human",
                     "json"
                   ],
-                  "environment": null
-                },
-                {
-                  "display": "--install-root <INSTALL_ROOT>",
-                  "description": "Installation generation storage directory",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--bin-dir <BIN_DIR>",
-                  "description": "Directory for the single public rstack executable link",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--asset-dir <ASSET_DIR>",
-                  "description": "Directory of already downloaded, verified release assets",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
                   "environment": null
                 },
                 {
@@ -26106,15 +26043,6 @@
                   "environment": null
                 },
                 {
-                  "display": "--json",
-                  "description": "Emit the runner's JSON report",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
                   "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
                   "always_required": false,
@@ -26126,33 +26054,6 @@
                     "human",
                     "json"
                   ],
-                  "environment": null
-                },
-                {
-                  "display": "--install-root <INSTALL_ROOT>",
-                  "description": "Installation generation storage directory",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--bin-dir <BIN_DIR>",
-                  "description": "Directory for the single public rstack executable link",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--asset-dir <ASSET_DIR>",
-                  "description": "Directory of already downloaded, verified release assets",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
                   "environment": null
                 },
                 {
@@ -26187,15 +26088,6 @@
               ],
               "options": [
                 {
-                  "display": "--json",
-                  "description": "Emit the runner's JSON report",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
                   "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
                   "always_required": false,
@@ -26207,33 +26099,6 @@
                     "human",
                     "json"
                   ],
-                  "environment": null
-                },
-                {
-                  "display": "--install-root <INSTALL_ROOT>",
-                  "description": "Installation generation storage directory",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--bin-dir <BIN_DIR>",
-                  "description": "Directory for the single public rstack executable link",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--asset-dir <ASSET_DIR>",
-                  "description": "Directory of already downloaded, verified release assets",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
                   "environment": null
                 },
                 {
@@ -26277,15 +26142,6 @@
                   "environment": null
                 },
                 {
-                  "display": "--json",
-                  "description": "Emit the runner's JSON report",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
                   "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
                   "always_required": false,
@@ -26297,33 +26153,6 @@
                     "human",
                     "json"
                   ],
-                  "environment": null
-                },
-                {
-                  "display": "--install-root <INSTALL_ROOT>",
-                  "description": "Installation generation storage directory",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--bin-dir <BIN_DIR>",
-                  "description": "Directory for the single public rstack executable link",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--asset-dir <ASSET_DIR>",
-                  "description": "Directory of already downloaded, verified release assets",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
                   "environment": null
                 },
                 {
@@ -26376,15 +26205,6 @@
                   "environment": null
                 },
                 {
-                  "display": "--json",
-                  "description": "Emit the runner's JSON report",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
                   "display": "--format <FORMAT>",
                   "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
                   "always_required": false,
@@ -26396,33 +26216,6 @@
                     "human",
                     "json"
                   ],
-                  "environment": null
-                },
-                {
-                  "display": "--install-root <INSTALL_ROOT>",
-                  "description": "Installation generation storage directory",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--bin-dir <BIN_DIR>",
-                  "description": "Directory for the single public rstack executable link",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--asset-dir <ASSET_DIR>",
-                  "description": "Directory of already downloaded, verified release assets",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
                   "environment": null
                 },
                 {

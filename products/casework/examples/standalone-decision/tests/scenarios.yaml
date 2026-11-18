@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
+kind: RStackScenarios
+scenarios:
+  - id: confirm-a-decision
+    steps:
+      - id: staff-the-queue
+        product: casework
+        as: administrator
+        method: POST
+        path: /v1/directory/bootstrap
+        headers: {If-Match: '"0"', Idempotency-Key: staff-the-queue}
+        body:
+          teamId: decisions-team
+          staff: [{issuer: https://identity.standalone.example.test, subject: staff}]
+          supervisors: []
+          queueId: decisions
+        expect: {status: 200}
+      - id: request-a-decision
+        product: casework
+        as: requester
+        method: POST
+        path: /v1/review-requests
+        headers: {Idempotency-Key: request-a-decision}
+        body:
+          policy: {id: decision}
+          subject:
+            source: standalone
+            type: batch
+            id: synthetic-batch-0042
+            version: "1"
+            # SHA-256 of the synthetic submitted snapshot's canonical JSON.
+            digest: "sha256:54cb59dbbbc61ee50ade6b89a3e961156b6a2ff1a584b485ede786b1becfc7c3"
+          requesterReference: synthetic-batch-0042
+          context:
+            mode: submitted
+            snapshot: {summary: Confirm the prepared synthetic batch, reference: synthetic-batch-0042}
+        expect: {status: 201}
+        capture: {request: {type: pointer, pointer: /requestId}}
+      - id: find-the-task
+        product: casework
+        as: staff
+        method: GET
+        path: /v1/review-tasks?queue=decisions
+        expect: {status: 200, json: {/items/0/requestId: "{{request}}"}}
+        capture:
+          task: {type: pointer, pointer: /items/0/taskId}
+          task-revision: {type: pointer, pointer: /items/0/revision}
+      - id: claim-the-task
+        product: casework
+        as: staff
+        method: POST
+        path: "/v1/review-tasks/{{task}}/claim"
+        headers: {If-Match: '"{{task-revision}}"', Idempotency-Key: claim-the-task}
+        expect: {status: 200}
+        capture: {claim-revision: {type: pointer, pointer: /revision}}
+      - id: confirm
+        product: casework
+        as: staff
+        method: POST
+        path: "/v1/review-tasks/{{task}}/decisions"
+        headers: {If-Match: '"{{claim-revision}}"', Idempotency-Key: confirm}
+        body: {decision: {type: answer, outcome: confirmed}}
+        expect: {status: 204}
+      - id: read-the-result
+        product: casework
+        as: requester
+        method: GET
+        path: "/v1/review-requests/{{request}}/result"
+        expect:
+          status: 200
+          json:
+            /subject/id: synthetic-batch-0042
+            /outcome: confirmed

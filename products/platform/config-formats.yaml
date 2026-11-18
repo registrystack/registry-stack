@@ -719,25 +719,25 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
-  - id: breg/project-dev
-    product: breg
-    title: Registry Stack project development plan
+  - id: rstack/dev
+    product: rstack
+    title: Registry Stack development plan
     files: [dev.yaml]
     syntax: yaml
     audience: authored
     stability: experimental
     current:
-      apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
-      kind: BRegProjectDev
+      apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+      kind: RStackDev
       checkedBy:
         file: crates/registry-rstack-dev/src/plan.rs
         symbol: API_VERSION
     target:
-      apiVersion: id.registrystack.org/formats/breg/project-dev/v1alpha1
-      kind: BRegProjectDev
+      apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+      kind: RStackDev
     schema:
-      path: products/platform/generated/dev/project-dev.v1alpha1.schema.json
-      id: https://id.registrystack.org/schemas/breg/project-dev/project-dev.v1alpha1.schema.json
+      path: products/platform/generated/dev/dev.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
       origin: generated
       generator: cargo run -p registry-rstack-dev --features schema --example dev-schema -- --output products/platform/generated/dev
       driftCheck: products/platform/scripts/check-dev-schemas.sh

@@ -360,10 +360,14 @@ mod tests {
                 _ => panic!("unregistered template"),
             });
         // The optional console is a separate application, not project input.
+        // The `rstack dev` plan and its scenarios are read by `rstack`, not by
+        // `bregctl`, so the starter does not ship them.
         let starter = lookup(id).expect("registered template");
         walk_files(&root)
             .into_iter()
-            .filter(|(path, _)| !path.starts_with("console/"))
+            .filter(|(path, _)| {
+                !path.starts_with("console/") && path != "dev.yaml" && !path.starts_with("dev/")
+            })
             .map(|(path, bytes)| {
                 let contents = materialize(starter, &path, &bytes);
                 (path, contents)

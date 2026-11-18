@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+# BReg alone: no Casework, no Evidence. The scenario file sits under dev/,
+# not tests/, because bregctl check reads every YAML file directly under tests/
+# as a BReg test. A run
+# signs its test tokens with a throwaway local key under this logical issuer.
+issuer: https://identity.directory.example.test
+products:
+  - {product: breg, project: ., audience: "urn:example:local-directory"}
+people:
+  editor:
+    subject: synthetic-directory-editor
+    client: directory-editor
+    grants:
+      breg:
+        profile: directory-editor
+        scopes: ["registry:directory:write"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: directory-administration
+          jurisdiction: zone-a
+  foreign-editor:
+    subject: synthetic-foreign-editor
+    client: directory-editor
+    grants:
+      breg:
+        profile: directory-editor
+        scopes: ["registry:directory:write"]
+        claims:
+          registry_actor_kind: human
+          registry_purpose: directory-administration
+          jurisdiction: zone-b
+# Both people match the editor profile, so each schema-test step names its person.
+schemaTestPeople:
+  directory-contact:
+    create-contact: editor
+    read-contact: editor
+    conceal-contact-outside-jurisdiction: foreign-editor
+    obtain-email-condition: editor
+    update-contact-email: editor
+    read-updated-contact: editor
+    start-registration: editor
+    submit-registration: editor
+scenarioFile: dev/scenarios.yaml
