@@ -106,6 +106,8 @@ Modules remain subject to the same ceiling.
 Publishing or withdrawing a statistical release commits at once in the same way, so the compiler refuses a standing agent profile that holds `publish` on a statistical dataset, with `breg.access-profile.standing-agent-publish-forbidden`.
 Both operations are authorised through the publisher's profile on the dataset's unit Record type, so that profile meets the ceiling too, including one a module contributes under the publisher's ID.
 A standing agent keeps `read-live` and `read-releases`.
+It cannot hold `read-exact`, which serves exact values to a named consumer.
+A standing agent profile cannot be a dataset's `exactReads` profile either.
 Give `publish` to a profile a person or a service uses directly.
 
 A task grant authorises no publication either.
@@ -118,7 +120,9 @@ A module profile carries no task grant, and the runtime refuses a task-grant tok
     standing_agent_cannot_publish_a_statistical_release,
     standing_agent_may_read_statistical_counts_and_releases,
     human_service_and_unspecified_profiles_keep_publish,
-    task_grant_profile_cannot_be_a_dataset_publisher. */}
+    task_grant_profile_cannot_be_a_dataset_publisher;
+    crates/registry-breg/tests/compiler_statistics.rs
+    a_standing_agent_cannot_read_exact_or_anchor_exact_reads. */}
 
 ## Configure current status
 

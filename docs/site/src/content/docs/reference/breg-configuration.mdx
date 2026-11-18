@@ -118,7 +118,16 @@ one diagnostic per item to reclassify. The definition digest covers the disclosu
 parameters.
 `measure` is a reserved column name, so no dimension may use it. At most one access profile holds `publish`
 on a dataset. Once one does, it and every `read-live` profile must also hold `read-releases`;
-without one, no profile may hold `read-releases`. See [Publish a statistical
+without one, no profile may hold `read-releases`.
+`exactReads` is an optional member, `{accessProfile}`, naming the profile an exact read computes under. A
+dataset with a `read-exact` grant needs it (`breg.statistical-dataset.exact-reads-missing`), and `exactReads`
+needs a `read-exact` grant (`breg.statistical-dataset.exact-reads-unused`) and a known profile
+(`breg.statistical-dataset.exact-reads-profile-unknown`). The compiler checks the profile as it checks a
+publisher: its visibility must not depend on the caller, its `list` grant must cover what the dataset filters
+and groups by, and it must be able to read each sum or mean field; those checks report codes beginning
+`breg.statistical-dataset.exact-reads-`. A standing agent cannot hold `read-exact`, and a standing-agent or
+task-grant profile cannot be the `exactReads` profile. `read-exact` works under either disclosure method and
+needs no publisher. `exactReads` and `read-exact` grants do not change the definition digest. See [Publish a statistical
 series](../../configure/breg-statistics/).
 
 {/* Evidence: crates/registry-breg/src/compiler/statistics.rs, compile() and

@@ -902,7 +902,18 @@ or winding.
 Every statistical operation requires a profile selected with `accessProfile`; a released-data
 reader needs no record permissions.
 
-Document reads from the live, series, latest-version, and exact-version routes send
+`GET /v1/statistics/{dataset}:exact` serves exact values for ended periods to a profile holding
+`read-exact`, which needs no record permissions. `from` and `to` are required and name ended periods at or
+after `firstPeriod`; there is no default. A range that reaches a period that has not ended is refused with
+`422` `statistical_dataset.release_refused` and `refusalCode` `period-not-ended`. `accessProfile` and `Accept` (JSON or CSV) work as on the live
+route, with the same cell and document size bounds. A dataset whose derived field reads the evaluation
+date accepts one period per request (`from` equal to `to`). The document carries
+`exact: {"evaluatedAt": "<date>", "accessProfile": "<caller profile>"}` in place of `live`, with no
+`release` and no `disclosure`, and its statuses are `exact` and `not-applicable` only. The read computes
+under the dataset's `exactReads` profile, not the caller's; each read is audited as `read-exact` with
+`periodFrom` and `periodTo`.
+
+Document reads from the live, exact, series, latest-version, and exact-version routes send
 `Cache-Control: no-store`, `Vary: authorization, accept`, and `Repr-Digest` for the exact JSON or
 CSV bytes. The release listing omits `Repr-Digest`. A version header's `contentDigest` identifies
 the canonical stored JSON; a withdrawn version's header omits it. No strong `ETag` is issued.

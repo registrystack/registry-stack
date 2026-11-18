@@ -91,6 +91,13 @@ pub(crate) fn statistical_dataset_operations(
     if dataset.live_profiles.contains(profile) {
         operations.insert("read-live");
     }
+    if dataset
+        .exact_reads
+        .as_ref()
+        .is_some_and(|exact| exact.readers.contains(profile))
+    {
+        operations.insert("read-exact");
+    }
     if let Some(releases) = &dataset.releases {
         let can_read = dataset.live_profiles.contains(profile)
             || releases.publisher == profile
@@ -190,6 +197,31 @@ pub(crate) fn append_statistics_openapi(
                     &admission_dataset.live_profiles,
                     read_parameters(RangeParameters::Optional, false, false, false),
                     success_document_response(),
+                    None,
+                ),
+            );
+        }
+        if let Some(exact_reads) = &dataset.exact_reads {
+            let admission_readers = admission_dataset
+                .exact_reads
+                .as_ref()
+                .map(|exact| exact.readers.clone())
+                .unwrap_or_default();
+            let mut responses = success_document_response();
+            // An exact read of a period that has not ended is refused.
+            responses["422"] = problem_response();
+            insert_operation(
+                paths,
+                &format!("{base}:exact"),
+                "get",
+                operation(
+                    dataset,
+                    selected,
+                    "read-exact",
+                    &exact_reads.readers,
+                    &admission_readers,
+                    read_parameters(RangeParameters::Required, false, false, false),
+                    responses,
                     None,
                 ),
             );
@@ -604,6 +636,10 @@ fn document_schema() -> Value {
                 }
             },
             "live":{
+                "type":"object","additionalProperties":false,"required":["evaluatedAt","accessProfile"],
+                "properties":{"evaluatedAt":{"type":"string","format":"date"},"accessProfile":{"type":"string"}}
+            },
+            "exact":{
                 "type":"object","additionalProperties":false,"required":["evaluatedAt","accessProfile"],
                 "properties":{"evaluatedAt":{"type":"string","format":"date"},"accessProfile":{"type":"string"}}
             },

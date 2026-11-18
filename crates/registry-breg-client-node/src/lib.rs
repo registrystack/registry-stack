@@ -2725,6 +2725,28 @@ impl BaseRegistryClient {
     }
 
     #[napi]
+    pub async fn statistics_exact(
+        &self,
+        dataset: String,
+        from: String,
+        to: String,
+        access_profile: Option<String>,
+        format: Option<String>,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .statistics_exact(
+                &dataset,
+                &from,
+                &to,
+                access_profile.as_deref(),
+                statistics_format(format.as_deref())?,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
     pub async fn statistics_releases(
         &self,
         dataset: String,

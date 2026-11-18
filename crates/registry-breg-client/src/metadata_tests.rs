@@ -137,7 +137,7 @@ fn statistical_dataset() -> Value {
             "codes": ["Registered", "other", "_U", "_T"]
         }],
         "definitionDigest": REVISION,
-        "operations": ["read-live", "list-releases", "read-latest-release", "read-release-version", "read-released-series"]
+        "operations": ["read-live", "read-exact", "list-releases", "read-latest-release", "read-release-version", "read-released-series"]
     })
 }
 
@@ -312,6 +312,21 @@ fn statistical_dataset_metadata_validates_known_domains_and_periods() {
         dataset["operations"] = json!(["read-live"]);
         value["statisticalDatasets"] = json!([dataset]);
         parse(&value);
+    }
+}
+
+#[test]
+fn statistical_dataset_operations_admit_read_exact_alone_and_with_read_live() {
+    for operations in [json!(["read-exact"]), json!(["read-live", "read-exact"])] {
+        let mut value = fixture();
+        let mut dataset = statistical_dataset();
+        dataset["operations"] = operations;
+        value["statisticalDatasets"] = json!([dataset]);
+        let metadata = parse(&value);
+        assert_eq!(
+            metadata.statistical_datasets(),
+            Some(&value["statisticalDatasets"])
+        );
     }
 }
 

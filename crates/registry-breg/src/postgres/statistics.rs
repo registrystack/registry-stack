@@ -30,7 +30,7 @@ use crate::mutation::BoundValue;
 use crate::statistics::{
     apply_disclosure, build_exact_cells, canonical_document_and_digest, current_period,
     maximum_decimal_characters, period_for_code, period_range, Cell, CellValue, DatasetDocument,
-    DimensionDomain, DisclosureDocument, GroupedCell, LiveDocument, Measure, Period,
+    DimensionDomain, DisclosureDocument, ExactDocument, GroupedCell, LiveDocument, Measure, Period,
     PeriodDocument, PeriodGranularity, PeriodKind, PeriodVersionHeader, ReleaseDocument,
     ReleaseStatus, ReleaseVersionHeader, StatisticsDocument, StatisticsError, WithdrawalDocument,
     WithdrawalReason, MAX_CELLS_PER_RESPONSE,
@@ -98,6 +98,15 @@ pub struct StatisticsLiveRequest<'a> {
     pub dataset_id: &'a str,
     pub from: Option<&'a str>,
     pub to: Option<&'a str>,
+    pub today: NaiveDate,
+    pub deadline: tokio::time::Instant,
+}
+
+pub struct StatisticsExactRequest<'a> {
+    pub context: &'a AuthorizedRequestContext,
+    pub dataset_id: &'a str,
+    pub from: &'a str,
+    pub to: &'a str,
     pub today: NaiveDate,
     pub deadline: tokio::time::Instant,
 }
@@ -474,6 +483,7 @@ impl PostgresStatisticsService {
             }),
             None,
             Some(DisclosureDocument::from(dataset.disclosure)),
+            None,
         )?;
         let canonical = canonical_document_and_digest(&document).map_err(map_statistics_error)?;
         let result_count = document.cells.len();
@@ -898,6 +908,70 @@ impl PostgresStatisticsService {
                 access_profile: request.context.selected_profile().to_owned(),
             }),
             None,
+            None,
+        )
+    }
+
+    /// Exact values for ended periods, computed under the dataset's
+    /// `exactReads` profile for a caller holding `read-exact`.
+    pub async fn exact(
+        &self,
+        request: StatisticsExactRequest<'_>,
+    ) -> Result<StatisticsDocument, StatisticsServiceError> {
+        within_deadline(request.deadline, self.exact_inner(request)).await
+    }
+
+    async fn exact_inner(
+        &self,
+        request: StatisticsExactRequest<'_>,
+    ) -> Result<StatisticsDocument, StatisticsServiceError> {
+        let dataset = self.exact_dataset(request.dataset_id, request.context)?;
+        let exact_reads = dataset
+            .exact_reads
+            .as_ref()
+            .ok_or(StatisticsServiceError::Concealed)?;
+        let periods = ended_periods(dataset, request.from, request.to, request.today)?;
+        // A dependent dataset's values hold at one reference date, so the
+        // range is one period evaluated at that period's reference date.
+        let evaluation_date = if dataset.evaluation_date_dependent {
+            match periods.as_slice() {
+                [period] => period.reference_date,
+                _ => return Err(StatisticsServiceError::QueryInvalid { field_path: "to" }),
+            }
+        } else {
+            request.today
+        };
+        enforce_response_cell_limit(dataset, periods.len())?;
+        // The caller authenticated under its own profile; the visibility
+        // the values compute under is the anchor's, which the compiler
+        // proved independent of the caller.
+        let anchor = AuthorizedRequestContext::new(
+            request.context.principal().map(str::to_owned),
+            request.context.purpose().map(str::to_owned),
+            exact_reads.access_profile.clone(),
+            Default::default(),
+        );
+        let computation = self
+            .compute(
+                dataset,
+                &anchor,
+                &periods,
+                evaluation_date,
+                request.deadline,
+                false,
+            )
+            .await?;
+        document_for(
+            dataset,
+            periods,
+            computation.cells,
+            None,
+            None,
+            None,
+            Some(ExactDocument {
+                evaluated_at: evaluation_date.to_string(),
+                access_profile: request.context.selected_profile().to_owned(),
+            }),
         )
     }
 
@@ -1415,6 +1489,7 @@ impl PostgresStatisticsService {
             None,
             None,
             Some(DisclosureDocument::from(dataset.disclosure)),
+            None,
         )?;
         for period in &mut document.periods {
             period.version = versions.remove(&period.code);
@@ -1438,6 +1513,20 @@ impl PostgresStatisticsService {
         dataset
             .live_profiles
             .contains(context.selected_profile())
+            .then_some(dataset)
+            .ok_or(StatisticsServiceError::Concealed)
+    }
+
+    fn exact_dataset(
+        &self,
+        id: &str,
+        context: &AuthorizedRequestContext,
+    ) -> Result<&CompiledStatisticalDataset, StatisticsServiceError> {
+        let dataset = self.dataset(id)?;
+        dataset
+            .exact_reads
+            .as_ref()
+            .is_some_and(|exact| exact.readers.contains(context.selected_profile()))
             .then_some(dataset)
             .ok_or(StatisticsServiceError::Concealed)
     }
@@ -1982,6 +2071,25 @@ fn requested_periods(
     Ok(periods)
 }
 
+/// The periods of an exact read: both bounds are named, and every period has
+/// ended, by the rule that governs a release.
+fn ended_periods(
+    dataset: &CompiledStatisticalDataset,
+    from: &str,
+    to: &str,
+    today: NaiveDate,
+) -> Result<Vec<Period>, StatisticsServiceError> {
+    let periods = period_range(granularity(dataset), from, to, today)
+        .map_err(|error| map_period_range_error(error, from, to))?;
+    enforce_first_period(dataset, &periods)?;
+    if periods.iter().any(|period| !period.ended) {
+        return Err(StatisticsServiceError::ReleaseRefused(
+            StatisticsReleaseRefusal::PeriodNotEnded,
+        ));
+    }
+    Ok(periods)
+}
+
 fn enforce_first_period(
     dataset: &CompiledStatisticalDataset,
     periods: &[Period],
@@ -2036,6 +2144,7 @@ fn document_for(
     release: Option<ReleaseDocument>,
     live: Option<LiveDocument>,
     disclosure: Option<DisclosureDocument>,
+    exact: Option<ExactDocument>,
 ) -> Result<StatisticsDocument, StatisticsServiceError> {
     let domains = dimensions(dataset);
     Ok(StatisticsDocument {
@@ -2053,6 +2162,7 @@ fn document_for(
         cells,
         release,
         live,
+        exact,
         disclosure,
     })
 }

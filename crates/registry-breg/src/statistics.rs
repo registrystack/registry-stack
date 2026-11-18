@@ -369,6 +369,15 @@ pub struct LiveDocument {
     pub access_profile: String,
 }
 
+/// Metadata of an exact read: the ended periods' values as they stand when
+/// evaluated, for the caller's profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExactDocument {
+    pub evaluated_at: String,
+    pub access_profile: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "method",
@@ -413,6 +422,8 @@ pub struct StatisticsDocument {
     pub release: Option<ReleaseDocument>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub live: Option<LiveDocument>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact: Option<ExactDocument>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<DisclosureDocument>,
 }
@@ -1049,9 +1060,19 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
     if document.cells.len() > MAX_CELLS_PER_RESPONSE {
         return Err(StatisticsError::TooManyCells);
     }
-    if document.release.is_some() && document.live.is_some() {
+    let metadata = [
+        document.release.is_some(),
+        document.live.is_some(),
+        document.exact.is_some(),
+    ];
+    if metadata.into_iter().filter(|present| *present).count() > 1 {
         return Err(StatisticsError::InvalidDocument(
-            "release and live metadata are mutually exclusive",
+            "release, live, and exact metadata are mutually exclusive",
+        ));
+    }
+    if document.exact.is_some() && document.disclosure.is_some() {
+        return Err(StatisticsError::InvalidDocument(
+            "an exact document carries no disclosure method",
         ));
     }
     if let Some(release) = &document.release {
@@ -1108,6 +1129,13 @@ fn validate_document(document: &StatisticsDocument) -> Result<(), StatisticsErro
     }
     let mut seen_cells = BTreeSet::new();
     for cell in &document.cells {
+        if document.exact.is_some()
+            && matches!(cell.status, CellStatus::Suppressed | CellStatus::Rounded)
+        {
+            return Err(StatisticsError::InvalidDocument(
+                "an exact document carries no suppressed or rounded cell",
+            ));
+        }
         match (&document.disclosure, cell.status) {
             (
                 Some(DisclosureDocument::ExactPublicValues),

@@ -817,6 +817,18 @@ pub struct StatisticalDatasetSource {
     pub measures: Vec<StatisticalMeasureSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<StatisticalDisclosureSource>,
+    /// How `read-exact` reads compute. Required when a profile holds `read-exact` on the dataset, and refused otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_reads: Option<StatisticalExactReadsSource>,
+}
+
+/// The profile whose visibility `read-exact` reads of a statistical dataset compute under.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalExactReadsSource {
+    /// The profile whose caller-independent visibility an exact read computes under.
+    pub access_profile: String,
 }
 
 /// One value a statistical dataset publishes.
@@ -846,7 +858,7 @@ pub enum StatisticalMeasureSource {
     },
     /// The mean of an `int64` or `decimal` unit Record field over the records
     /// that have a value for it, rounded half away from zero to `scale`
-    /// fractional digits. Served on live reads only.
+    /// fractional digits. Served on live and exact reads only.
     Mean {
         /// Names the measure on every cell that reports it.
         id: LocalId,
@@ -5124,7 +5136,7 @@ pub struct PermissionsSource {
 pub struct DatasetPermissionSource {
     /// The statistical dataset the permission names.
     pub dataset: LocalId,
-    /// What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`.
+    /// What the profile may do with the dataset. A profile that holds `read-live` or `publish` on a dataset with a publisher also holds `read-releases`. `read-exact` needs the dataset's `exactReads` member.
     #[serde(deserialize_with = "dataset_operations")]
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub operations: UniqueSet<DatasetOperation>,
@@ -5136,8 +5148,8 @@ fn dataset_operations<'de, D: Deserializer<'de>>(
     let operations = UniqueSet::<DatasetOperation>::deserialize(deserializer)?;
     if operations.is_empty() {
         return Err(Invalid::expected(
-            "at least one of read-live, publish, or read-releases",
-            "List read-live, publish, or read-releases, or remove the dataset permission.",
+            "at least one of read-live, read-exact, publish, or read-releases",
+            "List read-live, read-exact, publish, or read-releases, or remove the dataset permission.",
         )
         .into_error());
     }
@@ -5151,6 +5163,8 @@ fn dataset_operations<'de, D: Deserializer<'de>>(
 pub enum DatasetOperation {
     /// Read the dataset's live counts.
     ReadLive,
+    /// Read the dataset's exact values for ended periods, computed under the dataset's `exactReads` profile.
+    ReadExact,
     /// Publish and withdraw the dataset's releases. One profile holds it per dataset.
     Publish,
     /// Read the dataset's releases.

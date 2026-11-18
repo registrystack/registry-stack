@@ -8,6 +8,7 @@ export declare class BaseRegistryClient {
   openapi(accessProfile?: string | undefined | null): Promise<RawOutcome>
   registryMetadata(accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
   statisticsLive(dataset: string, from?: string | undefined | null, to?: string | undefined | null, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
+  statisticsExact(dataset: string, from: string, to: string, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
   statisticsReleases(dataset: string, top?: number | undefined | null, skipToken?: string | undefined | null, accessProfile?: string | undefined | null): Promise<RawOutcome>
   statisticsLatestRelease(dataset: string, period: string, selection: string, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
   statisticsReleaseVersion(dataset: string, period: string, version: number, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>

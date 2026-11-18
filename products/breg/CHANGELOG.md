@@ -55,6 +55,34 @@
   `requiresPostgis`. A consumer that pins the earlier versions must accept the
   new `apiVersion` values. See the [explain contract
   policy](https://docs.registrystack.org/reference/bregctl-explain/#schemas-and-compatibility).
+- A statistical dataset has a fourth operation, `read-exact`, beside
+  `read-live`, `publish`, and `read-releases`. It serves exact statistics
+  (counts, sums, means, and cells of one) to a named machine consumer, such as
+  a policy-simulation or costing service, over records it cannot read itself.
+  The route is `GET /v1/statistics/{dataset}:exact?from=<period>&to=<period>`;
+  both parameters are required, `accessProfile` and `Accept` (JSON or CSV) work
+  as on `:live`, and only ended periods are served, by the rule publication
+  uses. A dataset that depends on the evaluation date accepts one period per
+  request, computed with that period's reference date. A dataset declares the
+  visibility an exact read computes under with
+  `exactReads: {accessProfile: <profile id>}`; the caller needs only the
+  `read-exact` grant. The compiler checks that profile as it checks a
+  publisher, and refuses a `read-exact` grant without `exactReads`
+  (`breg.statistical-dataset.exact-reads-missing`), `exactReads` without a
+  `read-exact` grant (`breg.statistical-dataset.exact-reads-unused`), and an
+  unknown profile (`breg.statistical-dataset.exact-reads-profile-unknown`);
+  its other checks report codes beginning
+  `breg.statistical-dataset.exact-reads-`. A standing agent cannot hold
+  `read-exact`. The document carries `exact` with `evaluatedAt` and the
+  caller's `accessProfile` instead of `live`, no `release`, and no
+  `disclosure`; statuses are `exact` and `not-applicable`. Each read is audited
+  as `read-exact` with the caller's profile and the range in clear
+  (`periodFrom`, `periodTo`). `exactReads` and `read-exact` grants do not
+  change the definition digest. The clients gain `statistics_exact` (Rust and
+  Python, with `from_period` and `to_period`) and `statisticsExact` (Node.js).
+  The security model gains BREG-SEC-212 and BREG-RES-25: an exact read is as
+  sensitive as the records, so grant it only to a named service under a
+  data-sharing agreement.
 - BREAKING: A statistical dataset's `disclosure` block is tagged by a required
   `type`. Add `type: minimum-count-and-rounding` to the `disclosure` block of
   every existing project file; `minimumCount` and `roundingBase` stay members

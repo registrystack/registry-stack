@@ -138,11 +138,12 @@ The `read-releases` and `read-live` grants and `firstPeriod` do not change it.
 
 ## Decide who reads a dataset
 
-Each [access profile](../../reference/glossary/#access-profile) that reaches it says so under `permissions.datasets`, beside its record permissions under `permissions.records`. A dataset permission holds `dataset` and `operations`, drawn from three operations:
+Each [access profile](../../reference/glossary/#access-profile) that reaches it says so under `permissions.datasets`, beside its record permissions under `permissions.records`. A dataset permission holds `dataset` and `operations`, drawn from four operations:
 
 - `read-live`, exact live values
 - `publish`, publishing and withdrawing releases
 - `read-releases`, released documents
+- `read-exact`, exact values for ended periods, for a named consumer
 
 One profile at most holds `publish` on a dataset. Give it to a profile a person or a service uses directly: a standing agent profile, one with `actorKind: agent` and no `taskGrant`, cannot publish or withdraw a release, and `bregctl check` refuses the project with `breg.access-profile.standing-agent-publish-forbidden`. [Control access](../breg-access/) explains task grants.
 
@@ -292,6 +293,61 @@ reconstruct what the registry held on that past date.
     crates/registry-breg/tests/standing_agent_ceiling.rs,
     standing_agent_cannot_publish_a_statistical_release;
     crates/registry-bregctl/src/explain_report.rs, datasets. */}
+
+## Serve exact values to a named consumer
+
+A policy-simulation or costing service sometimes needs exact statistics over records it cannot read. `read-exact` serves counts, sums, means, and cells of one for ended periods to a profile that holds the grant, and the profile needs no record access. The dataset declares the visibility the read computes under with `exactReads`, and the consumer's profile holds only `read-exact`:
+
+```yaml
+statisticalDatasets:
+  - id: monthly-discharge-reports
+    unit: discharge-report
+    population: "substanceCode ne null"
+    period:
+      type: flow
+      field: period-start
+      granularity: month
+      firstPeriod: 2025-01
+    dimensions:
+      - administrative-boundary
+    measures:
+      - id: count
+        type: count
+      - id: amount_total
+        type: sum
+        field: amount
+    disclosure:
+      type: minimum-count-and-rounding
+      minimumCount: 5
+      roundingBase: 5
+    exactReads:
+      accessProfile: statistics-scope
+accessProfiles:
+  - id: costing-service
+    permissions:
+      datasets:
+        - dataset: monthly-discharge-reports
+          operations:
+            - read-exact
+```
+
+The `statistics-scope` profile must see the same records whoever calls. `bregctl check` refuses it if its visibility depends on the caller (row or membership boundaries, required purposes or consent, or no read access to a record type the dataset depends on), if its `list` grant does not cover what the dataset filters and groups by, or if it cannot read a sum or mean field. A `read-exact` grant without `exactReads` is refused with `breg.statistical-dataset.exact-reads-missing`, `exactReads` without a `read-exact` grant with `breg.statistical-dataset.exact-reads-unused`, and an unknown profile with `breg.statistical-dataset.exact-reads-profile-unknown`. A standing agent profile cannot hold `read-exact` or be the `exactReads` profile. The grant works under either disclosure method and needs no publisher, so the sum above, which cannot be released under `minimum-count-and-rounding`, is still served exactly.
+
+The consumer reads one range of ended periods. Both `from` and `to` are required, because the current period has not ended. A dataset that depends on the evaluation date accepts one period per request:
+
+```sh test-skip="needs a live registry"
+bregctl api \
+  '/v1/statistics/monthly-discharge-reports:exact?accessProfile=costing-service&from=2025-01&to=2025-03' \
+  --url "$BREG_URL" \
+  --token-file "$CONSUMER_TOKEN_FILE"
+```
+
+The document carries `exact`, with `evaluatedAt` and the caller's `accessProfile`, in place of `live`; statuses are `exact` and `not-applicable`. Each read is audited with the caller's profile and the requested range.
+
+The output is as sensitive as the records. It discloses cells of one and exact sums, and BReg cannot control what the consumer does with it. Grant `read-exact` to one named service under a data-sharing agreement that names the legal basis, the purpose, no onward disclosure, what the consumer may publish from its results, retention, and breach notice. Widening the `exactReads` profile's `list` grant widens every exact read, so review a change to that profile as a disclosure decision.
+
+{/* Evidence: products/breg/STATISTICS.md, "Exact reads for a named consumer";
+    products/breg/SECURITY-MODEL.md, BREG-RES-24. */}
 
 ## Review what a release discloses
 

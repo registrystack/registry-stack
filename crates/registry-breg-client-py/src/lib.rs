@@ -1860,6 +1860,31 @@ impl BaseRegistryClient {
         raw_value(py, &value.value, &value.metadata)
     }
 
+    #[pyo3(signature = (dataset, from_period, to_period, *, access_profile=None, format="json"))]
+    fn statistics_exact<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        from_period: &str,
+        to_period: &str,
+        access_profile: Option<&str>,
+        format: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let format = statistics_format(py, format)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_exact(
+                    dataset,
+                    from_period,
+                    to_period,
+                    access_profile,
+                    format,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
     #[pyo3(signature = (dataset, *, top=None, skip_token=None, access_profile=None))]
     fn statistics_releases<'py>(
         &self,

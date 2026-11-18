@@ -638,7 +638,7 @@
       }
     },
     "statisticalDatasets": {
-      "description": "Who may do what with each statistical dataset, ordered by dataset; empty when the project declares none. Each list names access profiles in order. `readReleases` is every profile that reads the dataset's releases, and is empty when no profile publishes it.",
+      "description": "Who may do what with each statistical dataset, ordered by dataset; empty when the project declares none. Each list names access profiles in order. `readExact` is every profile that reads exact values of ended periods. `readReleases` is every profile that reads the dataset's releases, and is empty when no profile publishes it.",
       "type": "array",
       "items": {
         "type": "object",
@@ -646,6 +646,7 @@
         "required": [
           "dataset",
           "readLive",
+          "readExact",
           "publish",
           "readReleases",
           "accessProfiles",
@@ -656,6 +657,12 @@
             "type": "string"
           },
           "readLive": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "readExact": {
             "type": "array",
             "items": {
               "type": "string"

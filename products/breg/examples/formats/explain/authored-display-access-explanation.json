@@ -438,6 +438,7 @@
       "publish": [
         "directory-editor"
       ],
+      "readExact": [],
       "readLive": [],
       "readReleases": [
         "directory-editor"

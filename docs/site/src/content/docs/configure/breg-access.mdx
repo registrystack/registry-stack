@@ -397,8 +397,9 @@ named on this page.
 
 A project that publishes counts declares statistical datasets, and a profile reaches them through
 `permissions.datasets`. Each entry names a `dataset` and its operations: `read-live` for current
-counts, `publish` to publish or withdraw a release, `read-releases` to read published releases.
-A standing agent profile, one with `actorKind: agent` and no `taskGrant`, cannot hold `publish`:
+counts, `publish` to publish or withdraw a release, `read-releases` to read published releases, `read-exact`
+to read exact values for ended periods as a named consumer.
+A standing agent profile, one with `actorKind: agent` and no `taskGrant`, cannot hold `publish` or `read-exact`:
 a release takes effect at once, with no draft for a person to confirm, so the compiler refuses it.
 [Publish a statistical series](../breg-statistics/) covers the datasets themselves.
 

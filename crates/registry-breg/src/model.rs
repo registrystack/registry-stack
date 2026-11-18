@@ -179,6 +179,9 @@ pub struct CompiledStatisticalDataset {
     pub live_profiles: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub releases: Option<CompiledStatisticalReleases>,
+    /// The profile `read-exact` computes under, and the profiles that read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_reads: Option<CompiledStatisticalExactReads>,
     pub dependency_entities: BTreeSet<String>,
     pub referenced_fields: BTreeSet<String>,
     pub evaluation_date_dependent: bool,
@@ -255,6 +258,15 @@ pub enum CompiledStatisticalDimensionDomain {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledStatisticalReleases {
     pub publisher: String,
+    pub readers: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledStatisticalExactReads {
+    /// The profile whose caller-independent visibility an exact read computes under.
+    pub access_profile: String,
+    /// The profiles that hold `read-exact`.
     pub readers: BTreeSet<String>,
 }
 
