@@ -639,7 +639,7 @@
   "registryId": "labelled-directory",
   "requiresPostgis": false,
   "reviewAuthorities": [],
-  "revision": "sha256:6e478c244513f8840df1ccb507bec5fe4ca60374cc2a83324fbe30ca010afd7c",
+  "revision": "sha256:661b54b70ecfc3573bf36031e1fa2bedda89ca107777a89eb23ac9bcdff04db0",
   "statisticalDatasets": [
     {
       "accessProfiles": {

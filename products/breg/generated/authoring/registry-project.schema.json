@@ -5459,7 +5459,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A release states every count, sum, and mean exactly. Admitted only when\nthe unit Record type, every field the dataset reads, and every Record\ntype a derived field reads from are classified `public`.",
+          "description": "A release states every measure exactly. Admitted only when\nthe unit Record type, every field the dataset reads, and every Record\ntype a derived field reads from are classified `public`.",
           "properties": {
             "type": {
               "const": "exact-public-values",
@@ -5511,7 +5511,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The sum of an `int64` or `decimal` unit Record field over the\npopulation, at the field's scale. Records with no value for the field\nare left out. Served on live reads only.",
+          "description": "The sum of an `int64` or `decimal` unit Record field over the\npopulation, at the field's scale. Records with no value for the field\nare left out. Not carried by a minimum-count-and-rounding release.",
           "properties": {
             "field": {
               "description": "The unit Record field to add up.",
@@ -5535,7 +5535,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The mean of an `int64` or `decimal` unit Record field over the records\nthat have a value for it, rounded half away from zero to `scale`\nfractional digits. Served on live and exact reads only.",
+          "description": "The mean of an `int64` or `decimal` unit Record field over the records\nthat have a value for it, rounded half away from zero to `scale`\nfractional digits. Not carried by a minimum-count-and-rounding release.",
           "properties": {
             "field": {
               "description": "The unit Record field to average.",
@@ -5586,6 +5586,83 @@
             "type",
             "id",
             "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One measure of the dataset over another, such as a sum over a count,\nrounded half away from zero to `scale` fractional digits. A cell whose\ndenominator is zero has no value. Not carried by a minimum-count-and-rounding release.",
+          "properties": {
+            "denominator": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The `count`, `distinct-count` or `sum` measure to divide by, other\nthan the numerator."
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "Names the measure on every cell that reports it."
+            },
+            "numerator": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The `count`, `distinct-count` or `sum` measure to divide."
+            },
+            "scale": {
+              "description": "Fractional digits of the reported ratio, 0 to 38.",
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "ratio",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "numerator",
+            "denominator",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The percentile of an `int64` or `decimal` unit Record field over the\nrecords that have a value for it: the inverse of the empirical\ndistribution function, averaging the two values either side of a\nboundary (Hyndman and Fan definition 2), so the median of an even number\nof values is the mean of the middle two. Rounded half away from zero to\n`scale` fractional digits. Not carried by a minimum-count-and-rounding release.",
+          "properties": {
+            "field": {
+              "description": "The unit Record field to take the percentile of.",
+              "type": "string"
+            },
+            "id": {
+              "$ref": "#/$defs/LocalId",
+              "description": "Names the measure on every cell that reports it."
+            },
+            "percentile": {
+              "description": "Which percentile, 1 to 99; the median is 50.",
+              "format": "uint32",
+              "maximum": 99,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "scale": {
+              "description": "Fractional digits of the reported percentile, 0 to 38.",
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "percentile",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "field",
+            "percentile",
+            "scale"
           ],
           "type": "object"
         }

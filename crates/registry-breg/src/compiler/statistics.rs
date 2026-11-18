@@ -20,7 +20,7 @@ use crate::model::{
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
 use crate::statistics::{
-    maximum_decimal_characters, period_for_code, DisclosureDocument, DisclosureMethod, Measure,
+    maximum_measure_characters, period_for_code, DisclosureDocument, DisclosureMethod, Measure,
     PeriodGranularity,
 };
 
@@ -145,7 +145,7 @@ pub(super) fn compile(
             }
         }
         // A minimum-count-and-rounding release carries counts and distinct
-        // counts; a sum or a mean is read live.
+        // counts; every other measure is read live or released exactly.
         if measures.iter().any(|measure| !measure.is_count_like()) {
             let releasing = grants
                 .publish
@@ -163,7 +163,7 @@ pub(super) fn compile(
                     &root,
                     &source.id,
                     &format!(
-                        "a minimum-count-and-rounding release carries counts and distinct counts only and a sum or mean is read live: remove publish and read-releases from {}, declare count and distinct-count measures only, or release exact values with disclosure type exact-public-values over a register classified public",
+                        "a minimum-count-and-rounding release carries counts and distinct counts only; a sum, mean, ratio or percentile is read live: remove publish and read-releases from {}, declare count and distinct-count measures only, or release exact values with disclosure type exact-public-values over a register classified public",
                         quoted(&releasing)
                     ),
                 ));
@@ -359,7 +359,7 @@ pub(super) fn compile(
                 &format!("{root}.dimensions"),
                 &source.id,
                 &format!(
-                    "a dataset with a distinct count declares at most {MAX_NON_ADDITIVE_DIMENSIONS} dimensions, because its totals are computed over the records, not the base cells"
+                    "a dataset with a distinct count or a percentile declares at most {MAX_NON_ADDITIVE_DIMENSIONS} dimensions, because its totals are computed over the records, not the base cells"
                 ),
             ));
         }
@@ -448,16 +448,11 @@ pub(super) fn compile(
                 None => continue,
             },
         };
+        let field_type =
+            |field_id: &str| field(unit, field_id).map(|(field_type, _)| field_type.clone());
         let longest_decimal = measures
             .iter()
-            .filter_map(|measure| {
-                let field_id = match measure {
-                    Measure::Sum { field, .. } | Measure::Mean { field, .. } => field,
-                    Measure::Count { .. } | Measure::DistinctCount { .. } => return None,
-                };
-                let (field_type, _) = field(unit, field_id)?;
-                maximum_decimal_characters(measure, field_type)
-            })
+            .filter_map(|measure| maximum_measure_characters(measure, &measures, &field_type))
             .max();
         let definition_digest = definition_digest(
             source,
@@ -917,7 +912,8 @@ fn compile_period(
     (Some(compiled), fields)
 }
 
-/// The declared measures, and the unit fields the sums and means read.
+/// The declared measures, and the unit fields the sums, means, percentiles and
+/// distinct counts read.
 fn compile_measures(
     source: &crate::contract::StatisticalDatasetSource,
     unit: &CompiledEntity,
@@ -1004,6 +1000,87 @@ fn compile_measures(
                     },
                 }
             }
+            StatisticalMeasureSource::Percentile {
+                field: field_id,
+                percentile,
+                scale,
+                ..
+            } => {
+                measure_fields.insert(field_id.clone());
+                let Some((field_type, _)) = field(unit, field_id) else {
+                    continue;
+                };
+                if !matches!(
+                    field_type,
+                    FieldTypeSource::Int64 | FieldTypeSource::Decimal { .. }
+                ) {
+                    errors.push(error(
+                        "breg.statistical-dataset.measure-field-type",
+                        &format!("{path}.field"),
+                        &source.id,
+                        &format!(
+                            "measure `{id}` takes a percentile of field `{field_id}`; use an int64 or decimal field"
+                        ),
+                    ));
+                    continue;
+                }
+                Measure::Percentile {
+                    id: id.to_string(),
+                    field: field_id.clone(),
+                    percentile: *percentile,
+                    scale: *scale,
+                }
+            }
+            StatisticalMeasureSource::Ratio {
+                numerator,
+                denominator,
+                scale,
+                ..
+            } => {
+                let mut operands_valid = true;
+                for (member, operand) in [("numerator", numerator), ("denominator", denominator)] {
+                    let is_operand = source.measures.iter().any(|candidate| {
+                        candidate.id() == operand
+                            && matches!(
+                                candidate,
+                                StatisticalMeasureSource::Count { .. }
+                                    | StatisticalMeasureSource::DistinctCount { .. }
+                                    | StatisticalMeasureSource::Sum { .. }
+                            )
+                    });
+                    if !is_operand {
+                        operands_valid = false;
+                        errors.push(error(
+                            "breg.statistical-dataset.ratio-operand",
+                            &format!("{path}.{member}"),
+                            &source.id,
+                            &format!(
+                                "ratio `{id}` divides measures of this dataset; name a count, distinct-count or sum measure, not `{operand}`"
+                            ),
+                        ));
+                    }
+                }
+                if numerator == denominator && operands_valid {
+                    operands_valid = false;
+                    errors.push(error(
+                        "breg.statistical-dataset.ratio-operand",
+                        &format!("{path}.denominator"),
+                        &source.id,
+                        &format!(
+                            "ratio `{id}` divides `{numerator}` by itself, which is always 1; name two different measures"
+                        ),
+                    ));
+                }
+                if !operands_valid {
+                    continue;
+                }
+                Measure::Ratio {
+                    id: id.to_string(),
+                    numerator: numerator.to_string(),
+                    denominator: denominator.to_string(),
+                    scale: *scale,
+                }
+            }
             StatisticalMeasureSource::DistinctCount {
                 field: field_id, ..
             } => {
@@ -1044,7 +1121,7 @@ fn compile_measures(
     (measures, measure_fields)
 }
 
-/// A live reader gets the sum or mean of a field it can read, never of one it
+/// A live reader gets the sum, mean or percentile of a field it can read, never of one it
 /// could not list: a measure field must be readable, though not filterable.
 fn validate_measure_fields_readable(
     source: &crate::contract::StatisticalDatasetSource,
@@ -1068,7 +1145,7 @@ fn validate_measure_fields_readable(
                 &path,
                 &source.id,
                 &format!(
-                    "add field `{field}` to readableFields for {subject} on `{}`, or remove the sum, mean or distinct count over it",
+                    "add field `{field}` to readableFields for {subject} on `{}`, or remove the sum, mean, percentile or distinct count over it",
                     unit.id
                 ),
             ));

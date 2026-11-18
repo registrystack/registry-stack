@@ -89,13 +89,13 @@ pub enum CellStatus {
     Suppressed,
     Rounded,
     /// The measure has no value for this cell, and nothing is withheld: a mean
-    /// over no values.
+    /// or percentile over no values, or a ratio over a zero denominator.
     #[serde(rename = "not-applicable")]
     NotApplicable,
 }
 
-/// The value of one cell. A count is a JSON integer; a sum or mean is a decimal
-/// string, which keeps every digit the database computed.
+/// The value of one cell. A count is a JSON integer; any other measure is a
+/// decimal string, which keeps every digit the database computed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CellValue {
@@ -156,6 +156,24 @@ pub enum Measure {
     /// The number of distinct values of a `reference` field among the records
     /// that have a value for it.
     DistinctCount { id: String, field: String },
+    /// The value of the `numerator` measure over the `denominator` measure, both
+    /// of the same dataset, rounded half away from zero to `scale` fractional
+    /// digits. A zero denominator gives no value.
+    Ratio {
+        id: String,
+        numerator: String,
+        denominator: String,
+        scale: u8,
+    },
+    /// The `percentile` (1 to 99) of a field over the records that have a value
+    /// for it, by Hyndman and Fan definition 2, rounded half away from zero to
+    /// `scale` fractional digits.
+    Percentile {
+        id: String,
+        field: String,
+        percentile: u8,
+        scale: u8,
+    },
 }
 
 impl Measure {
@@ -164,17 +182,21 @@ impl Measure {
             Self::Count { id }
             | Self::Sum { id, .. }
             | Self::Mean { id, .. }
-            | Self::DistinctCount { id, .. } => id,
+            | Self::DistinctCount { id, .. }
+            | Self::Ratio { id, .. }
+            | Self::Percentile { id, .. } => id,
         }
     }
 
-    /// True when a total of this measure is the total of its cells' values:
-    /// a count adds up across the cells, and a sum and a mean are computed from
-    /// the cells' sums and counts. A distinct count does not: the owners of two
-    /// districts are not the sum of each district's owners, so a dataset that
-    /// declares one computes its totals over the records.
+    /// True when a total of this measure is computed from the cells' values:
+    /// a count adds up across the cells, a sum and a mean are computed from the
+    /// cells' sums and counts, and a ratio from its operands' cell values. A
+    /// distinct count and a percentile are not: the owners of two districts are
+    /// not the sum of each district's owners, and the median of a country is
+    /// not a function of its districts' medians, so a dataset that declares one
+    /// computes its totals over the records.
     pub fn is_additive(&self) -> bool {
-        !matches!(self, Self::DistinctCount { .. })
+        !matches!(self, Self::DistinctCount { .. } | Self::Percentile { .. })
     }
 
     /// True for a measure whose value is a whole number of records or values,
@@ -184,12 +206,12 @@ impl Measure {
     }
 
     /// The value of a cell no record falls into: a count, a distinct count and
-    /// a sum are zero, and a mean has none.
+    /// a sum are zero, and a mean, a ratio and a percentile have none.
     fn empty_value(&self) -> Option<CellValue> {
         match self {
             Self::Count { .. } | Self::DistinctCount { .. } => Some(CellValue::Count(0)),
             Self::Sum { scale, .. } => Some(CellValue::Decimal(zero_decimal(*scale))),
-            Self::Mean { .. } => None,
+            Self::Mean { .. } | Self::Ratio { .. } | Self::Percentile { .. } => None,
         }
     }
 
@@ -197,11 +219,14 @@ impl Measure {
     fn admits(&self, value: &Option<CellValue>) -> bool {
         match (self, value) {
             (Self::Count { .. } | Self::DistinctCount { .. }, Some(CellValue::Count(_))) => true,
-            (Self::Sum { scale, .. }, Some(CellValue::Decimal(text)))
-            | (Self::Mean { scale, .. }, Some(CellValue::Decimal(text))) => {
-                is_decimal_text(text, *scale)
-            }
-            (Self::Mean { .. }, None) => true,
+            (
+                Self::Sum { scale, .. }
+                | Self::Mean { scale, .. }
+                | Self::Ratio { scale, .. }
+                | Self::Percentile { scale, .. },
+                Some(CellValue::Decimal(text)),
+            ) => is_decimal_text(text, *scale),
+            (Self::Mean { .. } | Self::Ratio { .. } | Self::Percentile { .. }, None) => true,
             _ => false,
         }
     }
@@ -235,16 +260,18 @@ pub fn is_decimal_text(text: &str, scale: u8) -> bool {
         }
 }
 
-/// The most characters a sum or mean over a field of `field_type` can take as a
-/// decimal string: every digit, the point when there are fractional digits, and
+/// The most characters a sum, mean or percentile over a field of `field_type` can
+/// take as a decimal string: every digit, the point when there are fractional digits, and
 /// the sign. A count, and a field that is not `int64` or `decimal`, has none.
 ///
 /// - A sum adds at most 10^19 values (one per record, bounded by an `int64` row
 ///   count), so it gains 19 integer digits over the field's `p - s` (19 for
 ///   `int64`) and keeps the field's `s` fractional digits.
-/// - A mean never exceeds the field's largest value in magnitude, so it keeps the
-///   field's integer digits, plus one when a scale below the field's rounds
+/// - A mean or percentile never exceeds the field's largest value in magnitude, so
+///   it keeps the field's integer digits, plus one when a scale below the field's rounds
 ///   99.99 up to 100, and has the measure's `scale` fractional digits.
+///
+/// A ratio has no field; [`maximum_measure_characters`] bounds it.
 ///
 /// The compiler sizes its byte bound with this, and the runtime refuses a value
 /// longer than it.
@@ -263,15 +290,73 @@ pub fn maximum_decimal_characters(
         _ => return None,
     };
     let (extra_integer_digits, scale) = match measure {
-        Measure::Count { .. } | Measure::DistinctCount { .. } => return None,
+        Measure::Count { .. } | Measure::DistinctCount { .. } | Measure::Ratio { .. } => {
+            return None
+        }
         Measure::Sum { scale, .. } => (19, usize::from(*scale)),
-        Measure::Mean { scale, .. } => (
+        Measure::Mean { scale, .. } | Measure::Percentile { scale, .. } => (
             usize::from(usize::from(*scale) < field_scale),
             usize::from(*scale),
         ),
     };
     let point = usize::from(scale > 0);
     Some(integer_digits + extra_integer_digits + scale + point + 1)
+}
+
+/// The most characters `measure` can take as a decimal string, whatever its
+/// type: [`maximum_decimal_characters`] for a sum, mean or percentile, and for a
+/// ratio a bound from its operands, found among `measures`. `field_type` gives
+/// the type of a unit Record field. A count, a distinct count, and a measure
+/// whose field or operands cannot be resolved, have none.
+///
+/// A ratio never exceeds its numerator over the smallest nonzero magnitude of
+/// its denominator, which is one unit of the denominator's scale (a count and a
+/// distinct count are whole numbers). The quotient gains one integer digit for
+/// each fractional digit of the denominator, and one more when rounding carries
+/// 99.99 up to 100.
+pub fn maximum_measure_characters(
+    measure: &Measure,
+    measures: &[Measure],
+    field_type: &dyn Fn(&str) -> Option<FieldTypeSource>,
+) -> Option<usize> {
+    let Measure::Ratio {
+        numerator,
+        denominator,
+        scale,
+        ..
+    } = measure
+    else {
+        let field = match measure {
+            Measure::Sum { field, .. }
+            | Measure::Mean { field, .. }
+            | Measure::Percentile { field, .. } => field,
+            Measure::Count { .. } | Measure::DistinctCount { .. } | Measure::Ratio { .. } => {
+                return None
+            }
+        };
+        return maximum_decimal_characters(measure, &field_type(field)?);
+    };
+    let operand_shape = |id: &str| -> Option<(usize, usize)> {
+        let operand = measures.iter().find(|candidate| candidate.id() == id)?;
+        match operand {
+            Measure::Count { .. } | Measure::DistinctCount { .. } => Some((19, 0)),
+            Measure::Sum { field, scale, .. } => {
+                let integer_digits = match field_type(field)? {
+                    FieldTypeSource::Int64 => 19,
+                    FieldTypeSource::Decimal {
+                        precision, scale, ..
+                    } => usize::from(precision).saturating_sub(usize::from(scale)),
+                    _ => return None,
+                };
+                Some((integer_digits + 19, usize::from(*scale)))
+            }
+            Measure::Mean { .. } | Measure::Ratio { .. } | Measure::Percentile { .. } => None,
+        }
+    };
+    let (numerator_digits, _) = operand_shape(numerator)?;
+    let (_, denominator_scale) = operand_shape(denominator)?;
+    let scale = usize::from(*scale);
+    Some(numerator_digits + denominator_scale + 1 + scale + usize::from(scale > 0) + 1)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

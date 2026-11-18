@@ -1160,3 +1160,487 @@ async fn a_distinct_count_is_read_live_exact_and_released_with_rounding_on_its_o
     task.abort();
     database.cleanup().await;
 }
+
+/// `registry_source` over the categories `codes`.
+fn source_with_categories(dimensions: &[&str], measures: Value, codes: &[&str]) -> Value {
+    let mut source = registry_source(dimensions, measures);
+    source["vocabularies"][0]["values"] = json!(codes);
+    source
+}
+
+fn ratio_measures() -> Value {
+    json!([
+        {"id":"records","type":"count"},
+        {"id":"amount-sum","type":"sum","field":"amount"},
+        {"id":"quantity-sum","type":"sum","field":"quantity"},
+        {"id":"amount-per-record","type":"ratio","numerator":"amount-sum","denominator":"records","scale":3},
+        {"id":"quantity-per-amount","type":"ratio","numerator":"quantity-sum","denominator":"amount-sum","scale":2},
+        {"id":"amount-per-quantity","type":"ratio","numerator":"amount-sum","denominator":"quantity-sum","scale":2},
+        {"id":"quantity-per-record","type":"ratio","numerator":"quantity-sum","denominator":"records","scale":0}
+    ])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ratio_rounds_half_away_from_zero_for_every_sign_and_a_total_is_the_ratio_of_the_totals()
+{
+    let rows: Vec<Row> = vec![
+        ("a", "2025-03-10", Some("1.00"), Some("1")),
+        ("a", "2025-03-11", Some("2.00"), Some("2")),
+        ("a", "2025-03-12", Some("3.00"), Some("3")),
+        ("a", "2025-03-13", Some("4.00"), None),
+        ("b", "2025-03-14", Some("-1.00"), Some("-1")),
+        ("b", "2025-03-15", Some("-2.00"), Some("-2")),
+        ("c", "2025-03-16", Some("4.00"), Some("-6")),
+    ];
+    let source = source_with_categories(&["category"], ratio_measures(), &["a", "b", "c", "d"]);
+    let (database, migration_task, app) = fixture_for(source, &rows).await;
+    let document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+
+    let not_applicable = (Value::Null, "not-applicable");
+    // Per category: amount-per-record, quantity-per-amount, amount-per-quantity,
+    // quantity-per-record.
+    let expected: [(&str, [(Value, &str); 4]); 5] = [
+        (
+            // 10.00 / 4; 6 / 10.00; 10.00 / 6 = 1.666..; 6 / 4 = 1.5 rounds up.
+            "a",
+            [
+                (json!("2.500"), "exact"),
+                (json!("0.60"), "exact"),
+                (json!("1.67"), "exact"),
+                (json!("2"), "exact"),
+            ],
+        ),
+        (
+            // -3.00 / 2; -3 / -3.00; -3.00 / -3; -3 / 2 = -1.5 rounds to -2.
+            "b",
+            [
+                (json!("-1.500"), "exact"),
+                (json!("1.00"), "exact"),
+                (json!("1.00"), "exact"),
+                (json!("-2"), "exact"),
+            ],
+        ),
+        (
+            // 4.00 / 1; -6 / 4.00; 4.00 / -6 = -0.666..; -6 / 1.
+            "c",
+            [
+                (json!("4.000"), "exact"),
+                (json!("-1.50"), "exact"),
+                (json!("-0.67"), "exact"),
+                (json!("-6"), "exact"),
+            ],
+        ),
+        // No records: every denominator is zero.
+        (
+            "d",
+            [
+                not_applicable.clone(),
+                not_applicable.clone(),
+                not_applicable.clone(),
+                not_applicable,
+            ],
+        ),
+        (
+            // Totals: 7 records, amount 11.00, quantity -3. The ratio of the
+            // totals is 11.00 / 7 = 1.571.., which is not the mean of the
+            // category ratios; -3 / 11.00 = -0.2727..; 11.00 / -3 = -3.666..;
+            // -3 / 7 = -0.43 rounds to zero.
+            "_T",
+            [
+                (json!("1.571"), "exact"),
+                (json!("-0.27"), "exact"),
+                (json!("-3.67"), "exact"),
+                (json!("0"), "exact"),
+            ],
+        ),
+    ];
+    let measures = [
+        "amount-per-record",
+        "quantity-per-amount",
+        "amount-per-quantity",
+        "quantity-per-record",
+    ];
+    for (category, values) in expected {
+        for (measure, (value, status)) in measures.iter().zip(values) {
+            assert_eq!(
+                cell(&document, "2025-03", Some(category), measure),
+                json!([value, status]),
+                "{category} {measure}"
+            );
+        }
+    }
+    migration_task.abort();
+    database.cleanup().await;
+
+    // Without dimensions the one cell is the total, from the base-cell path.
+    let rows: Vec<Row> = vec![
+        ("a", "2025-03-10", Some("1.00"), Some("1")),
+        ("a", "2025-03-11", Some("2.00"), Some("2")),
+    ];
+    let (database, migration_task, app) = fixture(&[], ratio_measures(), &rows).await;
+    let document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+    for (measure, value) in [
+        ("amount-per-record", "1.500"),
+        ("quantity-per-amount", "1.00"),
+        ("amount-per-quantity", "1.00"),
+        ("quantity-per-record", "2"),
+    ] {
+        assert_eq!(
+            cell(&document, "2025-03", None, measure),
+            json!([value, "exact"]),
+            "{measure}"
+        );
+    }
+    // A period without records has a zero denominator.
+    let document = body_json(live(&app, "2025-04", "2025-04", None).await).await;
+    assert_eq!(
+        cell(&document, "2025-04", None, "amount-per-record"),
+        json!([Value::Null, "not-applicable"])
+    );
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ratio_over_a_distinct_count_divides_the_unrounded_values() {
+    let parcels: Vec<Parcel> = vec![
+        ("a", "2025-03-10", Some(0), None, None),
+        ("a", "2025-03-11", Some(0), None, None),
+        ("a", "2025-03-12", Some(1), None, None),
+        ("b", "2025-03-14", Some(0), None, None),
+        ("b", "2025-03-15", Some(2), None, None),
+    ];
+    let (database, task, app) = parcel_fixture(
+        parcel_source(
+            &["category"],
+            json!([
+                {"id":"parcels","type":"count"},
+                {"id":"owners","type":"distinct-count","field":"owner"},
+                {"id":"parcels-per-owner","type":"ratio","numerator":"parcels","denominator":"owners","scale":2}
+            ]),
+        ),
+        3,
+        &parcels,
+    )
+    .await;
+    let document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+    // a: 3 parcels over 2 owners; b: 2 over 2; the total is 5 over 3 distinct
+    // owners, not over the 4 owners the categories add up to.
+    for (category, value) in [
+        ("a", json!(["1.50", "exact"])),
+        ("b", json!(["1.00", "exact"])),
+        ("c", json!([Value::Null, "not-applicable"])),
+        ("_T", json!(["1.67", "exact"])),
+    ] {
+        assert_eq!(
+            cell(&document, "2025-03", Some(category), "parcels-per-owner"),
+            value,
+            "{category}"
+        );
+    }
+    task.abort();
+    database.cleanup().await;
+}
+
+fn percentile_measures() -> Value {
+    json!([
+        {"id":"records","type":"count"},
+        {"id":"median-amount","type":"percentile","field":"amount","percentile":50,"scale":2},
+        {"id":"p10-amount","type":"percentile","field":"amount","percentile":10,"scale":2},
+        {"id":"p25-amount","type":"percentile","field":"amount","percentile":25,"scale":2},
+        {"id":"p90-amount","type":"percentile","field":"amount","percentile":90,"scale":2},
+        {"id":"median-quantity","type":"percentile","field":"quantity","percentile":50,"scale":0},
+        {"id":"median-quantity-2","type":"percentile","field":"quantity","percentile":50,"scale":2}
+    ])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_percentile_is_the_averaged_inverse_distribution_over_the_records_of_each_cell() {
+    let mut rows: Vec<Row> = Vec::new();
+    // a: the amounts 1.00 to 10.00, one null amount (left out) and the
+    // quantities 1, 2, 3.
+    let ten = [
+        "1.00", "2.00", "3.00", "4.00", "5.00", "6.00", "7.00", "8.00", "9.00", "10.00",
+    ];
+    for (index, amount) in ten.iter().enumerate() {
+        let quantity = [Some("1"), Some("2"), Some("3")]
+            .get(index)
+            .copied()
+            .flatten();
+        rows.push(("a", "2025-03-10", Some(amount), quantity));
+    }
+    rows.push(("a", "2025-03-11", None, None));
+    // b: the amounts 1.00 to 4.00 in any order, the quantities -1 and -2.
+    for (amount, quantity) in [
+        ("3.00", None),
+        ("1.00", Some("-1")),
+        ("4.00", None),
+        ("2.00", Some("-2")),
+    ] {
+        rows.push(("b", "2025-03-12", Some(amount), quantity));
+    }
+    // c: three amounts.
+    for amount in ["1.00", "2.00", "3.00"] {
+        rows.push(("c", "2025-03-13", Some(amount), None));
+    }
+    let (database, migration_task, app) =
+        fixture(&["category"], percentile_measures(), &rows).await;
+    let document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+
+    let expected: [(&str, [&str; 6]); 3] = [
+        // 1..=10: the median is (5 + 6) / 2; p10 is (1 + 2) / 2, the n q = 1
+        // case; p25 is x[3]; p90 is (9 + 10) / 2. The quantities 1, 2, 3 have
+        // the median 2.
+        ("a", ["5.50", "1.50", "3.00", "9.50", "2", "2.00"]),
+        // 1, 2, 3, 4: the median is 2.5; p10 is x[1]; p25 is (1 + 2) / 2;
+        // p90 is x[4]. The quantities -1, -2 have the median -1.5, which rounds
+        // away from zero to -2 at scale 0.
+        ("b", ["2.50", "1.00", "1.50", "4.00", "-2", "-1.50"]),
+        // 1, 2, 3: the median is 2.
+        ("c", ["2.00", "1.00", "1.00", "3.00", "", ""]),
+    ];
+    let measures = [
+        "median-amount",
+        "p10-amount",
+        "p25-amount",
+        "p90-amount",
+        "median-quantity",
+        "median-quantity-2",
+    ];
+    for (category, values) in expected {
+        for (measure, value) in measures.iter().zip(values) {
+            let want = if value.is_empty() {
+                json!([Value::Null, "not-applicable"])
+            } else {
+                json!([value, "exact"])
+            };
+            assert_eq!(
+                cell(&document, "2025-03", Some(category), measure),
+                want,
+                "{category} {measure}"
+            );
+        }
+    }
+    // The total is over all 17 amounts and 5 quantities, not over the
+    // category percentiles: the median amount is x[9] and the median quantity
+    // of -2, -1, 1, 2, 3 is 1.
+    for (measure, value) in [
+        ("median-amount", "3.00"),
+        ("p10-amount", "1.00"),
+        ("p25-amount", "2.00"),
+        ("p90-amount", "9.00"),
+        ("median-quantity", "1"),
+        ("median-quantity-2", "1.00"),
+    ] {
+        assert_eq!(
+            cell(&document, "2025-03", Some("_T"), measure),
+            json!([value, "exact"]),
+            "_T {measure}"
+        );
+    }
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+/// Hyndman and Fan definition 2 over amounts in hundredths: with the n values
+/// sorted, x[1..n], the value is x[ceil(n k / 100)], or the mean of x[j] and
+/// x[j + 1] when n k / 100 is an integer j, rounded half away from zero. The
+/// text has two fractional digits.
+fn definition_two(values: &[i64], percentile: usize) -> String {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let product = sorted.len() * percentile;
+    let hundredths = if product % 100 == 0 {
+        let sum = sorted[product / 100 - 1] + sorted[product / 100];
+        sum.signum() * ((sum.abs() + 1) / 2)
+    } else {
+        sorted[product.div_ceil(100) - 1]
+    };
+    let sign = if hundredths < 0 { "-" } else { "" };
+    format!(
+        "{sign}{}.{:02}",
+        hundredths.abs() / 100,
+        hundredths.abs() % 100
+    )
+}
+
+/// The hundredths of a seeded amount: duplicates, negatives, and odd cents, so
+/// that the average of two neighbours can fall on a half.
+fn seeded_hundredths(category: usize, index: usize) -> i64 {
+    (((index * 37 + category * 11) % 41) as i64 - 20) * 25 + ((index * 7 + category) % 5) as i64
+}
+
+fn hundredths_text(hundredths: i64) -> &'static str {
+    let sign = if hundredths < 0 { "-" } else { "" };
+    Box::leak(
+        format!(
+            "{sign}{}.{:02}",
+            hundredths.abs() / 100,
+            hundredths.abs() % 100
+        )
+        .into_boxed_str(),
+    )
+}
+
+#[test]
+fn the_reference_follows_the_definition_on_its_readable_cases() {
+    assert_eq!(definition_two(&[100, 200, 300, 400], 50), "2.50");
+    assert_eq!(definition_two(&[100, 200, 300], 50), "2.00");
+    assert_eq!(
+        definition_two(&(1..=10).map(|n| n * 100).collect::<Vec<_>>(), 10),
+        "1.50"
+    );
+    assert_eq!(definition_two(&[-1, -2], 50), "-0.02");
+    assert_eq!(definition_two(&[1, 2], 50), "0.02");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_percentile_matches_the_definition_for_every_cell_size_and_fraction() {
+    const PERCENTILES: [usize; 11] = [1, 5, 10, 25, 33, 50, 67, 75, 90, 95, 99];
+    let codes: Vec<String> = (1..=60).map(|n| format!("n{n:02}")).collect();
+    let code_refs: Vec<&str> = codes.iter().map(String::as_str).collect();
+    let mut measures = vec![json!({"id":"records","type":"count"})];
+    for percentile in PERCENTILES {
+        measures.push(json!({
+            "id": format!("p{percentile}"), "type":"percentile",
+            "field":"amount", "percentile": percentile, "scale": 2
+        }));
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    let mut by_category: Vec<Vec<i64>> = Vec::new();
+    for n in 1..=60_usize {
+        let values: Vec<i64> = (0..n).map(|index| seeded_hundredths(n, index)).collect();
+        for value in &values {
+            let code: &'static str = Box::leak(codes[n - 1].clone().into_boxed_str());
+            rows.push((code, "2025-03-10", Some(hundredths_text(*value)), None));
+        }
+        by_category.push(values);
+    }
+    let source = source_with_categories(&["category"], json!(measures), &code_refs);
+    let (database, migration_task, app) = fixture_for(source, &rows).await;
+    let document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+
+    let all: Vec<i64> = by_category.iter().flatten().copied().collect();
+    for percentile in PERCENTILES {
+        let measure = format!("p{percentile}");
+        for (index, values) in by_category.iter().enumerate() {
+            assert_eq!(
+                cell(&document, "2025-03", Some(&codes[index]), &measure),
+                json!([definition_two(values, percentile), "exact"]),
+                "n = {} percentile {percentile}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            cell(&document, "2025-03", Some("_T"), &measure),
+            json!([definition_two(&all, percentile), "exact"]),
+            "total percentile {percentile}"
+        );
+    }
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+/// A public register with a statistician who reads exact values.
+fn exact_register_source(measures: Value) -> Value {
+    let mut source = public_register_source(measures);
+    source["accessProfiles"].as_array_mut().unwrap().push(
+        json!({"id":"statistician","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+            "datasets":[{"dataset":"records-by-category","operations":["read-exact"]}]}}),
+    );
+    source["statisticalDatasets"][0]["exactReads"] = json!({"accessProfile":"analyst"});
+    source
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ratio_and_a_percentile_are_read_live_read_exact_and_released_exactly() {
+    let rows: Vec<Row> = vec![
+        ("a", "2025-03-10", Some("1.00"), None),
+        ("a", "2025-03-11", Some("2.00"), None),
+        ("a", "2025-03-12", Some("3.00"), None),
+        ("a", "2025-03-13", Some("4.00"), None),
+        ("b", "2025-03-14", Some("-1.00"), None),
+        ("b", "2025-03-15", Some("-2.00"), None),
+    ];
+    let (database, migration_task, app) = fixture_for(
+        exact_register_source(json!([
+            {"id":"records","type":"count"},
+            {"id":"amount-sum","type":"sum","field":"amount"},
+            {"id":"amount-per-record","type":"ratio","numerator":"amount-sum","denominator":"records","scale":3},
+            {"id":"median-amount","type":"percentile","field":"amount","percentile":50,"scale":2}
+        ])),
+        &rows,
+    )
+    .await;
+
+    let live_document = body_json(live(&app, "2025-03", "2025-03", None).await).await;
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/v1/statistics/records-by-category:exact?accessProfile=statistician&from=2025-03&to=2025-03")
+        .body(Body::empty())
+        .expect("request builds");
+    request
+        .extensions_mut()
+        .insert(release_claims("statistician"));
+    let exact = app.clone().call(request).await.expect("router responds");
+    assert_eq!(exact.status(), StatusCode::OK);
+    assert_eq!(body_json(exact).await["cells"], live_document["cells"]);
+
+    let published = release_request(
+        &app,
+        "POST",
+        "/v1/statistics/records-by-category/releases/2025-03/versions?accessProfile=publisher",
+        release_claims("publisher"),
+        Some("ratio-percentile-release"),
+    )
+    .await;
+    assert_eq!(
+        published.status(),
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body_bytes(published).await)
+    );
+    let read = release_request(
+        &app,
+        "GET",
+        "/v1/statistics/records-by-category/releases/2025-03/versions/1?accessProfile=reader",
+        release_claims("reader"),
+        None,
+    )
+    .await;
+    assert_eq!(read.status(), StatusCode::OK);
+    let released = body_json(read).await;
+    assert_eq!(
+        released["disclosure"],
+        json!({"method":"exact-public-values"})
+    );
+    assert_eq!(released["cells"], live_document["cells"]);
+
+    // One record or two is stated exactly; a cell with no record has no ratio
+    // and no percentile.
+    for (category, ratio, median) in [
+        ("a", json!(["2.500", "exact"]), json!(["2.50", "exact"])),
+        ("b", json!(["-1.500", "exact"]), json!(["-1.50", "exact"])),
+        (
+            "c",
+            json!([Value::Null, "not-applicable"]),
+            json!([Value::Null, "not-applicable"]),
+        ),
+        // 7.00 / 6 is not the mean of 2.5 and -1.5; the median of -2, -1, 1, 2,
+        // 3, 4 is 1.5.
+        ("_T", json!(["1.167", "exact"]), json!(["1.50", "exact"])),
+    ] {
+        assert_eq!(
+            cell(&released, "2025-03", Some(category), "amount-per-record"),
+            ratio,
+            "{category} ratio"
+        );
+        assert_eq!(
+            cell(&released, "2025-03", Some(category), "median-amount"),
+            median,
+            "{category} median"
+        );
+    }
+    migration_task.abort();
+    database.cleanup().await;
+}

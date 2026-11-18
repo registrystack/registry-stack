@@ -2987,7 +2987,7 @@ fn a_distinct_count_limits_the_dataset_to_four_dimensions() {
         .path
         .ends_with("statisticalDatasets[id=records-by-category].dimensions"));
     assert!(refusal.message.contains(
-        "a dataset with a distinct count declares at most 4 dimensions, because its totals are computed over the records, not the base cells"
+        "a dataset with a distinct count or a percentile declares at most 4 dimensions, because its totals are computed over the records, not the base cells"
     ));
     compile(&with_dimensions(
         json!([{"id":"parcels","type":"count"},{"id":"total","type":"sum","field":"amount"}]),
@@ -3123,5 +3123,337 @@ fn a_distinct_count_changes_the_definition_digest_and_its_absence_keeps_it() {
             .statistical_datasets()["records-by-category"]
             .definition_digest,
         "an unused reference field and record type do not enter a dataset's digest"
+    );
+}
+
+fn ratio_measures() -> Value {
+    json!([
+        {"id":"parcels","type":"count"},
+        {"id":"total-amount","type":"sum","field":"amount"},
+        {"id":"amount-per-parcel","type":"ratio","numerator":"total-amount","denominator":"parcels","scale":2},
+        {"id":"median-amount","type":"percentile","field":"amount","percentile":50,"scale":2}
+    ])
+}
+
+/// A diagnostic with `code` whose path ends with `path`.
+fn assert_measure_refused_at(measures: Value, code: &str, path: &str) {
+    let failure = compile(&live_measure_source(measures)).expect_err("the dataset is refused");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code && diagnostic.path.ends_with(path)),
+        "missing {code} at {path}: {:?}",
+        failure.diagnostics()
+    );
+}
+
+#[test]
+fn a_ratio_and_a_percentile_compile_with_the_scale_they_declare() {
+    let compiled = compile(&live_measure_source(ratio_measures()))
+        .expect("a live ratio and percentile compile");
+    assert_eq!(measures_of(&compiled), ratio_measures_compiled());
+    let metadata = artifact_json(&compiled, "generated/metadata/registry.json");
+    assert_eq!(
+        metadata["statisticalDatasets"][0]["measures"],
+        measures_of(&compiled)
+    );
+    let dataset = &compiled.statistical_datasets()["records-by-category"];
+    assert!(dataset.referenced_fields.contains("amount"));
+}
+
+fn ratio_measures_compiled() -> Value {
+    json!([
+        {"id":"parcels","type":"count"},
+        {"id":"total-amount","type":"sum","field":"amount","scale":2},
+        {"id":"amount-per-parcel","type":"ratio","numerator":"total-amount","denominator":"parcels","scale":2},
+        {"id":"median-amount","type":"percentile","field":"amount","percentile":50,"scale":2}
+    ])
+}
+
+#[test]
+fn a_ratio_may_name_an_operand_declared_after_it_and_a_distinct_count_or_sum() {
+    let compiled = compile(&distinct_source(json!([
+        {"id":"per-owner","type":"ratio","numerator":"parcels","denominator":"owners","scale":3},
+        {"id":"parcels","type":"count"},
+        {"id":"owners","type":"distinct-count","field":"owner"},
+        {"id":"total","type":"sum","field":"amount"},
+        {"id":"amount-per-owner","type":"ratio","numerator":"total","denominator":"owners","scale":0}
+    ])))
+    .expect("operands declared anywhere in the list are found");
+    assert_eq!(
+        measures_of(&compiled)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|measure| measure["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        [
+            "per-owner",
+            "parcels",
+            "owners",
+            "total",
+            "amount-per-owner"
+        ]
+    );
+}
+
+#[test]
+fn a_ratio_operand_is_a_count_distinct_count_or_sum_of_the_same_dataset() {
+    let base = |ratio: Value| {
+        json!([
+            {"id":"parcels","type":"count"},
+            {"id":"total","type":"sum","field":"amount"},
+            {"id":"average","type":"mean","field":"amount","scale":2},
+            {"id":"median","type":"percentile","field":"amount","percentile":50,"scale":2},
+            {"id":"other","type":"ratio","numerator":"total","denominator":"parcels","scale":2},
+            ratio
+        ])
+    };
+    let code = "breg.statistical-dataset.ratio-operand";
+    let ratio = |numerator: &str, denominator: &str| json!({"id":"r","type":"ratio","numerator":numerator,"denominator":denominator,"scale":2});
+    for bad in ["average", "median", "other", "missing", "r"] {
+        assert_measure_refused_at(base(ratio(bad, "parcels")), code, "measures[5].numerator");
+        assert_measure_refused_at(base(ratio("total", bad)), code, "measures[5].denominator");
+    }
+    // The same measure on both sides is always 1.
+    let failure = compile(&live_measure_source(base(ratio("total", "total"))))
+        .expect_err("a measure over itself is refused");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == code
+                && diagnostic.path.ends_with("measures[5].denominator")
+                && diagnostic.message.contains("total")),
+        "{:?}",
+        failure.diagnostics()
+    );
+    compile(&live_measure_source(base(ratio("total", "parcels"))))
+        .expect("a sum over a count is a ratio");
+}
+
+#[test]
+fn a_ratio_or_percentile_that_is_not_well_formed_does_not_read() {
+    for measures in [
+        json!([{"id":"r","type":"ratio","numerator":"a","denominator":"b"}]),
+        json!([{"id":"r","type":"ratio","numerator":"a","scale":1}]),
+        json!([{"id":"r","type":"ratio","denominator":"b","scale":1}]),
+        json!([{"id":"r","type":"ratio","numerator":"a","denominator":"b","scale":39}]),
+        json!([{"id":"r","type":"ratio","numerator":"a","denominator":"b","scale":-1}]),
+        json!([{"id":"r","type":"ratio","numerator":"a","denominator":"b","scale":1,"field":"amount"}]),
+        json!([{"id":"p","type":"percentile","field":"amount","scale":2}]),
+        json!([{"id":"p","type":"percentile","percentile":50,"scale":2}]),
+        json!([{"id":"p","type":"percentile","field":"amount","percentile":50}]),
+        json!([{"id":"p","type":"percentile","field":"amount","percentile":0,"scale":2}]),
+        json!([{"id":"p","type":"percentile","field":"amount","percentile":100,"scale":2}]),
+        json!([{"id":"p","type":"percentile","field":"amount","percentile":50.5,"scale":2}]),
+        json!([{"id":"p","type":"percentile","field":"amount","percentile":"50","scale":2}]),
+        json!([{"id":"p","type":"percentile","field":"amount","percentile":50,"scale":39}]),
+    ] {
+        let value = live_measure_source(measures.clone());
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(
+            parse_project_json(&bytes).is_err(),
+            "{measures} must not read"
+        );
+    }
+    for (percentile, scale) in [(1, 0), (99, 38)] {
+        compile(&live_measure_source(json!([
+            {"id":"p","type":"percentile","field":"amount","percentile":percentile,"scale":scale}
+        ])))
+        .expect("the bounds of percentile and scale are admitted");
+    }
+}
+
+#[test]
+fn a_percentile_field_must_be_int64_or_decimal_and_known() {
+    for field in ["category", "active", "event-date"] {
+        assert_measure_refused_at(
+            json!([{"id":"p","type":"percentile","field":field,"percentile":50,"scale":1}]),
+            "breg.statistical-dataset.measure-field-type",
+            "measures[0].field",
+        );
+    }
+    assert_measure_refused_at(
+        json!([{"id":"p","type":"percentile","field":"missing","percentile":50,"scale":1}]),
+        "breg.statistical-dataset.field-unknown",
+        "",
+    );
+    compile(&live_measure_source(json!([
+        {"id":"p","type":"percentile","field":"quantity","percentile":90,"scale":0}
+    ])))
+    .expect("an int64 field has percentiles");
+}
+
+#[test]
+fn every_reader_of_a_percentile_must_read_its_field() {
+    let mut value = live_measure_source(json!([
+        {"id":"p","type":"percentile","field":"amount","percentile":50,"scale":2}
+    ]));
+    value["accessProfiles"][ANALYST]["permissions"]["records"][0]["readableFields"] = json!([
+        "active",
+        "category",
+        "event-date",
+        "valid-from",
+        "valid-to",
+        "quantity"
+    ]);
+    let failure = compile(&value).expect_err("the analyst cannot read the measure field");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.statistical-dataset.measure-field-not-readable"
+            && diagnostic.message.contains("amount")
+            && diagnostic.message.contains("analyst")
+    }));
+}
+
+#[test]
+fn a_percentile_limits_the_dataset_to_four_dimensions_and_a_ratio_does_not() {
+    let with_dimensions = |measures: Value, count: usize| {
+        let mut value = live_measure_source(measures);
+        let fields = value["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        let mut names = vec![json!("category")];
+        for index in 1..count {
+            let id = format!("flag-{index}");
+            fields.push(
+                json!({"id":id,"type":"boolean","required":true,"classification":"internal"}),
+            );
+            names.push(json!(id));
+        }
+        for member in ["readableFields", "filterableFields"] {
+            let granted = value["accessProfiles"][ANALYST]["permissions"]["records"][0][member]
+                .as_array_mut()
+                .unwrap();
+            granted.extend(names.iter().skip(1).cloned());
+        }
+        value["statisticalDatasets"][0]["dimensions"] = json!(names);
+        value
+    };
+    let median = json!([
+        {"id":"parcels","type":"count"},
+        {"id":"median","type":"percentile","field":"amount","percentile":50,"scale":2}
+    ]);
+    compile(&with_dimensions(median.clone(), 4)).expect("four dimensions are accepted");
+    let failure = compile(&with_dimensions(median, 5)).expect_err("five are refused");
+    let refusal = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.statistical-dataset.non-additive-dimensions")
+        .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
+    assert!(
+        refusal.message.contains("a distinct count or a percentile"),
+        "{}",
+        refusal.message
+    );
+    compile(&with_dimensions(ratio_measures_without_percentile(), 5))
+        .expect("five dimensions over additive measures and a ratio are accepted");
+}
+
+fn ratio_measures_without_percentile() -> Value {
+    json!([
+        {"id":"parcels","type":"count"},
+        {"id":"total-amount","type":"sum","field":"amount"},
+        {"id":"amount-per-parcel","type":"ratio","numerator":"total-amount","denominator":"parcels","scale":2}
+    ])
+}
+
+#[test]
+fn a_ratio_is_additive_and_a_percentile_is_not() {
+    let compiled = compile(&live_measure_source(ratio_measures())).unwrap();
+    let measures = &compiled.statistical_datasets()["records-by-category"].measures;
+    let additive: Vec<(&str, bool)> = measures
+        .iter()
+        .map(|measure| (measure.id(), measure.is_additive()))
+        .collect();
+    assert_eq!(
+        additive,
+        [
+            ("parcels", true),
+            ("total-amount", true),
+            ("amount-per-parcel", true),
+            ("median-amount", false)
+        ]
+    );
+}
+
+#[test]
+fn a_released_dataset_with_a_ratio_or_percentile_needs_exact_values() {
+    for measure in [
+        json!({"id":"per","type":"ratio","numerator":"parcels","denominator":"parcels2","scale":2}),
+        json!({"id":"median","type":"percentile","field":"amount","percentile":50,"scale":2}),
+    ] {
+        let mut measures = vec![
+            json!({"id":"parcels","type":"count"}),
+            json!({"id":"parcels2","type":"sum","field":"quantity"}),
+        ];
+        measures.push(measure);
+        let mut published = live_measure_source(json!(measures.clone()));
+        grant(&mut published, PUBLISHER, &["publish", "read-releases"]);
+        let failure = compile(&published).expect_err("a ratio or percentile is not rounded");
+        let refusal = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "breg.statistical-dataset.measure-release-unsupported"
+            })
+            .unwrap_or_else(|| panic!("missing refusal: {:?}", failure.diagnostics()));
+        assert!(
+            refusal.message.contains("ratio") && refusal.message.contains("percentile"),
+            "{}",
+            refusal.message
+        );
+
+        let exact = public_register_source(json!(measures));
+        compile(&exact).expect("an exact-public-values release accepts both");
+    }
+}
+
+#[test]
+fn exact_values_name_a_percentile_field_that_is_not_public() {
+    let mut value = public_register_source(json!([
+        {"id":"facilities","type":"count"},
+        {"id":"median","type":"percentile","field":"amount","percentile":50,"scale":2}
+    ]));
+    compile(&value).expect("a public field is released exactly");
+    let amount = value["recordTypes"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|field| field["id"] == "amount")
+        .unwrap();
+    value["recordTypes"][0]["fields"][amount]["classification"] = json!("internal");
+    assert_exact_refusal_names(&value, "amount", "internal");
+}
+
+#[test]
+fn the_definition_digest_covers_a_ratio_and_a_percentile_and_their_absence_keeps_it() {
+    let without = live_measure_digest(json!([{"id":"parcels","type":"count"}]));
+    let digests = BTreeSet::from([
+        live_measure_digest(ratio_measures()),
+        live_measure_digest(json!([
+            {"id":"parcels","type":"count"},
+            {"id":"total-amount","type":"sum","field":"amount"},
+            {"id":"amount-per-parcel","type":"ratio","numerator":"total-amount","denominator":"parcels","scale":3},
+            {"id":"median-amount","type":"percentile","field":"amount","percentile":50,"scale":2}
+        ])),
+        live_measure_digest(json!([
+            {"id":"parcels","type":"count"},
+            {"id":"total-amount","type":"sum","field":"amount"},
+            {"id":"amount-per-parcel","type":"ratio","numerator":"total-amount","denominator":"parcels","scale":2},
+            {"id":"median-amount","type":"percentile","field":"amount","percentile":51,"scale":2}
+        ])),
+        live_measure_digest(json!([
+            {"id":"parcels","type":"count"},
+            {"id":"total-amount","type":"sum","field":"amount"},
+            {"id":"amount-per-parcel","type":"ratio","numerator":"total-amount","denominator":"parcels","scale":2},
+            {"id":"median-amount","type":"percentile","field":"quantity","percentile":50,"scale":2}
+        ])),
+        without.clone(),
+    ]);
+    assert_eq!(digests.len(), 5);
+    assert_eq!(
+        without,
+        live_measure_digest(json!([{"id":"parcels","type":"count"}])),
+        "a dataset without the new measures keeps its digest"
     );
 }
