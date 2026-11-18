@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Explicit external views and machine-only refresh over an authorised local root.
+//! Explicit external views, root refresh requests from a staff application's
+//! service client, and the in-process refresh worker.
 
 use super::*;
 use crate::external_refresh_config::ResolvedExternalRefreshPlan;
@@ -11,6 +12,13 @@ use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal, OrderDire
 use registry_platform_oidc::ActorKind;
 
 const MAX_REFRESH_BODY_BYTES: usize = 4096;
+/// How often the in-process worker looks for due or ready refresh plans.
+const REFRESH_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+/// Each worker step runs under its own deadline.
+const REFRESH_STEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+/// A plan starts no new step once its turn has run this long, so one busy
+/// plan cannot hold the others back for a whole tick.
+const REFRESH_PLAN_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub(crate) struct ExternalViewRequest {
     pub(crate) context: AuthorizedRequestContext,
@@ -61,19 +69,6 @@ pub(crate) enum ExternalViewError {
     ProjectionUnavailable(String),
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum RefreshMode {
-    Projection,
-    Labels,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct ManagedRefreshStep {
-    #[serde(default)]
-    start_sweep: bool,
-}
-
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ExternalSourceChange {
@@ -91,21 +86,28 @@ pub(crate) trait ExternalViewService: Send + Sync {
         &self,
         request: ExternalViewRequest,
     ) -> ServiceFuture<'_, Result<Value, ExternalViewError>>;
-    fn refresh(
+
+    /// Queue one admitted root for the in-process worker's next tick.
+    fn request_root_refresh(
         &self,
-        request: ExternalViewRequest,
-        mode: RefreshMode,
-    ) -> ServiceFuture<'_, Result<Value, ExternalViewError>>;
+        _request: ExternalViewRequest,
+    ) -> ServiceFuture<'_, Result<SourceChangeAdmission, ExternalViewError>> {
+        Box::pin(async { Err(ExternalViewError::Concealed) })
+    }
 
     fn managed_plan(&self, _plan: &str) -> Option<&ResolvedExternalRefreshPlan> {
         None
+    }
+
+    /// The configured plans that are due or hold ready work now.
+    fn runnable_managed_plans(&self) -> ServiceFuture<'_, Result<Vec<String>, ExternalViewError>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 
     fn managed_step(
         &self,
         _plan: String,
         _request: ExternalViewRequest,
-        _start_sweep: bool,
     ) -> ServiceFuture<'_, Result<Value, ExternalViewError>> {
         Box::pin(async { Err(ExternalViewError::Concealed) })
     }
@@ -130,11 +132,6 @@ pub(super) fn routes(registry: &CompiledRegistry) -> Router<Arc<HttpService>> {
             .route(
                 "/v1/external-views/{view}/{link}/records/{root}",
                 get(detail),
-            )
-            .route("/v1/external-views/{view}/{link}/refresh", post(refresh))
-            .route(
-                "/v1/external-views/{view}/{link}/refresh-labels",
-                post(refresh_labels),
             );
         if registry
             .external_views()
@@ -143,7 +140,10 @@ pub(super) fn routes(registry: &CompiledRegistry) -> Router<Arc<HttpService>> {
             .any(|projection| projection.mode == ExternalProjectionMode::Indexed)
         {
             app = app
-                .route("/v1/external-refresh-plans/{plan}/step", post(managed_step))
+                .route(
+                    "/v1/external-views/{view}/{link}/records/{root}/refresh",
+                    post(root_refresh),
+                )
                 .route(
                     "/v1/external-refresh-plans/{plan}/source-changes",
                     post(admit_source_change),
@@ -169,24 +169,6 @@ async fn refresh_body<T: serde::de::DeserializeOwned>(
         .await
         .ok()?;
     decode_refresh_body(&bytes)
-}
-
-fn verified_worker<'a>(
-    claims: &VerifiedRequestClaims,
-    principal_claim: &str,
-    principal: &str,
-    requester_client: &str,
-    row_claims: impl IntoIterator<Item = (&'a str, &'a BTreeSet<String>)>,
-) -> bool {
-    claims.actor_kind() == Some(ActorKind::Service)
-        && claims.principal_claim() == Some(principal_claim)
-        && claims.principal() == Some(principal)
-        && claims.requester_client() == Some(requester_client)
-        && row_claims.into_iter().all(|(name, expected)| {
-            claims
-                .direct_claim(name)
-                .is_some_and(|value| value.values() == *expected)
-        })
 }
 
 fn root_context(
@@ -227,84 +209,163 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 
-async fn managed_step(
-    State(service): State<Arc<HttpService>>,
-    Authenticated(claims): Authenticated,
-    Extension(correlation): Extension<RequestCorrelation>,
-    deadline: Option<Extension<crate::correlation::RequestDeadline>>,
-    Path(id): Path<String>,
-    request: axum::extract::Request,
-) -> Response {
-    let Some(backend) = service.external_views.as_ref() else {
-        return concealed();
-    };
-    let Some(plan) = backend.managed_plan(&id) else {
-        return concealed();
-    };
-    let worker = &plan.worker;
-    if !verified_worker(
-        &claims,
-        &worker.principal_claim,
-        &worker.principal,
-        &worker.requester_client,
-        worker
-            .row_claims
-            .iter()
-            .filter(|(name, _)| plan.target.target_claim_names.contains(*name))
-            .map(|(name, values)| (name.as_str(), values)),
-    ) || !worker
-        .required_scopes
-        .iter()
-        .all(|scope| claims.has_scope(scope))
-        || (!worker.required_purposes.is_empty()
-            && !claims
-                .purpose()
-                .is_some_and(|purpose| worker.required_purposes.contains(purpose)))
-    {
-        return concealed();
+/// A queued request answers 202 with no body; a full queue answers 429 and
+/// the caller retries later.
+fn admission_response(result: Result<SourceChangeAdmission, ExternalViewError>) -> Response {
+    no_store(match result {
+        Ok(SourceChangeAdmission::Accepted) => StatusCode::ACCEPTED.into_response(),
+        Ok(SourceChangeAdmission::AtCapacity) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "30")],
+        )
+            .into_response(),
+        Err(error) => external_view_problem(error),
+    })
+}
+
+/// One plan's turn in one worker tick: its step reports in order, and the
+/// failure that ended the turn, if any.
+pub(crate) struct ManagedRefreshTick {
+    pub(crate) plan: String,
+    pub(crate) steps: Vec<Value>,
+    pub(crate) failure: Option<ExternalViewError>,
+}
+
+/// Run one worker tick: every configured refresh plan that is due or holds
+/// ready work takes bounded steps as its configured worker identity. The
+/// worker holds no bearer token; each plan's principal, requester client,
+/// scopes, purpose and row claims come from the runtime file, and the plan's
+/// access profile admits the root list exactly as it would a request.
+#[cfg(all(test, feature = "postgres-test"))]
+pub(crate) async fn managed_refresh_tick(service: &HttpService) -> Vec<ManagedRefreshTick> {
+    refresh_tick(service, None).await.unwrap_or_default()
+}
+
+/// The in-process refresh worker. It ticks every five seconds until
+/// shutdown, and a requested shutdown stops it between steps. A tick in which
+/// every plan's turn completed records progress.
+pub(crate) async fn run_managed_refresh(
+    service: Arc<HttpService>,
+    last_success: Arc<crate::metrics::LastSuccess>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let mut interval = tokio::time::interval(REFRESH_TICK);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            change = shutdown.changed() => {
+                if change.is_err() || *shutdown.borrow() { return; }
+            }
+            _ = interval.tick() => {
+                let ticks = refresh_tick(&service, Some(&shutdown)).await;
+                if ticks.is_some_and(|ticks| ticks.iter().all(|tick| tick.failure.is_none())) {
+                    last_success.record();
+                }
+            }
+        }
     }
-    let Some(view) = service
+}
+
+/// `None` when the plan state could not be read; that failure is logged.
+async fn refresh_tick(
+    service: &HttpService,
+    shutdown: Option<&tokio::sync::watch::Receiver<bool>>,
+) -> Option<Vec<ManagedRefreshTick>> {
+    let Some(backend) = service.external_views.as_ref() else {
+        return Some(Vec::new());
+    };
+    let plans = match backend.runnable_managed_plans().await {
+        Ok(plans) => plans,
+        Err(_) => {
+            tracing::warn!(
+                reason = "unavailable",
+                "external refresh worker could not read its plans"
+            );
+            return None;
+        }
+    };
+    let stopping = || shutdown.is_some_and(|shutdown| *shutdown.borrow());
+    let mut ticks = Vec::with_capacity(plans.len());
+    for id in plans {
+        if stopping() {
+            break;
+        }
+        let mut tick = ManagedRefreshTick {
+            plan: id,
+            steps: Vec::new(),
+            failure: None,
+        };
+        let started = tokio::time::Instant::now();
+        loop {
+            let request = backend
+                .managed_plan(&tick.plan)
+                .ok_or(ExternalViewError::Concealed)
+                .and_then(|plan| worker_request(service, plan));
+            let result = match request {
+                Ok(request) => backend.managed_step(tick.plan.clone(), request).await,
+                Err(error) => {
+                    tracing::warn!(
+                        plan = %tick.plan,
+                        reason = "worker-refused",
+                        "external refresh plan's worker identity was not admitted"
+                    );
+                    Err(error)
+                }
+            };
+            match result {
+                Ok(step) => {
+                    let more = step.get("moreWork") == Some(&Value::Bool(true));
+                    tick.steps.push(step);
+                    if !more || started.elapsed() >= REFRESH_PLAN_BUDGET || stopping() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    tick.failure = Some(error);
+                    break;
+                }
+            }
+        }
+        ticks.push(tick);
+    }
+    Some(ticks)
+}
+
+/// The plan's configured worker identity, admitted to its root list through
+/// the plan's access profile as a request would be.
+fn worker_request(
+    service: &HttpService,
+    plan: &ResolvedExternalRefreshPlan,
+) -> Result<ExternalViewRequest, ExternalViewError> {
+    let claims = plan
+        .worker_claims()
+        .map_err(|_| ExternalViewError::Concealed)?;
+    let view = service
         .registry
         .external_views()
         .views
         .get(&plan.target.view)
-    else {
-        return concealed();
-    };
-    let Some(context) = root_context(
-        &service,
+        .ok_or(ExternalViewError::Concealed)?;
+    let context = root_context(
+        service,
         view,
         Operation::List,
-        Some(worker.access_profile.clone()),
+        Some(plan.worker.access_profile.clone()),
         &claims,
-        request.headers(),
-    ) else {
-        return concealed();
-    };
-    let Some(body) = refresh_body::<ManagedRefreshStep>(request).await else {
-        return invalid_request();
-    };
-    let result = backend
-        .managed_step(
-            id,
-            ExternalViewRequest {
-                context,
-                correlation,
-                view: plan.target.view.clone(),
-                link: plan.target.link.clone(),
-                root: None,
-                query: ExternalQueryMode::First(ExternalQuery {
-                    page_size: plan.page_size,
-                    ..ExternalQuery::default()
-                }),
-                deadline: refresh_deadline(deadline),
-            },
-            body.start_sweep,
-        )
-        .await;
-    no_store(match result {
-        Ok(value) => Json(value).into_response(),
-        Err(error) => external_view_problem(error),
+        &HeaderMap::new(),
+    )
+    .ok_or(ExternalViewError::Concealed)?;
+    Ok(ExternalViewRequest {
+        context,
+        correlation: RequestCorrelation::breg_created(),
+        view: plan.target.view.clone(),
+        link: plan.target.link.clone(),
+        root: None,
+        query: ExternalQueryMode::First(ExternalQuery {
+            page_size: plan.page_size,
+            ..ExternalQuery::default()
+        }),
+        deadline: tokio::time::Instant::now() + REFRESH_STEP_DEADLINE,
     })
 }
 
@@ -348,25 +409,19 @@ async fn admit_source_change(
     if !registry_adapter_core::projection_token_valid(&change.selector) {
         return invalid_request();
     }
-    let result = backend
-        .admit_source_change(id, claims, correlation, refresh_deadline(deadline), change)
-        .await;
-    no_store(match result {
-        Ok(SourceChangeAdmission::Accepted) => StatusCode::ACCEPTED.into_response(),
-        Ok(SourceChangeAdmission::AtCapacity) => (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(axum::http::header::RETRY_AFTER, "30")],
-        )
-            .into_response(),
-        Err(error) => external_view_problem(error),
-    })
+    admission_response(
+        backend
+            .admit_source_change(id, claims, correlation, refresh_deadline(deadline), change)
+            .await,
+    )
 }
 
 struct ReadTarget {
     view: String,
     link: String,
     root: Option<String>,
-    refresh: Option<RefreshMode>,
+    /// A root refresh request rather than a read.
+    refresh: bool,
 }
 
 async fn collection(
@@ -389,7 +444,7 @@ async fn collection(
             view,
             link,
             root: None,
-            refresh: None,
+            refresh: false,
         },
     )
     .await
@@ -415,20 +470,23 @@ async fn detail(
             view,
             link,
             root: Some(root),
-            refresh: None,
+            refresh: false,
         },
     )
     .await
 }
 
-async fn refresh(
+/// Queue one root for the in-process worker. The caller is a staff
+/// application's service client whose selected profile may Get the root and
+/// holds `refreshExternalProjections` for the link's projection.
+async fn root_refresh(
     State(service): State<Arc<HttpService>>,
     Authenticated(claims): Authenticated,
     Extension(correlation): Extension<RequestCorrelation>,
     deadline: Option<Extension<crate::correlation::RequestDeadline>>,
     RawQuery(raw): RawQuery,
     headers: HeaderMap,
-    Path((view, link)): Path<(String, String)>,
+    Path((view, link, root)): Path<(String, String, String)>,
 ) -> Response {
     handle(
         &service,
@@ -440,34 +498,8 @@ async fn refresh(
         ReadTarget {
             view,
             link,
-            root: None,
-            refresh: Some(RefreshMode::Projection),
-        },
-    )
-    .await
-}
-
-async fn refresh_labels(
-    State(service): State<Arc<HttpService>>,
-    Authenticated(claims): Authenticated,
-    Extension(correlation): Extension<RequestCorrelation>,
-    deadline: Option<Extension<crate::correlation::RequestDeadline>>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-    Path((view, link)): Path<(String, String)>,
-) -> Response {
-    handle(
-        &service,
-        &claims,
-        correlation,
-        deadline,
-        raw,
-        &headers,
-        ReadTarget {
-            view,
-            link,
-            root: None,
-            refresh: Some(RefreshMode::Labels),
+            root: Some(root),
+            refresh: true,
         },
     )
     .await
@@ -517,20 +549,11 @@ async fn handle(
     if context.purpose() != Some(projection.purpose.as_str()) {
         return concealed();
     }
-    let grant = if let Some(mode) = target.refresh {
+    let grant = if target.refresh {
         let Some(ids) = inventory.refresh.get(profile) else {
             return concealed();
         };
         if projection.mode != ExternalProjectionMode::Indexed || !ids.contains(&projection.id) {
-            return concealed();
-        }
-        if mode == RefreshMode::Labels
-            && (projection.cardinality != ExternalCardinality::Many
-                || !link
-                    .label
-                    .as_ref()
-                    .is_some_and(|label| ids.contains(&label.projection)))
-        {
             return concealed();
         }
         None
@@ -568,14 +591,15 @@ async fn handle(
     let Some(record_type) = inventory.record_types.get(projection.record_type.as_str()) else {
         return unavailable();
     };
+    // A root refresh takes no query beyond the selected profile.
     let allows_query = projection.mode == ExternalProjectionMode::Indexed
+        && !target.refresh
         && (!is_detail || projection.cardinality == ExternalCardinality::Many);
     let query = match plan_query(
         options.parsed.mode,
         grant,
         &record_type.fields,
         allows_query,
-        target.refresh.is_some(),
     ) {
         Ok(query) => query,
         Err(parameter) => return invalid_query_at(parameter),
@@ -592,12 +616,10 @@ async fn handle(
         query,
         deadline: refresh_deadline(deadline),
     };
-    let result = if let Some(mode) = target.refresh {
-        backend.refresh(request, mode).await
-    } else {
-        backend.read(request).await
-    };
-    no_store(match result {
+    if target.refresh {
+        return admission_response(backend.request_root_refresh(request).await);
+    }
+    no_store(match backend.read(request).await {
         Ok(value) => Json(value).into_response(),
         Err(error) => external_view_problem(error),
     })
@@ -634,10 +656,9 @@ fn plan_query(
     grant: Option<&ExternalLinkPermissionSource>,
     fields: &[crate::external_views::ExternalFieldSource],
     allows_query: bool,
-    refresh: bool,
 ) -> Result<ExternalQueryMode, &'static str> {
     let options = match mode {
-        strict_query::ParsedReadQueryMode::SkipToken { token } if allows_query || refresh => {
+        strict_query::ParsedReadQueryMode::SkipToken { token } if allows_query => {
             return Ok(ExternalQueryMode::Continue(token));
         }
         strict_query::ParsedReadQueryMode::SkipToken { .. } => return Err("$skiptoken"),
@@ -649,7 +670,7 @@ fn plan_query(
     if options.bbox.is_some() {
         return Err("bbox");
     }
-    if options.top.is_some() && !allows_query && !refresh {
+    if options.top.is_some() && !allows_query {
         return Err("$top");
     }
     let page_size = u16::try_from(options.top.unwrap_or(50))
@@ -659,7 +680,7 @@ fn plan_query(
     let equality = options
         .filter
         .map(|filter| {
-            if !allows_query || refresh {
+            if !allows_query {
                 return Err("$filter");
             }
             let FilterExpr::Predicate(FilterPredicate::Compare {
@@ -689,7 +710,7 @@ fn plan_query(
     let order = options
         .orderby
         .map(|order| {
-            if !allows_query || refresh {
+            if !allows_query {
                 return Err("$orderby");
             }
             let id = registry_platform_yaml::LocalId::new(order.field.as_str())
@@ -703,9 +724,7 @@ fn plan_query(
             })
         })
         .transpose()?;
-    if options.count.is_some()
-        && (!allows_query || refresh || !grant.is_some_and(|grant| grant.allow_count))
-    {
+    if options.count.is_some() && (!allows_query || !grant.is_some_and(|grant| grant.allow_count)) {
         return Err("$count");
     }
     Ok(ExternalQueryMode::First(ExternalQuery {
@@ -745,73 +764,126 @@ fn literal_value(field_type: ExternalFieldType, literal: Literal) -> Option<Valu
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn managed_worker_requires_the_verified_actor_and_exact_row_claim() {
-        let claims = |tenant: &str, client: &str, kind| {
-            VerifiedRequestClaims::authenticated(
-                "registry_principal",
-                "worker-principal",
-                BTreeSet::from(["registry.refresh".to_owned()]),
-                Some("consultation".to_owned()),
-                BTreeMap::from([(
-                    "tenant".to_owned(),
-                    VerifiedClaimValue::direct_string(tenant).unwrap(),
-                )]),
-            )
-            .unwrap()
-            .with_contextual_authority(
-                Some(kind),
-                Some(client.to_owned()),
-                None,
-                None,
-                BTreeMap::new(),
-            )
-            .unwrap()
-        };
-        let expected = BTreeSet::from(["allowed".to_owned()]);
-        let permits = |claims: &VerifiedRequestClaims| {
-            verified_worker(
-                claims,
-                "registry_principal",
-                "worker-principal",
-                "worker-client",
-                [("tenant", &expected)],
-            )
-        };
-        assert!(permits(&claims(
-            "allowed",
-            "worker-client",
-            ActorKind::Service
-        )));
-        assert!(!permits(&claims(
-            "outside",
-            "worker-client",
-            ActorKind::Service
-        )));
-        assert!(!permits(&claims(
-            "allowed",
-            "other-client",
-            ActorKind::Service
-        )));
-        assert!(!permits(&claims(
-            "allowed",
-            "worker-client",
-            ActorKind::Human
-        )));
-    }
-
-    #[test]
-    fn managed_step_body_is_closed_and_rejects_duplicate_instructions() {
-        let parse = decode_refresh_body::<ManagedRefreshStep>;
-        assert!(!parse(b"{}").unwrap().start_sweep);
-        assert!(parse(br#"{"startSweep":true}"#).unwrap().start_sweep);
-        assert!(parse(br#"{"scope":"outside"}"#).is_none());
-        assert!(parse(br#"{"startSweep":true,"startSweep":false}"#).is_none());
-    }
+    use crate::external_refresh_config::tests::{admitted_holder_plan, example_registry};
 
     async fn body(response: Response) -> Value {
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()
+    }
+
+    struct Ready;
+    impl ReadinessProbe for Ready {
+        fn is_ready(&self) -> ServiceFuture<'_, bool> {
+            Box::pin(async { true })
+        }
+    }
+
+    /// Worker admission reads no Record; every read is refused.
+    struct NoRecords;
+    impl RecordReadService for NoRecords {
+        fn get(
+            &self,
+            _: RecordReadRequest,
+        ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+            Box::pin(async { Err(ReadServiceError::Unavailable) })
+        }
+        fn list(
+            &self,
+            _: RecordReadRequest,
+        ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
+            Box::pin(async { Err(ReadServiceError::Unavailable) })
+        }
+        fn lookup(
+            &self,
+            _: RecordReadRequest,
+        ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+            Box::pin(async { Err(ReadServiceError::Unavailable) })
+        }
+    }
+
+    fn example_service() -> HttpService {
+        HttpService::new(
+            Arc::new(example_registry()),
+            ReadRuntimeIdentity {
+                package_revision: "package-revision".to_owned(),
+                schema_fingerprint: "schema-fingerprint".to_owned(),
+            },
+            Arc::new(NoRecords),
+            Arc::new(Ready),
+            Arc::new(
+                crate::cursor::CursorCodec::new(
+                    zeroize::Zeroizing::new(vec![7; 32]),
+                    std::time::Duration::from_secs(60),
+                )
+                .unwrap(),
+            ),
+        )
+    }
+
+    fn refused(service: &HttpService, plan: &ResolvedExternalRefreshPlan) -> bool {
+        matches!(
+            worker_request(service, plan),
+            Err(ExternalViewError::Concealed)
+        )
+    }
+
+    #[test]
+    fn the_worker_is_admitted_to_its_root_list_as_its_plan_configures() {
+        let service = example_service();
+        let request = worker_request(&service, &admitted_holder_plan()).unwrap();
+        assert_eq!(request.context.selected_profile(), "projection-refresh");
+        assert_eq!(request.view, "licence-holder-indexed");
+        assert_eq!(request.link, "holder");
+        assert!(request.root.is_none());
+    }
+
+    #[test]
+    fn a_worker_request_refuses_a_client_its_profile_does_not_admit() {
+        let service = example_service();
+        let mut plan = admitted_holder_plan();
+        plan.worker.requester_client = "staff-app".to_owned();
+        assert!(refused(&service, &plan));
+    }
+
+    #[test]
+    fn a_worker_request_refuses_a_missing_or_wrong_row_claim() {
+        let service = example_service();
+        let mut two_values = admitted_holder_plan();
+        two_values.worker.row_claims.insert(
+            "jurisdiction".to_owned(),
+            BTreeSet::from(["zone-a".to_owned(), "zone-b".to_owned()]),
+        );
+        assert!(refused(&service, &two_values), "two values for equals");
+        let mut renamed = admitted_holder_plan();
+        let values = renamed.worker.row_claims.remove("jurisdiction").unwrap();
+        renamed
+            .worker
+            .row_claims
+            .insert("region".to_owned(), values);
+        assert!(
+            refused(&service, &renamed),
+            "a claim the boundary does not use"
+        );
+        let mut missing = admitted_holder_plan();
+        missing.worker.row_claims.remove("jurisdiction");
+        assert!(refused(&service, &missing), "no jurisdiction claim");
+    }
+
+    /// The worker always acts as a service. The example's `officer` profile
+    /// lists the same root for the same purpose but admits only humans, so a
+    /// worker copying its client and scope is refused on actor kind alone.
+    #[test]
+    fn a_worker_request_refuses_a_profile_for_another_actor_kind() {
+        let service = example_service();
+        let mut plan = admitted_holder_plan();
+        plan.worker.access_profile = "officer".to_owned();
+        plan.worker.requester_client = "officer".to_owned();
+        plan.worker.required_scopes = BTreeSet::from(["registry:licensing:read".to_owned()]);
+        let officer = &service.registry.entities()["licence"].access_profiles["officer"];
+        assert_eq!(
+            crate::api::authorize_profile_claims(officer, &plan.worker_claims().unwrap()).err(),
+            Some("actor-kind-mismatched")
+        );
+        assert!(refused(&service, &plan));
     }
 
     #[tokio::test]

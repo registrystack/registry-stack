@@ -29,8 +29,9 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
     operational_log_level, select_operational_log_level, with_request_timeout_and_metrics_for_test,
-    with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, HookStateTransitionCode,
-    OperationalEvent, OperationalLogLevel, RecordTimerIterationCause, StartupError,
+    with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, ExternalViewsStage,
+    HookStateTransitionCode, OperationalEvent, OperationalLogLevel, RecordTimerIterationCause,
+    StartupError,
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_crypto::PrivateJwk;
@@ -697,6 +698,13 @@ fn expected_operational_event(
             None,
             Some(expected_background_task_stop_code(task, stop)),
         ),
+        OperationalEvent::ExternalViewsRefused(stage) => (
+            OperationalLogLevel::Error,
+            "registry_breg::startup",
+            "an external views startup stage was refused",
+            None,
+            Some(expected_external_views_stage_code(stage)),
+        ),
         OperationalEvent::RoleMode(RoleMode::Single) => (
             OperationalLogLevel::Info,
             "registry_breg::startup",
@@ -911,12 +919,29 @@ fn expected_background_task_stop_code(
         (BackgroundTask::ExternalProjectionRetention, BackgroundTaskStop::Returned) => {
             "external_projection.retention.returned"
         }
+        (BackgroundTask::ExternalRefresh, BackgroundTaskStop::Panicked) => {
+            "external_refresh.worker.panicked"
+        }
+        (BackgroundTask::ExternalRefresh, BackgroundTaskStop::Returned) => {
+            "external_refresh.worker.returned"
+        }
         (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
             "metrics.listener.panicked"
         }
         (BackgroundTask::MetricsListener, BackgroundTaskStop::Returned) => {
             "metrics.listener.returned"
         }
+    }
+}
+
+fn expected_external_views_stage_code(stage: ExternalViewsStage) -> &'static str {
+    match stage {
+        ExternalViewsStage::SourceSecrets => "external_source.secrets",
+        ExternalViewsStage::SourceLoad => "external_source.load",
+        ExternalViewsStage::StoreInstall => "external_store.install",
+        ExternalViewsStage::RefreshRegister => "external_refresh.register",
+        ExternalViewsStage::StoreStatus => "external_store.status",
+        ExternalViewsStage::RefreshStatus => "external_refresh.status",
     }
 }
 
@@ -955,6 +980,11 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     events.push(OperationalEvent::ReviewWorkerIterationFailed);
     events.push(OperationalEvent::ReviewResultLookupsUnavailable);
     events.push(OperationalEvent::MetricsQueueSampleFailed);
+    events.extend(
+        ExternalViewsStage::ALL
+            .into_iter()
+            .map(OperationalEvent::ExternalViewsRefused),
+    );
     for task in BackgroundTask::ALL {
         events.extend(
             BackgroundTaskStop::ALL

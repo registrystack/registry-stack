@@ -72,45 +72,24 @@ pub(crate) fn append(
                     );
                 }
             }
-            let refresh_admitted = |labels: bool| {
+            let refresh_admitted = |operation: Operation| {
                 is_indexed
                     && inventory.refresh.iter().any(|(profile, projections)| {
                         projections.contains(&projection.id)
-                            && (!labels
-                                || (is_many
-                                    && link.label.as_ref().is_some_and(|label| {
-                                        projections.contains(&label.projection)
-                                    })))
                             && admitted(
                                 profile,
                                 view.record_type.as_str(),
                                 projection.purpose.as_str(),
-                                Operation::List,
+                                operation,
                             )
                     })
             };
-            managed_refresh_possible |= refresh_admitted(false);
-            for (suffix, summary, labels) in [
-                (
-                    "refresh",
-                    "Refresh a bounded page of authorised local roots",
-                    false,
-                ),
-                (
-                    "refresh-labels",
-                    "Refresh labels selected from fresh authorised related rows",
-                    true,
-                ),
-            ] {
-                if refresh_admitted(labels) {
-                    paths.insert(
-                        format!("{base}/{suffix}"),
-                        refresh_operation(
-                            format!("external-{}-{}-{suffix}", view.id, link.id),
-                            summary,
-                        ),
-                    );
-                }
+            managed_refresh_possible |= refresh_admitted(Operation::List);
+            if refresh_admitted(Operation::Get) {
+                paths.insert(
+                    format!("{base}/records/{{root}}/refresh"),
+                    json!({"post": root_refresh_operation(view.id.as_str(), link.id.as_str())}),
+                );
             }
         }
     }
@@ -127,30 +106,6 @@ fn append_managed_refresh_paths(paths: &mut Map<String, Value>) {
             "required": true, "content": {"application/json": {"schema": schema}}
         })
     };
-    paths.insert("/v1/external-refresh-plans/{plan}/step".to_owned(), json!({"post": {
-        "operationId": "external-refresh-plan-step",
-        "summary": "Advance a deployment-configured external refresh plan",
-        "security": [{"bearerAuth": []}],
-        "parameters": [plan],
-        "requestBody": body(json!({"type": "object", "additionalProperties": false,
-            "properties": {"startSweep": {"type": "boolean", "default": false}}})),
-        "responses": {
-            "200": {"description": "Value-free step report", "content": {"application/json": {"schema": {
-                "type": "object", "additionalProperties": false,
-                "required": ["moreWork", "processed", "published", "reused", "unavailable",
-                    "retried", "settled", "sweepCompleted", "sweepAcquisitionFailures"],
-                "properties": {
-                    "moreWork": {"type": "boolean"}, "processed": count_schema(),
-                    "published": count_schema(), "reused": count_schema(), "unavailable": count_schema(),
-                    "retried": count_schema(), "settled": count_schema(),
-                    "sweepCompleted": {"type": "boolean"}, "sweepAcquisitionFailures": count_schema()
-                }
-            }}}},
-            "400": {"description": "Invalid step request"},
-            "404": {"description": "Plan is unavailable to the caller"},
-            "503": {"description": "The current plan or source is unavailable"}
-        }
-    }}));
     paths.insert("/v1/external-refresh-plans/{plan}/source-changes".to_owned(), json!({"post": {
         "operationId": "external-refresh-plan-source-change",
         "summary": "Admit an authenticated source change",
@@ -174,24 +129,30 @@ fn append_managed_refresh_paths(paths: &mut Map<String, Value>) {
     }}));
 }
 
-fn refresh_operation(operation_id: String, summary: &str) -> Value {
-    json!({"post": {
-        "operationId": operation_id,
-        "summary": summary,
+/// Queue one root for the in-process refresh worker. The caller is a staff
+/// application's service client, not a human officer: its selected profile
+/// must Get the root and hold `refreshExternalProjections` for the link's
+/// projection.
+fn root_refresh_operation(view: &str, link: &str) -> Value {
+    json!({
+        "operationId": format!("external-{view}-{link}-refresh"),
+        "summary": "Queue one authorised root for the refresh worker",
+        "description": "For a staff application's service client. The in-process refresh worker fetches the root's linked records on its next tick, as the refresh plan's configured identity.",
         "security": [{"bearerAuth": []}],
-        "parameters": [profile_parameter(), size_parameter(), cursor_parameter()],
+        "parameters": [
+            profile_parameter(),
+            {"name":"root","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}
+        ],
         "responses": {
-            "200": {"description": "Value-free refresh report", "content": {"application/json": {"schema": {
-                "type": "object", "additionalProperties": false,
-                "required": ["processed", "published", "reused", "unavailable"],
-                "properties": {"processed": count_schema(), "published": count_schema(),
-                    "reused": count_schema(), "unavailable": count_schema(), "nextCursor": {"type":"string"}}
-            }}}},
-            "400": {"description": "Invalid page request"},
-            "404": {"description": "Refresh is unavailable to the caller"},
-            "503": {"description": "The current source or projection is unavailable"}
+            "202": {"description": "The root is queued; a repeated request updates the queued one"},
+            "400": {"description": "Invalid refresh request"},
+            "404": {"description": "The view, root or refresh grant is unavailable to the caller"},
+            "429": {"description": "The refresh queue is at capacity", "headers": {
+                "Retry-After": {"schema": {"type": "integer", "minimum": 1}}
+            }},
+            "503": {"description": "The refresh plan, source or projection is unavailable"}
         }
-    }})
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -362,6 +323,42 @@ mod tests {
             keys(&operation["responses"]),
             BTreeSet::from(["202", "400", "404", "429", "503"]),
             "a repeated source change is accepted again, never a conflict"
+        );
+    }
+
+    #[test]
+    fn the_in_process_worker_leaves_only_source_changes_on_the_plan_surface() {
+        let mut paths = Map::new();
+        append_managed_refresh_paths(&mut paths);
+        assert_eq!(
+            paths.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["/v1/external-refresh-plans/{plan}/source-changes"],
+            "no caller can drive a refresh plan step over HTTP"
+        );
+    }
+
+    #[test]
+    fn a_root_refresh_queues_one_root_and_returns_no_body() {
+        let operation = root_refresh_operation("view", "link");
+        assert_eq!(operation["operationId"], "external-view-link-refresh");
+        assert!(operation.get("requestBody").is_none());
+        assert_eq!(
+            operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|parameter| parameter["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["accessProfile", "root"]
+        );
+        assert_eq!(
+            keys(&operation["responses"]),
+            BTreeSet::from(["202", "400", "404", "429", "503"])
+        );
+        assert!(operation["responses"]["202"].get("content").is_none());
+        assert_eq!(
+            operation["responses"]["429"]["headers"]["Retry-After"]["schema"]["minimum"],
+            1
         );
     }
 }

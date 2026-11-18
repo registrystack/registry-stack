@@ -637,9 +637,10 @@ pub(crate) async fn claim_plan(
     }))
 }
 
-/// Coalesce a manual sweep request with any due or active run. The active
-/// lease is not replaced, so a request cannot steal an in-flight step.
-pub(crate) async fn request_sweep(
+/// Postpone a plan whose configured projection is no longer bound, so the
+/// worker reports it once per plan interval rather than on every tick. Its
+/// queued work waits with it. A plan another worker holds is left alone.
+pub(crate) async fn defer_plan(
     transaction: &GuardedTransaction<'_>,
     plan_id: &str,
     authority_digest: &str,
@@ -647,20 +648,30 @@ pub(crate) async fn request_sweep(
     if !valid_key(plan_id) || !valid_key(authority_digest) {
         return Err(QueueError::Invalid);
     }
-    transaction
+    let row = transaction
         .transaction()
-        .execute(
-            "UPDATE registry_internal.registry_external_refresh_plans
-             SET reconciliation_due=true,
-                 reconciliation_generation=reconciliation_generation+CASE
-                     WHEN sweep_phase='complete' AND next_due_at>clock_timestamp() THEN 1 ELSE 0 END,
-                 next_due_at=least(next_due_at,clock_timestamp()),updated_at=clock_timestamp()
-             WHERE plan_id=$1 AND authority_digest=$2 AND active",
+        .query_one(
+            "WITH deferred AS (
+                 UPDATE registry_internal.registry_external_refresh_plans
+                 SET next_due_at=clock_timestamp()+make_interval(secs => interval_seconds::double precision),
+                     last_attempt_at=clock_timestamp(),last_attempt_outcome='invalid-binding',
+                     updated_at=clock_timestamp()
+                 WHERE plan_id=$1 AND authority_digest=$2 AND active
+                   AND (lease_expires_at IS NULL OR lease_expires_at<=clock_timestamp())
+                 RETURNING plan_id,plan_generation,next_due_at
+             ), postponed AS (
+                 UPDATE registry_internal.registry_external_refresh_work work
+                 SET ready_at=greatest(work.ready_at,deferred.next_due_at)
+                 FROM deferred
+                 WHERE work.plan_id=deferred.plan_id AND work.plan_generation=deferred.plan_generation
+                 RETURNING 1
+             )
+             SELECT count(*) FROM deferred",
             &[&plan_id, &authority_digest],
         )
         .await
-        .map(|changed| changed == 1)
-        .map_err(|_| QueueError::Unavailable)
+        .map_err(|_| QueueError::Unavailable)?;
+    Ok(row.get::<_, i64>(0) == 1)
 }
 
 /// Recheck the plan fence in the transaction that precedes acquisition or
@@ -1433,7 +1444,7 @@ CREATE TABLE IF NOT EXISTS registry_internal.registry_external_refresh_plans (
     next_turn text NOT NULL DEFAULT 'targets' CHECK (next_turn IN ('targets','sweep')),
     last_attempt_at timestamptz,
     last_attempt_outcome text CHECK (last_attempt_outcome IS NULL OR last_attempt_outcome IN
-        ('targets','sweep-page','sweep-complete','sweep-with-failures','idle')),
+        ('targets','sweep-page','sweep-complete','sweep-with-failures','idle','invalid-binding')),
     last_completed_at timestamptz,
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CONSTRAINT registry_external_refresh_plan_lease_pair CHECK ((lease_token IS NULL)=(lease_expires_at IS NULL))
@@ -1479,11 +1490,11 @@ BEGIN
                        WHERE field IS NULL OR octet_length(field) NOT BETWEEN 1 AND 1024)
     ) THEN RETURN NULL; END IF;
 
-    -- One statement queues every matching Record for every active plan. Plan
-    -- rows are read without a lock, so concurrent writers on any plans do not
-    -- wait on each other; capacity is counted once per plan, which lets
-    -- concurrent writers overshoot max_pending by their own batch at most.
-    -- A target already queued takes no new capacity.
+    -- One statement queues every matching Record for every active plan.
+    -- Admitted writers read plan rows without a lock, so concurrent writers
+    -- on any plans do not wait on each other; capacity is counted once per
+    -- plan, which lets concurrent writers overshoot max_pending by their own
+    -- batch at most. A target already queued takes no new capacity.
     WITH matched AS MATERIALIZED (
         SELECT DISTINCT inventory.plan_id,inventory.plan_generation,inventory.max_pending,
                ttl.seconds,input.record_id,'local:'||input.record_id::text AS target
@@ -1525,10 +1536,21 @@ BEGIN
         RETURNING 1
     ), refused AS (
         -- A Record the full queue refused is reconciled by the next sweep.
+        -- Refused writers lock their plan rows in plan order, so two of them
+        -- never deadlock, and hold each bump until they commit: a sweep that
+        -- starts later re-reads the plan row after this Record is visible,
+        -- and a sweep already running sees the higher generation and runs
+        -- again. Every refused writer bumps, even on a plan already flagged.
+        -- The lock is NO KEY UPDATE: it still holds off a sweep start, while
+        -- an admitted writer's foreign-key check on the same plan row does
+        -- not wait on it.
         UPDATE registry_internal.registry_external_refresh_plans plan
         SET reconciliation_due=true,reconciliation_generation=reconciliation_generation+1,
             next_due_at=least(next_due_at,clock_timestamp()),updated_at=clock_timestamp()
-        WHERE plan.plan_id IN (SELECT plan_id FROM admitted WHERE NOT admit)
+        WHERE plan.plan_id IN (
+            SELECT locked.plan_id FROM registry_internal.registry_external_refresh_plans locked
+            WHERE locked.plan_id IN (SELECT plan_id FROM admitted WHERE NOT admit)
+            ORDER BY locked.plan_id FOR NO KEY UPDATE)
         RETURNING 1
     )
     SELECT count(*) INTO captured FROM queued;
@@ -1696,6 +1718,28 @@ mod tests {
         assert!(purge.contains("work.plan_generation<>plan.plan_generation"));
         assert!(purge.contains("WHERE reconcile"));
         assert!(purge.contains("plan.updated_at<=clock_timestamp()-interval '24 hours'"));
+    }
+
+    #[test]
+    fn capture_flags_refused_plans_in_plan_order() {
+        let capture = INSTALL_SQL
+            .split("CREATE OR REPLACE FUNCTION registry_internal.capture_external_refresh_records")
+            .nth(1)
+            .unwrap()
+            .split("CREATE OR REPLACE FUNCTION")
+            .next()
+            .unwrap();
+        let refused = capture.split("refused AS (").nth(1).unwrap();
+        assert!(
+            refused.contains("ORDER BY locked.plan_id FOR NO KEY UPDATE"),
+            "writers refused on several plans lock them in one order: {refused}"
+        );
+        assert!(!refused.contains("SKIP LOCKED"), "{refused}");
+    }
+
+    #[test]
+    fn a_plan_deferred_for_an_invalid_binding_is_a_recorded_outcome() {
+        assert!(INSTALL_SQL.contains("'invalid-binding'"));
     }
 }
 
@@ -2657,6 +2701,220 @@ mod postgres_tests {
             .unwrap()
             .get(0);
         assert_eq!(queued, 4);
+        fixture.cleanup().await;
+    }
+
+    /// A writer refused at capacity keeps the plan row it flagged until it
+    /// commits. A sweep cannot start between the first refused writer's
+    /// commit and the second's, so the sweep that reconciles both reads the
+    /// second writer's Record or sees its reconciliation generation bump.
+    #[tokio::test]
+    async fn a_writer_refused_at_capacity_holds_its_plan_flag_until_it_commits() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let fields = BTreeSet::from(["subject-key".to_owned()]);
+        let mut plan = registration(&fixture, "plan", "authority", vec![scope.epoch]);
+        plan.max_pending = 1;
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, &[plan]).await.unwrap();
+        assert_eq!(
+            capture_local_record(tx.transaction(), "local-record", Uuid::new_v4(), &fields)
+                .await
+                .unwrap(),
+            1
+        );
+        tx.transaction()
+            .execute(
+                "UPDATE registry_internal.registry_external_refresh_plans
+                 SET reconciliation_due=false,next_due_at=clock_timestamp()",
+                &[],
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        const GENERATION: &str = "SELECT reconciliation_generation
+             FROM registry_internal.registry_external_refresh_plans WHERE plan_id='plan'";
+        let before: i64 = fixture
+            .migration
+            .query_one(GENERATION, &[])
+            .await
+            .unwrap()
+            .get(0);
+        // The fixture pool holds two runtime connections; the worker reuses
+        // the first writer's connection after that writer commits.
+        drop(runtime);
+
+        let mut first_runtime = fixture.pool.get().await.unwrap();
+        let mut second_runtime = fixture.pool.get().await.unwrap();
+        let first = transaction(&mut first_runtime, &registry, &fixture.expected).await;
+        assert_eq!(
+            capture_local_record(first.transaction(), "local-record", Uuid::new_v4(), &fields)
+                .await
+                .unwrap(),
+            0,
+            "the full queue refuses the first writer"
+        );
+        let second = transaction(&mut second_runtime, &registry, &fixture.expected).await;
+        let second_pid: i32 = second
+            .transaction()
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .unwrap()
+            .get(0);
+        let second_record = Uuid::new_v4();
+        let second_capture =
+            capture_local_record(second.transaction(), "local-record", second_record, &fields);
+        let commit_first = async {
+            let waited = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let waiting: bool = fixture
+                        .database
+                        .admin
+                        .query_one("SELECT cardinality(pg_blocking_pids($1))>0", &[&second_pid])
+                        .await
+                        .unwrap()
+                        .get(0);
+                    if waiting {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .is_ok();
+            first.commit().await.unwrap();
+            waited
+        };
+        let (second_captured, waited) = tokio::join!(second_capture, commit_first);
+        assert!(waited, "the second refused writer waits for the first");
+        assert_eq!(
+            second_captured,
+            Ok(0),
+            "the full queue refuses the second writer"
+        );
+
+        // The worker cannot start a sweep until the second writer commits.
+        let worker = transaction(&mut first_runtime, &registry, &fixture.expected).await;
+        worker
+            .transaction()
+            .batch_execute("SET LOCAL lock_timeout='200ms'")
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                claim_plan(&worker, "plan", "authority", Duration::from_secs(120)).await,
+                Err(QueueError::Unavailable)
+            ),
+            "a sweep start waits on the second writer's flag"
+        );
+        worker.rollback().await.unwrap();
+        second.commit().await.unwrap();
+        drop(first_runtime);
+        drop(second_runtime);
+        let after: i64 = fixture
+            .migration
+            .query_one(GENERATION, &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            after,
+            before + 2,
+            "each refused writer bumps the generation"
+        );
+        fixture.cleanup().await;
+    }
+
+    /// A refused writer's plan lock does not stop an admitted writer on the
+    /// same plan from queueing its Record: the admitted writer's reference to
+    /// the plan row does not wait on the flag, while a sweep start still does.
+    #[tokio::test]
+    async fn an_admitted_writer_does_not_wait_on_a_refused_writer_of_its_plan() {
+        let registry = super::super::external_view_query::tests::registry();
+        let fixture = Activated::new(&registry).await;
+        let scope = fixture
+            .bind(&registry, "projection", "binding", "grant", 60)
+            .await
+            .unwrap();
+        let fields = BTreeSet::from(["subject-key".to_owned()]);
+        let mut plan = registration(&fixture, "plan", "authority", vec![scope.epoch]);
+        plan.max_pending = 1;
+        let mut runtime = fixture.pool.get().await.unwrap();
+        let tx = transaction(&mut runtime, &registry, &fixture.expected).await;
+        register_plans(&tx, &[plan]).await.unwrap();
+        tx.commit().await.unwrap();
+        drop(runtime);
+
+        let mut first_runtime = fixture.pool.get().await.unwrap();
+        let mut second_runtime = fixture.pool.get().await.unwrap();
+        // The first writer fills the plan's one slot and is refused for its
+        // second Record, so it holds the plan flag until it commits.
+        let first = transaction(&mut first_runtime, &registry, &fixture.expected).await;
+        let capture = |record_id| LocalRecordCapture {
+            entity_id: "local-record".to_owned(),
+            record_id,
+            changed_fields: fields.clone(),
+        };
+        assert_eq!(
+            capture_local_records(
+                first.transaction(),
+                &[capture(Uuid::new_v4()), capture(Uuid::new_v4())]
+            )
+            .await,
+            Ok(1)
+        );
+        // The second writer still sees the slot free and is admitted.
+        let second = transaction(&mut second_runtime, &registry, &fixture.expected).await;
+        second
+            .transaction()
+            .batch_execute("SET LOCAL lock_timeout='200ms'")
+            .await
+            .unwrap();
+        assert_eq!(
+            capture_local_record(
+                second.transaction(),
+                "local-record",
+                Uuid::new_v4(),
+                &fields
+            )
+            .await,
+            Ok(1),
+            "an admitted writer does not wait on the refused writer's plan lock"
+        );
+        second.commit().await.unwrap();
+
+        let worker = transaction(&mut second_runtime, &registry, &fixture.expected).await;
+        worker
+            .transaction()
+            .batch_execute("SET LOCAL lock_timeout='200ms'")
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                claim_plan(&worker, "plan", "authority", Duration::from_secs(120)).await,
+                Err(QueueError::Unavailable)
+            ),
+            "a sweep start waits on the refused writer's flag"
+        );
+        worker.rollback().await.unwrap();
+        first.commit().await.unwrap();
+        drop(first_runtime);
+        drop(second_runtime);
+        let queued: i64 = fixture
+            .migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_external_refresh_work",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(queued, 2, "both admitted Records are queued");
         fixture.cleanup().await;
     }
 

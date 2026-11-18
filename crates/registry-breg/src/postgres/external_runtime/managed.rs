@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Durable refresh steps driven by an admitted worker, one bounded unit at a time.
+//! Durable refresh steps run by the in-process worker, one bounded unit at a time.
 
 use super::*;
 use crate::api::external_views::{ExternalSourceChange, SourceChangeAdmission};
@@ -14,6 +14,7 @@ use queue::{ClaimedTarget, QueueError, Settlement, StepKind, SweepCheckpoint, Wo
 const MAX_PENDING: i32 = 10_000;
 const STEP: &str = "external-refresh-plan-step";
 const SOURCE_CHANGE: &str = "external-refresh-plan-source-change";
+const ROOT_REFRESH: &str = "external-projection-refresh";
 
 fn unavailable<T>(_: T) -> ExternalViewError {
     ExternalViewError::Unavailable
@@ -268,6 +269,137 @@ impl PostgresExternalViewService {
         Ok(())
     }
 
+    pub(crate) fn has_managed_refresh(&self) -> bool {
+        !self.managed_refresh.is_empty()
+    }
+
+    /// The configured plans that are due or hold ready work and whose lease
+    /// is free.
+    pub(super) async fn run_runnable_managed_plans(&self) -> Result<Vec<String>> {
+        if self.managed_refresh.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut session = self.session().await?;
+        let transaction = self
+            .managed_transaction(&mut session, Instant::now() + Duration::from_secs(10))
+            .await?;
+        let mut runnable = Vec::new();
+        for (id, plan) in &self.managed_refresh {
+            if queue::has_ready_work(&transaction, id, &plan.authority_digest)
+                .await
+                .map_err(unavailable)?
+            {
+                runnable.push(id.clone());
+            }
+        }
+        transaction.rollback().await.map_err(unavailable)?;
+        session.disarm();
+        Ok(runnable)
+    }
+
+    /// Queue one root for the in-process worker. The caller is a staff
+    /// application's service client whose selected profile already passed
+    /// the root's Get boundary and holds the link projection's refresh grant.
+    /// The root's link key is upserted as a source change of the plan that
+    /// refreshes the link, so the worker's next step fetches it under the
+    /// plan's own identity. A root without a usable key queues nothing.
+    pub(super) async fn run_root_refresh(
+        &self,
+        request: ExternalViewRequest,
+    ) -> Result<SourceChangeAdmission> {
+        if !profile_is_keyed(self.audit.profile()) {
+            return Err(ExternalViewError::Unavailable);
+        }
+        let root = request.root.ok_or(ExternalViewError::Concealed)?;
+        let entity = self
+            .registry
+            .external_views()
+            .views
+            .get(&request.view)
+            .ok_or(ExternalViewError::Concealed)?
+            .record_type
+            .as_str();
+        let claims =
+            strict_claim_context(&self.registry, &request.context, entity).map_err(unavailable)?;
+        let target = root.to_string();
+        let attempt = begin_pre_io_audit(
+            &self.audit,
+            &self.expected,
+            &claims,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: HttpMethod::Post,
+                operation_id: ROOT_REFRESH,
+                target_record: Some(&target),
+                refusal_reason: None,
+                correlation: &request.correlation,
+            },
+        )
+        .await
+        .map_err(unavailable)?;
+        // The link's plan and its worker are looked up after the attempt, so
+        // a refusal here is audited like any other answer to the caller.
+        let result = match self.plan(&request, Some(RefreshMode::Projection)) {
+            Ok(plan) => match self.managed_refresh.values().find(|config| {
+                config.target.view == request.view && config.target.link == request.link
+            }) {
+                Some(config) => {
+                    self.queue_root(config, &request, &plan, &claims, root)
+                        .await
+                }
+                None => Err(ExternalViewError::Unavailable),
+            },
+            Err(error) => Err(error),
+        };
+        if !attempt.is_answered() {
+            self.terminal_for(
+                &request.context,
+                &request.correlation,
+                Some(entity),
+                request.root,
+                ROOT_REFRESH,
+                HttpMethod::Post,
+                matches!(result, Ok(SourceChangeAdmission::Accepted)),
+            )
+            .await?;
+        }
+        result
+    }
+
+    async fn queue_root(
+        &self,
+        config: &ResolvedExternalRefreshPlan,
+        request: &ExternalViewRequest,
+        plan: &Plan<'_>,
+        claims: &ClaimContext,
+        root: Uuid,
+    ) -> Result<SourceChangeAdmission> {
+        let mut session = self.session().await?;
+        let transaction = self
+            .transaction(&mut session, claims, request.deadline)
+            .await?;
+        let key = RootKeys::new(plan)?
+            .for_root(&transaction, root)
+            .await?
+            .ok_or(ExternalViewError::Concealed)?;
+        transaction.commit().await.map_err(unavailable)?;
+        session.disarm();
+        drop(session);
+        let Some(selector) = key.filter(|key| store::valid_key(key) && projection_token_valid(key))
+        else {
+            return Ok(SourceChangeAdmission::Accepted);
+        };
+        self.store_source_change(
+            config,
+            request.deadline,
+            ExternalSourceChange {
+                projection: plan.projection.id.to_string(),
+                selector,
+            },
+        )
+        .await
+    }
+
     async fn managed_transaction<'a>(
         &self,
         session: &'a mut QueryCancellationGuard,
@@ -488,7 +620,6 @@ impl PostgresExternalViewService {
         &self,
         id: &str,
         request: ExternalViewRequest,
-        start_sweep: bool,
     ) -> Result<Value> {
         let config = self
             .managed_refresh
@@ -512,9 +643,7 @@ impl PostgresExternalViewService {
         )
         .await
         .map_err(unavailable)?;
-        let result = self
-            .step(config, &request, &claims, &primary, start_sweep)
-            .await;
+        let result = self.step(config, &request, &claims, &primary).await;
         if !attempt.is_answered() {
             self.terminal(&request, &primary, STEP, HttpMethod::Post, result.is_ok())
                 .await?;
@@ -528,7 +657,6 @@ impl PostgresExternalViewService {
         request: &ExternalViewRequest,
         claims: &ClaimContext,
         primary: &Plan<'_>,
-        start_sweep: bool,
     ) -> Result<StepReport> {
         let labels = config
             .refresh_labels
@@ -538,14 +666,23 @@ impl PostgresExternalViewService {
         let transaction = self
             .managed_transaction(&mut session, request.deadline)
             .await?;
-        let scopes = self.managed_scopes(&transaction, config).await?;
-        if start_sweep
-            && !queue::request_sweep(&transaction, &config.id, &config.authority_digest)
-                .await
-                .map_err(unavailable)?
-        {
-            return Err(ExternalViewError::Unavailable);
-        }
+        let scopes = match self.managed_scopes(&transaction, config).await {
+            Ok(scopes) => scopes,
+            // A withdrawn or purged scope cannot step until the projection is
+            // bound again, so the plan waits one interval instead of failing
+            // on every tick.
+            Err(ExternalViewError::ProjectionUnavailable(projection)) => {
+                // A plan another replica holds is left to that lease holder.
+                let _deferred =
+                    queue::defer_plan(&transaction, &config.id, &config.authority_digest)
+                        .await
+                        .map_err(unavailable)?;
+                transaction.commit().await.map_err(unavailable)?;
+                session.disarm();
+                return Err(ExternalViewError::ProjectionUnavailable(projection));
+            }
+            Err(error) => return Err(error),
+        };
         let Some(lease) = queue::claim_plan(
             &transaction,
             &config.id,
