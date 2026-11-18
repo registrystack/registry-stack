@@ -275,6 +275,13 @@ client.statisticsExact('population', '2025-01', '2025-03', 'reader', 'csv').then
 client.statisticsExact('population', '2025-01', '2025-03')
 // @ts-expect-error Both period bounds are required.
 client.statisticsExact('population', '2025-01')
+client.statisticsReleaseDryRun('population', '2025-01', 'provisional', 'publisher').then((raw) => raw.reprDigest?.toUpperCase())
+// @ts-expect-error The dry run takes no idempotency key.
+client.statisticsReleaseDryRun('population', '2025-01', 'final', 'publisher', 'key')
+// @ts-expect-error The release status is a closed vocabulary.
+client.statisticsReleaseDryRun('population', '2025-01', 'draft', 'publisher')
+// @ts-expect-error The access profile is required.
+client.statisticsReleaseDryRun('population', '2025-01', 'final')
 
 const once = new BaseRegistryClient({
   baseUrl: 'https://registry.example.test/',

@@ -935,6 +935,7 @@ export declare class BaseRegistryClient {
   statisticsReleaseVersion(dataset: string, period: string, version: SafeInteger, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
   statisticsReleaseSeries(dataset: string, from: string, to: string, selection: StatisticsReleaseSelection, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
   statisticsPublish(dataset: string, period: string, status: StatisticsReleaseStatus, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
+  statisticsReleaseDryRun(dataset: string, period: string, status: StatisticsReleaseStatus, accessProfile: string): Promise<RawOutcome>
   statisticsWithdraw(dataset: string, period: string, version: SafeInteger, reason: StatisticsWithdrawalReason, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | null, request?: ReadRequestOptions): Promise<BRegMetadata>
   recordSchema(recordTypeIdentifier: string, accessProfile?: string | null, request?: ReadRequestOptions): Promise<RawOutcome>

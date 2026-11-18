@@ -1724,6 +1724,39 @@ impl BaseRegistryClient {
         .await
     }
 
+    /// POST one statistics JSON body that stores nothing: no idempotency key,
+    /// no retry. The served representation digest is required and checked.
+    pub(crate) async fn statistics_post_unkeyed_json(
+        &self,
+        segments: &[&str],
+        pairs: &[(String, String)],
+        body: Vec<u8>,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        let url = self.url_with_query(segments, pairs)?;
+        let builder = self
+            .transport
+            .http
+            .request(Method::POST, url)
+            .header(ACCEPT, APPLICATION_JSON)
+            .header(CONTENT_TYPE, APPLICATION_JSON)
+            .body(body);
+        let builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        let (wire, representation_digest) = self
+            .statistics_wire(response, StatusCode::OK, APPLICATION_JSON, true, true)
+            .await?;
+        crate::strict_json::from_slice(&wire.body)
+            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+        Ok(BRegComplete {
+            value: BRegRawDocument::with_representation_digest(
+                wire.media_type,
+                wire.body,
+                representation_digest,
+            ),
+            metadata: wire.metadata,
+        })
+    }
+
     /// POST one fixed ingestion-run JSON exchange without retry or link
     /// following. Ingestion routes carry no Idempotency-Key header: a resubmitted
     /// chunk is bound by the run's announced digests instead. A `content_type`

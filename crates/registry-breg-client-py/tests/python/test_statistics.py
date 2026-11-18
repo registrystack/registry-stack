@@ -215,6 +215,17 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(json.loads(self.requests[9][4]), {"status": "final"})
         self.assertEqual(self.requests[9][3], "caller-owned-key")
         self.assertEqual(json.loads(self.requests[10][4]), {"reason": "disclosure-risk"})
+        dry_run = self.client.statistics_release_dry_run(
+            "enrolments", "2025-01", "provisional", "publisher"
+        )
+        self.assertEqual(dry_run["media_type"], "application/json")
+        self.assertEqual(self.requests[11][0], "POST")
+        self.assertEqual(
+            self.requests[11][1],
+            "/v1/statistics/enrolments/releases/2025-01/versions:dry-run?accessProfile=publisher",
+        )
+        self.assertEqual(json.loads(self.requests[11][4]), {"status": "provisional"})
+        self.assertIsNone(self.requests[11][3])
         count = len(self.requests)
         with self.assertRaises(BaseRegistryClientError):
             self.client.statistics_release_version("enrolments", "2025-01", 0)
@@ -247,6 +258,18 @@ class StatisticsTests(unittest.TestCase):
         ):
             with self.assertRaises(BaseRegistryClientError):
                 invalid_period_call()
+        for invalid_dry_run in (
+            ("Bad Dataset", "2025-01", "final", "publisher"),
+            ("enrolments", "2025-99", "final", "publisher"),
+            ("enrolments", "2025-01", "final", "bad profile"),
+            ("enrolments", "2025-01", "unknown", "publisher"),
+        ):
+            with self.assertRaises(BaseRegistryClientError):
+                self.client.statistics_release_dry_run(*invalid_dry_run)
+        with self.assertRaises(TypeError):
+            self.client.statistics_release_dry_run(
+                "enrolments", "2025-01", "final", "publisher", "unexpected-key"
+            )
         self.assertEqual(len(self.requests), after_canonical_periods)
 
         for invalid_cache_read in (
@@ -290,6 +313,13 @@ class StatisticsTests(unittest.TestCase):
             )
         self.assertEqual(missing_digest.exception.code, "representation-digest")
 
+        for digest_dataset in ("digest-missing", "digest-mismatch"):
+            with self.assertRaises(BaseRegistryClientError) as dry_run_digest:
+                self.client.statistics_release_dry_run(
+                    digest_dataset, "2025-01", "final", "publisher"
+                )
+            self.assertEqual(dry_run_digest.exception.code, "representation-digest")
+
         with self.assertRaises(BaseRegistryClientError) as mismatched_digest:
             self.client.statistics_withdraw(
                 "digest-mismatch", "2025-01", 7, "source-data-error",
@@ -311,6 +341,15 @@ class StatisticsTests(unittest.TestCase):
             self.client.statistics_publish("release-refused", "2025-01", "final", "publisher", "refusal-key")
         self.assertEqual(refused.exception.code, "statistical_dataset.release_refused")
         self.assertEqual(refused.exception.refusal_code, "period-not-ended")
+
+        with self.assertRaises(BaseRegistryClientError) as dry_run_refused:
+            self.client.statistics_release_dry_run(
+                "release-refused", "2025-01", "final", "publisher"
+            )
+        self.assertEqual(
+            dry_run_refused.exception.code, "statistical_dataset.release_refused"
+        )
+        self.assertEqual(dry_run_refused.exception.refusal_code, "period-not-ended")
 
         with self.assertRaises(BaseRegistryClientError) as conflict:
             self.client.statistics_publish("version-conflict", "2025-01", "final", "publisher", "conflict-key")

@@ -2013,6 +2013,28 @@ impl BaseRegistryClient {
         raw_value(py, &value.value, &value.metadata)
     }
 
+    fn statistics_release_dry_run<'py>(
+        &self,
+        py: Python<'py>,
+        dataset: &str,
+        period: &str,
+        status: &str,
+        access_profile: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let status = release_status(py, status)?;
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.statistics_release_dry_run(
+                    dataset,
+                    period,
+                    status,
+                    access_profile,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn statistics_withdraw<'py>(
         &self,
