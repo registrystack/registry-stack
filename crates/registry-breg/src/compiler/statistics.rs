@@ -317,22 +317,19 @@ pub(super) fn compile(
                     _ => None,
                 })
                 .collect();
-            // Two released sums over the same records whose dimensions nest
-            // let a reader subtract one release from the other and isolate a
-            // finer cell than either protects.
+            // Any two releases of a sum of one field over one unit share a
+            // total, at least the grand total, and the totals rule sees one
+            // dataset only: a reader could subtract the published cells of one
+            // from that total and recover a cell the other withholds. Every
+            // sum of a field over a unit is released by one dataset.
             for earlier in &sum_releases {
-                let nested = earlier.unit == source.unit
-                    && earlier.population == source.population
-                    && !earlier.sum_fields.is_disjoint(&sum_fields)
-                    && (earlier.dimensions.iter().all(|d| dimensions.contains(d))
-                        || dimensions.iter().all(|d| earlier.dimensions.contains(d)));
-                if nested {
+                if earlier.unit == source.unit && !earlier.sum_fields.is_disjoint(&sum_fields) {
                     errors.push(error(
-                        "breg.statistical-dataset.sum-release-nested",
+                        "breg.statistical-dataset.sum-field-released-twice",
                         &root,
                         &source.id,
                         &format!(
-                            "its dimensions nest with those of `{}`, which releases a sum of the same field over the same records; release the sums in one dataset, give them disjoint dimensions, or change a population",
+                            "it releases a sum of a field that `{}` also releases over the same unit; release every sum of a field in one dataset, where the totals rule covers every cell",
                             earlier.id
                         ),
                     ));
@@ -341,9 +338,7 @@ pub(super) fn compile(
             sum_releases.push(SumRelease {
                 id: source.id.to_string(),
                 unit: source.unit.clone(),
-                population: source.population.clone(),
                 sum_fields,
-                dimensions: dimensions.clone(),
             });
         }
         if let Some((minimum_count, rounding_base)) = rounding {
@@ -2183,13 +2178,11 @@ fn sum_definition(sums: Option<&SumDisclosure>) -> Option<serde_json::Value> {
     sums.map(|sums| json!(sums.contributor))
 }
 
-/// A dataset that releases sums, as the nesting rule compares it.
+/// A dataset that releases sums: its unit and the fields it sums.
 struct SumRelease {
     id: String,
     unit: String,
-    population: String,
     sum_fields: BTreeSet<String>,
-    dimensions: Vec<CompiledStatisticalDimension>,
 }
 
 /// The contributor and dominance rules of a dataset that releases sums under
@@ -2258,6 +2251,9 @@ fn compile_sum_disclosure_rules(
             )),
             Some((FieldTypeSource::Reference { .. }, _)) => {
                 for publisher in &grants.publish {
+                    // A publisher with no record grant on the unit is reported
+                    // by the count grant check; this rule names only a grant
+                    // that leaves the contributor field unreadable.
                     let readable = unit
                         .access_profiles
                         .get(publisher)

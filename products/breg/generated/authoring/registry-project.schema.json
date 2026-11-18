@@ -5469,7 +5469,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Count, distinct-count and sum cells below `minimumCount` are suppressed\nand counts are rounded to a multiple of `roundingBase`. A release\ncarries counts and distinct counts; a sum is held until its disclosure\nrules are reviewed, and a mean, ratio or percentile is read live or\nreleased exactly. A dataset that declares a sum and grants `publish`\nalso names who a value belongs to (`contributor`) and the share one\ncontributor may hold before a cell is withheld (`dominancePercent`);\nevery other dataset omits both.",
+          "description": "Count and distinct-count cells below `minimumCount` are suppressed and\ncounts are rounded to a multiple of `roundingBase`. A sum cell is\nsuppressed when fewer than `minimumCount` contributors stand behind it\nor when the p% rule finds it dominated; an `int64` sum is rounded like\na count and a decimal sum is exact. A release carries counts and\ndistinct counts; a sum is held until its disclosure rules are reviewed,\nand a mean, ratio or percentile is read live or released exactly. A\ndataset that declares a sum and grants `publish` also names who a value\nbelongs to (`contributor`) and the p of the p% rule\n(`dominancePercent`); every other dataset omits both.",
           "properties": {
             "contributor": {
               "$ref": "#/$defs/StatisticalContributorSource",

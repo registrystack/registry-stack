@@ -42,6 +42,9 @@ type Row = (
     Option<&'static str>,
 );
 
+/// One expected cell value: measure id, value, and status.
+type ExpectedValue = (&'static str, Value, &'static str);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_total_of_a_sum_and_mean_is_computed_from_the_records_not_from_the_cells() {
     let rows: Vec<Row> = vec![
@@ -71,7 +74,7 @@ async fn every_total_of_a_sum_and_mean_is_computed_from_the_records_not_from_the
 
     // Hand-computed per category. A null amount or quantity is left out of both
     // the sum and the number of values the mean divides by.
-    let expected: [(&str, [(&str, Value, &str); 5]); 4] = [
+    let expected: [(&str, [ExpectedValue; 5]); 4] = [
         (
             "a",
             [
@@ -479,7 +482,7 @@ async fn a_public_register_publishes_exact_counts_sums_and_means() {
     );
 
     // One record is stated exactly, never suppressed.
-    let expected: [(&str, [(&str, Value, &str); 3]); 3] = [
+    let expected: [(&str, [ExpectedValue; 3]); 3] = [
         (
             "a",
             [
@@ -548,7 +551,7 @@ async fn a_public_register_publishes_exact_counts_sums_and_means() {
 fn release_claims(profile: &str) -> VerifiedRequestClaims {
     VerifiedRequestClaims::authenticated(
         "principal",
-        &format!("measures-{profile}"),
+        format!("measures-{profile}"),
         Default::default(),
         None,
         Default::default(),
@@ -1481,7 +1484,7 @@ fn definition_two(values: &[i64], percentile: usize) -> String {
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
     let product = sorted.len() * percentile;
-    let hundredths = if product % 100 == 0 {
+    let hundredths = if product.is_multiple_of(100) {
         let sum = sorted[product / 100 - 1] + sorted[product / 100];
         sum.signum() * ((sum.abs() + 1) / 2)
     } else {

@@ -353,7 +353,7 @@ pub(crate) fn append_statistics_openapi(
                     &publisher,
                     &admission_publisher,
                     dry_run_parameters(),
-                    json!({"200": json_response("StatisticalReleaseDryRun", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "410":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
+                    json!({"200": json_response("StatisticalReleaseDryRun", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalReleaseRequest"),
                 ),
             );
