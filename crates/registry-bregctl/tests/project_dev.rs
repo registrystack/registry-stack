@@ -1570,13 +1570,13 @@ fn browser_run_issuer_checks_both_bindings_before_start_requires_application_roo
 
 #[test]
 fn check_refuses_binding_configuration_the_products_would_refuse_at_the_plan_field() {
-    for (plan_edit, from, to, path, product) in [
+    for (plan_edit, from, to, path, message) in [
         (
             "scope",
             "casework: {profile: reviewer, scopes: [casework:review]}",
             "casework: {profile: reviewer, scopes: ['casework:\"quoted\"']}",
             "/people/reviewer/grants/casework/scopes",
-            "BReg refuses",
+            "scope-token",
         ),
         (
             "audience",
@@ -1610,7 +1610,7 @@ fn check_refuses_binding_configuration_the_products_would_refuse_at_the_plan_fie
         let diagnostic = &report["diagnostics"][0];
         assert_eq!(diagnostic["path"], path, "{plan_edit}: {diagnostic}");
         assert!(
-            diagnostic["message"].as_str().unwrap().contains(product),
+            diagnostic["message"].as_str().unwrap().contains(message),
             "{plan_edit}: {diagnostic}"
         );
         assert!(!state.exists(), "{plan_edit}");

@@ -21,6 +21,7 @@ use registry_platform_crypto::{
     jws::{parse_compact_jws, JwsLimits},
     parse_json_strict, GeneratedKeyAlgorithm, PrivateJwk, PublicJwk, SigningAlgorithm,
 };
+use registry_platform_httputil::{validate_requested_scopes, TokenError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -54,7 +55,7 @@ const TOKEN_SERVER_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const CLOCK_LEEWAY_SECONDS: u64 = 5;
 const MAXIMUM_REPLAY_ENTRIES: usize = 256;
 
-/// Run-local connections between BReg and Casework. Configuring either one requires both products, with BReg listed before Casework.
+/// Run-local connections between BReg and Casework. Configuring either one requires both products.
 #[derive(Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -149,19 +150,12 @@ impl Bindings {
         if self.breg_review_authority.is_none() && self.casework_context_provider.is_none() {
             return Ok(());
         }
-        let breg = product_position(plan, Product::Breg);
-        let casework = product_position(plan, Product::Casework);
         plan::require(
-            breg.is_some() && casework.is_some(),
+            product_position(plan, Product::Breg).is_some()
+                && product_position(plan, Product::Casework).is_some(),
             "/bindings",
             "Run-local bindings require both BReg and Casework products.",
             "Add both products to products, or remove bindings.",
-        )?;
-        plan::require(
-            breg < casework,
-            "/products",
-            "Products must place BReg before Casework when bindings are configured.",
-            "Move the BReg product before the Casework product.",
         )?;
 
         if let Some(binding) = &self.breg_review_authority {
@@ -233,18 +227,32 @@ fn require_machine_person<'a>(
         "Set identity to the alias of a test person in people.",
     )?;
     let person = &plan.people[alias];
-    plan::require(
-        person.grants.contains_key(&product),
-        field,
-        format!(
-            "The binding identity must name a person with a {} grant.",
-            product.name()
-        ),
-        format!(
-            "Add a {} grant to the named test person or choose another identity.",
-            product.name()
-        ),
-    )?;
+    let Some(grant) = person.grants.get(&product) else {
+        return plan::refuse(
+            field,
+            &format!(
+                "The binding identity must name a person with a {} grant.",
+                product.name()
+            ),
+            &format!(
+                "Add a {} grant to the named test person or choose another identity.",
+                product.name()
+            ),
+        );
+    };
+    // The bound product requests exactly these scopes through the shared OAuth
+    // client, which would refuse a list it cannot send only once the run starts.
+    if let Err(error) = validate_requested_scopes(&grant.scopes) {
+        let reason = match error {
+            TokenError::Configuration { reason } => reason.to_owned(),
+            other => other.to_string(),
+        };
+        return plan::refuse(
+            &format!("{}/scopes", grant_field(alias, product)),
+            &format!("The bound product could not request these scopes: {reason}."),
+            "Give the named test person between 1 and 32 distinct scopes that encode within 4096 bytes.",
+        );
+    }
     Ok(person)
 }
 
@@ -449,53 +457,6 @@ pub(super) fn render_for_check(plan: &Plan, product: Product, config: &mut Value
     );
 }
 
-/// Renders the review authority binding exactly as `start` writes it and lets
-/// BReg's reader refuse what it would refuse at startup, before anything is
-/// provisioned. A refusal names the plan field that produced the value, not
-/// the generated fragment. Casework checks the context provider binding
-/// itself, through `caseworkctl check`.
-pub(super) fn check_with_breg_reader(plan: &Plan) -> plan::SemanticResult<()> {
-    let Some(binding) = &plan.bindings.breg_review_authority else {
-        return Ok(());
-    };
-    let mut config = json!({});
-    render_for_check(plan, Product::Breg, &mut config);
-    let grant = grant_field(&binding.identity, Product::Casework);
-    let audience = audience_field(plan, Product::Casework);
-    require_reader_accepts(
-        "BReg",
-        "/bindings/bregReviewAuthority",
-        &config["reviewAuthorities"][binding.id.as_str()],
-        &[
-            Source::new(
-                "/profile",
-                &format!("{grant}/profile"),
-                json!("placeholder"),
-            ),
-            Source::new(
-                "/privateKeyJwt/assertionAudience",
-                "/issuer",
-                json!(STAND_IN_URI),
-            ),
-            Source::new("/privateKeyJwt/resource", &audience, json!(STAND_IN_URI)),
-            Source::new(
-                "/privateKeyJwt/scopes",
-                &format!("{grant}/scopes"),
-                json!(["placeholder"]),
-            ),
-            Source::new(
-                "/producerId",
-                "/bindings/bregReviewAuthority/producer",
-                json!("placeholder"),
-            ),
-        ],
-        |fragment| {
-            registry_breg::runtime_config::check_review_authority(&binding.id, fragment)
-                .map_err(|error| error.to_string())
-        },
-    )
-}
-
 /// The plan field that produced the member at `member`, a JSON pointer
 /// relative to the context provider binding the run writes for Casework.
 /// Members only the run supplies land on the binding.
@@ -514,26 +475,6 @@ pub(super) fn casework_binding_field(
     }
 }
 
-const STAND_IN_URI: &str = "urn:example:stand-in";
-
-/// One member of a rendered fragment and the plan field that produced it,
-/// with a value the reader accepts for that member.
-struct Source {
-    member: &'static str,
-    field: String,
-    stand_in: Value,
-}
-
-impl Source {
-    fn new(member: &'static str, field: &str, stand_in: Value) -> Self {
-        Self {
-            member,
-            field: field.to_owned(),
-            stand_in,
-        }
-    }
-}
-
 fn grant_field(alias: &str, product: Product) -> String {
     format!(
         "/people/{}/grants/{}",
@@ -545,38 +486,6 @@ fn grant_field(alias: &str, product: Product) -> String {
 fn audience_field(plan: &Plan, product: Product) -> String {
     let index = product_position(plan, product).expect("validated product");
     format!("/products/{index}/audience")
-}
-
-/// Refuses when `reader` refuses `fragment`. The reader states a rule without
-/// saying which member broke it, so the refusal lands on the plan field of the
-/// one member whose replacement by a stand-in makes the reader accept. When no
-/// single member explains it, the refusal lands on the binding.
-fn require_reader_accepts(
-    product: &str,
-    binding_field: &str,
-    fragment: &Value,
-    sources: &[Source],
-    reader: impl Fn(&Value) -> Result<(), String>,
-) -> plan::SemanticResult<()> {
-    let Err(refusal) = reader(fragment) else {
-        return Ok(());
-    };
-    let field = sources
-        .iter()
-        .find(|source| {
-            let mut probe = fragment.clone();
-            probe
-                .pointer_mut(source.member)
-                .map(|member| *member = source.stand_in.clone())
-                .is_some()
-                && reader(&probe).is_ok()
-        })
-        .map_or(binding_field, |source| source.field.as_str());
-    plan::refuse(
-        field,
-        &format!("{product} refuses the binding configuration the run writes from this value: {refusal}."),
-        "Correct the value so the product accepts the configuration the run writes for this binding.",
-    )
 }
 
 fn prepare_binding(
@@ -1029,18 +938,12 @@ mod tests {
                 named_clients: BTreeSet::new(),
             }),
             casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),
-            casework_source_digest: None,
             binaries: BTreeMap::new(),
         }
     }
 
     #[test]
-    fn validation_refuses_missing_grants_and_wrong_product_order() {
-        let mut value = plan();
-        value.products.reverse();
-        let error = value.bindings.validate(&value).unwrap_err().to_string();
-        assert!(error.contains("/products"), "{error}");
-
+    fn validation_refuses_missing_grants() {
         let mut value = plan();
         value.people.get_mut("producer").unwrap().grants.clear();
         let error = value.bindings.validate(&value).unwrap_err().to_string();
@@ -1051,10 +954,70 @@ mod tests {
     }
 
     #[test]
+    fn bindings_in_any_order_are_accepted() {
+        let mut value = plan();
+        value.products.reverse();
+        value.bindings.validate(&value).unwrap();
+    }
+
+    #[test]
+    fn bound_grant_scopes_must_be_requestable_through_the_shared_oauth_client() {
+        // Each bound product requests the identity's scopes through the shared
+        // OAuth client, which refuses this list before the run could start.
+        let too_long = (0..17)
+            .map(|index| format!("{index:02}{}", "s".repeat(254)))
+            .collect::<Vec<_>>();
+        let mut value = plan();
+        value
+            .people
+            .get_mut("producer")
+            .unwrap()
+            .grants
+            .get_mut(&Product::Casework)
+            .unwrap()
+            .scopes
+            .clone_from(&too_long);
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(
+            error.contains("/people/producer/grants/casework/scopes"),
+            "{error}"
+        );
+        assert!(error.contains("4096"), "{error}");
+
+        let mut value = plan();
+        value
+            .people
+            .get_mut("context-reader")
+            .unwrap()
+            .grants
+            .get_mut(&Product::Breg)
+            .unwrap()
+            .scopes
+            .clear();
+        let error = value.bindings.validate(&value).unwrap_err().to_string();
+        assert!(
+            error.contains("/people/context-reader/grants/breg/scopes"),
+            "{error}"
+        );
+
+        // A person no binding names keeps the plan's own scope rule.
+        let mut value = plan();
+        value.bindings.breg_review_authority = None;
+        value
+            .people
+            .get_mut("producer")
+            .unwrap()
+            .grants
+            .get_mut(&Product::Casework)
+            .unwrap()
+            .scopes = too_long;
+        value.bindings.validate(&value).unwrap();
+    }
+
+    #[test]
     fn run_issuer_preflight_resolves_both_binding_audiences_without_changing_the_plan() {
         let mut value = plan();
         value.issuer = "run".to_owned();
-        check_with_breg_reader(&value).unwrap();
         for (product, pointer) in [
             (
                 Product::Breg,
@@ -1097,93 +1060,6 @@ mod tests {
         let mut invalid = json;
         invalid["bregReviewAuthority"]["runIssuerBinding"]["unknown"] = json!(true);
         assert!(serde_json::from_value::<Bindings>(invalid).is_err());
-    }
-
-    #[test]
-    fn check_accepts_a_plan_the_breg_reader_accepts() {
-        check_with_breg_reader(&plan()).unwrap();
-    }
-
-    #[test]
-    fn check_refuses_a_bound_audience_that_is_not_a_resource_uri() {
-        let mut value = plan();
-        value.products[1].audience = "review".to_owned();
-        let error = check_with_breg_reader(&value).unwrap_err().to_string();
-        assert!(error.contains("/products/1/audience"), "{error}");
-        assert!(error.contains("BReg refuses"), "{error}");
-
-        // The context provider resource is Casework's rule, which
-        // `caseworkctl check` applies to the configuration the run writes.
-        let mut value = plan();
-        value.products[0].audience = "registry".to_owned();
-        check_with_breg_reader(&value).unwrap();
-    }
-
-    #[test]
-    fn check_refuses_bound_scopes_the_products_would_not_request() {
-        // Both products request a binding's scopes through the shared OAuth
-        // client, which refuses this list before the run could start them.
-        let too_long = (0..17)
-            .map(|index| format!("{index:02}{}", "s".repeat(254)))
-            .collect::<Vec<_>>();
-        let mut value = plan();
-        value
-            .people
-            .get_mut("producer")
-            .unwrap()
-            .grants
-            .get_mut(&Product::Casework)
-            .unwrap()
-            .scopes
-            .clone_from(&too_long);
-        let error = check_with_breg_reader(&value).unwrap_err().to_string();
-        assert!(
-            error.contains("/people/producer/grants/casework/scopes"),
-            "{error}"
-        );
-        assert!(error.contains("4096"), "{error}");
-
-        // A person no binding names keeps the plan's own scope rule.
-        let mut value = plan();
-        value.bindings.breg_review_authority = None;
-        value
-            .people
-            .get_mut("producer")
-            .unwrap()
-            .grants
-            .get_mut(&Product::Casework)
-            .unwrap()
-            .scopes = too_long;
-        value.bindings.validate(&value).unwrap();
-        check_with_breg_reader(&value).unwrap();
-    }
-
-    #[test]
-    fn check_refuses_other_binding_values_at_the_plan_field_that_produced_them() {
-        let mut value = plan();
-        value.issuer = "not a uri".to_owned();
-        let error = check_with_breg_reader(&value).unwrap_err().to_string();
-        assert!(error.contains("/issuer"), "{error}");
-        assert!(error.contains("assertion audience"), "{error}");
-
-        // The profile grammar is a rule only the product readers state: the
-        // runner restates nothing about it, so BReg's reader catches it and
-        // the refusal lands on the grant that produced the value.
-        let mut value = plan();
-        value
-            .people
-            .get_mut("producer")
-            .unwrap()
-            .grants
-            .get_mut(&Product::Casework)
-            .unwrap()
-            .profile = "not a profile".to_owned();
-        let error = check_with_breg_reader(&value).unwrap_err().to_string();
-        assert!(
-            error.contains("/people/producer/grants/casework/profile"),
-            "{error}"
-        );
-        assert!(error.contains("the profile must be"), "{error}");
     }
 
     #[test]

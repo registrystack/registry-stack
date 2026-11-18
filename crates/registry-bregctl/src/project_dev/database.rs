@@ -10,6 +10,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rustls::pki_types::{pem::PemObject as _, CertificateDer};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use tokio::runtime::{Builder, Runtime};
 use tokio_postgres::{
     config::{Host, SslMode},
@@ -533,7 +534,7 @@ impl Database {
     }
 
     fn create_spatial_bbox_role(&mut self, names: &Names) -> Result<()> {
-        let role = spatial_bbox_role(names)?;
+        let role = spatial_bbox_role(names);
         let statement = create_nologin_role_sql(&role);
         self.create_owned_role(
             &role,
@@ -582,16 +583,7 @@ impl Database {
 
     fn configure_database(&self, names: &Names, breg: bool, requires_postgis: bool) -> Result<()> {
         let statement = database_setup_sql(names, breg);
-        let spatial_roles = if requires_postgis {
-            Some((
-                registry_breg::postgres::SqlIdentifier::parse(&names.migration_role)
-                    .map_err(|_| anyhow!("the generated migration role is invalid"))?,
-                registry_breg::postgres::SqlIdentifier::parse(&names.runtime_role)
-                    .map_err(|_| anyhow!("the generated runtime role is invalid"))?,
-            ))
-        } else {
-            None
-        };
+        let postgis = requires_postgis.then(|| postgis_prerequisites_sql(names));
 
         let mut target = self.admin_config.clone();
         target.dbname(&names.database).ssl_mode(SslMode::Require);
@@ -611,16 +603,19 @@ impl Database {
                         })
                         .map_err(anyhow::Error::new)
                         .context("cannot configure the provisioned PostgreSQL database")?;
-                    if let Some((migration, runtime)) = &spatial_roles {
-                        registry_breg::postgres::provision_postgis_prerequisites(
-                            &client, migration, runtime,
-                        )
-                        .await
-                        .context(
-                            "cannot provision BReg PostGIS prerequisites; the PostgreSQL \
+                    if let Some(postgis) = &postgis {
+                        client
+                            .batch_execute(postgis)
+                            .await
+                            .map_err(|error| {
+                                OperationFailure::postgres("PostGIS provisioning", error)
+                            })
+                            .map_err(anyhow::Error::new)
+                            .context(
+                                "cannot provision BReg PostGIS prerequisites; the PostgreSQL \
                              administrator must be allowed to CREATE EXTENSION postgis, \
                              which normally needs a superuser",
-                        )?;
+                            )?;
                     }
                     Result::<()>::Ok(())
                 })
@@ -726,7 +721,7 @@ pub(super) fn run_object_names(run_id: &str, label: &str, spatial: bool) -> Resu
     let names = Names::new(run_id, label);
     let mut owned = vec![names.migration_role.clone(), names.runtime_role.clone()];
     if spatial {
-        owned.push(spatial_bbox_role(&names)?);
+        owned.push(spatial_bbox_role(&names));
     }
     owned.push(names.database);
     Ok(owned)
@@ -749,12 +744,45 @@ impl Names {
     }
 }
 
-fn spatial_bbox_role(names: &Names) -> Result<String> {
-    let runtime = registry_breg::postgres::SqlIdentifier::parse(&names.runtime_role)
-        .map_err(|_| anyhow!("the generated runtime role is invalid"))?;
-    Ok(registry_breg::postgres::spatial_bbox_role(&runtime)
-        .as_str()
-        .to_owned())
+fn spatial_bbox_role(names: &Names) -> String {
+    spatial_bbox_role_for(&names.runtime_role)
+}
+
+/// The no-login role BReg expects to own its spatial candidate views:
+/// `<runtime>__spatial_bbox` when that fits PostgreSQL's 63-byte identifier
+/// limit, else `breg_bbox_` and the first 8 hex digits of the SHA-256 of
+/// `breg/spatial-bbox-role/v1:<runtime>`.
+fn spatial_bbox_role_for(runtime_role: &str) -> String {
+    let candidate = format!("{runtime_role}__spatial_bbox");
+    if candidate.len() <= 63 {
+        return candidate;
+    }
+    let digest = Sha256::digest(format!("breg/spatial-bbox-role/v1:{runtime_role}").as_bytes());
+    let prefix: String = digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("breg_bbox_{prefix}")
+}
+
+/// The schema BReg's generated spatial SQL reads PostGIS from.
+const POSTGIS_SCHEMA: &str = "registry_spatial_ext";
+
+/// Administrator-run PostGIS setup for one spatial run: the extension in its
+/// own schema, usable by both run roles, and the bbox role the migration role
+/// may SET. The bbox role itself is created earlier in provisioning.
+fn postgis_prerequisites_sql(names: &Names) -> String {
+    let migration = quote_identifier(&names.migration_role);
+    let runtime = quote_identifier(&names.runtime_role);
+    let bbox = quote_identifier(&spatial_bbox_role(names));
+    format!(
+        "CREATE SCHEMA IF NOT EXISTS {POSTGIS_SCHEMA};\n\
+         REVOKE ALL ON SCHEMA {POSTGIS_SCHEMA} FROM PUBLIC;\n\
+         CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA {POSTGIS_SCHEMA};\n\
+         GRANT USAGE ON SCHEMA {POSTGIS_SCHEMA} TO {migration}, {runtime};\n\
+         GRANT {bbox} TO {migration} WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;\n\
+         GRANT USAGE ON SCHEMA {POSTGIS_SCHEMA} TO {bbox};"
+    )
 }
 
 fn validate_run_id(run_id: &str) -> Result<()> {
@@ -1485,22 +1513,36 @@ mod tests {
     fn spatial_breg_uses_the_governed_bbox_role_for_its_runtime() {
         for label in ["breg_test", "breg"] {
             let names = Names::new(RUN_ID, label);
-            let expected = registry_breg::postgres::spatial_bbox_role(
-                &registry_breg::postgres::SqlIdentifier::parse(&names.runtime_role).unwrap(),
-            );
-            assert_eq!(spatial_bbox_role(&names).unwrap(), expected.as_str());
-            assert!(expected.as_str().starts_with("breg_bbox_"));
-            assert!(expected.as_str().len() <= 63);
-            let statement = create_nologin_role_sql(expected.as_str());
+            let expected = spatial_bbox_role_for(&names.runtime_role);
+            assert_eq!(spatial_bbox_role(&names), expected);
+            assert!(expected.starts_with("breg_bbox_"));
+            assert!(expected.len() <= 63);
+            let statement = create_nologin_role_sql(&expected);
             assert_eq!(
                 statement,
                 format!(
                     "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS",
-                    quote_identifier(expected.as_str())
+                    quote_identifier(&expected)
                 )
             );
             assert!(!statement.contains("PASSWORD"));
         }
+    }
+
+    /// Vectors computed with BReg's `spatial_bbox_role`, which names the role
+    /// BReg checks for at startup.
+    #[test]
+    fn spatial_bbox_role_matches_breg() {
+        assert_eq!(
+            spatial_bbox_role_for("abc_runtime"),
+            "abc_runtime__spatial_bbox"
+        );
+        let at_the_limit = "r".repeat(49);
+        assert_eq!(
+            spatial_bbox_role_for(&at_the_limit),
+            format!("{at_the_limit}__spatial_bbox")
+        );
+        assert_eq!(spatial_bbox_role_for(&"r".repeat(60)), "breg_bbox_254fe84b");
     }
 
     #[test]
@@ -1509,7 +1551,7 @@ mod tests {
             let names = Names::new(RUN_ID, label);
             let mut expected = vec![names.migration_role.clone(), names.runtime_role.clone()];
             if spatial {
-                let bbox = spatial_bbox_role(&names).unwrap();
+                let bbox = spatial_bbox_role(&names);
                 assert!(!bbox.contains(RUN_ID), "the bbox role is not run-scoped");
                 expected.push(bbox);
             }
