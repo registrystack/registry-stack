@@ -1,15 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise operator withdrawal and restart on the disposable native fixture."""
+"""Exercise operator purge and restart on the disposable native fixture."""
 
-from concurrent.futures import ThreadPoolExecutor
 import json
 import re
 import subprocess
 
 import fixture_path
 fixture_path.ensure_importable()
-from journey import JourneyError, expect, records, request
+from journey import JourneyError, expect, records
 
 PROJECTION = "holdings-indexed"
 VIEW = "business-holdings-indexed"
@@ -77,74 +76,60 @@ class ScopeRecovery:
         self.write_json(self.work / f"scope-{step}.json", report)
         return report
 
-    def withdraw_and_rotate(self):
+    def purge(self):
         self.journey.control("reset")
-        self.journey.refresh(VIEW, LINK)
+        # The journey ends on an empty holdings snapshot; the sweep interval is an hour, so ask
+        # for the business root's refresh to republish the reset fixture's two holdings.
+        self.journey.refresh_until(VIEW, LINK, self.journey.args.business_root,
+                                   lambda: len(self.journey.rows(self.journey.business()) or []) == 2,
+                                   "a refresh to republish the reset holdings snapshot")
         verify_holdings(self.journey)
-        active = self.operator("inspect", "before-withdrawal")
+        active = self.operator("inspect", "before-purge")
         expect(active["active"] and active["snapshotCounts"]["fresh"] > 0,
-               "withdrawal fixture lacked a retained holdings snapshot")
+               "purge fixture lacked a retained holdings snapshot")
         before = self.journey.source_calls()
         self.journey.control("hold-next", operation=OPERATION)
-        with ThreadPoolExecutor(max_workers=1) as workers:
-            inflight = workers.submit(
-                request, self.journey.args.breg_origin, f"/v1/external-views/{VIEW}/{LINK}/refresh",
-                self.journey.auth["projection-refresh"], method="POST",
-                query={"accessProfile": "projection-refresh"},
-            )
-            try:
-                expect(self.fixture.wait_for_hold(timeout=2), "the first holdings page did not reach the source barrier")
-                held = self.journey.source_calls()
-                expect(held == {**before, OPERATION: before.get(OPERATION, 0) + 1},
-                       "the source received more than the first holdings request before withdrawal")
-                withdrawn = self.operator("withdraw", "withdrawal", active)
-                expect(not withdrawn["active"] and withdrawn["epoch"] == active["epoch"],
-                       "the operator did not withdraw the inspected scope")
-                expect(self.fixture.status()["held"], "scope withdrawal exceeded the source barrier deadline")
-            finally:
-                self.journey.control("release")
-            status, body = inflight.result(timeout=8)
-        expect(self.journey.source_calls() == held, "a subsequent Adapter request followed scope withdrawal")
-        expect(status == 503 or (status == 200 and body["published"] == 0 and body["unavailable"] > 0),
-               "the in-flight refresh did not fail closed after withdrawal")
+        # The staff application request queues a refresh; the worker's next tick acquires and stops at the barrier.
+        self.journey.request_refresh(VIEW, LINK, self.journey.args.business_root)
+        expect(self.fixture.wait_for_hold(timeout=self.journey.args.refresh_timeout),
+               "the first holdings page did not reach the source barrier")
+        held = self.journey.source_calls()
+        expect(held == {**before, OPERATION: before.get(OPERATION, 0) + 1},
+               "the source received more than the first holdings request before the purge")
+        try:
+            purged = self.operator("purge", "purge", active)
+            expect(not purged["active"] and purged["epoch"] == active["epoch"],
+                   "the operator did not end the inspected scope")
+        finally:
+            self.journey.control("release")
         verify_hidden(self.journey)
-        inactive = self.operator("inspect", "after-withdrawal")
-        expect(not inactive["active"] and inactive["epoch"] == withdrawn["epoch"]
-               and inactive["snapshotCounts"] == {"fresh": 0, "expired": 0, "invalidated": 0},
-               "withdrawal did not purge the retained holdings snapshots")
+        after = self.operator("inspect", "after-purge")
+        expect(not after["active"] and after["epoch"] == purged["epoch"]
+               and after["snapshotCounts"] == {"fresh": 0, "expired": 0, "invalidated": 0},
+               "the purge did not delete the retained holdings snapshots")
         self.write_json(self.work / "recovery-inflight.json", {
-            "refreshStatus": status, "sourceRequestsBefore": before, "sourceRequestsAtWithdrawal": held,
+            "sourceRequestsBefore": before, "sourceRequestsAtPurge": held,
             "sourceRequestsAfterRelease": self.journey.source_calls(),
         })
-        self.rotate(inactive)
-
-    def rotate(self, inactive):
-        rotated = self.operator("rotate", "rotation", inactive)
-        expect(rotated["active"] and rotated["epoch"] != inactive["epoch"]
-               and rotated["bindingDigest"] == self.fact["bindingDigest"]
-               and rotated["grantDigest"] == self.fact["grantDigest"]
-               and rotated["cacheTtlSeconds"] == self.fact["cacheTtlSeconds"],
-               "rotation did not install a fresh epoch for the current reviewed binding")
-        self.calls_at_rotation = self.journey.source_calls()
-        self.epoch = rotated["epoch"]
+        self.purged_epoch = purged["epoch"]
+        self.calls_at_purge = self.journey.source_calls()
 
     def verify_rebuild(self):
-        verify_hidden(self.journey)
-        incomplete = self.operator("inspect", "after-restart")
-        expect(incomplete["active"] and incomplete["epoch"] == self.epoch
-               and incomplete["snapshotCounts"] == {"fresh": 0, "expired": 0, "invalidated": 0},
-               "restart did not preserve the empty rotated holdings scope")
-        expect(self.journey.source_calls() == self.calls_at_rotation,
-               "the restarted candidate acquired holdings before an explicit refresh")
-        result = self.journey.refresh(VIEW, LINK)
-        expect(result["published"] > 0 and result["unavailable"] == 0,
-               "the rotated scope did not publish a fresh holdings refresh")
-        after_refresh = self.journey.source_calls()
-        expect(after_refresh.get(OPERATION, 0) >= self.calls_at_rotation.get(OPERATION, 0) + 2,
+        # The restarted worker finds a scope without snapshots and sweeps it at once.
+        self.journey.wait_until(lambda: len(self.journey.rows(self.journey.business()) or []) == 2,
+                                "the restarted worker to rebuild the holdings snapshot")
+        rebuilt = self.operator("inspect", "after-restart")
+        expect(rebuilt["active"] and rebuilt["epoch"] != self.purged_epoch
+               and rebuilt["snapshotCounts"]["fresh"] > 0
+               and rebuilt["bindingDigest"] == self.fact["bindingDigest"]
+               and rebuilt["grantDigest"] == self.fact["grantDigest"]
+               and rebuilt["cacheTtlSeconds"] == self.fact["cacheTtlSeconds"],
+               "the restart did not bind a fresh scope for the current reviewed binding")
+        after_rebuild = self.journey.source_calls()
+        expect(after_rebuild.get(OPERATION, 0) >= self.calls_at_purge.get(OPERATION, 0) + 2,
                "rebuilding the scope did not acquire both holdings pages")
         verify_holdings(self.journey)
-        expect(self.journey.source_calls() == after_refresh, "the rebuilt indexed read attempted acquisition")
+        expect(self.journey.source_calls() == after_rebuild, "the rebuilt indexed read attempted acquisition")
         self.write_json(self.work / "recovery-rebuild.json", {
-            "refresh": result, "sourceRequestsBeforeRefresh": self.calls_at_rotation,
-            "sourceRequestsAfterRefresh": after_refresh,
+            "sourceRequestsAtPurge": self.calls_at_purge, "sourceRequestsAfterRebuild": after_rebuild,
         })

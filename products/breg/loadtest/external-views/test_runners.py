@@ -11,27 +11,35 @@ import fixture_path
 fixture_path.ensure_importable()
 from journey import JourneyError
 from recovery import operator_report
-from run_candidate import URL_FILES, database_urls, stage_project, verify_source_facts
+from run_candidate import IDENTITIES, URL_FILES, runtime_config, database_urls, stage_project, verify_source_facts
 from synthetic_source import runtime_fragment
 
 
 class RecoveryTests(unittest.TestCase):
     def test_operator_report_reads_the_bregctl_scope(self):
-        output = (b'{"ok":true,"command":"external-projection withdraw",'
+        output = (b'{"ok":true,"command":"external-projection purge",'
                   b'"scope":{"projection":"holdings-indexed","active":false}}\n')
-        self.assertEqual(operator_report(output, "withdraw"), {"projection": "holdings-indexed", "active": False})
+        self.assertEqual(operator_report(output, "purge"), {"projection": "holdings-indexed", "active": False})
         for invalid, action in (
-            (output, "rotate"),
-            (output.replace(b'"ok":true', b'"ok":false'), "withdraw"),
-            (b'{"ok":true,"command":"external-projection withdraw"}', "withdraw"),
-            (output + output, "withdraw"),
-            (b"COMMIT", "withdraw"),
+            (output, "inspect"),
+            (output.replace(b'"ok":true', b'"ok":false'), "purge"),
+            (b'{"ok":true,"command":"external-projection purge"}', "purge"),
+            (output + output, "purge"),
+            (b"COMMIT", "purge"),
         ):
             with self.assertRaisesRegex(JourneyError, "scope report"):
                 operator_report(invalid, action)
 
 
 class CandidateFixtureTests(unittest.TestCase):
+    def test_no_fixture_identity_is_a_refresh_worker(self):
+        # BReg refreshes in process; no token or client exists for a worker.
+        self.assertNotIn("licensing-refresh", IDENTITIES)
+
+    def test_the_worker_client_is_an_allowed_client_without_an_identity(self):
+        config = runtime_config(Path("/w"), {}, Path("/p"), "127.0.0.1:0")
+        self.assertIn("licensing-refresh", config["authentication"]["oidc"]["allowedClients"])
+
     def test_saved_native_project_is_staged_byte_for_byte_and_requires_all_three_files(self):
         with tempfile.TemporaryDirectory() as scratch:
             work = Path(scratch)
@@ -54,11 +62,11 @@ class CandidateFixtureTests(unittest.TestCase):
     def test_source_facts_require_all_projections_and_refuse_connection_details(self):
         bindings = runtime_fragment("http://127.0.0.1:8001", "synthetic", "2030-01-01T00:00:00Z")
         projections = []
-        for binding in bindings["externalSources"]:
-            person = binding["id"].startswith("person")
-            indexed = binding["id"].endswith("-indexed")
+        for projection, binding in bindings["externalSources"].items():
+            person = projection.startswith("person")
+            indexed = projection.endswith("-indexed")
             projections.append({
-                "id": binding["id"], "mode": "indexed" if indexed else "live",
+                "id": projection, "mode": "indexed" if indexed else "live",
                 "recordType": "person" if person else "holding",
                 "authority": "urn:example:population-register" if person else "urn:example:business-register",
                 "operation": ("person-batch" if indexed else "person-exact") if person else "holdings-by-business",

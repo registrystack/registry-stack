@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Turn one reviewed BReg webhook into scoped external refresh hints."""
+"""Turn one reviewed BReg webhook into scoped external source changes."""
 from __future__ import annotations
 
 import argparse
-import hmac
 import http.client
 import json
 import os
@@ -45,10 +44,9 @@ def selector_is_valid(value: object) -> bool:
     )
 
 
-class RefreshHints:
+class SourceChanges:
     def __init__(
-        self, *, origin: str, plan: str, projection: str, scheme: str, fields: list[str],
-        token_file: Path, id_key: bytes,
+        self, *, origin: str, plan: str, projection: str, fields: list[str], token_file: Path,
     ) -> None:
         url = urlsplit(origin)
         if (
@@ -63,22 +61,18 @@ class RefreshHints:
             raise ValueError("configure an HTTPS origin or loopback HTTP origin")
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", plan):
             raise ValueError("configure a refresh plan identifier")
-        if not selector_is_valid(projection) or not selector_is_valid(scheme):
-            raise ValueError("configure a projection and selector scheme")
+        if not selector_is_valid(projection):
+            raise ValueError("configure a projection")
         if not 1 <= len(fields) <= 2 or len(set(fields)) != len(fields):
             raise ValueError("configure one selector field or two distinct parent fields")
-        if len(id_key) < 32:
-            raise ValueError("the hint ID key needs at least 32 bytes")
         self.host = url.hostname
         self.port = url.port
         self.connection = http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection
         self.plan = plan
-        self.path = f"/v1/external-refresh-plans/{plan}/hints"
+        self.path = f"/v1/external-refresh-plans/{plan}/source-changes"
         self.projection = projection
-        self.scheme = scheme
         self.fields = tuple(fields)
         self.token_file = token_file
-        self.id_key = id_key
 
     def accept(self, headers: dict[str, str], body: bytes) -> None:
         values = json.loads(body)["data"]["values"]
@@ -89,18 +83,9 @@ class RefreshHints:
         if not re.fullmatch(rb"[A-Za-z0-9._~+/-]+=*", token):
             raise OSError("the notifier refused the service token format")
         for selector in dict.fromkeys(selectors):
-            # Delivery attempt and operator replay generation can change. The
-            # source/event identity and receiving target determine the hint.
-            identity = json.dumps(
-                [headers["ce-source"], headers["ce-id"], self.plan, self.projection, self.scheme, selector],
-                separators=(",", ":"), ensure_ascii=False,
-            ).encode()
-            hint_id = hmac.digest(self.id_key, b"breg-refresh-hint-v1\0" + identity, "sha256").hex()
-            payload = {
-                "hintId": hint_id, "projection": self.projection,
-                "selectorScheme": self.scheme, "selector": selector,
-            }
-            self.submit(payload, token.decode("ascii"))
+            # A repeated change for the same selector is admitted again with
+            # 202, so a retry after a lost response needs no identity.
+            self.submit({"projection": self.projection, "selector": selector}, token.decode("ascii"))
 
     def submit(self, payload: dict[str, str], token: str) -> None:
         connection = self.connection(self.host, self.port, timeout=2)
@@ -111,9 +96,9 @@ class RefreshHints:
             )
             with connection.getresponse() as response:
                 if response.status != 202:
-                    raise OSError("the receiving registry did not accept the hint")
+                    raise OSError("the receiving registry did not accept the source change")
         except http.client.HTTPException:
-            raise OSError("the receiving registry did not acknowledge the hint") from None
+            raise OSError("the receiving registry did not acknowledge the source change") from None
         finally:
             connection.close()
 
@@ -132,9 +117,7 @@ def main() -> None:
     parser.add_argument("--destination-origin", required=True)
     parser.add_argument("--plan", required=True)
     parser.add_argument("--projection", required=True)
-    parser.add_argument("--selector-scheme", required=True)
     parser.add_argument("--token-file", type=Path, required=True)
-    parser.add_argument("--hint-id-key", type=Path, required=True)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{64}", args.schema_digest):
         parser.error("configure the exact 64-character event schema digest")
@@ -142,13 +125,12 @@ def main() -> None:
         key = read_secret(args.key)
         if len(key) < 32:
             raise ValueError("the webhook key needs at least 32 bytes")
-        acceptance = RefreshHints(
+        acceptance = SourceChanges(
             origin=args.destination_origin, plan=args.plan, projection=args.projection,
-            scheme=args.selector_scheme, fields=args.selector_field, token_file=args.token_file,
-            id_key=read_secret(args.hint_id_key),
+            fields=args.selector_field, token_file=args.token_file,
         )
     except (OSError, ValueError):
-        parser.error("check notifier origin, plan, projection, selector fields and credential files")
+        parser.error("check notifier origin, plan, projection, selector fields and credential file")
     else:
         schema = (
             f"urn:breg:event-schema:{args.registry_id}:{args.record_type}:"

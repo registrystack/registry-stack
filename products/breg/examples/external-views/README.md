@@ -17,9 +17,10 @@ Two licences and a holding reuse the same indexed Person projection.
 A company shareholder has a Business key and no Person key, so the
 company row remains visible without a Person lookup. The restricted
 profile reads the same local licences and businesses without any external
-disclosure or query permission. The refresh profile uses a dedicated
-service identity, has only the approved refresh scopes, and can list local
-roots only in its assigned jurisdiction.
+disclosure or query permission. The refresh profile names the service
+identity BReg's in-process worker refreshes as, has only the approved
+refresh scopes, and can list local roots only in its assigned jurisdiction.
+No client credential or token exists for that worker.
 
 Write access to a link's `fromField` chooses which outside subject BReg
 fetches. Whoever can set `holder-key` on a licence decides which Person the
@@ -59,8 +60,13 @@ binds its endpoint and scope for each projection, and names the service
 key by secret reference. Merge the `externalSources` member into an
 operator-owned runtime file before starting the candidate BReg. The
 fragment grants an hour of synthetic source access. Indexed values keep the
-authored five minute cache lifetime and are purged when it ends, so refresh
-again for a continued demo, or run the fixture refresh requests below.
+authored five minute cache lifetime and are purged when it ends. The
+worker refreshes both indexed views on startup and then at each plan
+interval, so a continued demo needs only a running BReg. A staff application's service client can
+queue one root's refresh with
+`POST /v1/external-views/{view}/{link}/records/{root}/refresh`, which
+answers 202, or 429 with `Retry-After: 30` while the plan's queue is full. The worker ticks every 5 seconds
+and a record write does not wake it early, so poll the read route.
 
 The fixture control identity can reset or rename the Person, replace or
 empty holdings, interrupt the next page, apply `no-store` to a data
@@ -133,21 +139,20 @@ checks.
 
 Add `--recovery` to the small candidate runner to exercise migration-role
 scope maintenance with `bregctl external-projection` and the staged runtime
-configuration. The runner pauses the first source response of a paged holdings
-refresh, withdraws the inspected scope, and checks that the in-flight
-refresh sends no later source requests or restores indexed data. It
-rotates the scope under the configured synthetic binding, checks the
-rotated digests against the generated source facts, restarts BReg,
-and verifies that indexed coverage remains incomplete until an explicit
-fresh refresh. Owner-only `scope-*.json` and `recovery-*.json` reports
-record the transition and operation counts.
+configuration. The runner pauses the first source response of a queued
+holdings refresh, purges the inspected scope, and checks that the in-flight
+refresh sends no later source requests or restores indexed data. It then
+restarts BReg and verifies that the worker finds the empty scope and
+rebuilds it under a new epoch with the generated binding and grant digests.
+Owner-only `scope-*.json` and `recovery-*.json` reports record the
+transition and operation counts.
 
 ## Run the HTTP checks against an existing fixture
 
 Use the same split roles and seed the supplied records under the fixture
-editor. Obtain short-lived officer, restricted and refresh tokens and keep
-them in owner-only files. The refresh token must carry the verified service
-actor and requester client `licensing-refresh`. Pass the local root IDs
+editor, and configure the runtime `externalRefresh` plans for both indexed
+views. Obtain short-lived officer, restricted and staff application tokens and keep them in
+owner-only files. Pass the local root IDs
 for `licence-first` and `business-with-holdings` to the runner.
 
 ```sh
@@ -156,18 +161,21 @@ python3 products/breg/examples/external-views/journey.py \
   --source-origin "$FIXTURE_SOURCE_ORIGIN" \
   --officer-token-file "$FIXTURE_OFFICER_TOKEN_FILE" \
   --restricted-token-file "$FIXTURE_RESTRICTED_TOKEN_FILE" \
-  --refresh-token-file "$FIXTURE_REFRESH_TOKEN_FILE" \
+  --staff-token-file "$FIXTURE_STAFF_TOKEN_FILE" \
   --control-key-file "$FIXTURE_CONTROL_KEY_FILE" \
   --licence-root "$FIXTURE_LICENCE_ID" \
   --business-root "$FIXTURE_BUSINESS_ID"
 ```
 
-The runner exercises live exact and related reads, role concealment before
-and after refresh, surname count and paging across unopened licences,
+The runner waits for the worker's startup sweep, then drives each
+change with a staff application root refresh and a bounded poll of the read route
+(`--refresh-timeout`, 60 seconds by default). It exercises live exact and
+related reads, role concealment before and after refresh, surname count and paging across unopened licences,
 authorized absence, label reuse, company shareholders, retention refusal,
 complete snapshot replacement, and interrupted acquisition. It verifies that
-a retained Person becomes unavailable after source denial, ambiguity or
-disconnection and that recovery restores coverage. Source call counts check
+a source denial, ambiguous answer or disconnection leaves the last complete
+Person snapshot served until it expires, and that a later refresh restores
+coverage. Source call counts check
 that indexed and denied reads skip acquisition. Database races, expiry
 purges and scale have separate acceptance checks.
 

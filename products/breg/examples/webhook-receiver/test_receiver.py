@@ -228,7 +228,7 @@ class WebhookAcceptanceTests(unittest.TestCase):
             RECEIVER.WebhookInbox(link)
 
 
-class RefreshHintTests(unittest.TestCase):
+class SourceChangeTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -236,7 +236,6 @@ class RefreshHintTests(unittest.TestCase):
         self.token_file.touch(mode=0o600)
         self.token_file.write_text("notifier-token-canary\n", encoding="ascii")
         self.key = b"receiver-test-key-material-32-bytes"
-        self.id_key = b"notifier-test-hint-identity-key-material"
         self.attempts = []
         self.accepted = {}
         self.responses = []
@@ -251,7 +250,7 @@ class RefreshHintTests(unittest.TestCase):
                 test.attempts.append((self.path, self.headers["Authorization"], request))
                 result = test.responses.pop(0) if test.responses else 202
                 if result in (202, None):
-                    test.accepted.setdefault(request["hintId"], request)
+                    test.accepted.setdefault(request["selector"], request)
                 if result is None:
                     return  # Lose the response after recording admission.
                 self.send_response(result)
@@ -280,10 +279,10 @@ class RefreshHintTests(unittest.TestCase):
                 f"urn:breg:event-schema:example-registry:{record_type}:{event_id}:sha256:" + "a" * 64
             ),
         }
-        self.sink = REFRESH.RefreshHints(
+        self.sink = REFRESH.SourceChanges(
             origin=f"http://127.0.0.1:{self.destination.server_port}",
-            plan="licensing-holders", projection="authority-indexed", scheme="urn:example:authority-key",
-            fields=fields, token_file=self.token_file, id_key=self.id_key,
+            plan="licensing-holders", projection="authority-indexed",
+            fields=fields, token_file=self.token_file,
         )
         self.server = self.start(RECEIVER.make_server(0, self.key, self.contract, self.sink))
 
@@ -298,14 +297,10 @@ class RefreshHintTests(unittest.TestCase):
         selector = "approved-person-selector-canary"
         headers, body = signed_event(self.key, self.contract, {"person-key": selector})
         self.assertEqual(self.post(headers, body), (204, b""))
-        path, authorization, hint = self.attempts[0]
-        self.assertEqual(path, "/v1/external-refresh-plans/licensing-holders/hints")
+        path, authorization, change = self.attempts[0]
+        self.assertEqual(path, "/v1/external-refresh-plans/licensing-holders/source-changes")
         self.assertEqual(authorization, "Bearer notifier-token-canary")
-        self.assertRegex(hint["hintId"], r"^[0-9a-f]{64}$")
-        self.assertEqual(hint, {
-            "hintId": hint["hintId"], "projection": "authority-indexed",
-            "selectorScheme": "urn:example:authority-key", "selector": selector,
-        })
+        self.assertEqual(change, {"projection": "authority-indexed", "selector": selector})
 
     def test_invalid_signature_schema_and_unapproved_fields_make_no_request(self):
         self.configure("person", "person-corrected-v1", ["person-key"])
@@ -341,9 +336,9 @@ class RefreshHintTests(unittest.TestCase):
             headers["idempotency-key"] = "sha256:" + "c" * 64
             self.resign(headers, body)
             self.assertEqual(self.post(headers, body), (204, b""))
-        hints = [attempt[2] for attempt in self.attempts]
-        self.assertEqual([hint["selector"] for hint in hints], [previous, current] * 3)
-        self.assertEqual(hints, hints[:2] * 3)
+        changes = [attempt[2] for attempt in self.attempts]
+        self.assertEqual([change["selector"] for change in changes], [previous, current] * 3)
+        self.assertEqual(changes, changes[:2] * 3)
         self.assertEqual(len(self.accepted), 2)
         self.assertEqual(output.getvalue(), "")
 

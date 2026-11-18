@@ -130,9 +130,16 @@ class HttpFixtureTests(unittest.TestCase):
 
     def test_generated_fragment_is_scoped_and_pins_the_maintained_pack(self):
         config = runtime_fragment("http://127.0.0.1:8001", "projection-source-key", "2030-01-01T00:00:00Z")
-        bindings = {entry["id"]: entry for entry in config["externalSources"]}
+        bindings = config["externalSources"]
+        self.assertIsInstance(bindings, dict)
         self.assertEqual(set(bindings), {"person-live", "person-indexed", "holdings-live", "holdings-indexed"})
         for entry in bindings.values():
+            self.assertNotIn("id", entry)
+            self.assertEqual(
+                set(entry),
+                {"packFile", "packDigest", "connection", "endpointPolicies", "allowedFields",
+                 "grantValidUntil", "acquisition"},
+            )
             self.assertNotIn("retention", entry)
             self.assertNotIn("allowedSelectors", entry)
             self.assertNotIn("cacheTtlSeconds", entry)

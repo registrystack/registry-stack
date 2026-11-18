@@ -12,7 +12,7 @@ exact; elapsed-time targets depend on the host and its load.
 | Holder reuse | 50,000 source keys, 20 roots per key, including 2,500 authorized absent keys |
 | Related records | 120 rows for each of two allowed parents and two denied parents |
 | Candidate HTTP | Each measured indexed read, including refusal, finishes within 5 seconds |
-| Freshness | Complete the sweep and the measured reads within 600 seconds from the first refresh. The cache lifetime is 600 seconds, and values are purged when it ends |
+| Freshness | Complete the sweep and the measured reads within 600 seconds from the start of the fill. The cache lifetime is 600 seconds, and values are purged when it ends |
 | Person source requests | At most 1,100 batch reads and no exact reads during the sweep |
 | Holdings source requests | Six reads for the two allowed parents, no request to a denied parent |
 | Indexed query source requests | Zero, including reads with missing coverage |
@@ -26,7 +26,7 @@ The reviewed Adapter pack permits at most 64 Person keys per request and
 refresh page, the first 500 pages should each make two Adapter requests.
 Later pages should reuse published keys from this sweep. The 1,100-call
 ceiling allows headroom above the 1,000 calls this layout predicts. The
-native service must traverse 10,000 HTTP refresh pages. Each authorized
+native service must traverse 10,000 refresh pages in process. Each authorized
 holding snapshot uses three source pages of 40 rows. The scale holdings
 are company shareholders. The small native fixture covers reuse of a
 Person label.
@@ -61,49 +61,70 @@ migration role uses PostgreSQL `generate_series` to bulk load only the
 fixture's two empty owned Record tables under the fixture editor's row
 policy. Table and field names come from the checked package inventory. This
 setup does not measure Record ingestion or create Record history. Every
-external snapshot is acquired through the candidate refresh endpoint and
+external snapshot is acquired by BReg's in-process refresh worker through
 the reviewed Adapter pack.
+
+BReg refreshes in process. The runtime declares two refresh plans, one for
+each indexed view, run by a worker that ticks every 5 seconds. A plan whose
+epoch has no snapshots is due immediately, so the worker sweeps both views on
+startup. The worker holds no token. Its requester client is listed on its
+access profile and among the allowed clients. A staff application's service
+client could queue one root through the root refresh route (202, or 429 with
+`Retry-After: 30`), but the scale runner does not call it. The runner
+polls the indexed read every 5 seconds, with a 600-second bound, until the
+filtered Person read answers 200 with the full surname count and both
+related parents answer 200 with their 120 rows. It then reads the
+freshness counts and the source counters.
 
 The runner compares three first-page repetitions and every page of the
 selected surname to an independently computed set of root IDs. It compares
 both sort directions and their first continuations, authorized missing
 values and their count, the unfiltered population count, and all related
 rows plus filtered pages for both permitted parents. It inserts a new
-authorized root through the ordinary HTTP route after the sweep and expects
-a coverage refusal even though the requested surname would exclude that
-root. It checks the two denied collection roots and compares source counters
+authorized root through the ordinary HTTP route after the fill and expects
+a coverage refusal for the filtered read, even though the requested surname
+would exclude that root. A filtered, sorted or counted list over an uncovered
+root answers 503 `external_view.incomplete`. A plain unfiltered, unsorted,
+uncounted list over an uncovered root answers 200 and marks that row
+unavailable, so the refusal check uses the filtered read. The refusal is
+checked immediately after the insert, ahead of the next worker tick. It
+checks the two denied collection roots and compares source counters
 before and after all indexed requests.
 
 Read `scale-report.json` for candidate binary SHA-256 values, the pack and
-package inventory digests, PostgreSQL settings, refresh metrics, source
+package inventory digests, PostgreSQL settings, fill metrics, source
 request counts and query wall times. The report includes partial measurements
 on failure after the scale run begins. `scale-native-plans.log` contains the
 matching native plans. Record the candidate repository revision and the
 command beside these files.
 
-Add `--managed-refresh` to the same command to use BReg's managed step
-endpoint. The fixture declares two plans on one service identity, with a
-900-second interval and a 1,800-second indexed lifetime. The initial
-holder sweep is due on startup. The runner then requests two holder
-sweeps back to back, without waiting for the timer. It makes an indexed
-read between steps and again at completion of each repeat. Each repeat
-must traverse the million-root population and reacquire all distinct keys
-within 600 seconds, using at most 1,100 Person batch requests. The report
-checks that the oldest valid observation still has more than one interval
-remaining after each sweep, using counts and timestamps from the fresh
-snapshots in the disposable database.
+Add `--managed-refresh` to the same command to run the extended plan
+lane. The fixture declares two plans on one worker, with a 900-second
+interval and a 1,800-second indexed lifetime. Without the flag the interval
+is 3,600 seconds, so only the startup sweep falls inside the measurement.
+The cold fill must traverse the million-root population and acquire all
+distinct keys within 600 seconds, using at most 1,100 Person batch requests.
+The report checks that the oldest valid observation has more than one
+interval remaining, using counts and timestamps from the fresh snapshots in
+the disposable database.
 
 In the managed run, the ordinary Record creation that exposes missing
 coverage must also enqueue and acquire just that new holder key. The
-runner then changes a surname in the synthetic source, submits an
-authenticated hint and verifies the correction through all 20 roots
-sharing the key. Each targeted step must read exactly one selector in one
-Person batch request. The report includes source request counts, step
-counts and retries, time from submission to step start and settlement,
-and time to indexed readiness. Those times reflect immediate test
-polling. They do not include a scheduler's polling delay. This lane
-does not exercise collection or label hints, retries under injected
-faults, or query plans for the targeted witness lookup.
+runner polls until the filtered read answers 200 again. It then changes a
+surname in the synthetic source and posts
+`POST /v1/external-refresh-plans/holders/source-changes` with
+`{"projection": "person-indexed", "selector": "..."}`. The selector scheme
+comes from the compiled projection, and the call answers 202 with no
+receipt and no conflict. The runner polls until the correction reaches all
+20 roots sharing the key. Each targeted acquisition must read exactly one
+selector in one Person batch request. The report records source request
+counts, the time from admission to indexed readiness and the roots verified.
+Those times include the worker's 5-second tick and the runner's 5-second
+poll. The earlier forced warm-sweep repeats are not run, because a sweep can
+no longer be forced over HTTP; a second full sweep would need an elapsed
+interval. This lane does not exercise collection or label source changes,
+retries under injected faults, or query plans for the targeted witness
+lookup.
 
 Add `--managed-refresh-smoke` alongside `--scale --managed-refresh` for
 the same HTTP and freshness checks on 2,000 authorized and 200 denied
