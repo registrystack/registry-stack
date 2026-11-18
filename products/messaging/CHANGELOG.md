@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `rstack dev` runs Messaging projects. An `smtp` provider sends to a Mailpit
+  container and an `http` SMS provider to a mock gateway; the run report names
+  both under `sinks`. `messagingctl init` points at `rstack dev start`.
+  `messagingctl dev` remains.
+- BREAKING: `messagingctl api --client` is removed. Pass `--url URL --header
+  @FILE` with the header file `rstack dev token RUN --as PERSON` writes, or use
+  a saved `--connection`.
 - The SMTP client moves to lettre 0.11.24, which fixes RUSTSEC-2026-0560 to RUSTSEC-2026-0565: STARTTLS reply injection, missing dot-stuffing after a bare CR or LF, quoted local parts sent to the wrong address, two panics on hostile input, and unbounded buffering of a server reply.
 
 ## 0.46.0 - 2026-11-08

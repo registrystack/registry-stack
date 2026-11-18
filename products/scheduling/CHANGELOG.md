@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: `schedulingctl api --client` is removed. Pass `--url URL --header @FILE`
+  with a bearer header file, or use a saved `--connection`.
 - BREAKING: Appointment detail (`GET /v1/appointments/{id}`) rests on how the
   caller was admitted. A token that holds the reads scope reads the appointments
   it owns, as before. A token that holds no reads scope and is admitted only

@@ -21,6 +21,11 @@
 - `rstack dev` runs Casework projects through the installed `caseworkctl`, so a
   plan with only Casework projects needs no `bregctl`. See
   [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
+- BREAKING: `caseworkctl dev` and its `dev-clients.yaml` format are removed.
+  Run a Casework project, alone or with BReg, with `rstack dev`.
+- BREAKING: `caseworkctl api --client` is removed. Pass `--url URL --header
+  @FILE` with the header file `rstack dev token RUN --as PERSON` writes, or use
+  a saved `--connection`.
 - Let a review stage choose a subset of the policy's outcomes with
   `stages[].outcomes`. The runtime enforces the stage's choices, and
   `caseworkctl explain` lists them. A stage that omits the list offers every

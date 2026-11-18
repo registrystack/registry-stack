@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- `rstack dev` runs Evidence projects, alone or with BReg. An Evidence project
+  with its own `local-target.yaml` runs on that target, with the development
+  secrets it references generated for the run. See
+  [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
+- BREAKING: `evidencectl dev` is removed. Run an Evidence project with
+  `rstack dev`, and get a caller token with `rstack dev token RUN --as PERSON`.
+  `evidencectl check --file` now checks the ThunderID task-connection and
+  session files that `evidencectl dev check` checked; the `evidence/dev-state`
+  format is gone.
+- BREAKING: `evidencectl source add` is removed. Prepare the BReg side with
+  `bregctl dev prepare-source`, write the source handoff with `bregctl generate
+  evidence-source`, and add it to the Evidence project with `evidencectl source
+  import`.
+- BREAKING: `evidencectl access client add|list|revoke` and `evidencectl audit
+  show` are removed with the local session they managed. A run's people and
+  grants live in `dev.yaml`.
+- BREAKING: `evidencectl request prepare` no longer takes `--client`. Pass the
+  Evidence origin with `--evidence-url`, the caller's bearer token as an
+  owner-only header file with `--header @FILE` (as `rstack dev token` writes
+  it), and the runtime configuration with `--runtime-config FILE`.
+- BREAKING: `evidencectl api --client` is removed. Pass `--url URL --header
+  @FILE`, or use a saved `--connection`.
 - BREAKING: `acquisitionDeadlineMilliseconds` has a maximum of 300000 (300
   seconds) in the authored target
   (`sourceAcquisition.acquisitionDeadlineMilliseconds`) and in the runtime
@@ -32,8 +54,7 @@
   (RFC 10070 section 4). A configuration, target, bundle or profile without it fails to
   load, and a Node or Python client without it is refused when it is
   constructed. `evidencectl client profile create` requires
-  `--client-assertion-audience`, and `evidencectl source add` refuses a source
-  handoff without `clientAssertionAudience`. Migration: set the audience member
+  `--client-assertion-audience`. Migration: set the audience member
   to the authorization server's issuer identifier, exactly as its metadata
   publishes it.
 

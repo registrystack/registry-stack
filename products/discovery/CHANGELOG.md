@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- BREAKING: `discoveryctl api --client` is removed. Pass `--url URL --header @FILE`
+  with a bearer header file, or use a saved `--connection`.
+
 ## 0.46.0 - 2026-11-08
 
 - The serving binary installs its stop-signal handlers before it binds the

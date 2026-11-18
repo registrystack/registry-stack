@@ -2,16 +2,30 @@
 
 ## Unreleased
 
-- `rstack dev check|start|status|token|stop` runs a checkout's BReg and Casework
-  projects, alone or together, against a PostgreSQL server you supply. See
+- `rstack dev check|start|status|token|stop` runs a checkout's BReg, Casework,
+  Evidence and Messaging projects, one alone or several together, from a
+  `rstack/dev` plan in `dev.yaml`. Each run starts its own PostgreSQL in Docker
+  unless `RSTACK_DEV_DATABASE_URL` names a server, and defines up to 256 test
+  people. A Messaging run gets Mailpit and a mock SMS gateway; the run report
+  lists them under `sinks` and each product's runtime configuration under
+  `runtimeConfigs`. An Evidence project with its own `local-target.yaml` runs
+  on that target, with the development secrets it references generated for the
+  run. `rstack` hands the plan to the CLI of the first product it lists, so
+  install only the products the plan names. See
   [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/). It is an alpha developer tool and may
-  change. `rstack` hands the plan to the CLI of its first product (`bregctl`
-  for BReg, otherwise `caseworkctl`), so install only the products the plan
-  names. The plan and scenario schemas are published under
-  [generated/dev](generated/dev/).
+  change. The plan and scenario schemas are published under
+  [generated/dev](generated/dev/). It replaces `caseworkctl dev` and
+  `evidencectl dev`, which are removed (see the Casework and Evidence
+  changelogs). `bregctl dev` and `messagingctl dev` remain.
+- BREAKING: `api --client` is removed from `bregctl`, `caseworkctl`,
+  `discoveryctl`, `coordinatorctl`, `schedulingctl`, `evidencectl` and
+  `messagingctl`. It named a caller in a product's local development session.
+  Call a `rstack dev` run with `--url URL --header @FILE`, using the header
+  file `rstack dev token RUN --as PERSON` writes, or use a saved
+  `--connection`.
 - `rstack dev stop RUN_ID --recover` releases a run whose supervisor is gone.
-  It waits for the process guards to finish, drops the run's databases and roles
-  on the original PostgreSQL cluster, and removes the run directory. You can
+  It waits for the process guards to finish, drops the run's databases and roles,
+  removes the run's containers, and removes the run directory. You can
   retry after a partial failure.
 - With `--json`, refusals and startup failures from `rstack dev` print a
   `registry.rstack.error.v1` object, published as
