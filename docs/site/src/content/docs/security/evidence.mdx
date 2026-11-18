@@ -37,6 +37,29 @@ decided before authorization, for a failed authentication, a malformed
 request, an invalid selector, or a rate limit, write no native audit entry, so
 watch for them in operational logs and metrics instead.
 
+An agent acts only inside its task grant. For an institutional agent task,
+Evidence consumes a complete signed grant context issued by an external task
+authority, and accepts it only on a configured authority path whose subjects
+derive from the authenticated grant (`authenticated-grant` subjects). That path
+may carry any authority kind the package's grant ceiling allows. When the token
+also carries the separately mapped actor identity, the path must be
+`delegated`; a token without that identity can use an `organizational` or
+`statutory` path. The agent actor kind, authenticated principal, verified client
+and resource, trusted source issuer, purpose, exact Evidence requirement bound,
+effective deadline, and signed approver handle must all match that one path. A
+partial, malformed, expired, mismatched, or non-agent grant is refused without
+falling back to standing authority. Evidence checks the grant deadline, not the
+grant's status, so a revoked grant keeps working until its deadline (see
+[how long authority outlives a change](../../reference/casework-task-grants/#how-long-authority-outlives-a-change)).
+
+{/* Evidence: crates/registry-evidence/src/selector.rs, the authority path loop (actor
+    identity requires AuthorityKind::Delegated; a grant-carrying token never matches a
+    standing profile) and task_grant_matches;
+    crates/registry-evidence/tests/selector_conformance.rs,
+    task_grant_context_is_bound_before_selector_or_source_access;
+    crates/registry-evidence/src/runtime_tests.rs,
+    singular_release_does_not_begin_after_the_task_grant_expired. */}
+
 Source access cannot be redirected. Source calls are fixed by trusted
 configuration and executed by the core alone, which closes off SSRF, credential
 forwarding, and script-directed networking. Rhai returns one closed lookup

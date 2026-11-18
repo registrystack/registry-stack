@@ -597,6 +597,15 @@ Pending or unproved outcomes remain spent and answer 409 with `Retry-After` unti
 Past the deadline, or when no such proof path is declared, they remain spent permanently and the 409 carries no `Retry-After`.
 Recovery never grants authority to repeat the mutation.
 
+Recovery is also bound to the source origin the write reached.
+The precommit pins a digest of the configured `baseUrl` of every endpoint the write, status and uncertainty routes reach.
+Credentials are outside it, so a credential rotation keeps recovery.
+Every poll, whether a status GET, a bounded wait or a same-key retry's uncertainty check, runs only while the current runtime configuration yields the same digest.
+A row whose pin differs, or that carries none, is never polled.
+Its status link answers the exact stored 202, a bounded wait returns the committed 202, and a retry answers 409 without `Retry-After`, until the accepted expiry or the effect deadline ends it.
+Restoring the original `baseUrl` lets that work finish.
+Each held poll logs a value-free warning and adds no journal event kind.
+
 ### Artifact fence
 
 {/* Evidence: crates/registry-adapter/tests/postgres_async_status_link.rs an_asynchronous_hotfix_is_refused_while_the_older_artifacts_write_is_unfinished */}
@@ -724,12 +733,13 @@ Field bounds follow Evidence:
 - `scheme`: 1 to 32 HTTP token bytes.
 - `headerName`: at most 64 bytes.
 - `tokenEndpoint`: ASCII URI bytes with complete percent escapes, and without query or fragment.
-- `clientAssertionAudience`: 1 to 512 non-blank bytes.
+- `clientAssertionAudience`: 1 to 512 non-blank bytes. It is required for `oauth2-private-key-jwt` and has no default.
 - `scope`, `audience` and `resource`: Evidence's bounds and validators.
 
 The rules for credentials are:
 
 - The token endpoint of an OAuth2 kind is itself a fixed destination bound in the runtime config, never derived from a response. Token requests are engine sends outside `maximumUpstreamCalls`, bounded separately at two per endpoint per exchange.
+- The `oauth2-private-key-jwt` assertion carries `clientAssertionAudience` as its only audience and has the header `typ: client-authentication+jwt` (RFC 10070 section 4). The member is the authorization server's issuer identifier, exactly as its metadata publishes it, and a runtime credential without it is refused when the configuration is read.
 - The token request goes through the endpoint's own outbound client, with the same trust profile and the same mTLS identity.
 - Key material loads when the deployment loads. A client identity, a CA bundle or a signing key that cannot be read refuses startup, never the first caller's request.
 - Token responses require `token_type` `Bearer` in any case. A missing `expires_in` takes the operator's `assumedLifetimeSeconds` and, without one, fails as a credential error. The lifetime is anchored when the request is sent, not when the reply arrives. The cache is clamped to `maximumCacheSeconds`, unknown members are ignored, and refresh is single-flight.

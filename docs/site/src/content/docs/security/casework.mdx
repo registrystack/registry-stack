@@ -42,7 +42,8 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   A reviewer decides under a human assertion and a single selected profile; profile scopes are
   never unioned (`CASEWORK-SEC-01`, `CASEWORK-SEC-02`).
   {/* Evidence: crates/registry-casework/tests/human_identity_auth.rs,
-      same_role_profiles_with_distinct_principals_require_distinct_scopes;
+      same_role_profiles_on_one_principal_claim_are_selected_by_their_own_scope and
+      same_role_profiles_require_distinct_scopes;
       crates/registry-casework/tests/review_acceptance_postgres.rs,
       exact_policy_admission_and_independent_producer_authority. */}
 - Applicant progress projection: the ordinary producer request read omits progress.
@@ -99,8 +100,8 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   {/* Evidence: crates/registry-casework/src/http.rs, review_policy_descriptions. */}
 - Task grants: a grant is bounded: 900 seconds for an immediate grant, at most 604800 seconds
   (seven days) for a `deferred` one.
-  Responsibility changes, release, a changed subject, template deactivation and revocation end a
-  grant, and it cannot be revived by reassigning back.
+  Responsibility changes, release, a decision on the review task, a changed subject, template
+  deactivation and revocation end a grant, and it cannot be revived by reassigning back.
   Deferred grants cannot carry Evidence bounds (`CASEWORK-SEC-18`, `CASEWORK-SEC-27`).
   {/* Evidence: crates/registry-casework/src/task_grants/http_tests.rs,
       deferred_review_grants_ignore_drafts_but_never_revive_after_responsibility_changes;
@@ -195,6 +196,12 @@ The residuals refer to these obligations by number.
    Revoke the key at the issuer and at every other relying party (`CASEWORK-RES-09`).
    {/* Evidence: crates/registry-casework/src/config.rs, revoked_key_ids,
        a_token_signed_by_a_revoked_key_id_is_refused_like_any_other_verification_failure. */}
+10. Issue every person's tokens with the same principal claim.
+    Casework trusts one issuer and refuses a `casework.yaml` whose reviewer, initiator and requester
+    access profiles name different `principalClaim` values, because one person would then appear as
+    two principals and separation-of-duties and one-seat checks would compare the wrong identities
+    (`CASEWORK-SEC-16`).
+    Producer profiles, which are services, share one claim among themselves.
 
 ## Accepted residuals
 
@@ -332,7 +339,8 @@ identifiers.
 {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http,
     insecure_http_startup_diagnostic;
     crates/registry-casework/tests/human_identity_auth.rs,
-    same_role_profiles_with_distinct_principals_require_distinct_scopes. */}
+    same_role_profiles_on_one_principal_claim_are_selected_by_their_own_scope and
+    same_role_profiles_require_distinct_scopes. */}
 
 ### `CASEWORK-RES-09`: key refusal is by `kid`, locally, at startup
 
