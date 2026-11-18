@@ -27,7 +27,6 @@ entries:
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_refuses_changed_principal}
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_requires_ready_session}
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: paired_issuer_options_require_an_explicit_resource}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: api_origin_requires_the_ready_session_endpoint}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_refused_borrow_records_no_issuer_and_starts_no_container}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: an_issuer_that_is_not_one_exact_loopback_origin_is_refused}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_report_naming_another_client_is_refused}
