@@ -211,7 +211,8 @@
               {
                 "enum": [
                   "payer-rejected",
-                  "request-expired"
+                  "request-expired",
+                  "payer-cancelled"
                 ],
                 "type": "string"
               },
@@ -1615,6 +1616,16 @@
             "required": true,
             "schema": {
               "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Return-URL",
+            "required": false,
+            "schema": {
+              "maxLength": 200,
               "minLength": 1,
               "type": "string"
             }
