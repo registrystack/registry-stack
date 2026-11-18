@@ -115,6 +115,42 @@ fn platform_task_connection_and_session_files_are_checked_offline() {
 }
 
 #[test]
+fn a_refused_task_connection_or_session_file_exits_as_refused() {
+    let directory = tempfile::tempdir().expect("directory");
+    let connection = directory.path().join("task-connection.yaml");
+    let example_connection =
+        fs::read_to_string(example("platform/examples/task-connection.yaml")).expect("example");
+    fs::write(
+        &connection,
+        format!("{example_connection}unexpectedMember: true\n"),
+    )
+    .expect("write");
+    let session = with_unknown_member(
+        "platform/thunderid-session",
+        "platform/examples/thunderid/session.json",
+        directory.path(),
+    );
+
+    for file in [connection, session] {
+        let label = file.display().to_string();
+        let human = check_file(&file, &[]);
+        assert_eq!(human.status.code(), Some(1), "{label}");
+        assert!(human.stdout.is_empty(), "{label}");
+
+        let json = check_file(&file, &["--format", "json"]);
+        assert_eq!(json.status.code(), Some(1), "{label}");
+        let report = json_report(&json);
+        assert_eq!(report["status"], "domain-refusal", "{label}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| !diagnostics.is_empty()),
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn check_acceptance_reason_refuses_an_authored_expression() {
     let directory = tempfile::tempdir().expect("directory");
     let file = directory.path().join("check-acceptances.yaml");
@@ -170,6 +206,31 @@ fn a_file_with_a_member_its_format_does_not_define_is_refused() {
             "{format}"
         );
     }
+}
+
+#[test]
+fn a_substitution_expression_in_kind_is_refused_once_without_matching_a_format() {
+    let directory = tempfile::tempdir().expect("directory");
+    let file = directory.path().join("task-connection.yaml");
+    let example_connection =
+        fs::read_to_string(example("platform/examples/task-connection.yaml")).expect("example");
+    let substituted = example_connection.replace(
+        "kind: PlatformTaskConnection",
+        "kind: \"${KIND_SUBSTITUTION_CANARY}\"",
+    );
+    assert_ne!(
+        substituted, example_connection,
+        "the example names its kind"
+    );
+    fs::write(&file, substituted).expect("write");
+
+    let output = check_file(&file, &["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["code"], "config.substitution-not-allowed");
+    assert_eq!(diagnostics[0]["path"], "/kind");
 }
 
 #[test]
