@@ -22,6 +22,28 @@ ignore = [
     # when upstream makes smartstring optional/removes it, or when another
     # dependency introduces a runtime smartstring path.
     "RUSTSEC-2026-0249",
+    # RUSTSEC-2026-0543 (chrono) and RUSTSEC-2026-0555 (chrono-tz): upstream
+    # ended maintenance (chronotope/chrono#1768) and RustSec marks every
+    # version unmaintained. Neither is a vulnerability report, and no
+    # maintained release exists to move to. chrono is a direct dependency of
+    # most workspace crates and also arrives through postgres-types, rmcp,
+    # russh-sftp and schemars, so leaving it is a workspace-wide move to jiff
+    # or time.
+    # chrono-tz carries a concrete residual this ignore does not accept: its
+    # last release, 0.10.4, bundles IANA tzdata 2025b.
+    # registry-platform-calendar (working days and weekly windows for BReg,
+    # Casework, Coordinator and Scheduling) and registry-evidence convert
+    # instants to local dates with that data, so they miss every later rule
+    # change, among them Morocco and Western Sahara at UTC from 2026-09-20,
+    # and British Columbia, Alberta, the Northwest Territories, Manitoba and
+    # Cuba from 2026-11-01. Fixing it means replacing chrono-tz with a
+    # maintained zone database.
+    # Owner: Registry Stack maintainers. Reviewed 2026-11-18. Remove the
+    # chrono-tz entry when the workspace stops depending on chrono-tz. Review
+    # both by 2027-02-18, and at once if a vulnerability advisory is published
+    # against either crate or upstream hands maintenance over.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
     # The following advisories all arrive through the Typst rendering tree
     # (`typst`/`typst-pdf`/`krilla`/`typst-library`), which
     # `registry-render` pins at 0.15.1 with a lockfile matched to the Typst
